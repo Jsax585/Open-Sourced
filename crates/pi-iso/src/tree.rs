@@ -130,7 +130,7 @@ pub fn copy_symlink(src: &Path, dst: &Path, file_type: FileType) -> IsoResult<()
 	res.map_err(|err| IsoError::other(format!("symlink {}: {err}", dst.display())))
 }
 
-/// Per-entry actions of [`copy_dir_contents`].
+/// Per-entry actions of [`copy_dir_contents_with_exclusions`].
 pub trait TreeCopy {
 	/// Recreates the symlink `src` at `dst`.
 	fn symlink(&self, src: &Path, dst: &Path, file_type: FileType) -> IsoResult<()>;
@@ -140,20 +140,7 @@ pub trait TreeCopy {
 	fn finish_dir(&self, src: &Path, dst: &Path) -> IsoResult<()>;
 }
 
-/// Copies the entries of the directory `src` into the existing directory
-/// `dst`, recursing into subdirectories. Top-level entries named in `skip` are
-/// left out; the dispatch uses the directory listing's file types, so
-/// symlinks are never followed.
-pub fn copy_dir_contents(
-	src: &Path,
-	dst: &Path,
-	skip: &[&OsStr],
-	copy: &impl TreeCopy,
-) -> IsoResult<()> {
-	copy_dir_contents_with_exclusions(src, dst, src, skip, &[], copy)
-}
-
-/// Like [`copy_dir_contents`], but omits exact relative subtrees from `root`
+/// Copies `src` into `dst`, omitting exact relative subtrees from `root`
 /// before opening their children. Entries are classified from the directory
 /// listing, so an excluded symlink is never followed.
 pub fn copy_dir_contents_with_exclusions(

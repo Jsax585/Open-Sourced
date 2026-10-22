@@ -86,7 +86,11 @@ impl IsolationBackend for ApfsBackend {
 
 #[cfg(target_os = "macos")]
 mod imp {
-	use std::{fs, path::{Path, PathBuf}};
+	use std::{
+		fs,
+		os::unix::fs::DirBuilderExt as _,
+		path::{Path, PathBuf},
+	};
 
 	use crate::{
 		IsoError, IsoResult,
@@ -140,7 +144,16 @@ mod imp {
 		root: &Path,
 		exclude_paths: &[PathBuf],
 	) -> IsoResult<()> {
-		fs::create_dir_all(dst_dir)
+		let source_permissions = fs::metadata(src_dir)
+			.map_err(|err| IsoError::other(format!("metadata {}: {err}", src_dir.display())))?
+			.permissions();
+		// Ancestors of an excluded subtree cannot use clonefile wholesale. Make
+		// each manually materialized directory private before writing children,
+		// then restore the source mode only after its contents are complete.
+		let mut builder = fs::DirBuilder::new();
+		builder.mode(0o700);
+		builder
+			.create(dst_dir)
 			.map_err(|err| IsoError::other(format!("create {}: {err}", dst_dir.display())))?;
 		for entry in fs::read_dir(src_dir)
 			.map_err(|err| IsoError::other(format!("read_dir {}: {err}", src_dir.display())))?
@@ -172,6 +185,8 @@ mod imp {
 					.map_err(|err| clone_error(&src, &dst, &err))?;
 			}
 		}
+		fs::set_permissions(dst_dir, source_permissions)
+			.map_err(|err| IsoError::other(format!("set permissions on {}: {err}", dst_dir.display())))?;
 		Ok(())
 	}
 
@@ -248,7 +263,11 @@ mod tests {
 	use std::{
 		ffi::OsStr,
 		fs,
-		os::unix::{ffi::OsStrExt, fs::symlink},
+		os::unix::{
+			ffi::OsStrExt,
+			fs::{PermissionsExt, symlink},
+		},
+		path::PathBuf,
 	};
 
 	use super::*;
@@ -295,6 +314,52 @@ mod tests {
 				.file_type()
 				.is_symlink()
 		);
+		fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn filtered_clone_preserves_private_directory_and_file_modes() {
+		let nonce = format!(
+			"pi-iso-apfs-filtered-mode-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		);
+		let root = std::env::temp_dir().join(nonce);
+		let lower = root.join("lower");
+		let merged = root.join("merged");
+		let private = lower.join("private");
+		let ancestor = private.join("ancestor");
+		let retained = ancestor.join("retain.txt");
+		fs::create_dir_all(ancestor.join("discard")).unwrap();
+		fs::write(&retained, "private\n").unwrap();
+		fs::set_permissions(&retained, fs::Permissions::from_mode(0o600)).unwrap();
+		for directory in [&lower, &private, &ancestor] {
+			fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+		}
+
+		let result = backend().start_with_exclusions(
+			&lower,
+			&merged,
+			&[PathBuf::from("private/ancestor/discard")],
+		);
+		if matches!(result, Err(crate::IsoError::Unavailable(_))) {
+			let _ = fs::remove_dir_all(root);
+			return;
+		}
+		result.unwrap();
+
+		let mode = |path: &std::path::Path| {
+			fs::metadata(path).unwrap().permissions().mode() & 0o777
+		};
+		assert_eq!(mode(&lower), 0o700);
+		assert_eq!(mode(&merged), 0o700);
+		assert_eq!(mode(&merged.join("private/ancestor")), 0o700);
+		assert_eq!(mode(&retained), 0o600);
+		assert_eq!(mode(&merged.join("private/ancestor/retain.txt")), 0o600);
+		assert!(!merged.join("private/ancestor/discard").exists());
 		fs::remove_dir_all(root).unwrap();
 	}
 }
