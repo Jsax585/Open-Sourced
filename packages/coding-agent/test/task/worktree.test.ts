@@ -1044,13 +1044,15 @@ describe("captureIsolationBaseline", () => {
 		]);
 		await runGit(repo, ["add", "README.md", ".gitignore"]);
 		await runGit(repo, ["commit", "-q", "-m", "base"]);
-		await runGit(repo, ["remote", "add", "origin", repo]);
+		const sourceOrigin = "ssh://git@example.invalid:2222/team/repo.git";
+		await runGit(repo, ["remote", "add", "origin", sourceOrigin]);
 		const sourceHead = await runGit(repo, ["rev-parse", "HEAD"]);
 
 		const copies = path.join(repo, "apps/web/.verify");
 		const linked = path.join(copies, "linked");
 		const sameOrigin = path.join(copies, "same-origin");
 		const sameOriginUnrelated = path.join(copies, "same-origin-unrelated");
+		const samePathDifferentPort = path.join(copies, "same-path-different-port");
 		const different = path.join(copies, "different");
 		const unknown = path.join(copies, "unknown");
 		await fs.mkdir(copies, { recursive: true });
@@ -1058,7 +1060,16 @@ describe("captureIsolationBaseline", () => {
 		await runGit(repo, ["worktree", "add", "-q", linked, "-b", "fixture-linked", "HEAD"]);
 		await fs.writeFile(path.join(linked, "linked-marker.txt"), "linked checkout\n");
 		await runGit(repo, ["clone", "-q", repo, sameOrigin]);
+		await runGit(sameOrigin, ["remote", "set-url", "origin", sourceOrigin]);
 		await fs.writeFile(path.join(sameOrigin, "clone-marker.txt"), "same origin clone\n");
+		await runGit(repo, ["clone", "-q", repo, samePathDifferentPort]);
+		await runGit(samePathDifferentPort, [
+			"remote",
+			"set-url",
+			"origin",
+			"ssh://git@example.invalid:2223/team/repo.git",
+		]);
+		await fs.writeFile(path.join(samePathDifferentPort, "port-marker.txt"), "different SSH port\n");
 
 		for (const [nested, content] of [
 			[sameOriginUnrelated, "same origin, unrelated history\n"],
@@ -1073,7 +1084,7 @@ describe("captureIsolationBaseline", () => {
 			await runGit(nested, ["add", "nested.txt"]);
 			await runGit(nested, ["commit", "-q", "-m", "nested"]);
 		}
-		await runGit(sameOriginUnrelated, ["remote", "add", "origin", repo]);
+		await runGit(sameOriginUnrelated, ["remote", "add", "origin", sourceOrigin]);
 		await runGit(different, ["remote", "add", "origin", "https://example.invalid/different.git"]);
 
 		const plan = await prepareIsolationCopyPlan(repo);
@@ -1089,6 +1100,7 @@ describe("captureIsolationBaseline", () => {
 		expect(copiedBaseline.nested.map(nested => nested.relativePath).sort()).toEqual([
 			path.join("apps", "web", ".verify", "different"),
 			path.join("apps", "web", ".verify", "same-origin-unrelated"),
+			path.join("apps", "web", ".verify", "same-path-different-port"),
 			path.join("apps", "web", ".verify", "unknown"),
 		]);
 
@@ -1116,6 +1128,9 @@ describe("captureIsolationBaseline", () => {
 					expect(
 						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/same-origin-unrelated/nested.txt"), "utf8"),
 					).toBe("same origin, unrelated history\n");
+					expect(
+						await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/same-path-different-port/port-marker.txt"), "utf8"),
+					).toBe("different SSH port\n");
 					expect(await fs.readFile(path.join(handle.mergedDir, "apps/web/.verify/unknown/nested.txt"), "utf8")).toBe(
 						"unknown identity\n",
 					);
@@ -1129,6 +1144,7 @@ describe("captureIsolationBaseline", () => {
 					expect(baseline.nested.map(nested => nested.relativePath).sort()).toEqual([
 						path.join("apps", "web", ".verify", "different"),
 						path.join("apps", "web", ".verify", "same-origin-unrelated"),
+						path.join("apps", "web", ".verify", "same-path-different-port"),
 						path.join("apps", "web", ".verify", "unknown"),
 					]);
 				} finally {
@@ -1139,6 +1155,7 @@ describe("captureIsolationBaseline", () => {
 			expect(await runGit(repo, ["status", "--porcelain=v1"])).toBe("");
 			expect(await fs.readFile(path.join(linked, "linked-marker.txt"), "utf8")).toBe("linked checkout\n");
 			expect(await Bun.file(path.join(sameOrigin, "clone-marker.txt")).exists()).toBe(true);
+			expect(await Bun.file(path.join(samePathDifferentPort, "port-marker.txt")).exists()).toBe(true);
 		} finally {
 			await runGit(repo, ["worktree", "remove", "--force", linked]);
 			setWorktreesDir(undefined);
