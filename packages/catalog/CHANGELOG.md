@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Fixed OpenZoo enabling reasoning on a thinking-named model whose live roster lists parameters and leaves reasoning out.
 - Fixed OpenZoo treating an OpenRouter `text->image` modality as image input; only the side before `->` counts, and a legacy `text+image` value still does.
 - Fixed OpenZoo sending temperature, top_p, penalties, or stop to a model whose live roster lists parameters and omits those controls.
 - Fixed OpenZoo sending `top_k` or `min_p` when the live roster lists temperature and top_p but omits that extension.

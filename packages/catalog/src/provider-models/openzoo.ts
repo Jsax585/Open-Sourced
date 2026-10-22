@@ -131,9 +131,12 @@ const OPENZOO_PENALTY_AND_STOP_PARAMETERS = [
  *
  * `true` when the row says it reasons. `false` when it explicitly declines
  * (`supports_reasoning: false` or `reasoning: false`) and no positive signal
- * exists — a thinking-variant name must not turn that back on. `undefined`
- * when the row omits reasoning metadata, which is the only case where that
- * name is a fallback.
+ * exists — a thinking-variant name must not turn that back on. A present
+ * `supported_parameters` list is exhaustive, the same way tools and sampling
+ * treat one: omitting both `reasoning` and `reasoning_effort` is false, so
+ * that name cannot turn reasoning on. `undefined` only when the row omits
+ * reasoning metadata entirely, which is the only case where that name is a
+ * fallback.
  */
 function liveOpenzooReasoning(entry: OpenAICompatibleModelRecord): boolean | undefined {
 	if (entry.supports_reasoning === true || entry.reasoning === true) {
@@ -149,6 +152,10 @@ function liveOpenzooReasoning(entry: OpenAICompatibleModelRecord): boolean | und
 		return true;
 	}
 	if (entry.supports_reasoning === false || entry.reasoning === false) {
+		return false;
+	}
+	// The include check above already returned when either token is present.
+	if (Array.isArray(entry.supported_parameters)) {
 		return false;
 	}
 	return undefined;
@@ -250,8 +257,9 @@ function liveOpenzooInput(entry: OpenAICompatibleModelRecord): ("text" | "image"
  * real numbers; the bundled upstream reference (matched by the
  * OpenRouter-style id) supplies only the display name.
  * Reasoning is the live report when the row gives one. An explicit false
- * stays false; only a row that omits reasoning metadata falls back to a
- * thinking-variant name. Image input stays on the discovery default unless
+ * stays false, including a present parameter list that omits reasoning;
+ * only a row that omits reasoning metadata falls back to a thinking-variant
+ * name. Image input stays on the discovery default unless
  * the row reports it, including an explicit false vision flag with no
  * positive modality signal. A matching id from another provider is not a
  * capability signal. A present `supported_parameters` list that omits `tools` marks

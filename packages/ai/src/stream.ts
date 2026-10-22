@@ -37,7 +37,7 @@ import type { GoogleVertexOptions } from "./providers/google-vertex";
 import { streamKimi } from "./providers/kimi";
 import type { OllamaChatOptions } from "./providers/ollama";
 import type { OpenAICompletionsOptions } from "./providers/openai-completions";
-import { openAISamplingExtensionEnabled, samplingCompatFlag } from "./providers/openai-shared";
+import { openAISamplingAllowance } from "./providers/openai-shared";
 import { streamPiNative } from "./providers/pi-native-client";
 import { streamSynthetic } from "./providers/synthetic";
 import {
@@ -1154,37 +1154,14 @@ function withSupportedSamplingParams<T extends SamplingOptions>(model: Model<Api
 	) {
 		return options;
 	}
-	const compat = model.compat;
-	if (!compat || !("supportsSamplingParams" in compat) || compat.supportsSamplingParams !== false) return options;
+	const sampling = openAISamplingAllowance(model);
+	if (sampling.core) return options;
 	const supported = { ...options };
 	delete supported.temperature;
 	delete supported.topP;
-	const authored = model.compatConfig;
-	if (
-		!openAISamplingExtensionEnabled(
-			false,
-			samplingCompatFlag(compat, "supportsTopK"),
-			samplingCompatFlag(authored, "supportsTopK"),
-		)
-	) {
-		delete supported.topK;
-	}
-	if (
-		!openAISamplingExtensionEnabled(
-			false,
-			samplingCompatFlag(compat, "supportsMinP"),
-			samplingCompatFlag(authored, "supportsMinP"),
-		)
-	) {
-		delete supported.minP;
-	}
-	if (
-		!openAISamplingExtensionEnabled(
-			false,
-			samplingCompatFlag(compat, "supportsPenaltyAndStopParams"),
-			samplingCompatFlag(authored, "supportsPenaltyAndStopParams"),
-		)
-	) {
+	if (!sampling.topK) delete supported.topK;
+	if (!sampling.minP) delete supported.minP;
+	if (!sampling.penaltyAndStop) {
 		delete supported.presencePenalty;
 		delete supported.repetitionPenalty;
 		delete supported.frequencyPenalty;
@@ -2025,6 +2002,7 @@ function mapOptionsForApi<TApi extends Api>(
 			}
 			return castApi<"openai-completions">({
 				...base,
+				stopSequences: options?.stopSequences,
 				reasoning: resolveOpenAiReasoningEffort(model, options),
 				// `OpenAICompletionsOptions` carries no forceReasoningOff; fold it.
 				disableReasoning: options?.disableReasoning || options?.forceReasoningOff,
@@ -2039,6 +2017,7 @@ function mapOptionsForApi<TApi extends Api>(
 		case "openai-completions":
 			return castApi<"openai-completions">({
 				...base,
+				stopSequences: options?.stopSequences,
 				reasoning: resolveOpenAiReasoningEffort(model, options),
 				// `OpenAICompletionsOptions` carries no forceReasoningOff; fold it.
 				disableReasoning: options?.disableReasoning || options?.forceReasoningOff,

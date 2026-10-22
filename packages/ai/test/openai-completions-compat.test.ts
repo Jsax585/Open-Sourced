@@ -206,6 +206,7 @@ describe("openai-completions compatibility", () => {
 			presencePenalty: 0.1,
 			frequencyPenalty: 0.2,
 			repetitionPenalty: 1.1,
+			stopSequences: ["END"],
 			onPayload: payload => resolve(payload),
 		});
 		const body = toObject(await promise);
@@ -216,6 +217,7 @@ describe("openai-completions compatibility", () => {
 		expect(body?.presence_penalty).toBe(0.1);
 		expect(body?.frequency_penalty).toBe(0.2);
 		expect(body?.repetition_penalty).toBe(1.1);
+		expect(body?.stop).toBe("END");
 	});
 
 	it("still omits top_k and penalties for a reasoning model that did not advertise them", async () => {
@@ -238,6 +240,7 @@ describe("openai-completions compatibility", () => {
 			minP: 0.05,
 			presencePenalty: 0.1,
 			frequencyPenalty: 0.2,
+			stopSequences: ["END"],
 			onPayload: payload => resolve(payload),
 		});
 		const body = toObject(await promise);
@@ -246,6 +249,7 @@ describe("openai-completions compatibility", () => {
 		expect(body?.min_p).toBeUndefined();
 		expect(body?.presence_penalty).toBeUndefined();
 		expect(body?.frequency_penalty).toBeUndefined();
+		expect(body?.stop).toBeUndefined();
 	});
 
 	it("omits top_k while still sending min_p when only top_k is turned off", async () => {

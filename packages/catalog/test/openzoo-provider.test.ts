@@ -770,6 +770,34 @@ describe("openzoo built-in provider", () => {
 		expect(builtReasoning("example-lab/plain")).toBe(false);
 	});
 
+	test("a parameter list that omits reasoning stays off for a thinking-named model", async () => {
+		// foo-thinking classifies as a thinking variant. A present
+		// supported_parameters list that names neither reasoning nor
+		// reasoning_effort used to look like omitted metadata, so the name
+		// turned reasoning on and the built model exposed reasoning controls
+		// the roster did not list. An absent list still falls back to that
+		// name. A list that includes reasoning_effort is still a positive report.
+		const options = openzooModelManagerOptions({
+			fetch: async () =>
+				Response.json({
+					data: [
+						{ id: "example-lab/foo-thinking", supported_parameters: ["tools"] },
+						{ id: "example-lab/effort-thinking", supported_parameters: ["reasoning_effort"] },
+						{ id: "example-lab/baz-thinking" },
+					],
+				}),
+		});
+		const models = await options.fetchDynamicModels?.();
+		const builtReasoning = (id: string) => {
+			const model = models?.find(item => item.id === id);
+			return model ? buildModel(model).reasoning : undefined;
+		};
+
+		expect(builtReasoning("example-lab/foo-thinking")).toBe(false);
+		expect(builtReasoning("example-lab/effort-thinking")).toBe(true);
+		expect(builtReasoning("example-lab/baz-thinking")).toBe(true);
+	});
+
 	test("architecture.modality image output is not image input", async () => {
 		// OpenRouter spells modality as input->output. `text->image` is an
 		// image generator: a substring check used to mark that row image-capable,

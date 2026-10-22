@@ -4082,6 +4082,51 @@ export function openAISamplingExtensionEnabled(
 	return authored === true;
 }
 
+/** Which sampling fields a caller may forward for this model. */
+export interface OpenAISamplingAllowance {
+	/** `temperature` and `top_p`. */
+	core: boolean;
+	topK: boolean;
+	minP: boolean;
+	/** Penalties and `stop`. */
+	penaltyAndStop: boolean;
+}
+
+/**
+ * Sampling fields safe to forward.
+ *
+ * The core group is on unless compat explicitly turns it off. While it is
+ * off, `top_k`, `min_p`, and the penalty/stop group stay on only when the
+ * authored spec advertised that extension. An unset authored flag follows
+ * the off core group, so a resolved default of true is not an advertisement.
+ * While the core group is on, every field stays forwardable and the provider
+ * applies its own extension flags.
+ */
+export function openAISamplingAllowance(model: Pick<Model<Api>, "compat" | "compatConfig">): OpenAISamplingAllowance {
+	const compat = model.compat;
+	const core = !compat || !("supportsSamplingParams" in compat) || compat.supportsSamplingParams !== false;
+	if (core) return { core: true, topK: true, minP: true, penaltyAndStop: true };
+	const authored = model.compatConfig;
+	return {
+		core: false,
+		topK: openAISamplingExtensionEnabled(
+			false,
+			samplingCompatFlag(compat, "supportsTopK"),
+			samplingCompatFlag(authored, "supportsTopK"),
+		),
+		minP: openAISamplingExtensionEnabled(
+			false,
+			samplingCompatFlag(compat, "supportsMinP"),
+			samplingCompatFlag(authored, "supportsMinP"),
+		),
+		penaltyAndStop: openAISamplingExtensionEnabled(
+			false,
+			samplingCompatFlag(compat, "supportsPenaltyAndStopParams"),
+			samplingCompatFlag(authored, "supportsPenaltyAndStopParams"),
+		),
+	};
+}
+
 type CommonSamplingOptions = Pick<
 	StreamOptions,
 	"temperature" | "topP" | "topK" | "minP" | "presencePenalty" | "repetitionPenalty" | "maxTokens"

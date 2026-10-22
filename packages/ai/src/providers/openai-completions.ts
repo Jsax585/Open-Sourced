@@ -2104,10 +2104,10 @@ function buildParams(
 		if (options?.frequencyPenalty !== undefined) {
 			params.frequency_penalty = options.frequencyPenalty;
 		}
-	}
-	if (options?.stopSequences?.length && initialCompat.supportsPenaltyAndStopParams) {
-		const seqs = options.stopSequences;
-		params.stop = seqs.length === 1 ? seqs[0] : seqs.slice(0, 4);
+		if (options?.stopSequences?.length) {
+			const seqs = options.stopSequences;
+			params.stop = seqs.length === 1 ? seqs[0] : seqs.slice(0, 4);
+		}
 	}
 	applyOpenAIServiceTier(params, options?.serviceTier, model);
 
