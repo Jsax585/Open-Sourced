@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { SegmentContext } from "../src/status-line/segments";
-import { renderSegment } from "../src/status-line/segments";
+import { describeSegment, renderSegment } from "../src/status-line/segments";
 import { initTheme, theme } from "../src/theme";
 
 beforeAll(async () => {
@@ -171,5 +171,59 @@ describe("status line model segment compact thinking level", () => {
 		const rendered = renderSegment("model", createThinkingContext(true));
 		expect(Bun.stripANSI(rendered.content)).toBe(`${glyph} Test Model`);
 		expect(Bun.stripANSI(rendered.content)).not.toContain(theme.sep.dot);
+	});
+});
+
+describe("status line model segment provider prefix", () => {
+	function createProviderContext(provider: string | undefined, showProvider: boolean | undefined): SegmentContext {
+		const ctx = createModelContext(false);
+		ctx.session.state.model = {
+			id: "test-model",
+			name: "Test Model",
+			...(provider === undefined ? {} : { provider }),
+		} as SegmentContext["session"]["state"]["model"];
+		if (showProvider !== undefined) ctx.options.model = { showProvider };
+		return ctx;
+	}
+
+	// Read inside each test: the theme is initialised in `beforeAll`, after module
+	// collection.
+	const modelPrefix = () => (theme.icon.model ? `${theme.icon.model} ` : "");
+
+	it("prefixes the provider id when showProvider is enabled", () => {
+		const rendered = renderSegment("model", createProviderContext("opencode-go", true));
+		expect(Bun.stripANSI(rendered.content)).toBe(`${modelPrefix()}opencode-go/Test Model`);
+		// Provider and model are sibling spans: nesting dim inside the model colour
+		// would let its reset leak into the model name.
+		expect(rendered.content).toContain(theme.fg("dim", "opencode-go/"));
+	});
+
+	it("shows only the model name by default", () => {
+		for (const ctx of [
+			createProviderContext("opencode-go", undefined),
+			createProviderContext("opencode-go", false),
+		]) {
+			const rendered = renderSegment("model", ctx);
+			expect(Bun.stripANSI(rendered.content)).toBe(`${modelPrefix()}Test Model`);
+			expect(rendered.content).not.toContain("opencode-go");
+		}
+	});
+
+	it("keeps the plain model name when the model carries no provider", () => {
+		const rendered = renderSegment("model", createProviderContext(undefined, true));
+		expect(Bun.stripANSI(rendered.content)).toBe(`${modelPrefix()}Test Model`);
+		expect(rendered.content).not.toContain("undefined");
+	});
+
+	it("splits the provider into its own dim span in the native description", () => {
+		const spans = describeSegment("model", createProviderContext("opencode-go", true))?.spans ?? [];
+		expect(spans.map(part => part.t)).toEqual(["opencode-go/", "Test Model"]);
+		expect(spans[0]?.s).toBe("dim");
+		expect(spans[1]?.s).toBe("statusLineModel");
+	});
+
+	it("keeps the native description to the model name by default", () => {
+		const spans = describeSegment("model", createProviderContext("opencode-go", undefined))?.spans ?? [];
+		expect(spans.map(part => part.t)).toEqual(["Test Model"]);
 	});
 });

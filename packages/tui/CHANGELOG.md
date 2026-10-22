@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `statusLine.segmentOptions.path.basenameOnly` renders only the final directory name instead of a shortened path, and `statusLine.segmentOptions.model.showProvider` prefixes the model name with the active provider id (`provider/model`). Both are opt-in and off by default ([#16757](https://github.com/can1357/oh-my-pi/pull/16757) by [@rennzhang](https://github.com/rennzhang))
+
 ## [18.12.6] - 2026-10-21
 
 ### Changed

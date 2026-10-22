@@ -37,8 +37,18 @@ export interface CollabStatus {
 
 export interface StatusLineSegmentOptions {
 	pi?: { showProfile?: boolean };
-	model?: { showThinkingLevel?: boolean };
-	path?: { abbreviate?: boolean; maxLength?: number; stripWorkPrefix?: boolean };
+	model?: {
+		showThinkingLevel?: boolean;
+		/** Prefix the model name with the active provider id (`provider/model`), opt-in. */
+		showProvider?: boolean;
+	};
+	path?: {
+		abbreviate?: boolean;
+		maxLength?: number;
+		stripWorkPrefix?: boolean;
+		/** Render only the final directory name instead of a shortened path, opt-in. */
+		basenameOnly?: boolean;
+	};
 	git?: { showBranch?: boolean; showStaged?: boolean; showUnstaged?: boolean; showUntracked?: boolean };
 	time?: { format?: "12h" | "24h"; showSeconds?: boolean };
 }

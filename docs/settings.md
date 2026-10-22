@@ -881,7 +881,9 @@ tui:
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
 
-The `path` segment abbreviates the home directory to `~`. On Windows, shared path formatting recognizes both the long home name and its existing 8.3 aliases (such as `ADMINI~1`), including in tool labels and error text. Only the home prefix is abbreviated; remaining path components keep their spelling, and formatting does not change the working directory or environment. Set `statusLine.segmentOptions.path.abbreviate: false` to keep the full path in the status line.
+The `path` segment abbreviates the home directory to `~`. On Windows, shared path formatting recognizes both the long home name and its existing 8.3 aliases (such as `ADMINI~1`), including in tool labels and error text. Only the home prefix is abbreviated; remaining path components keep their spelling, and formatting does not change the working directory or environment. Set `statusLine.segmentOptions.path.abbreviate: false` to keep the full path in the status line. Set `statusLine.segmentOptions.path.basenameOnly: true` to render only the current directory's name (`📁 ren-core`) instead of a shortened path; it takes precedence over `abbreviate`, while `maxLength` still caps an over-long name.
+
+The `model` segment shows the active model's name. Set `statusLine.segmentOptions.model.showProvider: true` to prefix it with the provider id the turn is actually routed through (`opencode-go/DeepSeek V4.1 Flash`), which tells apart identically named models served by different providers and survives fallback or role switching. Off by default.
 
 The `pi` segment tags the brand with the active named profile (`π-work`; see [Profiles](config-usage.md#profiles)). Set `statusLine.segmentOptions.pi.showProfile: false` to hide the tag.
 
