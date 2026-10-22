@@ -199,16 +199,25 @@ describe("Markdown component", () => {
 			]);
 		});
 
-		it("passes custom listBullet themes the bare marker on task items", () => {
-			const theme = {
+		it("keeps task checkboxes under custom listBullet themes", () => {
+			const source = "- [x] Ship the fix\n- [ ] Add a test\n\n10. [x] Tag it";
+			// Exact-marker transforms still see the bare `- ` / `10. ` marker.
+			const exactMarkerTheme = {
 				...defaultMarkdownTheme,
 				listBullet: (bullet: string) => (bullet === "- " ? "• " : bullet === "10. " ? "10) " : bullet),
 			};
-			const markdown = new Markdown("- [x] Ship the fix\n- [ ] Add a test\n\n10. [x] Tag it", 0, 0, theme);
+			// Marker-replacing callbacks swap the marker, never the checkbox state.
+			const replaceAllTheme = { ...defaultMarkdownTheme, listBullet: () => "• " };
 
-			const plainLines = markdown.render(40).map(line => stripVTControlCharacters(line).trimEnd());
+			const exactMarkerLines = new Markdown(source, 0, 0, exactMarkerTheme)
+				.render(40)
+				.map(line => stripVTControlCharacters(line).trimEnd());
+			const replaceAllLines = new Markdown(source, 0, 0, replaceAllTheme)
+				.render(40)
+				.map(line => stripVTControlCharacters(line).trimEnd());
 
-			expect(plainLines).toEqual(["• [x] Ship the fix", "• [ ] Add a test", "", "10) [x] Tag it"]);
+			expect(exactMarkerLines).toEqual(["• [x] Ship the fix", "• [ ] Add a test", "", "10) [x] Tag it"]);
+			expect(replaceAllLines).toEqual(["• [x] Ship the fix", "• [ ] Add a test", "", "• [x] Tag it"]);
 		});
 
 		it("keeps list rows within width when the marker consumes the line", () => {

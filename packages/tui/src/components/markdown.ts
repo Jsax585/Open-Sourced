@@ -4340,14 +4340,17 @@ export class Markdown implements Component {
 			const rowStart = lines.length;
 			const marker = token.ordered ? `${startNumber + i}. ` : "- ";
 			// A task item's leading checkbox token draws nothing in #renderListItem;
-			// draw it after the marker so wrapped rows hang under the task text. It
-			// gets its own `listBullet` call so themes keyed on the exact marker
-			// (`- `, `10. `) still match.
+			// draw it after the marker so wrapped rows hang under the task text.
+			// `listBullet` only ever sees the bare marker (`- `, `10. `), so themes
+			// that match or replace it never touch the checkbox, which takes the
+			// item's text style instead.
 			const checkbox = item.tokens?.[0];
 			const taskBox = checkbox?.type === "checkbox" ? `[${checkbox.checked ? "x" : " "}] ` : "";
 			const bullet = marker + taskBox;
-			const firstPrefix =
-				indent + this.#theme.listBullet(marker) + (taskBox === "" ? "" : this.#theme.listBullet(taskBox));
+			let firstPrefix = indent + this.#theme.listBullet(marker);
+			if (taskBox !== "") {
+				firstPrefix += styleContext ? styleContext.applyText(taskBox) : this.#applyDefaultStyle(taskBox);
+			}
 			// Continuation rows align under the item text, so the hang matches the
 			// actual bullet width (`10. ` is 4 cells, not 2).
 			const continuationIndent = indent + padding(visibleWidth(bullet));
