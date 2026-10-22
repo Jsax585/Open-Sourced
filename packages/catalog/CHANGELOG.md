@@ -5,7 +5,9 @@
 ### Added
 
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
-- Added Requesty as a model provider, including public catalog discovery from `https://router.requesty.ai/v1/models`, per-model pricing and limits, and dual-API routing — Claude-family ids (including upstream-prefixed ids like `bedrock/claude-sonnet-4@us-west-2`) via `anthropic-messages`, everything else via `openai-completions`.
+- Added Requesty as a model provider: public catalog discovery with long-context price tiers, Claude routed over `anthropic-messages` and everything else over `openai-completions`, plus provider rules that send the `minimal` effort as Requesty's `min`, repair reasoning Requesty under-reports (Claude 4.5 on every route), and keep a Gemini `web_search` tool from being swapped for Google Search ([#6492](https://github.com/can1357/oh-my-pi/pull/6492) by [@ApplY3D](https://github.com/ApplY3D))
+- Added the `ignore-api-key` discovery property: catalog generation skips every stored credential for that provider so the bundle reflects its full public catalog instead of one account's roster ([#6492](https://github.com/can1357/oh-my-pi/pull/6492) by [@ApplY3D](https://github.com/ApplY3D))
+- The `escape-builtin-tool-names` rule now also applies to `openai-completions` models ([#6492](https://github.com/can1357/oh-my-pi/pull/6492) by [@ApplY3D](https://github.com/ApplY3D))
 
 ### Changed
 

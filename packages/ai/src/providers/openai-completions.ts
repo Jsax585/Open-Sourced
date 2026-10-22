@@ -873,6 +873,7 @@ const streamOpenAICompletionsOnce = (
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
+			let toolWireNames = IDENTITY_TOOL_WIRE_NAMES;
 			const requestReasoningEffortFallbacks = new Map<string, OpenAIReasoningEffortFallback>();
 			const attemptedReasoningEffortFallbacks = new Set<string>();
 			let activeReasoningEffortFallbackKey: string | undefined;
@@ -892,6 +893,7 @@ const streamOpenAICompletionsOnce = (
 				const effectiveToolStrictModeOverride = disableStrictTools ? "none" : toolStrictModeOverride;
 				const builtParams = buildParams(model, context, options, effectiveToolStrictModeOverride);
 				appliedStrictTools = builtParams.strictToolsApplied;
+				toolWireNames = builtParams.toolWireNames;
 				let params = builtParams.params;
 				// Tool-triggered suppression is a hard wire constraint; cached
 				// enabled-effort negotiation must not overwrite its `none`.
@@ -1285,7 +1287,7 @@ const streamOpenAICompletionsOnce = (
 				const block: ToolCall & { partialArgs: string } = {
 					type: "toolCall",
 					id: call.id,
-					name: call.name,
+					name: toolWireNames.decode(call.name),
 					arguments: {},
 					partialArgs: call.arguments,
 				};
@@ -1537,7 +1539,7 @@ const streamOpenAICompletionsOnce = (
 						for (let toolCallOffset = 0; toolCallOffset < toolCalls.length; toolCallOffset++) {
 							const toolCall = toolCalls[toolCallOffset]!;
 							const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
-							const incomingName = toolCall.function?.name || "";
+							const incomingName = toolWireNames.decode(toolCall.function?.name || "");
 							// Multi-entry `tool_calls` arrays without `id`/`index` — either the
 							// opening chunk that carries per-entry names, or a continuation whose
 							// entries are argument-only. Either way, route by array offset so
@@ -2031,9 +2033,12 @@ function buildParams(
 	toolStrictMode: AppliedToolStrictMode;
 	strictToolsApplied: boolean;
 	reasoningEffortFallbackAllowed: boolean;
+	/** One name mapping per request: definitions, replay, and response decoding must agree. */
+	toolWireNames: ToolWireNames;
 } {
 	const initialPolicy = resolveOpenAICompatForRequest(model, options, Boolean(context.tools?.length));
 	const initialCompat = initialPolicy.compat as ResolvedOpenAICompat;
+	const toolWireNames = createToolWireNames(initialCompat.escapeBuiltinToolNames === true, context);
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 
 	const requestModelId = resolveOpenAICompletionsModelId(model, options);
@@ -2087,7 +2092,7 @@ function buildParams(
 	applyOpenAIServiceTier(params, options?.serviceTier, model);
 
 	if (context.tools?.length) {
-		const builtTools = convertTools(context.tools, initialCompat, toolStrictModeOverride);
+		const builtTools = convertTools(context.tools, initialCompat, toolWireNames, toolStrictModeOverride);
 		params.tools = builtTools.tools;
 		toolStrictMode = builtTools.toolStrictMode;
 		strictToolsApplied = builtTools.strictToolsApplied;
@@ -2103,7 +2108,11 @@ function buildParams(
 	}
 
 	if (options?.toolChoice && initialCompat.supportsToolChoice) {
-		params.tool_choice = mapToOpenAICompletionsToolChoice(options.toolChoice);
+		const toolChoice = mapToOpenAICompletionsToolChoice(options.toolChoice);
+		params.tool_choice =
+			typeof toolChoice === "object"
+				? { type: "function", function: { name: toolWireNames.encode(toolChoice.function.name) } }
+				: toolChoice;
 	}
 	const forcedToolName =
 		typeof params.tool_choice === "object" && params.tool_choice !== null && "function" in params.tool_choice
@@ -2189,7 +2198,7 @@ function buildParams(
 		hasTools: Array.isArray(params.tools) && params.tools.length > 0,
 	});
 	const compat = finalPolicy.compat as ResolvedOpenAICompat;
-	const messages = convertMessages(model, context, compat);
+	const messages = convertMessages(model, context, compat, toolWireNames);
 	maybeAddAnthropicCacheControl(compat, messages);
 	params.messages = messages;
 	const outputToken = resolveOpenAIOutputTokenParam({
@@ -2230,6 +2239,7 @@ function buildParams(
 		toolStrictMode,
 		strictToolsApplied,
 		reasoningEffortFallbackAllowed: finalPolicy.reasoning.disableReason !== "tools",
+		toolWireNames,
 	};
 }
 
@@ -2346,6 +2356,7 @@ export function convertMessages(
 	model: Model<"openai-completions">,
 	context: Context,
 	compat: ResolvedOpenAICompat,
+	toolWireNames = createToolWireNames(compat.escapeBuiltinToolNames === true, context),
 ): ChatCompletionMessageParam[] {
 	const params: ChatCompletionMessageParam[] = [];
 
@@ -2717,7 +2728,7 @@ export function convertMessages(
 						id: normalizeMistralToolId(toolCallId, compat.requiresMistralToolIds),
 						type: "function",
 						function: {
-							name: tc.name,
+							name: toolWireNames.encode(tc.name),
 							arguments: serializeToolArguments(tc.arguments),
 						},
 					};
@@ -2799,7 +2810,7 @@ export function convertMessages(
 					tool_call_id: normalizeMistralToolId(resolvedToolCallId, compat.requiresMistralToolIds),
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
-					toolResultMsg.name = toolMsg.toolName;
+					toolResultMsg.name = toolWireNames.encode(toolMsg.toolName);
 				}
 				params.push(toolResultMsg);
 
@@ -2856,9 +2867,60 @@ export function convertMessages(
 	return params;
 }
 
+/**
+ * Client tool names some gateways swap for a native server tool when sent
+ * verbatim (Requesty turns a Gemini `web_search` function into Google Search).
+ * Only these are renamed, so every other name keeps its length budget.
+ */
+const BUILTIN_TOOL_NAMES: ReadonlySet<string> = new Set(["web_search"]);
+const BUILTIN_TOOL_NAME_PREFIX = "_";
+
+/** Request-scoped client <-> wire tool names; see `escapeBuiltinToolNames`. */
+export interface ToolWireNames {
+	encode(name: string): string;
+	decode(name: string): string;
+}
+
+const IDENTITY_TOOL_WIRE_NAMES: ToolWireNames = { encode: name => name, decode: name => name };
+
+/**
+ * Renames each client tool that clashes with a gateway built-in to an alias no
+ * client name in this request uses (offered tools and replayed history), and
+ * decodes only through the inverse map: a name that was never renamed is
+ * never changed on the way back.
+ */
+function createToolWireNames(escape: boolean, context: Context): ToolWireNames {
+	if (!escape) return IDENTITY_TOOL_WIRE_NAMES;
+	const clientNames = new Set<string>();
+	for (const tool of context.tools ?? []) clientNames.add(tool.name);
+	for (const message of context.messages) {
+		if (message.role === "toolResult" && message.toolName) clientNames.add(message.toolName);
+		if (message.role !== "assistant") continue;
+		for (const block of message.content) {
+			if (block.type === "toolCall") clientNames.add(block.name);
+		}
+	}
+	const toWire = new Map<string, string>();
+	const toClient = new Map<string, string>();
+	for (const name of clientNames) {
+		if (!BUILTIN_TOOL_NAMES.has(name)) continue;
+		// Numbered fallbacks keep the alias a few characters longer than the
+		// built-in name, well inside the 64-character function-name limit.
+		let alias = `${BUILTIN_TOOL_NAME_PREFIX}${name}`;
+		for (let n = 2; clientNames.has(alias) || toClient.has(alias); n++) {
+			alias = `${BUILTIN_TOOL_NAME_PREFIX}${name}_${n}`;
+		}
+		toWire.set(name, alias);
+		toClient.set(alias, name);
+	}
+	if (toWire.size === 0) return IDENTITY_TOOL_WIRE_NAMES;
+	return { encode: name => toWire.get(name) ?? name, decode: name => toClient.get(name) ?? name };
+}
+
 function convertTools(
 	tools: Tool[],
 	compat: ResolvedOpenAICompat,
+	toolWireNames: ToolWireNames,
 	toolStrictModeOverride?: ToolStrictModeOverride,
 ): BuiltOpenAICompletionTools {
 	const rejectRootObjectUnion = compat.rejectRootObjectUnion;
@@ -2922,7 +2984,7 @@ function convertTools(
 		wireTools.push({
 			type: "function",
 			function: {
-				name: tool.name,
+				name: toolWireNames.encode(tool.name),
 				description: tool.description || "",
 				parameters: emittedParameters,
 				// Only include strict if provider supports it. Some reject unknown fields.
