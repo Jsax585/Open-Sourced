@@ -7,13 +7,31 @@ Printing an image{{#if py}} or figure{{/if}} attaches it.
 
 <prelude>
 `await` marks async helpers; the rest are sync.
+{{#ifAll py js}}
+Same in Python and JS:
+```
+print(value, ...)  log(message)  phase(title)  env(key?, value?)
+await tool.<name>(args) — session tool; `args` is its parameter object
+```
+Python only (kwargs):
+```py
+read(path, offset?, limit?)  write(path, content)  output(*ids, format?, query?, offset?, limit?)
+wait(handles, timeout?=None, raise_errors?=True)
+```
+JS only (positional args or ONE trailing options object):
+```js
+await read(path, offset?, limit?)  await write(path, content)  await output(...ids, { format?, query?, offset?, limit? })
+await wait(handles, { timeout?, raiseErrors? })
+```
+- `wait(handles, …)`: agent/completion barrier, ordered results; `raise_errors=False` / `raiseErrors: false` retains failures.
+{{else}}
 {{#if py}}
 Python (kwargs):
 ```py
 print(value, ...)  log(message)  phase(title)  env(key?, value?)
 read(path, offset?, limit?)  write(path, content)  output(*ids, format?, query?, offset?, limit?)
-wait(handles, timeout?=None, raise_errors?=True)
-await tool.<name>(args)
+wait(handles, timeout?=None, raise_errors?=True) — agent/completion barrier, ordered results; `raise_errors=False` retains failures.
+await tool.<name>(args) — session tool; `args` is its parameter object
 ```
 {{/if}}
 {{#if js}}
@@ -21,12 +39,11 @@ JS (positional args or ONE trailing options object):
 ```js
 print(value, ...)  log(message)  phase(title)  env(key?, value?)
 await read(path, offset?, limit?)  await write(path, content)  await output(...ids, { format?, query?, offset?, limit? })
-await wait(handles, { timeout?, raiseErrors? })
-await tool.<name>(args)
+await wait(handles, { timeout?, raiseErrors? }) — agent/completion barrier, ordered results; `raiseErrors: false` retains failures.
+await tool.<name>(args) — session tool; `args` is its parameter object
 ```
 {{/if}}
-- `wait(handles, …)`: agent/completion barrier, ordered results; {{#ifAll py js}}`raise_errors=False` / `raiseErrors: false`{{else}}{{#if py}}`raise_errors=False`{{else}}`raiseErrors: false`{{/if}}{{/ifAll}} retains failures.
-- `tool.<name>(args)`: session tool; `args` is its parameter object.
+{{/ifAll}}
 </prelude>
 
 {{#if inlineTopics}}

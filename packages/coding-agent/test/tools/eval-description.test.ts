@@ -225,13 +225,20 @@ describe("eval tool description await markers", () => {
 		tempDir.removeSync();
 	});
 
-	/** Helper name → whether its documented signature is prefixed with `await`. */
+	/**
+	 * Helper name → whether its documented signature is prefixed with `await`, read from the prelude's
+	 * `lang` block plus the untagged block both runtimes share (rendered when both are enabled).
+	 */
 	function documentedAwaits(description: string, lang: "py" | "js"): Map<string, boolean> {
-		const block = description.match(new RegExp("```" + lang + "\\n([\\s\\S]*?)\\n```"))?.[1];
-		if (block === undefined) throw new Error(`no \`\`\`${lang} block in eval description`);
+		const prelude = description.slice(description.indexOf("<prelude>"), description.indexOf("</prelude>"));
+		const blocks = [...prelude.matchAll(/```(\w*)\n([\s\S]*?)\n```/g)];
+		if (!blocks.some(([, tag]) => tag === lang)) throw new Error(`no \`\`\`${lang} block in eval description`);
 		const awaits = new Map<string, boolean>();
-		for (const match of block.matchAll(/(await\s+)?(tool\.<name>|[A-Za-z_]\w*)\(/g)) {
-			awaits.set(match[2], match[1] !== undefined);
+		for (const [, tag, body] of blocks) {
+			if (tag !== lang && tag !== "") continue;
+			for (const match of body.matchAll(/(await\s+)?(tool\.<name>|[A-Za-z_]\w*)\(/g)) {
+				awaits.set(match[2], match[1] !== undefined);
+			}
 		}
 		return awaits;
 	}
