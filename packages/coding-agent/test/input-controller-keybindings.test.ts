@@ -11,6 +11,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
+import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
@@ -79,7 +80,10 @@ async function createContext() {
 		"app.clipboard.pasteImage": ["ctrl+v"],
 		"app.tools.toggleVisibility": ["ctrl+shift+o"],
 		"app.tools.expand": ["ctrl+o"],
-		"app.display.toggleDetail": ["ctrl+h"],
+		// Read from the shipped definition rather than hard-coded: an action without
+		// a default chord gets no listener match on a default install, and this map
+		// must not be able to hide that.
+		"app.display.toggleDetail": [...KeybindingsManager.inMemory().getKeys("app.display.toggleDetail")],
 	};
 	const customHandlers = new Map<string, () => void>();
 	const setActionKeys = vi.fn();
