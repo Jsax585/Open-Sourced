@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed filtered isolation materialization omitting only explicitly verified duplicate checkout subtrees before filesystem copy, mount, or snapshot fallback.
+
 ## [18.12.5] - 2026-10-21
 
 ### Fixed

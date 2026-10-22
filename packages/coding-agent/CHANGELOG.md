@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed task isolation copying ignored nested checkouts of the same source repository into new sandboxes; verified unrelated nested repositories and ordinary ignored runtime input remain available.
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
