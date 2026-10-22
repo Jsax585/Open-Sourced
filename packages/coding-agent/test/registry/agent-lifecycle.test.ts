@@ -10,18 +10,28 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 interface SessionStub {
 	session: AgentSession;
 	disposeCalls: () => number;
+	/** Mark the session as mid-turn (a follow-up prompt from the focused view). */
+	setStreaming: (streaming: boolean) => void;
 }
 
-/** Minimal session: the lifecycle manager only ever calls dispose() on it. */
+/** Minimal session: the lifecycle manager reads its busy state and calls dispose() on it. */
 function makeSessionStub(dispose?: () => Promise<void>): SessionStub {
 	let calls = 0;
 	const stub = {
+		isStreaming: false,
+		hasPendingAsyncWork: () => false,
 		dispose: async () => {
 			calls++;
 			await dispose?.();
 		},
 	};
-	return { session: stub as unknown as AgentSession, disposeCalls: () => calls };
+	return {
+		session: stub as unknown as AgentSession,
+		disposeCalls: () => calls,
+		setStreaming: (streaming: boolean) => {
+			stub.isStreaming = streaming;
+		},
+	};
 }
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -154,6 +164,77 @@ describe("AgentLifecycleManager", () => {
 		vi.advanceTimersByTime(TTL);
 		await flushAsync();
 		expect(registry.get("2-Sub")?.status).toBe("parked");
+		expect(stub.disposeCalls()).toBe(1);
+	});
+
+	it("hold defers an idle agent's park until unhold re-arms the TTL", async () => {
+		vi.useFakeTimers();
+		const stub = makeSessionStub();
+		registerIdleSub("4-Sub", stub.session);
+		lifecycle.hold("4-Sub");
+		lifecycle.adopt("4-Sub", { idleTtlMs: TTL });
+
+		// Held: the TTL fires but the park is deferred, and any direct park is a no-op.
+		vi.advanceTimersByTime(TTL * 10);
+		await flushAsync();
+		await lifecycle.park("4-Sub");
+		expect(registry.get("4-Sub")?.status).toBe("idle");
+		expect(registry.get("4-Sub")?.session).toBe(stub.session);
+		expect(stub.disposeCalls()).toBe(0);
+
+		// Unhold re-arms the TTL; the agent then parks normally.
+		lifecycle.unhold("4-Sub");
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("4-Sub")?.status).toBe("parked");
+		expect(stub.disposeCalls()).toBe(1);
+	});
+
+	it("hold cancels an armed park timer for a live idle agent", async () => {
+		vi.useFakeTimers();
+		const stub = makeSessionStub();
+		registerIdleSub("5-Sub", stub.session);
+		lifecycle.adopt("5-Sub", { idleTtlMs: TTL });
+
+		// The timer is armed, then the view lands on the agent before it fires.
+		vi.advanceTimersByTime(TTL - 1);
+		lifecycle.hold("5-Sub");
+		vi.advanceTimersByTime(TTL * 10);
+		await flushAsync();
+		expect(registry.get("5-Sub")?.status).toBe("idle");
+		expect(stub.disposeCalls()).toBe(0);
+
+		lifecycle.unhold("5-Sub");
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("5-Sub")?.status).toBe("parked");
+		expect(stub.disposeCalls()).toBe(1);
+	});
+
+	it("does not park a viewed agent whose follow-up turn is still running after unfocus", async () => {
+		vi.useFakeTimers();
+		const stub = makeSessionStub();
+		registerIdleSub("6-Sub", stub.session);
+		// The user is reading a finished tangent: the view holds it, then a
+		// follow-up prompt drives the session directly — the ref stays `idle`
+		// while the turn streams.
+		lifecycle.hold("6-Sub");
+		lifecycle.adopt("6-Sub", { idleTtlMs: TTL });
+		stub.setStreaming(true);
+		lifecycle.unhold("6-Sub");
+
+		// Several TTLs of a long turn: the session must stay live throughout.
+		vi.advanceTimersByTime(TTL * 10);
+		await flushAsync();
+		expect(registry.get("6-Sub")?.status).toBe("idle");
+		expect(registry.get("6-Sub")?.session).toBe(stub.session);
+		expect(stub.disposeCalls()).toBe(0);
+
+		// Once the follow-up settles, the next TTL parks it as usual.
+		stub.setStreaming(false);
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(registry.get("6-Sub")?.status).toBe("parked");
 		expect(stub.disposeCalls()).toBe(1);
 	});
 

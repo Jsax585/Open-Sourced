@@ -9,9 +9,11 @@ import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/
 import { resolveLocalRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -24,6 +26,11 @@ interface CapturedJobRunContext {
 type CapturedJobRun = (ctx: CapturedJobRunContext) => Promise<string>;
 
 const model = { provider: "anthropic", id: "claude-sonnet-4-5" } as Model;
+
+/** Settle the async park chain (timer callback → park() → dispose → setStatus). */
+async function flushAsync(): Promise<void> {
+	for (let i = 0; i < 5; i++) await Promise.resolve();
+}
 
 function assistantText(text: string): AssistantMessage {
 	return {
@@ -65,10 +72,15 @@ function createCloneStub(overrides?: {
 		messages.push(message);
 	});
 	let listener: ((event: TanSessionEvent) => void) | undefined;
+	let todoPhases: unknown = [{ name: "inherited parent task", status: "in_progress" }];
 	const clone = {
 		agent: { appendMessage, state: { messages } },
 		sessionManager: overrides?.sessionManager,
-		setTodoPhases: vi.fn(),
+		isStreaming: false,
+		setTodoPhases: vi.fn((phases: unknown) => {
+			todoPhases = phases;
+		}),
+		getTodoPhases: vi.fn(() => todoPhases),
 		getActiveToolNames: vi.fn(() => overrides?.activeToolNames ?? ["read", "bash"]),
 		getEnabledToolNames: vi.fn(() => overrides?.enabledToolNames ?? overrides?.activeToolNames ?? ["read", "bash"]),
 		setActiveToolPresentation: vi.fn(async () => {}),
@@ -107,6 +119,8 @@ function createContext(overrides?: {
 	preparedExtensions?: unknown;
 	effectiveExtensionRoots?: unknown;
 	extensionPaths?: unknown;
+	focusedAgentId?: string;
+	settings?: Record<string, unknown>;
 }) {
 	const tempDir = TempDir.createSync("@omp-tan-controller-");
 	const parentFile = path.join(tempDir.path(), "parent.jsonl");
@@ -160,15 +174,18 @@ function createContext(overrides?: {
 		getSessionFile: vi.fn(() => cloneFile),
 		appendCustomEntry: vi.fn(),
 	} as unknown as SessionManager;
-	const ctx = {
+	const ctxRecord = {
 		session,
 		sessionManager,
-		settings: Settings.isolated({ "task.enableLsp": true }),
+		settings: Settings.isolated({ "task.enableLsp": true, ...overrides?.settings }),
 		showStatus: vi.fn(),
 		showWarning: vi.fn(),
 		showError: vi.fn(),
 		rebuildChatFromMessages: vi.fn(),
-	} as unknown as InteractiveModeContext;
+		focusedAgentId: overrides?.focusedAgentId as string | undefined,
+		focusAgentSession: vi.fn(async () => {}),
+	};
+	const ctx = ctxRecord as unknown as InteractiveModeContext;
 	return {
 		tempDir,
 		parentFile,
@@ -176,6 +193,10 @@ function createContext(overrides?: {
 		cloneFile,
 		cloneManager,
 		ctx,
+		/** Simulate the view having landed on an agent (what focusAgentSession does). */
+		setFocusedAgentId: (id: string | undefined) => {
+			ctxRecord.focusedAgentId = id;
+		},
 		getArtifactsDir,
 		getSessionId,
 		register,
@@ -191,7 +212,10 @@ function createContext(overrides?: {
 
 describe("TanCommandController", () => {
 	afterEach(() => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
+		AgentLifecycleManager.resetGlobalForTests();
+		AgentRegistry.resetGlobalForTests();
 	});
 
 	it("rejects empty work before forking", async () => {
@@ -650,6 +674,131 @@ describe("TanCommandController", () => {
 		);
 		// The compaction listener is released once the tan finishes.
 		expect(stub.compactionListener).toBeUndefined();
+	});
+
+	it("switches the view to the new tan agent once its session exists", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const { clone } = createCloneStub();
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: clone,
+		} as unknown as CreateAgentSessionResult);
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("watch me");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		const cloneId = harness.capturedOptions?.agentId;
+		expect(cloneId).toMatch(/^Tan-/);
+		expect(harness.ctx.focusAgentSession).toHaveBeenCalledWith(cloneId);
+	});
+
+	it("parks a viewed tan only after the view leaves it, not while its turn runs", async () => {
+		vi.useFakeTimers();
+		AgentRegistry.resetGlobalForTests();
+		AgentLifecycleManager.resetGlobalForTests();
+		const harness = createContext({ settings: { "task.agentIdleTtlMs": 20 } });
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const { clone } = createCloneStub();
+		const cloneSession = clone as unknown as AgentSession;
+		const registry = AgentRegistry.global();
+		const lifecycle = AgentLifecycleManager.global();
+		// Like the SDK: the clone is a registered, live agent for as long as it runs.
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const id = (options as CreateAgentSessionOptions).agentId;
+			if (!id) throw new Error("createAgentSession without an agentId");
+			registry.register({
+				id,
+				displayName: "tan",
+				kind: "sub",
+				session: cloneSession,
+				sessionFile: harness.cloneFile,
+				status: "running",
+			});
+			return { session: clone } as unknown as CreateAgentSessionResult;
+		});
+		// What the focus controller does: pin the viewed agent, then show it.
+		harness.ctx.focusAgentSession = vi.fn(async (id: string) => {
+			lifecycle.hold(id);
+			harness.setFocusedAgentId(id);
+		});
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("stay with me");
+		const cloneId = harness.capturedOptions?.agentId;
+		if (!cloneId) throw new Error("clone id was not captured");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		// On screen: the finished tangent is still attached and disposable-free,
+		// so the view keeps rendering its transcript.
+		expect(registry.get(cloneId)).toMatchObject({ status: "idle", session: cloneSession });
+		expect(clone.dispose).not.toHaveBeenCalled();
+		// The idle TTL cannot take a viewed session down, however long it runs.
+		vi.advanceTimersByTime(200);
+		await flushAsync();
+		expect(registry.get(cloneId)?.session).toBe(cloneSession);
+		expect(clone.dispose).not.toHaveBeenCalled();
+
+		// Leaving the view releases the hold; the TTL then parks the agent.
+		lifecycle.unhold(cloneId);
+		vi.advanceTimersByTime(20);
+		await flushAsync();
+		expect(registry.get(cloneId)).toMatchObject({ status: "parked", session: null });
+		expect(clone.dispose).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps the tangent running when the view cannot follow it", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const { clone } = createCloneStub();
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: clone,
+		} as unknown as CreateAgentSessionResult);
+		harness.ctx.focusAgentSession = vi.fn(async () => {
+			throw new Error("agent vanished");
+		});
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("cannot follow");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await expect(
+			run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} }),
+		).resolves.toBe("done");
+
+		expect(harness.ctx.showWarning).toHaveBeenCalledWith(
+			expect.stringContaining("Could not switch the view to /tan agent"),
+		);
+		expect(clone.prompt).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears the fork's inherited todos before the view attaches to it", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const { clone } = createCloneStub();
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: clone,
+		} as unknown as CreateAgentSessionResult);
+		let todosAtFocus: unknown;
+		harness.ctx.focusAgentSession = vi.fn(async () => {
+			todosAtFocus = clone.getTodoPhases();
+		});
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("fresh task");
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		// Attaching reloads the viewed session's todos: they must already be the
+		// cleared list, or the parent's tasks stay on screen for the tangent.
+		expect(todosAtFocus).toEqual([]);
+		expect(clone.setTodoPhases).toHaveBeenCalledWith([]);
+		expect(harness.cloneManager.appendCustomEntry).toHaveBeenCalledWith(expect.any(String), { phases: [] });
 	});
 
 	it("does not duplicate the request when compaction runs before the initial dispatch", async () => {
