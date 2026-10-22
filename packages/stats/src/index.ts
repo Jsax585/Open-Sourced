@@ -7,6 +7,7 @@ import { formatErrorRate } from "./client/data/formatters";
 import { getDashboardStats, getTotalMessageCount, syncAllSessions } from "./aggregator";
 import { closeDb } from "./db";
 import { refreshRollups } from "./rollup";
+import { runHeadlessStats } from "./headless";
 import { formatStatsDashboardUrl, startServer } from "./server";
 
 export {
@@ -23,6 +24,7 @@ export { refreshRollups } from "./rollup";
 export type { StatsJudge, StatsJudgeProvider } from "./frustration";
 export { getGainDashboardStats } from "./gain-aggregator";
 export { formatStatsDashboardUrl, type StartServerOptions, startServer } from "./server";
+export { runHeadlessStats };
 export type { GainDashboardStats, GainSource, GainSourceTotals, GainTimeSeriesPoint } from "./shared-types";
 export type {
 	AggregatedStats,
@@ -100,6 +102,7 @@ export interface StandaloneStatsArgs {
 	host: string;
 	json: boolean;
 	sync: boolean;
+	follow: boolean;
 	help: boolean;
 }
 
@@ -112,6 +115,7 @@ export function parseStandaloneStatsArgs(args: string[]): StandaloneStatsArgs {
 			host: { type: "string", default: "127.0.0.1" },
 			json: { type: "boolean", short: "j", default: false },
 			sync: { type: "boolean", short: "s", default: false },
+			follow: { type: "boolean", default: false },
 			help: { type: "boolean", short: "h", default: false },
 		},
 		allowPositionals: true,
@@ -121,6 +125,7 @@ export function parseStandaloneStatsArgs(args: string[]): StandaloneStatsArgs {
 		host: values.host || "127.0.0.1",
 		json: values.json ?? false,
 		sync: values.sync ?? false,
+		follow: values.follow ?? false,
 		help: values.help ?? false,
 	};
 }
@@ -143,6 +148,7 @@ Options:
   --host <host>       Host to bind (default: 127.0.0.1)
   -j, --json         Output stats as JSON and exit
   -s, --sync         Sync session files and show summary
+  --follow          Keep syncing sessions without starting the dashboard
   -h, --help         Show this help message
 
 Examples:
@@ -150,11 +156,19 @@ Examples:
   omp-stats --json       # Print stats as JSON
   omp-stats --host 0.0.0.0 # Explicitly expose on all IPv4 interfaces
   omp-stats --sync       # Sync and show summary
+  omp-stats --follow      # Keep stats ingestion running without a dashboard
 `);
 		return;
 	}
 
 	try {
+		if (values.follow && (values.json || values.sync)) {
+			throw new Error("--follow cannot be combined with --json or --sync");
+		}
+		if (values.follow) {
+			await runHeadlessStats();
+			return;
+		}
 		if (!values.json && !values.sync) {
 			// The dashboard ingests sessions in the background and streams progress to the page.
 			const { port: actualPort } = await startServer(values.port, values.host);

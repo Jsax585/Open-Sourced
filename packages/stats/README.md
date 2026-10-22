@@ -8,6 +8,7 @@ Local observability dashboard for AI usage statistics.
 - **SQLite aggregation**: Stats storage in `bun:sqlite`, with hourly rollups so any range queries in milliseconds
 - **Live web dashboard**: Opens instantly, ingests sessions in the background (newest first) and streams progress and updates to the page
 - **Incremental sync**: Only processes new/modified log entries; a watcher re-syncs transcripts as they are written
+- **Headless live sync**: `omp stats --follow --no-open` keeps importing sessions without a dashboard page.
 
 ## Metrics Tracked
 
@@ -33,6 +34,9 @@ omp stats
 
 # Custom port
 omp stats --port 8080
+
+# Keep importing sessions without starting the dashboard or browser
+omp stats --follow --no-open
 
 # Print summary to console
 omp stats --summary
