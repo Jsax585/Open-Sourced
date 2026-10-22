@@ -308,6 +308,24 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn rerouted_parallel_edge_does_not_collide_with_other_edges() {
+		let options = RenderOptions { color_mode: Some(ColorMode::None), ..RenderOptions::default() };
+		let source = "\
+flowchart LR
+  X[Client] --> A[Gateway]
+  A -->|first parallel| B[Service B]
+  B -->|branch a| D[Target D]
+  B -->|longer branch b| E[Target E]
+  A -->|forward request| C[Service C]
+  F[Caller] --> G[Proxy] --> C
+  A -.->|second parallel| B";
+		let art = render(source, &options).unwrap();
+		assert!(art.contains("├─forward request►"), "{art}");
+		assert!(art.contains("├┄┄┄┄┄second parallel┄┄┄┄┄┄┘ └─longer branch b─┐"), "{art}");
+		assert!(art.contains("▲ │"), "{art}");
+	}
+
 	/// One case of `fixtures/mermaid.json`: the exact output (or error
 	/// message) for a source and option set. Originally captured from the
 	/// TypeScript renderer; flowchart layouts have since been re-baselined

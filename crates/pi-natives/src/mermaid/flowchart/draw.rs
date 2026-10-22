@@ -326,8 +326,10 @@ pub fn draw_arrow(graph: &AsciiGraph, edge: &AsciiEdge) -> [Layer; 6] {
 	if edge.path.is_empty() {
 		return std::array::from_fn(|_| Layer::over(&graph.canvas));
 	}
-	let label_canvas = draw_arrow_label(graph, edge);
-	let (path_canvas, lines_drawn, line_dirs) = draw_path(graph, &edge.path, edge.style);
+	let drawing_path = edge_drawing_path(graph, edge);
+	let label_canvas = draw_arrow_label(graph, edge, &drawing_path);
+	let (path_canvas, lines_drawn, line_dirs) =
+		draw_path(graph, &edge.path, &drawing_path, edge.style);
 	let source_shape = graph.nodes.get(edge.from).map_or_default(|node| node.shape);
 	let box_start_canvas = draw_box_start(graph, &edge.path, source_shape);
 	let arrow_end_canvas = if edge.has_arrow_end {
@@ -357,7 +359,7 @@ pub fn draw_arrow(graph: &AsciiGraph, edge: &AsciiEdge) -> [Layer; 6] {
 	} else {
 		Layer::over(&graph.canvas)
 	};
-	let corners_canvas = draw_corners(graph, &edge.path);
+	let corners_canvas = draw_corners(graph, &edge.path, &drawing_path);
 	[
 		path_canvas,
 		box_start_canvas,
@@ -382,9 +384,58 @@ const fn reverse_direction(dir: Dir) -> Dir {
 	}
 }
 
+fn edge_drawing_path(graph: &AsciiGraph, edge: &AsciiEdge) -> Vec<DrawingCoord> {
+	let mut coords = line_to_drawing(graph, &edge.path);
+	let n = edge.path.len();
+	let is_parallel = edge.from != edge.to
+		&& graph
+			.edges
+			.iter()
+			.filter(|other| {
+				(other.from, other.to) == (edge.from, edge.to)
+					|| (other.from, other.to) == (edge.to, edge.from)
+			})
+			.count()
+			> 1;
+	if n >= 3 && is_parallel {
+		let has_outgoing_on_end_port = graph.edges.iter().any(|other| {
+			!other.path.is_empty() && other.from == edge.to && other.start_dir == edge.end_dir
+		});
+		if has_outgoing_on_end_port {
+			let approach = edge.path[n - 3];
+			let corner = edge.path[n - 2];
+			let end = edge.path[n - 1];
+			if matches!(edge.end_dir, Dir::Down | Dir::Up)
+				&& corner.x == end.x
+				&& approach.y == corner.y
+			{
+				let step = graph
+					.column_width
+					.get(&end.x)
+					.copied()
+					.unwrap_or(3)
+					.div_euclid(2)
+					.clamp(1, 2);
+				let dx = (approach.x - end.x).signum() * step;
+				coords[n - 2].x += dx;
+				coords[n - 1].x += dx;
+			} else if matches!(edge.end_dir, Dir::Left | Dir::Right)
+				&& corner.y == end.y
+				&& approach.x == corner.x
+			{
+				let dy = (approach.y - end.y).signum();
+				coords[n - 2].y += dy;
+				coords[n - 1].y += dy;
+			}
+		}
+	}
+	coords
+}
+
 fn draw_path(
 	graph: &AsciiGraph,
 	path: &[GridCoord],
+	drawing_path: &[DrawingCoord],
 	style: EdgeStyle,
 ) -> (Layer, Vec<Vec<DrawingCoord>>, Vec<Dir>) {
 	let mut canvas = Layer::over(&graph.canvas);
@@ -394,9 +445,8 @@ fn draw_path(
 		return (canvas, lines, directions);
 	};
 	let mut previous = first;
-	for &next in &path[1..] {
-		let previous_drawing = grid_to_drawing_coord(graph, previous);
-		let next_drawing = grid_to_drawing_coord(graph, next);
+	let mut previous_drawing = drawing_path[0];
+	for (&next, &next_drawing) in path[1..].iter().zip(&drawing_path[1..]) {
 		if previous_drawing == next_drawing {
 			previous = next;
 			continue;
@@ -417,6 +467,7 @@ fn draw_path(
 		lines.push(segment);
 		directions.push(dir);
 		previous = next;
+		previous_drawing = next_drawing;
 	}
 	(canvas, lines, directions)
 }
@@ -511,10 +562,14 @@ const fn corner_char(previous: Dir, next: Dir, use_ascii: bool) -> char {
 	}
 }
 
-fn draw_corners(graph: &AsciiGraph, path: &[GridCoord]) -> Layer {
+fn draw_corners(
+	graph: &AsciiGraph,
+	path: &[GridCoord],
+	drawing_path: &[DrawingCoord],
+) -> Layer {
 	let mut canvas = Layer::over(&graph.canvas);
-	for points in path.windows(3) {
-		let drawing = grid_to_drawing_coord(graph, points[1]);
+	for (index, points) in path.windows(3).enumerate() {
+		let drawing = drawing_path[index + 1];
 		let previous = determine_direction(points[0], points[1]);
 		let next = determine_direction(points[1], points[2]);
 		canvas.set(
@@ -526,12 +581,27 @@ fn draw_corners(graph: &AsciiGraph, path: &[GridCoord]) -> Layer {
 	canvas
 }
 
-fn draw_arrow_label(graph: &AsciiGraph, edge: &AsciiEdge) -> Layer {
+fn draw_arrow_label(
+	graph: &AsciiGraph,
+	edge: &AsciiEdge,
+	drawing_path: &[DrawingCoord],
+) -> Layer {
 	let mut canvas = Layer::over(&graph.canvas);
 	if edge.text.is_empty() {
 		return canvas;
 	}
-	let line = line_to_drawing(graph, &edge.label_line);
+	let line = if let [a, b] = edge.label_line.as_slice() {
+		edge
+			.path
+			.windows(2)
+			.enumerate()
+			.find_map(|(i, pair)| {
+				(pair[0] == *a && pair[1] == *b).then(|| vec![drawing_path[i], drawing_path[i + 1]])
+			})
+			.unwrap_or_else(|| line_to_drawing(graph, &edge.label_line))
+	} else {
+		line_to_drawing(graph, &edge.label_line)
+	};
 	let upward = match (edge.path.first(), edge.path.last()) {
 		(Some(start), Some(end)) if edge.path.len() >= 2 && end.y < start.y => Some(true),
 		(Some(start), Some(end)) if edge.path.len() >= 2 && end.y > start.y => Some(false),
