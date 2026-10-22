@@ -197,16 +197,9 @@ fn normalize_listed_paths(lists: &[&[u8]]) -> IsoResult<Vec<PathBuf>> {
 			}
 		}
 	}
-	paths.sort();
-	paths.dedup();
-	let mut roots = Vec::with_capacity(paths.len());
-	for path in paths {
-		if roots.iter().any(|ancestor: &PathBuf| path.starts_with(ancestor)) {
-			continue;
-		}
-		roots.push(path);
-	}
-	Ok(roots)
+	paths.sort_unstable();
+	paths.dedup_by(|path, ancestor| path.starts_with(ancestor));
+	Ok(paths)
 }
 
 fn copy_listed_paths(
