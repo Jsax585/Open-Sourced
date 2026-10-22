@@ -19,6 +19,7 @@ import {
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
 	cfgStartupQuiet,
+	cfgTuiCompleteScrollback,
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
@@ -63,6 +64,7 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			showHardwareCursor: cfgShowHardwareCursor.get(settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(settings),
+			completeScrollback: cfgTuiCompleteScrollback.get(settings),
 			imeSafeCursor: cfgTuiImeSafeCursor.get(settings),
 			autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(settings),
 			spellingTypoDetection: cfgSpellingTypoDetection.get(settings),
@@ -89,7 +91,6 @@ describe("issue #9597 — cold-launch welcome duplication", () => {
 			terminal,
 			version: "18.0.4",
 			cache: false,
-			recentSessions: async () => [],
 		});
 		await terminal.waitForRender();
 		const lease = takeStartupComposerLease();

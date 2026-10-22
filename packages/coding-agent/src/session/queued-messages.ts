@@ -65,7 +65,7 @@ export function isUserQueuedMessage(message: AgentMessage): boolean {
 
 /**
  * Whether a queued user prompt was authored by the user rather than handed off by an
- * agent. Queue editing (chips, removal, editor restore) only touches these.
+ * agent. Queue editing (chips, removal, promotion, editor restore) only touches these.
  */
 export function isUserAuthoredQueuedMessage(message: AgentMessage): boolean {
 	return isUserQueuedMessage(message) && !("attribution" in message && message.attribution === "agent");
@@ -83,12 +83,19 @@ export const VIDEO_ATTACHMENT_TYPE = "video-attachment";
 /** Hidden companion carrying the source path of a pasted or dropped image. */
 export const IMAGE_ATTACHMENT_TYPE = "image-attachment";
 
+/**
+ * Hidden notice announcing model agents the user tagged with a `^` mention.
+ * Agent-attributed so providers keep its system authority, yet queued only
+ * ahead of the prompt that tagged the model, so it is a companion by type.
+ */
+export const SESSION_AGENT_NOTICE_TYPE = "session-agent-notice";
+
 /** Whether a hidden queued message is a companion of an adjacent user prompt. */
 export function isHiddenUserCompanion(message: AgentMessage): boolean {
+	if (message.role !== "custom" || message.display !== false) return false;
+	if (message.customType === SESSION_AGENT_NOTICE_TYPE) return true;
 	return (
-		message.role === "custom" &&
 		message.attribution === "user" &&
-		message.display === false &&
 		(MAGIC_KEYWORD_NOTICE_TYPES.has(message.customType) ||
 			message.customType === IMAGE_ATTACHMENT_DESCRIPTION_TYPE ||
 			message.customType === VIDEO_ATTACHMENT_TYPE ||

@@ -1,5 +1,5 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import type { LimitsApi, OAuthAccess, OAuthApi } from "./auth/types";
+import type { LimitsApi, OAuthAccess, OAuthApi, OAuthRequestIdentity } from "./auth/types";
 import * as AIError from "./error";
 import { isAuthRetryableError, isInvalidatedOAuthTokenError } from "./error/auth-classify";
 import { isAccountPolicyError, isUsageLimit } from "./error/flags";
@@ -48,6 +48,8 @@ export interface ResolvedApiKey {
 	 * already sent it before that block.
 	 */
 	afterSiblingWait?: boolean;
+	/** Non-secret request scope belonging to this bearer, replaced on account rotation. */
+	oauthIdentity?: OAuthRequestIdentity;
 }
 
 export type ApiKeyResolution = string | ResolvedApiKey | undefined;
@@ -274,6 +276,9 @@ async function runOAuthAttempt<T>(
  *   enters sibling rotation. Ordinary 401/auth failures get one refresh-same,
  *   then rotate through distinct siblings; 403/usage-limit failures skip the
  *   refresh and rotate directly.
+ * - A resolver that throws on the initial resolve surfaces its cause (a
+ *   broker/OAuth/network failure) instead of reading as a missing key; only a
+ *   resolver that resolves without a credential is a "No API key" case.
  *
  * Used by non-streaming consumers (image generation, web search, completion
  * helpers). The streaming driver in `stream.ts` implements the same policy with
@@ -294,7 +299,19 @@ export async function withAuth<T>(
 
 	const resolver = key;
 	const signal = opts?.signal;
-	const initialKey = await resolveRetryKey(resolver, false, undefined, signal);
+	let initialKey: string | undefined;
+	try {
+		initialKey = await resolveApiKeyOnce(resolver, signal);
+	} catch (error) {
+		// A resolver that deliberately reports a missing key keeps that type.
+		if (error instanceof AIError.MissingApiKeyError) throw error;
+		// A thrown resolver is a broker/OAuth/network failure, not a missing
+		// key — surface the cause instead of masking it as "No API key".
+		throw new AIError.ConfigurationError(
+			`Failed to resolve API key: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
+	}
 	if (initialKey === undefined) throw missingKey();
 
 	const state = createAuthRetryKeyState(initialKey);
