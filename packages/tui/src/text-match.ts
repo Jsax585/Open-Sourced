@@ -194,22 +194,22 @@ export class MatchTarget {
 	}
 
 	/** {@link matchText} against this prepared candidate. */
-	match(query: string, options?: MatchOptions): TextMatch | null {
+	match(query: string | TextQuery, options?: MatchOptions): TextMatch | null {
 		const typos = options?.typos ?? true;
 		const abbreviations = options?.abbreviations ?? true;
-		const words = splitQuery(query);
+		const { words, compactWords, phrase, compactPhrase } = typeof query === "string" ? new TextQuery(query) : query;
 		if (words.length === 0) {
 			const first = this.#names.findIndex(name => name !== null);
 			return { kind: "prefix", cost: 0, nameIndex: first };
 		}
-		if (words.length === 1) return this.#matchWord(words[0]!, typos, abbreviations);
-		const phrase = this.#matchPhrase(words.join(" "));
+		if (words.length === 1) return this.#matchWord(words[0]!, compactWords[0]!, typos, abbreviations);
+		const phraseMatch = this.#matchPhrase(phrase, compactPhrase);
 		let weakest: TextMatch | null = null;
 		let cost = 0;
 		let nameIndex = -1;
 		for (let index = 0; index < words.length; index++) {
-			const match = this.#matchWord(words[index]!, typos, abbreviations);
-			if (!match) return phrase;
+			const match = this.#matchWord(words[index]!, compactWords[index]!, typos, abbreviations);
+			if (!match) return phraseMatch;
 			if (index === 0) nameIndex = match.nameIndex;
 			const order = weakest ? TIER[match.kind] - TIER[weakest.kind] : 1;
 			if (order > 0) {
@@ -221,11 +221,10 @@ export class MatchTarget {
 			}
 		}
 		const separate = weakest && { kind: weakest.kind, cost, nameIndex };
-		return phrase && (!separate || compareTextMatches(phrase, separate) <= 0) ? phrase : separate;
+		return phraseMatch && (!separate || compareTextMatches(phraseMatch, separate) <= 0) ? phraseMatch : separate;
 	}
 
-	#matchWord(word: string, typos: boolean, abbreviations: boolean): TextMatch | null {
-		const compactWord = compactOf(word);
+	#matchWord(word: string, compactWord: string, typos: boolean, abbreviations: boolean): TextMatch | null {
 		let best: TextMatch | null = null;
 		for (let index = 0; index < this.#names.length; index++) {
 			const name = this.#names[index];
@@ -244,8 +243,7 @@ export class MatchTarget {
 	}
 
 	/** A several-word query found letter for letter in one name. */
-	#matchPhrase(phrase: string): TextMatch | null {
-		const compactPhrase = compactOf(phrase);
+	#matchPhrase(phrase: string, compactPhrase: string): TextMatch | null {
 		let best: TextMatch | null = null;
 		for (let index = 0; index < this.#names.length; index++) {
 			const name = this.#names[index];
@@ -254,6 +252,26 @@ export class MatchTarget {
 			if (match && (!best || compareTextMatches(match, best) < 0)) best = match;
 		}
 		return best;
+	}
+}
+
+/**
+ * A query split into words, folded and lowercased once. Pass it to
+ * {@link MatchTarget.match} when one query is matched against many candidates.
+ */
+export class TextQuery {
+	readonly words: readonly string[];
+	/** Each word without punctuation, for punctuation-free comparison. */
+	readonly compactWords: readonly string[];
+	/** The words joined by single spaces, matched letter for letter as one phrase. */
+	readonly phrase: string;
+	readonly compactPhrase: string;
+
+	constructor(query: string) {
+		this.words = fold(query).toLowerCase().split(/\s+/).filter(Boolean);
+		this.compactWords = this.words.map(compactOf);
+		this.phrase = this.words.join(" ");
+		this.compactPhrase = compactOf(this.phrase);
 	}
 }
 
@@ -277,8 +295,10 @@ export function rankByText<T>(
 	options?: MatchOptions,
 ): Array<{ item: T; match: TextMatch }> {
 	const ranked: Array<{ item: T; match: TextMatch }> = [];
+	const prepared = new TextQuery(query);
 	for (const item of items) {
-		const match = matchText(query, fieldsOf(item), options);
+		const fields = fieldsOf(item);
+		const match = (fields instanceof MatchTarget ? fields : new MatchTarget(fields)).match(prepared, options);
 		if (match) ranked.push({ item, match });
 	}
 	return ranked.sort((a, b) => compareTextMatches(a.match, b.match));
@@ -301,8 +321,9 @@ export class MatchCorpus<T> {
 	/** Same results as `rankByText(query, items, fieldsOf, options)`. */
 	rank(query: string, options?: MatchOptions): Array<{ item: T; match: TextMatch }> {
 		const ranked: Array<{ item: T; match: TextMatch }> = [];
+		const prepared = new TextQuery(query);
 		for (let index = 0; index < this.#items.length; index++) {
-			const match = this.#targets[index]!.match(query, options);
+			const match = this.#targets[index]!.match(prepared, options);
 			if (match) ranked.push({ item: this.#items[index]!, match });
 		}
 		return ranked.sort((a, b) => compareTextMatches(a.match, b.match));
@@ -337,10 +358,6 @@ const IGNORABLE = /[\p{M}\p{Cf}]/gu;
 /** Compatibility-decomposed `text` without combining marks or invisible format characters. */
 function fold(text: string): string {
 	return NON_ASCII.test(text) ? text.normalize("NFKD").replace(IGNORABLE, "") : text;
-}
-
-function splitQuery(query: string): string[] {
-	return fold(query).toLowerCase().split(/\s+/).filter(Boolean);
 }
 
 /**

@@ -25,7 +25,7 @@ import {
 	pickerEvent,
 	pickerHits,
 } from "../native/picker";
-import { compareTextMatches, type MatchFields, MatchTarget, type TextMatch } from "../text-match";
+import { compareTextMatches, type MatchFields, MatchTarget, type TextMatch, TextQuery } from "../text-match";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { plainText } from "../native/spans";
@@ -326,7 +326,7 @@ const LITERAL_ONLY = { typos: false, abbreviations: false } as const;
  * null. Typos and abbreviations are off so a near miss or abbreviation of the
  * title cannot shadow the same word found literally in the transcript or id.
  */
-function matchSessionLiterally(session: SessionSelectorEntry, query: string): TextMatch | null {
+function matchSessionLiterally(session: SessionSelectorEntry, query: TextQuery): TextMatch | null {
 	return sessionMatchTarget(session).match(query, LITERAL_ONLY);
 }
 
@@ -371,7 +371,7 @@ function prioritizeTitleMatches<T extends SessionSelectorEntry>(sessions: T[], l
 export function rankSessionSearchMatches<T extends SessionSelectorEntry>(allSessions: T[], query: string): T[] {
 	const tokens = tokenizeSessionQuery(query);
 	if (tokens.length === 0) return allSessions;
-	const normalized = tokens.join(" ");
+	const normalized = new TextQuery(tokens.join(" "));
 
 	const literal: RankedSessionMatch<T>[] = [];
 	const fuzzyMatches: RankedSessionMatch<T>[] = [];
@@ -637,7 +637,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 		// Literal pass: synchronous so every keystroke gets immediate
 		// recency-ranked feedback regardless of listing size.
-		const normalized = tokens.join(" ");
+		const normalized = new TextQuery(tokens.join(" "));
 		const literal: RankedSessionMatch<T>[] = [];
 		const rest: number[] = [];
 		const all = this.#allSessions;
@@ -670,7 +670,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	}
 
 	/** Fuzzy-match `rest[start..end)` (indexes into the unfiltered list) into {@link #fuzzyRanked}. */
-	#matchFuzzy(query: string, rest: number[], start: number, end: number): void {
+	#matchFuzzy(query: TextQuery, rest: number[], start: number, end: number): void {
 		const all = this.#allSessions;
 		for (let i = start; i < end; i++) {
 			const index = rest[i]!;
@@ -688,7 +688,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 	 * keystroke on a large listing, and the native picker replays its
 	 * row-arrival animation on every reorder. A stale generation aborts silently.
 	 */
-	#scheduleFuzzyScan(generation: number, query: string, rest: number[], start: number, shown: number): void {
+	#scheduleFuzzyScan(generation: number, query: TextQuery, rest: number[], start: number, shown: number): void {
 		this.#scanTimer = setTimeout(() => {
 			this.#scanTimer = undefined;
 			if (generation !== this.#scanGeneration) return;

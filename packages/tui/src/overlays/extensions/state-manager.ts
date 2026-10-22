@@ -1,5 +1,5 @@
 /** Pure dashboard tree, filtering, and selection state. */
-import { compareTextMatches, MatchTarget, type TextMatch } from "../../text-match";
+import { compareTextMatches, MatchTarget, type TextMatch, TextQuery } from "../../text-match";
 import {
 	type DashboardState,
 	type DisabledReason,
@@ -170,8 +170,9 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 	}
 
 	const ranked: { ext: Extension; match: TextMatch }[] = [];
+	const prepared = new TextQuery(query);
 	for (const ext of extensions) {
-		const match = extensionMatchTarget(ext).match(query);
+		const match = extensionMatchTarget(ext).match(prepared);
 		if (match) ranked.push({ ext, match });
 	}
 	ranked.sort((a, b) => compareTextMatches(a.match, b.match));

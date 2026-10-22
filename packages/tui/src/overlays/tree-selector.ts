@@ -1,6 +1,6 @@
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Component, Container, Input, matchesKey, Spacer, TruncatedText, truncateToWidth } from "../index";
-import { type MatchFields, MatchTarget } from "../text-match";
+import { type MatchFields, MatchTarget, TextQuery } from "../text-match";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 /** Available session-tree display filters. */
 export const TREE_FILTER_MODES = ["default", "no-tools", "user-only", "labeled-only", "all"] as const;
@@ -473,7 +473,8 @@ class TreeList implements Component {
 	#buildFilter(): (node: TreeSelectorNode, row: TreeRow<TreeSelectorNode, string>) => boolean {
 		const filterMode = this.#filterMode;
 		const leafId = this.currentLeafId;
-		const query = this.getSearchQuery().trim();
+		const trimmed = this.getSearchQuery().trim();
+		const query = trimmed ? new TextQuery(trimmed) : undefined;
 		return node => {
 			const entry = node.entry;
 			const isCurrentLeaf = entry.id === leafId;
