@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added provider-level `discoveryTimeoutMs` in `models.yml` so slow built-in LiteLLM proxies can retain rich reasoning and context metadata ([#11390](https://github.com/can1357/oh-my-pi/pull/11390) by [@PeterPonyu](https://github.com/PeterPonyu))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21

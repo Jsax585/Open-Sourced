@@ -1,3 +1,4 @@
+import { DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS } from "../discovery/openai-compatible";
 import { CHARM_HYPER_API_BASE_URL, normalizeCharmHyperBaseUrl } from "../wire/charm-hyper";
 import { CODEX_BASE_URL, CODEX_CLIENT_VERSION } from "../wire/codex";
 import { CURSOR_DEFAULT_BASE_URL } from "../wire/cursor";
@@ -12,6 +13,8 @@ import {
 export interface ModelCacheProviderIdOptions extends AccountScope {
 	apiKey?: string;
 	baseUrl?: string;
+	/** LiteLLM rich-discovery deadline; part of the cache namespace so a longer budget does not reuse a stale fallback. */
+	discoveryTimeoutMs?: number;
 }
 
 const CREDENTIAL_SCOPED_MODEL_CACHE_PROVIDERS: Readonly<Record<string, true>> = {
@@ -88,6 +91,13 @@ function cursorCredentialSubject(apiKey: string): string | undefined {
 	}
 }
 
+/** Configured LiteLLM deadline when positive and finite, otherwise the built-in default. */
+export function resolveLiteLLMDiscoveryTimeoutMs(configuredTimeoutMs: number | undefined): number {
+	return configuredTimeoutMs !== undefined && Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+		? configuredTimeoutMs
+		: DEFAULT_OPENAI_COMPATIBLE_DISCOVERY_TIMEOUT_MS;
+}
+
 /** Resolve the cache namespace used by a provider's model-manager options without constructing those options. */
 export function resolveModelCacheProviderId(providerId: string, options: ModelCacheProviderIdOptions = {}): string {
 	switch (providerId) {
@@ -160,14 +170,16 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 		}
 		case "litellm": {
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
+			const timeoutMs = resolveLiteLLMDiscoveryTimeoutMs(options.discoveryTimeoutMs);
 			// rich-v12 invalidates namespaced ids that missed bare catalog references.
 			// rich-v11 excluded ClinePass gateway metadata (issue #10932). rich-v10
 			// filtered known non-conversational LiteLLM modes, unioned compat across
 			// the management endpoints, and keyed the deployment's `supports_vision`
 			// declaration into it; earlier versions invalidated rows whose
 			// `compatConfig` retained a colliding bundled model's provider-specific
-			// transport (e.g. Fireworks `wireModelIdMode`) (issue #9938).
-			return `litellm:rich-v12:${Bun.hash(baseUrl).toString(36)}`;
+			// transport (e.g. Fireworks `wireModelIdMode`) (issue #9938). Including the
+			// timeout invalidates fallback rows cached under a shorter deadline.
+			return `litellm:rich-v12:${Bun.hash(`${baseUrl}\u0000${timeoutMs}`).toString(36)}`;
 		}
 		case "gmi-cloud":
 		case "siliconflow":

@@ -361,6 +361,14 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"authHeader?": "boolean",
 		"auth?": ProviderAuthSchema,
 		"discovery?": ProviderDiscoverySchema,
+		/**
+		 * Deadline in milliseconds for this provider's *built-in* runtime model
+		 * discovery (honoured by `litellm`, whose rich metadata walk otherwise
+		 * gives up after 10 s and degrades every model to the `/v1/models`
+		 * fallback). Providers that configure `discovery:` themselves use
+		 * `discovery.timeoutMs` instead.
+		 */
+		"discoveryTimeoutMs?": "number",
 		"models?": ModelDefinitionSchema.array(),
 		"modelOverrides?": { "[string]": ModelOverrideSchema },
 		"disableStrictTools?": "boolean",
@@ -393,6 +401,14 @@ export const getModelsConfigSchemaBundle = once(() => {
 		}
 		if (value.apiKey !== undefined && typeof value.apiKey === "string" && value.apiKey.length === 0) {
 			return ctx.mustBe("apiKey a non-empty string");
+		}
+		if (
+			value.discoveryTimeoutMs !== undefined &&
+			(typeof value.discoveryTimeoutMs !== "number" ||
+				value.discoveryTimeoutMs <= 0 ||
+				!Number.isFinite(value.discoveryTimeoutMs))
+		) {
+			return ctx.mustBe("discoveryTimeoutMs a positive finite number");
 		}
 		return true;
 	});
