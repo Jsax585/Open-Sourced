@@ -11,7 +11,10 @@
 //! file-system magic; the caller pays full filesystem-copy cost up front
 //! and an `rm -rf` on teardown.
 
-use std::{fs::FileType, path::{Component, Path, PathBuf}};
+use std::{
+	fs::FileType,
+	path::{Component, Path, PathBuf},
+};
 
 use async_trait::async_trait;
 
@@ -132,8 +135,8 @@ fn git_worktree_remove(merged: &Path) -> IsoResult<()> {
 /// worktree at `merged`. Four passes mirror what `git status` would report at
 /// `lower` while retaining ordinary ignored runtime input:
 ///
-///  1. **Staged:** `git diff --binary --cached` from lower, applied to both
-///     the index and the working tree of `merged`.
+///  1. **Staged:** `git diff --binary --cached` from lower, applied to both the
+///     index and the working tree of `merged`.
 ///  2. **Unstaged:** `git diff --binary` from lower, applied to the working
 ///     tree only.
 ///  3. **Untracked:** every path listed by `git ls-files --others
@@ -502,13 +505,11 @@ mod tests {
 	fn listed_paths_copy_each_covered_subtree_once() {
 		let paths = normalize_listed_paths(&[
 			b"apps/web/.verify/\0runtime/.env\0".as_slice(),
-			b"apps/web/.verify/same-origin-unrelated/.git/objects/9d/object\0runtime/.env\0".as_slice(),
+			b"apps/web/.verify/same-origin-unrelated/.git/objects/9d/object\0runtime/.env\0"
+				.as_slice(),
 		])
 		.expect("relative git paths");
-		assert_eq!(
-			paths,
-			vec![PathBuf::from("apps/web/.verify"), PathBuf::from("runtime/.env")]
-		);
+		assert_eq!(paths, vec![PathBuf::from("apps/web/.verify"), PathBuf::from("runtime/.env")]);
 	}
 
 	struct TempDirGuard(PathBuf);
