@@ -10,7 +10,7 @@
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
 /** Provider id stamped on discovered managed skills (distinguishes them from authored). */
@@ -252,4 +252,88 @@ export async function deleteManagedSkill(name: string): Promise<void> {
 			throw err;
 		}
 	});
+}
+
+/** One existing managed skill, as the settle scribe needs to see it. */
+export interface ManagedSkillSnapshot {
+	name: string;
+	description: string;
+	body: string;
+}
+
+/** Total body bytes quoted into the scribe prompt; the rest are named only. */
+export const MAX_SCRIBE_SKILL_CONTEXT_BYTES = 32_000;
+
+/**
+ * Read the existing managed skills for the settle scribe.
+ *
+ * The scribe can write a managed skill but has no read tool, so this is its only
+ * view of what it may be updating — `writeManagedSkill` replaces a body whole.
+ * Anything unsafe to hand to a model is skipped: symlinked or hard-linked skills
+ * (a write would be refused anyway) and files without a valid managed name +
+ * description. Bodies are quoted whole here; the prompt renderer, not the
+ * reader, decides what fits the byte budget.
+ */
+export async function readManagedSkills(agentDir?: string): Promise<ManagedSkillSnapshot[]> {
+	const root = getManagedSkillsDir(agentDir);
+	const entries = await fs.readdir(root, { withFileTypes: true }).catch(err => {
+		if (isEnoent(err) || (err as { code?: string }).code === "ENOTDIR") return [];
+		throw err;
+	});
+	const skills: ManagedSkillSnapshot[] = [];
+	for (const entry of entries) {
+		// `isDirectory()` is false for a symlink, which is exactly the exclusion we want.
+		if (!entry.isDirectory() || !isValidManagedSkillName(entry.name)) continue;
+		const file = path.join(root, entry.name, "SKILL.md");
+		const fileStat = await fs.lstat(file).catch(err => {
+			if (isEnoent(err)) return null;
+			throw err;
+		});
+		if (!fileStat?.isFile() || fileStat.nlink > 1) continue;
+		const content = await fs.readFile(file, "utf8").catch(() => undefined);
+		if (content === undefined) continue;
+		const { frontmatter, body } = parseFrontmatter(content, { source: file });
+		const description =
+			typeof frontmatter.description === "string" ? sanitizeManagedDescription(frontmatter.description) : "";
+		if (!description) continue;
+		skills.push({ name: entry.name, description, body: body.trim() });
+	}
+	return skills.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Render the managed-skill inventory for the scribe prompt, frontmatter stripped
+ * so an update can be written back verbatim. Bodies are billed against
+ * `MAX_SCRIBE_SKILL_CONTEXT_BYTES`; skills past that budget are listed by name
+ * and description only, so the scribe still knows not to duplicate them.
+ */
+export function formatManagedSkillsForScribe(
+	skills: readonly ManagedSkillSnapshot[],
+	budgetBytes = MAX_SCRIBE_SKILL_CONTEXT_BYTES,
+): string {
+	if (skills.length === 0) return "";
+	const quoted: string[] = [];
+	const namedOnly: string[] = [];
+	let used = 0;
+	for (const skill of skills) {
+		const block = `### ${skill.name}\n\n${skill.description}\n\n${skill.body}\n`;
+		const bytes = Buffer.byteLength(block, "utf8");
+		if (used + bytes > budgetBytes) {
+			namedOnly.push(`- ${skill.name}: ${skill.description}`);
+			continue;
+		}
+		used += bytes;
+		quoted.push(block);
+	}
+	const sections = [
+		"## Existing managed skills",
+		'`manage_skill(action="update")` replaces a skill\'s whole body. When you enhance one listed below, carry its existing procedure forward instead of dropping it.',
+		quoted.join("\n"),
+	];
+	if (namedOnly.length > 0) {
+		sections.push(
+			`Listed without their bodies (too many to quote in full; create a new skill rather than blind-updating one):\n\n${namedOnly.join("\n")}`,
+		);
+	}
+	return sections.filter(part => part.length > 0).join("\n\n");
 }

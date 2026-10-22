@@ -531,7 +531,12 @@ async function runPrintModeCore(
 	// durability rather than letting it escape as a raw fatal dump.
 	let durabilityFailure = false;
 	try {
-		await session.dispose({ mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS });
+		await session.dispose({
+			mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+			// The session just settled for the last time: give its opt-in scribe the
+			// chance to write a skill instead of cancelling it on the way out.
+			awaitAutolearnSettle: true,
+		});
 	} catch (error) {
 		if (!persistenceFailure || error !== persistenceFailure) throw error;
 		durabilityFailure = true;

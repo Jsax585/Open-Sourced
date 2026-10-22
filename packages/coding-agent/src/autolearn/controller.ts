@@ -10,6 +10,10 @@
  *   * every other substantive stop belongs to the capture nudge for the primary
  *     model, gated by `autolearn.autoContinue`.
  *
+ * A pass reports whether it actually ran. A scribe that cannot start — no
+ * scribe model resolves, no capture tool is mounted — hands its stop to the
+ * capture nudge, so switching the scribe on never silences capture.
+ *
  * Disjointness is the point: a stop is never paid for twice. Passive mode is
  * intentionally prompt-cache neutral: the standing system guidance remains
  * available, but no hidden mid-session reminder is inserted into the
@@ -62,19 +66,21 @@ export function buildAutoLearnInstructions(available: { manageSkill: boolean; le
 export interface AutoLearnControllerOptions {
 	session: AgentSession;
 	settings: Settings;
-	capture: (content: string) => Promise<void>;
+	/** Runs the capture turn; `false` when the pass could not start. */
+	capture: (content: string) => Promise<boolean>;
 	/**
 	 * Optional: wired only where a scribe model can resolve. Absent, a terminal
-	 * settle falls back to the capture nudge rather than running nothing.
+	 * settle falls back to the capture nudge rather than running nothing. A
+	 * `false` result — no model, no tool — feeds the same fallback.
 	 */
-	scribe?: (content: string) => Promise<void>;
+	scribe?: (content: string) => Promise<boolean>;
 }
 
 export class AutoLearnController {
 	readonly #session: AgentSession;
 	readonly #settings: Settings;
-	readonly #capture: (content: string) => Promise<void>;
-	readonly #scribe: ((content: string) => Promise<void>) | undefined;
+	readonly #capture: (content: string) => Promise<boolean>;
+	readonly #scribe: ((content: string) => Promise<boolean>) | undefined;
 	#toolCalls = 0;
 	/**
 	 * Whether the in-flight turn BEGAN while goal mode was active. Captured at
@@ -160,7 +166,16 @@ export class AutoLearnController {
 		// persisted conversation prefix after providers have cached it. The standing
 		// auto-learn system guidance is stable; keep passive mode to that guidance
 		// so Anthropic prompt-cache prefixes survive long sessions.
-		if (cfgAutolearnAutoContinue.get(this.#settings) !== true) return;
+		this.#scheduleCapture();
+	}
+
+	/** Whether the capture nudge may run at all for the current settings. */
+	#captureEnabled(): boolean {
+		return cfgAutolearnAutoContinue.get(this.#settings) === true;
+	}
+
+	#scheduleCapture(): void {
+		if (!this.#captureEnabled()) return;
 		this.#schedule("capture");
 	}
 
@@ -174,9 +189,19 @@ export class AutoLearnController {
 
 	#start(pass: AutoLearnPass): void {
 		const run = pass === "scribe" ? this.#scribe : this.#capture;
-		if (!run) return;
+		if (!run) {
+			// A terminal settle with no scribe runner still belongs to capture.
+			if (pass === "scribe") this.#scheduleCapture();
+			return;
+		}
 		this.#passInFlight = pass;
 		void run(pass === "scribe" ? SCRIBE_NUDGE : CAPTURE_NUDGE)
+			.then(ran => {
+				// The runner resolves its own model per pass, so "no scribe model"
+				// only surfaces here. Hand the stop to capture rather than letting a
+				// configured-but-unresolvable scribe swallow it.
+				if (ran === false && pass === "scribe") this.#scheduleCapture();
+			})
 			.catch(err => {
 				logger.warn("auto-learn pass failed", { pass, err });
 			})

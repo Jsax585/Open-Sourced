@@ -24,26 +24,33 @@ class FakeSession {
 	goalEnabled = false;
 	captureGate: Promise<void> | undefined;
 	captureError: Error | undefined;
+	/** Simulates a pass that could not start: no model, no capture tool, aborted. */
+	captureStarts = true;
+	scribeStarts = true;
 
 	subscribe(listener: (event: AgentSessionEvent) => void): () => void {
 		this.listeners.push(listener);
 		return () => {};
 	}
 
-	async capture(content: string): Promise<void> {
+	async capture(content: string): Promise<boolean> {
+		if (!this.captureStarts) return false;
 		this.captures.push(content);
 		const gate = this.captureGate;
 		const error = this.captureError;
 		if (gate) await gate;
 		if (error) throw error;
+		return true;
 	}
 
-	async scribe(content: string): Promise<void> {
+	async scribe(content: string): Promise<boolean> {
+		if (!this.scribeStarts) return false;
 		this.scribes.push(content);
 		const gate = this.captureGate;
 		const error = this.captureError;
 		if (gate) await gate;
 		if (error) throw error;
+		return true;
 	}
 
 	getPlanModeState(): { enabled: boolean } | undefined {
@@ -78,20 +85,20 @@ class FakeSession {
 	}
 }
 
-function install(session: FakeSession, overrides: Record<string, unknown> = {}): Settings {
+function install(session: FakeSession, overrides: Record<string, unknown> = {}, wireScribe = true): Settings {
 	const settings = Settings.isolated({ "autolearn.enabled": true, ...overrides });
 	new AutoLearnController({
 		session: session as unknown as AgentSession,
 		settings,
 		capture: content => session.capture(content),
-		scribe: content => session.scribe(content),
+		scribe: wireScribe ? content => session.scribe(content) : undefined,
 	});
 	return settings;
 }
 
+/** Flush a pass, the fallback it can schedule behind itself, and the pending pass. */
 async function settleCaptures(): Promise<void> {
-	await Promise.resolve();
-	await Promise.resolve();
+	for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
 const ZERO_USAGE: Usage = {
@@ -395,6 +402,39 @@ describe("AutoLearnController", () => {
 		release.resolve();
 		await settleCaptures();
 		expect(session.scribes).toHaveLength(1);
+	});
+
+	it("hands a terminal settle to capture when the scribe cannot start", async () => {
+		// The runner resolves its model per pass, so a configured scribe with no
+		// usable model reports `false` only after the stop was already routed to it.
+		const session = new FakeSession();
+		session.scribeStarts = false;
+		install(session, { "autolearn.autoContinue": true, "autolearn.scribe": true });
+		session.toolCalls(5);
+		session.agentSettled();
+		await settleCaptures();
+		expect(session.scribes).toHaveLength(0);
+		expect(session.captures).toHaveLength(1);
+	});
+
+	it("runs neither pass on a settle whose scribe cannot start while capture is off", async () => {
+		const session = new FakeSession();
+		session.scribeStarts = false;
+		install(session, { "autolearn.scribe": true });
+		session.toolCalls(5);
+		session.agentSettled();
+		await settleCaptures();
+		expect(session.scribes).toHaveLength(0);
+		expect(session.captures).toHaveLength(0);
+	});
+
+	it("keeps the capture nudge on a terminal settle when no scribe runner is wired", () => {
+		const session = new FakeSession();
+		install(session, { "autolearn.autoContinue": true, "autolearn.scribe": true }, false);
+		session.toolCalls(5);
+		session.agentSettled();
+		expect(session.scribes).toHaveLength(0);
+		expect(session.captures).toHaveLength(1);
 	});
 });
 

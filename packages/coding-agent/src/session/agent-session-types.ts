@@ -69,6 +69,13 @@ export interface AgentSessionDisposeOptions {
 	 * (`/quit`, test teardown, subagent completion).
 	 */
 	reason?: postmortem.Reason;
+	/**
+	 * Wait for an in-flight session-settle pass to finish instead of aborting it
+	 * (default false). A one-shot `omp -p`/JSON run disposes right after printing
+	 * its answer, so without this the settle scribe is cancelled before it ever
+	 * reaches a request. Interactive and signal teardown keep the immediate abort.
+	 */
+	awaitAutolearnSettle?: boolean;
 }
 
 /** Listener notified when command metadata changes. */

@@ -151,6 +151,7 @@ describe("AgentSession.fork(entryId)", () => {
 		const captureRun = seeded.runAutolearnCapture(async signal => {
 			captureSignal = signal;
 			await capture.promise;
+			return true;
 		});
 		const userEval = new AbortController();
 		const flush = seeded.sessionManager.flush.bind(seeded.sessionManager);
