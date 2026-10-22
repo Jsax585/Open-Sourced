@@ -15,6 +15,8 @@ export default class Stats extends Command {
 		host: Flags.string({ description: "Host to bind", default: "127.0.0.1" }),
 		json: Flags.boolean({ char: "j", description: "Output stats as JSON", default: false }),
 		summary: Flags.boolean({ char: "s", description: "Print summary to console", default: false }),
+		follow: Flags.boolean({ description: "Keep syncing sessions without starting the dashboard", default: false }),
+		"no-open": Flags.boolean({ description: "Do not open the dashboard in a browser", default: false }),
 	};
 
 	async run(): Promise<void> {
@@ -25,6 +27,8 @@ export default class Stats extends Command {
 			host: flags.host ?? "127.0.0.1",
 			json: flags.json,
 			summary: flags.summary,
+			follow: flags.follow,
+			noOpen: flags["no-open"],
 		};
 
 		await theme.initTheme();

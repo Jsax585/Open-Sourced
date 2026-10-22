@@ -61,6 +61,8 @@ export interface StatsCommandArgs {
 	host: string;
 	json: boolean;
 	summary: boolean;
+	follow: boolean;
+	noOpen: boolean;
 }
 
 // =============================================================================
@@ -76,9 +78,17 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		getTotalMessageCount,
 		printStatsSummary,
 		refreshRollups,
+		runHeadlessStats,
 		startServer,
 		syncAllSessions,
 	} = await import("@oh-my-pi/omp-stats");
+	if (cmd.follow) {
+		if (cmd.json || cmd.summary) {
+			throw new Error("--follow cannot be combined with --json or --summary");
+		}
+		await runHeadlessStats();
+		return;
+	}
 
 	// One-shot reports need fully ingested, fully rolled-up data before printing.
 	if (cmd.json || cmd.summary) {
@@ -107,8 +117,7 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	const url = formatStatsDashboardUrl(hostname, port);
 	console.log(chalk.green(`Dashboard available at: ${url}`));
 
-	// Open browser
-	openPath(url);
+	if (!cmd.noOpen) openPath(url);
 
 	console.log(`Press ${formatKeyHint("ctrl+c")} to stop\n`);
 

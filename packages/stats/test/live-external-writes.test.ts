@@ -33,7 +33,24 @@ async function syncAndFlush(live: StatsLive): Promise<number> {
 	return live.status().version;
 }
 
-describe("StatsLive external writes", () => {
+describe("StatsLive", () => {
+	it("starts its initial sync without a dashboard connection", async () => {
+		const live = new StatsLive();
+		const { promise, resolve } = Promise.withResolvers<LiveStatus>();
+		const unsubscribe = live.subscribe(status => {
+			if (status.sync.phase === "idle" && status.sync.lastSyncedAt !== null) resolve(status);
+		});
+		try {
+			live.start();
+			const status = await promise;
+			expect(status.sync.phase).toBe("idle");
+			expect(status.sync.lastSyncedAt).not.toBeNull();
+		} finally {
+			unsubscribe();
+			live.stop();
+		}
+	});
+
 	it("bumps the version only when another connection committed since the last sync", async () => {
 		vi.useFakeTimers();
 		// Distinct lastSyncedAt per sync while the clock is frozen.

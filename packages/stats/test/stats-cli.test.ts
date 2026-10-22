@@ -9,6 +9,7 @@ describe("standalone stats CLI", () => {
 			host: "127.0.0.1",
 			json: false,
 			sync: false,
+			follow: false,
 			help: false,
 		});
 	});
@@ -20,5 +21,14 @@ describe("standalone stats CLI", () => {
 		});
 		expect(formatStatsDashboardUrl("::", 3850)).toBe("http://[::]:3850");
 		expect(formatStatsDashboardUrl("2001:db8::1", 3850)).toBe("http://[2001:db8::1]:3850");
+	});
+	it("parses follow mode without changing the dashboard bind defaults", () => {
+		expect(parseStandaloneStatsArgs(["--follow"])).toMatchObject({
+			port: 3847,
+			host: "127.0.0.1",
+			follow: true,
+			json: false,
+			sync: false,
+		});
 	});
 });

@@ -1,6 +1,6 @@
 /**
- * Live ingest for a running dashboard: background session sync, rollup
- * refresh, and a status stream the client subscribes to (`/api/events`).
+ * Live ingest for the stats dashboard or a headless follow command: background session sync,
+ * rollup refresh, and a status stream the dashboard subscribes to (`/api/events`).
  *
  * The dashboard never waits for ingest. {@link StatsLive.start} kicks a full
  * sync in the background and watches the sessions directory; changed
@@ -33,7 +33,7 @@ const PROGRESS_THROTTLE_MS = 150;
 /** Receives each distinct status and its JSON serialization (shared by every listener). */
 type Listener = (status: LiveStatus, frame: string) => void;
 
-/** One per process; owned by the dashboard server (see `startServer`). */
+/** One per process; shared by the dashboard server and headless follow mode. */
 export class StatsLive {
 	#version = 1;
 	#sync: LiveSyncStatus = { phase: "idle", current: 0, total: 0, processed: 0, lastSyncedAt: null, error: null };
