@@ -202,6 +202,12 @@ export interface AutocompleteItem {
 	state?: string;
 	/** Dim hint text shown inline after cursor when this item is selected */
 	hint?: string;
+	/**
+	 * Slash command matched only through its description, not its name or an alias:
+	 * a browse hit, so Enter submits the typed text instead of running it unless the
+	 * user moved the selection onto it.
+	 */
+	descriptionMatch?: boolean;
 }
 
 type Awaitable<T> = T | Promise<T>;
@@ -392,6 +398,9 @@ function buildSlashCommandCompletions(
 				...(cmd.iconName && { iconName: cmd.iconName }),
 				...(fullDesc && { description: fullDesc }),
 				...nativeCommandText(displayDesc, staticDesc, hint),
+				// Any name or alias match outranks the description, so `detail` means no
+				// name matched: Enter submits the typed text instead of running it.
+				...(match.kind === "detail" && { descriptionMatch: true }),
 			},
 			match,
 			usage: commandUsage?.(name) ?? 0,
