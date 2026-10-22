@@ -103,6 +103,40 @@ Tool-call argument streaming:
 - providers that send only `response.function_call_arguments.done` still populate final args
 - tool call IDs are normalized as `"<call_id>|<item_id>"`
 
+### Standard Responses transport ownership
+
+`streamSimple` forwards an explicit request preference to `streamOpenAIResponses`.
+The provider resolves `options.preferWebsockets ?? model.preferWebsockets ?? false`:
+HTTP/SSE remains the default. `buildParams` and `processResponsesStream` own the
+request and event semantics for both transports, so tools, reasoning, usage and
+native history do not acquire a second converter.
+
+`utils/websocket.ts` owns protocol-neutral URL conversion and handshake-header
+normalization, shared with Codex. Proxy selection and abort tracking also reuse
+the existing utilities. `providers/openai-responses-websocket.ts` owns the standard
+Responses exchange and its session-owned socket leases, not Codex headers, Lite
+shaping, steering or its retry state machine. Those behaviors remain in the
+Codex provider; sharing the Responses event protocol does not make their session
+and recovery contracts identical.
+
+Each lease admits one active `response.create`. A concurrent request for the same
+session receives an independent ephemeral socket rather than stealing a busy
+connection. Successful idle connections can be reused; failure or cancellation
+retires the connection. `ProviderSessionState.releaseSession` and `close` own
+teardown. Without provider session state, the connection closes after the request.
+
+Standard WebSocket requests replay full history and never consult or update the
+HTTP `previous_response_id` baseline. Reconnection therefore requires no native
+chain reconstruction. The provider rejects injected response anchors and background
+execution, and bypasses HTTP transient-stream retry and stored-result recovery on
+WebSocket errors. This boundary avoids hidden replay after uncertain execution;
+Codex recovery policy remains independent.
+
+The coding-agent resolves the session transport hint against the actual request
+model, including advisor and side requests. Global `on` is Codex-only; global `off`
+can supply an HTTP override for standard Responses. An explicit SDK preference
+takes precedence over that hint.
+
 ## Google Generative AI (`google-generative-ai`)
 
 Source: `packages/ai/src/providers/google.ts` (thin request wrapper) and `google-shared.ts` (`streamGoogleGenAI`, shared chunk-to-block translation)

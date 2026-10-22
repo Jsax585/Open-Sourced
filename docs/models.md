@@ -114,8 +114,40 @@ An unscoped OpenRouter `baseUrl` names the `/api/v1` chat root, so OpenRouter De
 models use its `/api/alpha` sibling on the same host, e.g. a `.../api/v1` relay serves judges at
 `.../api/alpha/decisions`.
 
-`preferWebsockets` (on a model or `modelOverrides` entry) controls whether Codex requests prefer
-the WebSocket transport. `omitMaxOutputTokens` omits the model-derived output cap.
+`preferWebsockets` (on a model or `modelOverrides` entry) explicitly enables WebSocket
+transport for `openai-responses`, and controls the existing Codex transport preference.
+Standard Responses uses HTTP/SSE when omitted or `false`; it never probes WebSocket
+automatically. Keep `api: openai-responses` and the existing API root: the client upgrades
+the same `/responses` endpoint, without adding `/codex`.
+
+For example, enable WebSocket for one discovered or built-in model:
+
+```yaml
+providers:
+  openai:
+    modelOverrides:
+      gpt-6-astra:
+        preferWebsockets: true
+```
+
+Existing provider `baseUrl`, authentication and discovery settings remain unchanged.
+Custom `models` entries accept the same boolean directly. The endpoint must support
+Responses WebSocket `response.create` events; HTTP Responses compatibility alone is
+not sufficient.
+
+An explicit SDK request `preferWebsockets: false` overrides a model opt-in. The session
+setting `providers.openaiWebsockets: on` enables Codex only, not standard Responses;
+`off` supplies an HTTP override for both, unless the SDK caller explicitly overrides it.
+Its `auto` value leaves the request override unset: an unconfigured standard model
+still uses HTTP/SSE. `PI_CODEX_WEBSOCKET` remains Codex-only.
+
+Standard Responses WebSocket requests replay the full conversation on each turn.
+They do not use `previous_response_id` chaining, even when HTTP stateful Responses
+is enabled; an injected `previous_response_id` or `background: true` is rejected.
+Connection and protocol failures surface as errors rather than silently switching
+to HTTP/SSE. Codex chaining, steering and fallback behavior are unchanged.
+
+`omitMaxOutputTokens` omits the model-derived output cap.
 
 ### Bedrock request options
 
