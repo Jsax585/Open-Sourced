@@ -501,6 +501,35 @@ describe("interactive native input ingress", () => {
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
+	it("Enter /tan takes its images out of the composer, so the next draft cannot send them", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const h = await createHarness(() => {});
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		const handleTanCommand = vi.fn(async (_work: string, _images?: ImageContent[]) => {
+			entered.resolve();
+			await release.promise;
+		});
+		h.ctx.handleTanCommand = handleTanCommand;
+		h.draftWithImage("/tan fix this block [Image #1]");
+		const submitting = h.pressSubmit(ENTER);
+		await entered.promise;
+		// Pasted while /tan dispatches: the composer holds only this image, so it is #1.
+		h.editor.pendingImages.push(newerImage);
+		h.editor.pendingImageLinks.push("local://newer.jpg");
+		h.editor.setText("newer [Image #1]");
+		release.resolve();
+		await submitting;
+
+		expect(handleTanCommand).toHaveBeenCalledWith("fix this block [Image #1]", [originalImage]);
+		expect(h.editor.pendingImages).toEqual([newerImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
+
+		await h.pressSubmit(ENTER);
+
+		expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", { streamingBehavior: "steer", images: [newerImage] });
+	});
+
 	it.each(["/clear", "/export"])(
 		"Ctrl+Enter preserves newer drafts across delayed %s builtin dispatch",
 		async command => {

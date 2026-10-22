@@ -1036,7 +1036,8 @@ export class InputController {
 				submittedMode === "plan" ||
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
-				submittedMode === "guided-goal";
+				submittedMode === "guided-goal" ||
+				submittedMode === "tan";
 			if (
 				draftDetached &&
 				submittedImages?.length &&
