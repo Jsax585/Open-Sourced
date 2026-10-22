@@ -6,6 +6,10 @@
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Fixed snapcompact and handoff compactions losing extension and memory context from `session.compacting`; manual and speculative handoff now run the hook too ([#16720](https://github.com/can1357/oh-my-pi/pull/16720) by [@integrITsolutions](https://github.com/integrITsolutions))
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
