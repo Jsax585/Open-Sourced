@@ -89,6 +89,34 @@ test.each(["request", "settings override", "frontmatter"] as const)(
 	},
 );
 
+test.each([
+	["the enabled scope", "scope-test/allowed"],
+	["the requested model", "late-provider/ready"],
+] as const)("defers to execution while %s may still be registered by an extension", async (_label, requested) => {
+	// An unrelated model is already available; the scoped target registers later, during child setup.
+	cfgEnabledModels.override(settings, ["late-provider/ready"]);
+	const policy = await resolveEffectiveSubagentPolicy({
+		session: session(),
+		invocationKind: "task",
+		assignment: "Inspect the target.",
+		agent: "worker",
+		model: requested === "late-provider/ready" ? requested : undefined,
+	});
+	expect(policy.modelOverride?.length).toBeGreaterThan(0);
+});
+
+test("still rejects at preflight once the scoped model is registered and the selection is outside it", async () => {
+	cfgEnabledModels.override(settings, ["scope-test/allowed"]);
+	await expect(
+		resolveEffectiveSubagentPolicy({
+			session: session(["scope-test/forbidden"]),
+			invocationKind: "task",
+			assignment: "Inspect the target.",
+			agent: "worker",
+		}),
+	).rejects.toMatchObject({ kind: "preflight" });
+});
+
 test("skips a forbidden ordered candidate at execution after shared preflight", async () => {
 	const policy = await resolveEffectiveSubagentPolicy({
 		session: session(),

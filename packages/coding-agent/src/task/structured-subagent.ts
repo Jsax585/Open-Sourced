@@ -452,16 +452,21 @@ export async function resolveEffectiveSubagentPolicy(
 	const enabledPatterns = cfgEnabledModels.get(settings);
 	if (enabledPatterns.length > 0 && modelOverride.length > 0 && modelRegistry) {
 		const available = modelRegistry.getAvailable();
-		// Discovery may still be warming up; execution resolves the same scope
-		// again once models are available.
-		if (available.length > 0) {
-			const scopedModels = filterAvailableModelsByEnabledPatterns(available, enabledPatterns, settings);
-			if (!resolveModelOverride(modelOverride, { getAvailable: () => scopedModels }, settings).model) {
-				throw new StructuredSubagentError(
-					"preflight",
-					`No enabled model matches the subagent selection: ${JSON.stringify(modelOverride)}. Check enabledModels.`,
-				);
-			}
+		const scopedModels = filterAvailableModelsByEnabledPatterns(available, enabledPatterns, settings);
+		// Reject only what the registry can already decide: the selection resolves, every
+		// enabledModels pattern matches something, and none of it is in scope. A selection
+		// or scoped model that extensions or discovery may still register is left to
+		// execution, which resolves the same scope once models are loaded.
+		const decidable =
+			resolveModelOverride(modelOverride, { getAvailable: () => available }, settings).model !== undefined &&
+			enabledPatterns.every(
+				pattern => filterAvailableModelsByEnabledPatterns(available, [pattern], settings).length > 0,
+			);
+		if (decidable && !resolveModelOverride(modelOverride, { getAvailable: () => scopedModels }, settings).model) {
+			throw new StructuredSubagentError(
+				"preflight",
+				`No enabled model matches the subagent selection: ${JSON.stringify(modelOverride)}. Check enabledModels.`,
+			);
 		}
 	}
 	const isolationEnabled = cfgTaskIsolationEnabled.get(settings);
