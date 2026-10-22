@@ -291,6 +291,7 @@ describe("Composer prepaint", () => {
 		await initTheme();
 		settings = await Settings.init({ inMemory: true });
 		config = {
+			stickyPrompt: "off",
 			quiet: cfgStartupQuiet.get(settings),
 			composerShape: cfgComposerShape.get(settings) ?? "box",
 			showHardwareCursor: cfgShowHardwareCursor.get(settings),
@@ -825,6 +826,7 @@ describe("Composer prepaint", () => {
 		await terminal.waitForRender(() => terminal.getViewport().some(row => Bun.stripANSI(row).includes("v9.9.9")));
 
 		applyStartupComposerPreferences({
+			stickyPrompt: config.stickyPrompt,
 			quiet: true,
 			composerShape: "box",
 			showHardwareCursor: config.showHardwareCursor,

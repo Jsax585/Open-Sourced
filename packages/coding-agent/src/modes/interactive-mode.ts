@@ -267,6 +267,7 @@ import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
 import { SessionInfoOverlay } from "@oh-my-pi/pi-tui/overlays/session-info-overlay";
 import { JobsSheet } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "./status-line-host";
 import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -398,6 +399,7 @@ import {
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
 	cfgTuiResizeScrollback,
+	cfgTuiStickyPrompt,
 	cfgTuiCompleteScrollback,
 	cfgTuiTextSizing,
 	cfgTuiTight,
@@ -435,6 +437,7 @@ const cfgLiveUiSettings = combine({
 	showHardwareCursor: cfgShowHardwareCursor,
 	"tui.maxInlineImages": cfgTuiMaxInlineImages,
 	"tui.resizeScrollback": cfgTuiResizeScrollback,
+	"tui.stickyPrompt": cfgTuiStickyPrompt,
 	"tui.completeScrollback": cfgTuiCompleteScrollback,
 	"tui.imeSafeCursor": cfgTuiImeSafeCursor,
 	autocompleteMaxVisible: cfgAutocompleteMaxVisible,
@@ -1972,7 +1975,19 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender();
 			}),
 		);
-		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
+		this.ui.setInlineMouseTrackingProvider(() => {
+			const clickCapture = this.#mouseCapture;
+			const viewportWheel = this.composer.stickyPrompt === "viewport";
+			// Hover bands belong only to clickable capture: viewport-only wheel
+			// reporting still requires clearing stale click highlighting.
+			if (!clickCapture) {
+				this.composer.setHoveredClickId(undefined);
+				// The provider can fire from a synchronous forced render before
+				// init reaches the controller block below.
+				this.#inputController?.clearHoverHighlight();
+			}
+			return clickCapture || viewportWheel;
+		});
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
 		this.progressHudContainer = new AnchoredLiveContainer();
@@ -3364,6 +3379,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.optimisticUserMessageSignature = undefined;
 		this.#pendingSubmissionDispose?.();
 		this.#pendingSubmissionDispose = undefined;
+		for (const component of this.#optimisticUserMessageComponents) {
+			if (component instanceof UserMessageComponent) component.markTranscriptBlockFinalized();
+		}
 		this.#optimisticUserMessageComponents = [];
 	}
 
@@ -3397,15 +3415,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	): void {
 		this.clearOptimisticSkillMessage();
 		this.optimisticSkillMessagePending = true;
+		// Mark the row pending before insertion so the transcript never settles it
+		// into immutable history during a slow preflight (issue #11217).
 		this.#optimisticSkillMessageComponents = this.#captureAddedChatComponents(() => {
-			this.addMessageToChat(message, options);
+			this.addMessageToChat(message, { ...options, pendingTranscriptBlock: true });
 		});
-		// Hold the row live (unfinalized) so it stays removable until reconcile,
-		// instead of settling and retiring into immutable scrollback mid-preflight
-		// where reconcile could no longer swap it out (issue #11217).
-		for (const component of this.#optimisticSkillMessageComponents) {
-			if (component instanceof SkillMessageComponent) component.markTranscriptBlockPending();
-		}
 		this.ensureLoadingAnimation();
 		this.ui.requestRender();
 	}
@@ -3492,7 +3506,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						attribution: "user",
 						timestamp: Date.now(),
 					},
-					{ imageLinks: input.imageLinks },
+					{ imageLinks: input.imageLinks, pendingTranscriptBlock: true },
 				);
 			});
 		} else {
@@ -3589,21 +3603,19 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	finishPendingSubmission(input: SubmittedUserInput): void {
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
-		const pendingSubmissionDispose = this.#pendingSubmissionDispose;
 		if (wasPendingSubmission) {
 			this.#pendingSubmittedInput = undefined;
-			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;
 		}
 
 		if (wasPendingSubmission && !this.session.isStreaming && !this.streamingComponent) {
-			this.optimisticUserMessageSignature = undefined;
-			pendingSubmissionDispose?.();
-			this.#optimisticUserMessageComponents = [];
+			this.clearOptimisticUserMessage();
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
 				this.#stopLoadingAnimation(true);
 			}
+		} else if (wasPendingSubmission) {
+			this.#pendingSubmissionDispose = undefined;
 		}
 	}
 
@@ -3618,6 +3630,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Live-setting composer preferences; `quiet` is startup-only and `composerShape` flows through {@link syncComposerShape}. */
 	#liveComposerPreferences(): Omit<ComposerPreferences, "quiet" | "composerShape"> {
 		return {
+			stickyPrompt: cfgTuiStickyPrompt.get(this.settings),
 			showHardwareCursor: cfgShowHardwareCursor.get(this.settings),
 			maxInlineImages: cfgTuiMaxInlineImages.get(this.settings),
 			resizeScrollback: cfgTuiResizeScrollback.get(this.settings),
@@ -3663,6 +3676,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"showHardwareCursor",
 				"tui.maxInlineImages",
 				"tui.resizeScrollback",
+				"tui.stickyPrompt",
 				"tui.completeScrollback",
 				"tui.imeSafeCursor",
 				"autocompleteMaxVisible",
@@ -3759,6 +3773,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
+		if (any("tui.stickyPrompt")) rebuildChat = true;
 		if (any("tui.renderMermaid")) {
 			setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(this.settings));
 			rebuildChat = true;
@@ -4182,7 +4197,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					attribution: "user",
 					timestamp: Date.now(),
 				},
-				{ imageLinks: submission.imageLinks },
+				{ imageLinks: submission.imageLinks, pendingTranscriptBlock: true },
 			);
 		});
 	}
@@ -8003,6 +8018,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		options?: {
 			imageLinks?: readonly (string | undefined)[];
 			reuseSettledComponent?: boolean;
+			pendingTranscriptBlock?: boolean;
 		},
 	): Component[] {
 		return this.#uiHelpers.addMessageToChat(message, options);

@@ -39,7 +39,12 @@ describe("composer startup cache", () => {
 	it("round-trips per-project speculation and serves settings-derived rows to projects without their own", () => {
 		const project = path.join(root, "project");
 		const other = path.join(root, "other");
-		const preferences = { ...COMPOSER_DEFAULTS, composerShape: "rail", autocompleteMaxVisible: 7 };
+		const preferences = {
+			...COMPOSER_DEFAULTS,
+			stickyPrompt: "viewport" as const,
+			composerShape: "rail",
+			autocompleteMaxVisible: 7,
+		};
 		const theme = { symbolPreset: "ascii" as const, colorBlindMode: true, darkTheme: "dark", lightTheme: "light" };
 		const status = statusFor(ThinkingLevel.High);
 
@@ -53,6 +58,29 @@ describe("composer startup cache", () => {
 		expect(reader.read(project)).toEqual({ preferences, theme, status });
 		// Theme and status follow the user.
 		expect(reader.read(other)).toEqual({ preferences, theme, status });
+		reader.close();
+	});
+
+	it("defaults cached UI payloads without sticky presentation to off", () => {
+		const project = path.join(root, "legacy-project");
+		const writer = ComposerCache.open(dbPath);
+		writer.writeUi(project, COMPOSER_DEFAULTS, {});
+		writer.close();
+
+		const database = new Database(dbPath);
+		const row = database
+			.prepare<{ value: string }, [string, string]>("SELECT value FROM entries WHERE project = ? AND kind = ?")
+			.get(project, "ui");
+		expect(row).toBeDefined();
+		const payload = JSON.parse(row!.value) as { preferences: Record<string, unknown> };
+		delete payload.preferences.stickyPrompt;
+		database
+			.prepare("UPDATE entries SET value = ? WHERE project = ? AND kind = ?")
+			.run(JSON.stringify(payload), project, "ui");
+		database.close();
+
+		const reader = ComposerCache.open(dbPath);
+		expect(reader.read(project).preferences?.stickyPrompt).toBe("off");
 		reader.close();
 	});
 

@@ -80,6 +80,7 @@ import type { SessionContext, StrippedToolCallsMarker } from "../../session/sess
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
+import { cfgTuiStickyPrompt } from "../settings";
 import {
 	createAssistantMessageComponent,
 	getAssistantMessageLinkTargets,
@@ -140,6 +141,8 @@ type QueuedMessages = {
 type AddMessageOptions = {
 	imageLinks?: readonly (string | undefined)[];
 	reuseSettledComponent?: boolean;
+	/** Keep a new user bubble live and replaceable until its canonical event arrives. */
+	pendingTranscriptBlock?: boolean;
 };
 
 type ImageChipSessionManager = Pick<
@@ -335,6 +338,7 @@ export class UiHelpers {
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
 						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
 						component.setExpanded(this.ctx.toolOutputExpanded);
+						if (options?.pendingTranscriptBlock) component.markTranscriptBlockPending();
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
@@ -414,9 +418,11 @@ export class UiHelpers {
 							images,
 							liveSteered: message.role === "user" && message.liveSteered === true,
 							timestamp: message.timestamp,
+							semanticResponseGrouping: !isSynthetic && cfgTuiStickyPrompt.get(this.ctx.settings) === "terminal",
 						});
 						this.ctx.transcriptMessageComponents.set(message, userComponent);
 					}
+					if (options?.pendingTranscriptBlock) userComponent.markTranscriptBlockPending();
 					this.ctx.chatContainer.addChild(userComponent);
 				}
 				break;
