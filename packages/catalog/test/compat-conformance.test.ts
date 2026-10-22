@@ -35,6 +35,11 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// cloudflareWorkersAiModelManagerOptions serves at runtime; models.json
 	// gains the rows at the next regeneration.
 	"cloudflare-workers-ai",
+	// LithosAI's roster is organization-scoped and answers 401 without a
+	// credential, so every row — the ids alone; the endpoint publishes no
+	// limits, tariffs, or capability metadata — comes from the live snapshot
+	// via `lithosAiModelManagerOptions` and nothing is frozen into models.json.
+	"lithosai",
 	// User-configured LiteLLM proxy (models.yml provider or litellm auth flow;
 	// PROXY_OPENAI_COMPAT_PROVIDERS) that forwards upstream chat templates.
 	"litellm",

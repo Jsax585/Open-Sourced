@@ -5,6 +5,7 @@
 ### Added
 
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
+- Added the `lithosai` provider for LithosAI's hosted inference engine, with per-tier pricing, image input, and `low`/`high`/`max` reasoning effort on every discovered roster model ([#14206](https://github.com/can1357/oh-my-pi/pull/14206) by [@iacore](https://github.com/iacore))
 
 ### Changed
 
