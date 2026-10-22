@@ -235,7 +235,9 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 			orgId: `${TEST_ACCOUNT_PREFIX}-org-${accountId}`,
 		});
 		if (!report) throw new Error("Expected fake Claude ledger to produce a usage report");
-		return entry.resetAvailable ? { ...report, resetCredits: resetInventory(accountId, entry.resetExpiresAtMs) } : report;
+		return entry.resetAvailable
+			? { ...report, resetCredits: resetInventory(accountId, entry.resetExpiresAtMs) }
+			: report;
 	};
 	const usageProvider: UsageProvider = {
 		id: ANTHROPIC,
@@ -286,8 +288,8 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 	};
 	vi.spyOn(authStorage.resets, "list").mockImplementation(async request => {
 		if (request?.provider !== ANTHROPIC) return [];
-		const activeCredentialId = authStorage
-			.oauth.accounts(ANTHROPIC, request.sessionId)
+		const activeCredentialId = authStorage.oauth
+			.accounts(ANTHROPIC, request.sessionId)
 			.find(account => account.active)?.credentialId;
 		return ACCOUNT_IDS.flatMap(accountId => {
 			if (!ledger[accountId].resetAvailable) return [];
@@ -388,8 +390,7 @@ async function createTieredHarness(options: TieredHarnessOptions) {
 						entry.allowanceUsedPct = 100;
 						usageLimitFailures.push("b");
 						mock.push({
-							throw:
-								'429 {"type":"error","error":{"type":"rate_limit_error","message":"usage_limit_reached"}} retry-after-ms=7200000',
+							throw: '429 {"type":"error","error":{"type":"rate_limit_error","message":"usage_limit_reached"}} retry-after-ms=7200000',
 						});
 						return mock.stream(model, context, streamOptions);
 					}
