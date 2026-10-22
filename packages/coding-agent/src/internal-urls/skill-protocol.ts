@@ -40,11 +40,82 @@ import type {
 class UnknownSkillError extends Error {}
 
 /**
+ * The skill a URL addresses is missing from disk. Also the case where the
+ * snapshot is merely stale, so it earns one re-discovery retry — a missing
+ * sub-path inside an existing skill does not, and stays a plain {@link Error}.
+ */
+class MissingSkillFileError extends Error {}
+
+/**
  * Most an unknown `skill://` name waits for MCP (deferred startup included) to advertise it: long
  * enough for a healthy handshake, short enough that a hung server or its reconnect ladder cannot
  * hold a read of a typo'd or disabled skill name for the rest of the turn.
  */
 const UNKNOWN_SKILL_MCP_WAIT_MS = 5_000;
+
+/** A lookup miss explained by a stale snapshot rather than a genuine absence. */
+function isStaleSkillLookup(error: unknown): boolean {
+	return error instanceof UnknownSkillError || error instanceof MissingSkillFileError;
+}
+
+/** Missing target: retryable when the skill itself is addressed, fatal for a sub-path. */
+function missingSkillFile(skillRoot: boolean, targetPath: string): Error {
+	return skillRoot
+		? new MissingSkillFileError(`File not found: ${targetPath}`)
+		: new Error(`File not found: ${targetPath}`);
+}
+
+/**
+ * Runs `attempt` against `context`'s skill snapshot (else the process one) and,
+ * when it reports a stale-snapshot miss, re-discovers skills through the
+ * caller's own {@link ResolveContext.reloadSkills} and runs it once more.
+ *
+ * The refresher travels on the context, never through process-global state, so
+ * a lookup in one session can only ever retry against that session's skills —
+ * a concurrently constructed helper or subagent session cannot swap the
+ * snapshot underneath it. Without a refresher the miss stays fatal, and a
+ * reload that returns the snapshot it was given (non-reloadable session) skips
+ * the retry instead of repeating the same failure.
+ */
+async function withFreshSkills<T>(
+	context: ResolveContext | undefined,
+	attempt: (skills: readonly Skill[]) => Promise<T>,
+): Promise<T> {
+	const snapshot = context?.skills ?? getActiveSkills();
+	try {
+		return await attempt(snapshot);
+	} catch (error) {
+		const reload = context?.reloadSkills;
+		if (!reload || !isStaleSkillLookup(error)) throw error;
+		let fresh: readonly Skill[];
+		try {
+			fresh = await reload();
+		} catch (reloadError) {
+			logger.warn("skill:// rediscovery failed", { error: reloadError });
+			throw error;
+		}
+		if (fresh === snapshot) throw error;
+		return await attempt(fresh);
+	}
+}
+
+/** Where a skill:// URL points, and whether it addressed the skill itself. */
+interface SkillTarget {
+	targetPath: string;
+	/**
+	 * The URL resolved to the skill's own instruction file or base directory
+	 * (no relative sub-path), including a collision-namespaced
+	 * `skill://<namespace>/<name>`. Only these misses mean the skill itself is
+	 * gone, so only these earn a re-discovery retry.
+	 */
+	skillRoot: boolean;
+	/**
+	 * The snapshot's instruction file for the skill. A directory lookup stats
+	 * {@link targetPath}, which can outlive a moved `SKILL.md`; checking this
+	 * file proves the snapshot still describes a skill.
+	 */
+	instructionFile: string;
+}
 
 /**
  * Path a skill:// URL addresses, after traversal and plugin-root containment
@@ -57,7 +128,7 @@ async function skillTargetPath(
 	skills: readonly Skill[],
 	directory: boolean,
 	create = false,
-): Promise<string> {
+): Promise<SkillTarget> {
 	const skillName = url.rawHost || url.hostname;
 	if (!skillName) {
 		throw new Error("skill:// URL requires a skill name: skill://<name>");
@@ -82,8 +153,9 @@ async function skillTargetPath(
 		throw new UnknownSkillError(`Unknown skill: ${skillName}\nAvailable: ${availableStr}`);
 	}
 
+	const skillRoot = !urlPath || urlPath === "/";
 	let resolvedPath: string;
-	if (!urlPath || urlPath === "/") {
+	if (skillRoot) {
 		resolvedPath = path.resolve(directory ? skill.baseDir : skill.filePath);
 	} else {
 		const relativePath = decodeURIComponent(urlPath.slice(1));
@@ -97,11 +169,12 @@ async function skillTargetPath(
 	// Agent Plugin skills (§4.1): every target, including the bare instruction
 	// file and base directory, must canonically resolve within the plugin root.
 	// Symlinks may target other files inside the same package.
-	if (!skill.containRoot) return resolvedPath;
+	const instructionFile = skill.filePath;
+	if (!skill.containRoot) return { targetPath: resolvedPath, skillRoot, instructionFile };
 	const escape = `skill:// path resolves outside the plugin root: ${url.href}`;
 	const contained = await resolveContainedPath(skill.containRoot, resolvedPath);
 	if (contained.status === "outside") throw new UrlContainmentError(escape);
-	if (contained.status === "ok") return contained.realPath;
+	if (contained.status === "ok") return { targetPath: contained.realPath, skillRoot, instructionFile };
 	if (create) {
 		try {
 			await ensureCreatableWithinRoot(resolvedPath, skill.containRoot, "skill", url.href);
@@ -110,7 +183,7 @@ async function skillTargetPath(
 			throw error instanceof UrlContainmentError ? new UrlContainmentError(escape) : error;
 		}
 	}
-	return resolvedPath;
+	return { targetPath: resolvedPath, skillRoot, instructionFile };
 }
 
 /**
@@ -132,9 +205,8 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		let targetPath: string;
 		try {
-			targetPath = await skillTargetPath(url, context?.skills ?? getActiveSkills(), false);
+			return await withFreshSkills(context, skills => this.#resolveAgainst(url, skills));
 		} catch (error) {
 			if (!(error instanceof UnknownSkillError)) throw error;
 			// Loaded skills always win; otherwise serve the resource an MCP server advertises under
@@ -167,14 +239,17 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			// The server, not a loaded skill, sizes this text: keep `read`'s normal result limits.
 			return { ...resource, unbounded: false };
 		}
+	}
+
+	/** Read the skill file or directory `url` addresses from one skill snapshot. */
+	async #resolveAgainst(url: InternalUrl, skills: readonly Skill[]): Promise<InternalResource> {
+		const { targetPath, skillRoot } = await skillTargetPath(url, skills, false);
 
 		let stats: fsTypes.Stats;
 		try {
 			stats = await fs.stat(targetPath);
 		} catch (error) {
-			if (isEnoent(error)) {
-				throw new Error(`File not found: ${targetPath}`);
-			}
+			if (isEnoent(error)) throw missingSkillFile(skillRoot, targetPath);
 			throw error;
 		}
 
@@ -201,23 +276,47 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	 * Null for a missing entry (or dangling symlink) without `create`, plugin skill or not, and for a
 	 * name no loaded skill owns while MCP is available unless `options.localOnly`: an MCP server may
 	 * advertise the URL, which {@link resolve} settles (its servers may still be connecting).
+	 * A miss on the skill itself re-discovers skills from disk once through the caller's
+	 * {@link ResolveContext.reloadSkills}, so a skill added or moved mid-session is found without a restart.
 	 */
 	async locate(url: InternalUrl, context?: ResolveContext, options?: LocateOptions): Promise<string | null> {
-		const skills = context?.skills ?? getActiveSkills();
-		let targetPath: string;
 		try {
-			targetPath = await skillTargetPath(url, skills, options?.directory === true, options?.create === true);
+			return await withFreshSkills(context, skills => this.#locateAgainst(url, skills, options));
 		} catch (error) {
+			// Exhausted the retry: the addressed skill really is gone.
+			if (error instanceof MissingSkillFileError) return null;
 			if (error instanceof UnknownSkillError && !options?.localOnly && MCPManager.available()) return null;
 			throw error;
 		}
+	}
+
+	/** Locate `url` against one skill snapshot; a miss on the skill itself throws to trigger the retry. */
+	async #locateAgainst(url: InternalUrl, skills: readonly Skill[], options?: LocateOptions): Promise<string | null> {
+		const { targetPath, skillRoot, instructionFile } = await skillTargetPath(
+			url,
+			skills,
+			options?.directory === true,
+			options?.create === true,
+		);
 		if (options?.create) return targetPath;
+		if (skillRoot && options?.directory === true) {
+			// A base directory outlives a moved `SKILL.md`: statting it alone would
+			// keep serving a directory the snapshot no longer describes. Missing
+			// instruction file means the skill moved, so the lookup must retry.
+			try {
+				await fs.stat(instructionFile);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+				throw missingSkillFile(true, instructionFile);
+			}
+		}
 		try {
 			await fs.stat(targetPath);
 			return targetPath;
 		} catch (error) {
-			if (isEnoent(error)) return null;
-			throw error;
+			if (!isEnoent(error)) throw error;
+			if (skillRoot) throw missingSkillFile(true, targetPath);
+			return null;
 		}
 	}
 

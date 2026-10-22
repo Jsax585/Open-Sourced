@@ -6795,6 +6795,15 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
+	 * Rediscovers this session's skills from disk without touching the system
+	 * prompt — the just-in-time path a `skill://` lookup uses when it misses the
+	 * loaded snapshot. Returns the same snapshot when skills are not reloadable.
+	 */
+	reloadSkills(): Promise<readonly Skill[]> {
+		return this.#tools.reloadSkills();
+	}
+
+	/**
 	 * Rediscovers skills and file-based slash commands for the current cwd, rebuilds the
 	 * system prompt, and notifies command-metadata listeners (TUI autocomplete, RPC/ACP
 	 * command lists). Serialized so overlapping reloads apply in call order.

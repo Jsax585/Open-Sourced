@@ -246,6 +246,38 @@ This skill is added after session creation.
 		expect(session.skills.some((s: Skill) => s.name === "runtime-added-skill")).toBe(false);
 	});
 
+	it("reads a skill created after the session started, without a restart", async () => {
+		const settings = createIsolatedSkillsSettings();
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(tempDir),
+			modelRegistry: sharedModelRegistry,
+			settings,
+		});
+		try {
+			const read = session.getToolByName("read");
+			expect(read).toBeDefined();
+			await expect(read!.execute("read-late-skill-absent", { path: "skill://late-skill" })).rejects.toThrow(
+				/Unknown skill/,
+			);
+
+			const lateDir = path.join(tempDir, ".omp", "skills", "late-skill");
+			fs.mkdirSync(lateDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(lateDir, "SKILL.md"),
+				"---\nname: late-skill\ndescription: Added after the session started.\n---\n\n# Late Skill\n\nbody\n",
+			);
+
+			// The session's snapshot predates the file: the read re-discovers it.
+			const result = await read!.execute("read-late-skill", { path: "skill://late-skill" });
+			expect(result.content.some(part => part.type === "text" && part.text.includes("# Late Skill"))).toBe(true);
+			expect(session.skills.some(skill => skill.name === "late-skill")).toBe(true);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("a live skills.customDirectories edit exposes the directory's skills without restart", async () => {
 		const settings = createIsolatedSkillsSettings();
 		const { session } = await createAgentSession({

@@ -310,6 +310,15 @@ export interface ResolveContext {
 	/** Calling session's loaded skills. Prefer this over process-global skill state. */
 	skills?: readonly Skill[];
 	/**
+	 * Re-discover the calling session's skills from disk, just in time, and
+	 * return the fresh array. `skill://` runs it once when a lookup misses
+	 * {@link skills}, then retries against the result; the retry is skipped when
+	 * the returned array is the one it was given (skills are not reloadable) or
+	 * when this is absent. Bound to the caller so a concurrent session can never
+	 * swap its own cwd, settings, or skills into this lookup.
+	 */
+	reloadSkills?: () => Promise<readonly Skill[]>;
+	/**
 	 * Calling session's agent-scoped applicable rule set (rulebook + always-apply
 	 * + triggered TTSR rules, already bucketed by `agents` frontmatter). Prefer
 	 * this over the process-global snapshot — the global one reflects only the
