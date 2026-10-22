@@ -34,8 +34,8 @@ import {
 } from "./executor";
 import { isCompletionProbeEnabled } from "./completion-probe";
 import { discoverAgents, getAgent } from "./discovery";
-import { assertPerCallModelApproved } from "./model-approval";
-import { cfgTaskAgentAccountPools, cfgTaskMaxEffort } from "./settings";
+import { assertPerCallDispatchModel } from "./model-approval";
+import { cfgTaskAgentAccountPools, cfgTaskMaxEffort, cfgTaskPerCallModelFallbacks } from "./settings";
 import { type RestoredSeanceSession, restoreSeanceSession } from "./seance";
 import { seanceIsolationOptions } from "./seance-policy";
 import type { AgentDefinition } from "./types";
@@ -284,13 +284,15 @@ export function createPersistedSubagentReviverFactory(
 					parentAgentId: ref.parentId,
 					oauthAccountPools,
 					// A per-call model is held to the operator's current grants, not the transcript's,
-					// never switches models, and keeps the live task.maxEffort ceiling the spawn ran under.
+					// switches models only through runtime fallbacks when task.perCallModelFallbacks allows
+					// them, never promotes context, and keeps the live task.maxEffort ceiling the spawn ran under.
 					...(init.perCallModel
 						? {
 								thinkingLevelCeiling: cfgTaskMaxEffort.get(ctx.settings),
-								disableModelFallback: true,
+								disableModelFallback: cfgTaskPerCallModelFallbacks.get(ctx.settings) === "off",
+								disableContextPromotion: true,
 								assertDispatchModel: (model: Model) => {
-									assertPerCallModelApproved(
+									assertPerCallDispatchModel(
 										model,
 										{
 											settings: ctx.settings,

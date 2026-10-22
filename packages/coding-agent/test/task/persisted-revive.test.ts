@@ -616,7 +616,7 @@ describe("persisted subagent revival", () => {
 			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
 		});
 		const modelRegistry = { authStorage: {}, getAvailable: () => [own] } as unknown as ModelRegistry;
-		const revive = async (settings: Settings) => {
+		const revive = async (settings: Settings, fallbacksOff = true) => {
 			const cwd = makeTempDir("@pi-revive-per-call-");
 			const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
 				agent: "reviewer",
@@ -628,12 +628,16 @@ describe("persisted subagent revival", () => {
 			await reviver(ref);
 			const check = options?.assertDispatchModel;
 			if (!check) throw new Error("Expected a per-call dispatch check");
-			expect(options?.disableModelFallback).toBe(true);
+			expect(options?.disableModelFallback).toBe(fallbacksOff);
+			expect(options?.disableContextPromotion).toBe(true);
 			return check;
 		};
 
 		// The spawn approved the model through the agent's frontmatter; revival keeps that grant.
 		expect((await revive(Settings.isolated()))(own)).toBeUndefined();
+		// Runtime fallbacks stay available to a revived worker, still held to the dispatch check.
+		const runtimeCheck = await revive(Settings.isolated({ "task.perCallModelFallbacks": "runtime" }), false);
+		expect(runtimeCheck(own)).toBeUndefined();
 		// A disabled, removed or project-sourced agent no longer grants its model.
 		const disabledCheck = await revive(Settings.isolated({ "task.disabledAgents": ["reviewer"] }));
 		expect(() => disabledCheck(own)).toThrow(/not approved/);

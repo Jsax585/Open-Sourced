@@ -7,7 +7,9 @@
  * frontmatter model, or the parent's live model. Catalog membership,
  * credentials, built-in role defaults, project agent frontmatter and saved
  * transcripts grant nothing. `task.perCallModelAllow`, when set, narrows the
- * result to the models its exact, `@role` or glob entries match.
+ * result to the models its exact, `@role` or glob entries match. Under
+ * `task.perCallModelFallbacks: runtime` a running worker may also send to
+ * concrete `retry.fallbackChains` entries; those are never requestable.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -21,7 +23,8 @@ import {
 } from "../config/model-resolver";
 import { isKindRole } from "../config/model-roles";
 import type { Settings } from "../config/settings";
-import { cfgTaskDisabledAgents, cfgTaskPerCallModelAllow } from "./settings";
+import { cfgRetryFallbackChains } from "../session/settings";
+import { cfgTaskDisabledAgents, cfgTaskPerCallModelAllow, cfgTaskPerCallModelFallbacks } from "./settings";
 
 /** A per-call model was rejected: not approved by the operator's configuration. */
 export class PerCallModelError extends Error {
@@ -149,5 +152,47 @@ export function assertPerCallModelApproved(
 			: "";
 	throw new PerCallModelError(
 		`Per-call model ${identity(model)} is not approved for agent "${grants.agentName}": use a model named by a configured chat role, a bundled or user-level agent's frontmatter, or the parent's model${allowGuidance}. Catalog or credentials alone do not approve a model.`,
+	);
+}
+
+/** Concrete `retry.fallbackChains` entries; wildcard entries are relative provider swaps, not models the operator named. */
+function concreteChainEntries(settings: Settings): string[] {
+	return Object.entries(cfgRetryFallbackChains.get(settings))
+		.filter(([key]) => !isKindRole(key))
+		.flatMap(([, chain]) => (Array.isArray(chain) ? chain.filter(entry => !entry.includes("*")) : []));
+}
+
+/**
+ * Throw {@link PerCallModelError} unless a running per-call worker may send to
+ * `model`: an approved model, or under `task.perCallModelFallbacks: runtime` a
+ * concrete `retry.fallbackChains` entry the allowlist admits.
+ */
+export function assertPerCallDispatchModel(
+	model: Pick<Model<Api>, "provider" | "id">,
+	grants: PerCallModelGrants,
+	registry: ApprovalRegistry,
+): void {
+	if (isPerCallModelApproved(model, grants, registry)) return;
+	const { settings } = grants;
+	const runtime = cfgTaskPerCallModelFallbacks.get(settings) === "runtime";
+	if (runtime) {
+		const target = identity(model);
+		const chat = registry.getAvailable("chat");
+		if (
+			chat.some(candidate => identity(candidate) === target) &&
+			allowlistAdmits(target, chat, settings) &&
+			grantablePatterns(concreteChainEntries(settings), settings).some(pattern =>
+				patternApproves(pattern, target, chat, settings),
+			)
+		) {
+			return;
+		}
+	}
+	const allowGuidance =
+		cfgTaskPerCallModelAllow.get(settings).length > 0
+			? ", and it must also match an entry in task.perCallModelAllow"
+			: "";
+	throw new PerCallModelError(
+		`Per-call subagent "${grants.agentName}" cannot send to ${identity(model)}: the model is not approved${allowGuidance}.${runtime ? "" : " Runtime fallbacks need task.perCallModelFallbacks: runtime."}`,
 	);
 }

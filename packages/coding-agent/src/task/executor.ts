@@ -133,12 +133,18 @@ import {
 	type YieldItem,
 } from "@oh-my-pi/pi-tui/tools/task";
 import { yieldSectionShapes } from "./yield-assembly";
-import { assertPerCallModelApproved, PerCallModelError, type PerCallModelGrants } from "./model-approval";
+import {
+	assertPerCallDispatchModel,
+	assertPerCallModelApproved,
+	PerCallModelError,
+	type PerCallModelGrants,
+} from "./model-approval";
 import { assembleYieldResult } from "@oh-my-pi/pi-tui/tools/task-yield-assembly";
 import {
 	cfgTaskPrewalk,
 	cfgTaskAgentPrewalk,
 	cfgTaskMaxEffort,
+	cfgTaskPerCallModelFallbacks,
 	cfgTaskSoftRequestBudgetNotice,
 	cfgTaskSoftRequestBudget,
 	cfgTaskAgentSoftRequestBudget,
@@ -4566,7 +4572,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// session-level --prewalk. The bundled generic `task` agent has no
 			// frontmatter default; the `task.prewalk` toggle (default off) arms it.
 			// Resolution failures skip prewalk instead of failing the spawn. A per-call
-			// worker never switches models, so it never prewalks.
+			// worker only switches models through approved runtime fallbacks, so it never prewalks.
 			const perCallModelGrants = options.perCallModelGrants;
 			let prewalk: Prewalk | undefined;
 			const prewalkPattern =
@@ -4665,12 +4671,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					thinkingLevel: effectiveThinkingLevel,
 					...(perCallModelGrants
 						? {
-								// Every request stays on an approved model that can run at or below the spawn's effort ceiling.
+								// Every request stays on an approved model (or, with runtime fallbacks, a configured
+								// chain model) that can run at or below the spawn's effort ceiling.
 								assertDispatchModel: (dispatchModel: Model) => {
-									assertPerCallModelApproved(dispatchModel, perCallModelGrants, modelRegistry);
+									assertPerCallDispatchModel(dispatchModel, perCallModelGrants, modelRegistry);
 									if (spawnEffortCeiling) assertModelSupportsEffortCeiling(dispatchModel, spawnEffortCeiling);
 								},
-								disableModelFallback: true,
+								disableModelFallback: cfgTaskPerCallModelFallbacks.get(settings) === "off",
+								disableContextPromotion: true,
 							}
 						: {}),
 					thinkingLevelCeiling: spawnEffortCeiling,

@@ -331,6 +331,29 @@ export const cfgTaskPerCallModelAllow = register({
 	},
 });
 
+export const cfgTaskPerCallModelFallbacks = register({
+	id: "task.perCallModelFallbacks",
+	type: "enum",
+	values: ["off", "runtime"] as const,
+	default: "off",
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Per-Call Model Fallbacks",
+		description:
+			"Whether a per-call subagent may switch models when a request fails. Fallback targets are never requestable in `model`.",
+		options: [
+			{ value: "off", label: "Off", description: "The subagent fails instead of switching models" },
+			{
+				value: "runtime",
+				label: "Runtime",
+				description:
+					"The subagent may retry on its later candidates and on concrete retry.fallbackChains models; nothing else",
+			},
+		],
+	},
+});
+
 export const cfgTaskMaxConcurrency = register({
 	id: "task.maxConcurrency",
 	protocolDefault: ["rpc", "acp"],

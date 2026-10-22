@@ -616,8 +616,10 @@ export interface CreateAgentSessionOptions {
 	 * operator did not approve.
 	 */
 	assertDispatchModel?: (model: Model) => void;
-	/** Never switch to a retry fallback model; the turn fails instead. Per-call `model` subagents set it. */
+	/** Never switch to a retry fallback model; the turn fails instead. Per-call `model` subagents set it unless runtime fallbacks are allowed. */
 	disableModelFallback?: boolean;
+	/** Never promote to a larger-context model (implied by {@link disableModelFallback}). Per-call `model` subagents set it. */
+	disableContextPromotion?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -4780,6 +4782,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
 			disableModelFallback: options.disableModelFallback,
+			disableContextPromotion: options.disableContextPromotion,
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,

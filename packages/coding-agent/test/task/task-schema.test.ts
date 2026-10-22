@@ -254,6 +254,16 @@ describe("task spawn validation", () => {
 		expect(await description("on")).toContain("`model`: one exact");
 	});
 
+	it("states the runtime fallback rule that task.perCallModelFallbacks selects", async () => {
+		const description = async (fallbacks: string) => {
+			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+			const settings = { "task.perCallModel": "on", "task.perCallModelFallbacks": fallbacks };
+			return (await TaskTool.create(createSession({ settings }))).description;
+		};
+		expect(await description("off")).toContain("No runtime model fallback.");
+		expect(await description("runtime")).toContain("operator-configured fallback models");
+	});
+
 	it("declares `model` as a candidate list only while task.perCallModel accepts task calls", () => {
 		const params = { agent: "scout", task: "Map.", solutionSpace: "focused", model: ["@review", "p/m"] };
 		const fixed = getTaskSchema({ isolationEnabled: false, batchEnabled: false });

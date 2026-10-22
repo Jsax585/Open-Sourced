@@ -207,6 +207,8 @@ export interface AgentSessionConfig {
 	thinkingLevelCeiling?: Effort;
 	/** Never switch to a retry fallback model; the turn fails instead. */
 	disableModelFallback?: boolean;
+	/** Never promote to a larger-context model; implied by {@link disableModelFallback}. */
+	disableContextPromotion?: boolean;
 	/** Retry chain ownership when startup selected one of its fallback entries. */
 	initialRetryFallback?: InitialRetryFallbackState;
 	/** Skip retry.fallbackChains validation at construction; the host calls `validateRetryFallbackChains()` later. */

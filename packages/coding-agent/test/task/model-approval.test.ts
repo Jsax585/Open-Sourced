@@ -4,6 +4,7 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { parseAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import {
+	assertPerCallDispatchModel,
 	assertPerCallModelApproved,
 	isPerCallModelApproved,
 	type PerCallModelGrants,
@@ -173,5 +174,40 @@ describe("per-call model grants", () => {
 		// Granted by `review`, but its bare id `openai/gpt-5` must not satisfy an `openai/*` entry.
 		expect(isPerCallModelApproved(routed, grants, providers)).toBe(false);
 		expect(isPerCallModelApproved(direct, grants, providers)).toBe(true);
+	});
+});
+
+describe("per-call dispatch with runtime fallbacks", () => {
+	const chained = { modelRoles: { review: "mock/other" }, "retry.fallbackChains": { review: ["mock/target:high"] } };
+	const dispatch =
+		(settings: Record<string, unknown>, model: Pick<Model, "provider" | "id"> = target) =>
+		() =>
+			assertPerCallDispatchModel(model, { settings: Settings.isolated(settings), agentName: "worker" }, registry);
+
+	it.each([
+		["off: a chain entry is refused", chained, /perCallModelFallbacks: runtime/],
+		[
+			"runtime: a wildcard chain entry never grants",
+			{ ...chained, "retry.fallbackChains": { "mock/*": ["mock/*"] }, "task.perCallModelFallbacks": "runtime" },
+			/not approved/,
+		],
+		[
+			"runtime: a chain entry outside the allowlist is refused",
+			{ ...chained, "task.perCallModelFallbacks": "runtime", "task.perCallModelAllow": ["mock/other"] },
+			/task\.perCallModelAllow/,
+		],
+	] as const)("%s", (_name, settings, error) => {
+		expect(dispatch(settings)).toThrow(error);
+	});
+
+	it("runtime: a concrete chain entry may be sent to but never requested", () => {
+		const settings = { ...chained, "task.perCallModelFallbacks": "runtime" };
+		expect(dispatch(settings)).not.toThrow();
+		expect(
+			isPerCallModelApproved(target, { settings: Settings.isolated(settings), agentName: "worker" }, registry),
+		).toBe(false);
+		// A non-chat model named in a chain stays out of reach.
+		const imageChain = { ...settings, "retry.fallbackChains": { review: ["mock/painter"] } };
+		expect(dispatch(imageChain, image)).toThrow(/not approved/);
 	});
 });

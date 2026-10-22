@@ -5943,10 +5943,26 @@ describe("AgentSession retry fallback", () => {
 	});
 
 	it.each([
-		{ label: "promotes while model switching is allowed", disableModelFallback: false },
-		{ label: "never promotes a session with disableModelFallback", disableModelFallback: true },
-	])("context promotion: $label", async ({ disableModelFallback }) => {
-		const modelsConfigPath = path.join(tempDir.path(), `promotion-disabled-${disableModelFallback}.json`);
+		{
+			label: "promotes while model switching is allowed",
+			disableModelFallback: false,
+			disableContextPromotion: false,
+		},
+		{
+			label: "never promotes a session with disableModelFallback",
+			disableModelFallback: true,
+			disableContextPromotion: false,
+		},
+		{
+			label: "never promotes a session with only disableContextPromotion",
+			disableModelFallback: false,
+			disableContextPromotion: true,
+		},
+	])("context promotion: $label", async ({ disableModelFallback, disableContextPromotion }) => {
+		const modelsConfigPath = path.join(
+			tempDir.path(),
+			`promotion-disabled-${disableModelFallback}-${disableContextPromotion}.json`,
+		);
 		await Bun.write(
 			modelsConfigPath,
 			JSON.stringify({
@@ -5989,6 +6005,7 @@ describe("AgentSession retry fallback", () => {
 			settings,
 			modelRegistry,
 			disableModelFallback,
+			disableContextPromotion,
 		});
 
 		// Grow the history past the small model's window, then prompt again.
@@ -6002,7 +6019,7 @@ describe("AgentSession retry fallback", () => {
 
 		const smallId = `${small.provider}/${small.id}`;
 		const largeId = `${large.provider}/${large.id}`;
-		if (disableModelFallback) {
+		if (disableModelFallback || disableContextPromotion) {
 			expect(requestedModels).not.toContain(largeId);
 			expect(session.model?.id).toBe(small.id);
 		} else {

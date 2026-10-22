@@ -80,6 +80,7 @@ import {
 	cfgTaskMaxConcurrency,
 	cfgTaskMaxRecursionDepth,
 	cfgTaskMaxRuntimeMs,
+	cfgTaskPerCallModelFallbacks,
 	cfgTaskSpeculativeLaunch,
 	cfgTaskStructured,
 	perCallModelEnabled,
@@ -155,6 +156,7 @@ interface TaskDescriptionOptions {
 	batchEnabled: boolean;
 	effortEnabled: boolean;
 	perCallModelEnabled: boolean;
+	perCallModelFallbacks: boolean;
 	evalToolsEnabled: boolean;
 	structured: boolean;
 	asyncEnabled: boolean;
@@ -206,6 +208,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		batchEnabled: options.batchEnabled,
 		effortEnabled: options.effortEnabled,
 		perCallModelEnabled: options.perCallModelEnabled,
+		perCallModelFallbacks: options.perCallModelFallbacks,
 		evalToolsEnabled: options.evalToolsEnabled,
 		structured: options.structured,
 		asyncEnabled: options.asyncEnabled,
@@ -777,6 +780,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
 			perCallModelEnabled: perCallModelEnabled(this.session.settings, "task"),
+			perCallModelFallbacks: cfgTaskPerCallModelFallbacks.get(this.session.settings) === "runtime",
 			evalToolsEnabled: evalToolsEnabled(this.session),
 			structured: this.#isStructured(),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),
