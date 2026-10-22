@@ -35,7 +35,7 @@ export function buildQuotedReplyPrefill(draft: string, lastReply: string): strin
 		.split("\n")
 		.map(line => (line.length === 0 ? ">" : `> ${line}`))
 		.join("\n");
-	if (draft.length === 0) return quoted;
+	if (draft.length === 0) return `${quoted}\n\n`;
 	return `${quoted}\n\n${draft}`;
 }
 

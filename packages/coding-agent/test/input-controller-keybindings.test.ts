@@ -12,6 +12,7 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import type { SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as externalEditor from "../src/utils/external-editor";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
@@ -93,6 +94,9 @@ async function createContext() {
 	const showModelSelector = vi.fn();
 	const requestRender = vi.fn();
 	const showError = vi.fn();
+	const showWarning = vi.fn();
+	const uiStop = vi.fn();
+	const uiStart = vi.fn();
 	let focused: unknown;
 	let overlayVisible = false;
 	const addInputListener = vi.fn((listener: InputListener) => {
@@ -172,6 +176,8 @@ async function createContext() {
 		resetDisplayAfterAppearanceRefresh,
 		ui: {
 			requestRender,
+			stop: uiStop,
+			start: uiStart,
 			resetDisplay,
 			clearInlineImages,
 			addInputListener,
@@ -251,6 +257,7 @@ async function createContext() {
 		canFollowUpBtw,
 		handleBtwFollowUpKey,
 		showError,
+		showWarning,
 		showStatus: vi.fn(),
 		isGuidedGoalInterviewActive,
 	} as unknown as InteractiveModeContext;
@@ -293,6 +300,9 @@ async function createContext() {
 			handleBtwFollowUpKey,
 			showError,
 			isGuidedGoalInterviewActive,
+			showWarning,
+			uiStop,
+			uiStart,
 		},
 	};
 }
@@ -1023,6 +1033,10 @@ describe("InputController global editor actions", () => {
 		await initTheme(false);
 	});
 
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("routes shortcuts while an ask dialog holds focus", async () => {
 		const context = await createContext();
 		const controller = new context.InputController(context.ctx);
@@ -1151,6 +1165,40 @@ describe("InputController global editor actions", () => {
 		expect(dispatchInput(listeners, CTRL_SHIFT_G)).toBeUndefined();
 		expect(dispatchInput(listeners, ALT_E)).toBeUndefined();
 		expect(openExternalEditorQuotedReply).not.toHaveBeenCalled();
+	});
+
+	it("opens external editor with quoted reply and existing draft, applying result back to composer", async () => {
+		const context = await createContext();
+		context.editor.setText("my draft response");
+		vi.spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
+		const openInEditor = vi
+			.spyOn(externalEditor, "openInEditor")
+			.mockResolvedValue("> the last reply\n\nmy draft response\nand an extra point");
+		const controller = new context.InputController(context.ctx);
+
+		await controller.openExternalEditorQuotedReply();
+
+		expect(openInEditor).toHaveBeenCalledWith("vim", "> the last reply\n\nmy draft response", {
+			extension: ".omp.md",
+		});
+		expect(context.editor.getText()).toBe("> the last reply\n\nmy draft response\nand an extra point");
+		expect(context.spies.uiStop).toHaveBeenCalledTimes(1);
+		expect(context.spies.uiStart).toHaveBeenCalledTimes(1);
+		expect(context.spies.requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows warning and does not open editor when no assistant reply exists", async () => {
+		const context = await createContext();
+		context.ctx.session.getLastAssistantText = vi.fn(() => undefined);
+		vi.spyOn(externalEditor, "getEditorCommand").mockReturnValue("vim");
+		const openInEditor = vi.spyOn(externalEditor, "openInEditor");
+		const controller = new context.InputController(context.ctx);
+
+		await controller.openExternalEditorQuotedReply();
+
+		expect(context.spies.showWarning).toHaveBeenCalledWith("No assistant reply to quote yet.");
+		expect(openInEditor).not.toHaveBeenCalled();
+		expect(context.spies.uiStop).not.toHaveBeenCalled();
 	});
 
 	it("defers the tree selector's Ctrl+Shift+O filter binding", async () => {
