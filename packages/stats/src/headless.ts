@@ -11,7 +11,12 @@ export async function runHeadlessStats(): Promise<never> {
 	const live = statsLive();
 	const keepAlive = setInterval(() => {}, 60_000);
 	let shuttingDown = false;
+	let reportedInitialSync = false;
 	const unsubscribe = live.subscribe(status => {
+		if (!reportedInitialSync && status.sync.phase === "idle" && status.sync.lastSyncedAt !== null) {
+			reportedInitialSync = true;
+			console.log("Initial live stats sync complete.");
+		}
 		if (status.sync.phase === "error" && status.sync.error) {
 			console.error(`Live stats sync failed: ${status.sync.error}`);
 		}
