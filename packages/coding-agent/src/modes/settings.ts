@@ -532,6 +532,19 @@ export const cfgTuiTitleState = register({
 	},
 });
 
+export const cfgTuiStateFile = register({
+	id: "tui.stateFile",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Terminal State File",
+		description:
+			"Also write the agent run state to <terminal>.state.json in the terminal-sessions directory ($XDG_STATE_HOME/omp/terminal-sessions on an XDG install, ~/.omp/agent/terminal-sessions otherwise), so a program that is not the terminal can read whether omp is working, idle, or waiting on you",
+	},
+});
+
 export const cfgTuiTitleSpinner = register({
 	id: "tui.titleSpinner",
 	type: "enum",

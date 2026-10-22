@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `tui.stateFile`, which writes the agent run state (working, idle, or waiting on you) to `<terminal>.state.json` in the terminal-sessions directory ([#11830](https://github.com/can1357/oh-my-pi/pull/11830) by [@michael-schnell](https://github.com/michael-schnell)).
+
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ## [18.12.6] - 2026-10-21
