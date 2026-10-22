@@ -632,25 +632,28 @@ bun run gen:nix
 
 The command uses `bun2nix` from `nix develop` when available, otherwise enters the development shell through Nix, then falls back to the pinned `bunx bun2nix@2.1.2`. Do not edit `nix/bun.nix` manually.
 
-On Apple Silicon, `nix build .#omp` supplies Swift 6.4 and the macOS 27 SDK
-to compile the Apple Foundation Models bridge without a host Xcode installation.
-The `nixpkgs-apple` input tracks `nixpkgs-unstable` and provides an SDK-compatible
-stdenv; the Bun and Rust versions and the Linux/Intel Mac package sets remain
-unchanged. Remove this input when the main nixpkgs and nix-bun pins can advance
-together to an SDK 27-capable set. The compiler and SDK are build-only dependencies.
-The package check requires an availability response and accepts only a ready model
-or known OS/device/model eligibility reasons; bridge errors and unknown reasons
-fail the build. Using Apple Foundation Models still requires macOS 27+, an eligible
-device, and enabled/downloaded Apple Intelligence models. Older macOS systems can
-run OMP without loading the bridge. Downstream callers can use
-`omp.override { withAppleFm = false; }` to opt out of the Swift/SDK dependencies
-and the bridge requirement; the official Apple Silicon package enables it by default.
-
 For a non-interactive smoke check:
 
 ```sh
 bun dev -- --version
 ```
+
+#### Apple Silicon Nix builds
+
+`nix build .#omp` supplies Swift 6.4 and SDK 27 without relying on host Xcode/CLT.
+The build rejects fallback to a host compiler. The compiler and SDK are build-only
+dependencies; a missing `apple-sdk_27` fails evaluation with an opt-out hint.
+
+The `nixpkgs-apple` input tracks `nixpkgs-unstable` for an SDK-compatible stdenv,
+leaving Bun/Rust versions and Linux/Intel package sets unchanged. Remove it when
+the main nixpkgs and nix-bun pins can advance together to an SDK 27-capable set.
+
+Install checks load the bridge on macOS 27+ and accept only valid availability
+responses. On older macOS, `unsupported_os` only confirms a non-empty embedded
+bridge, not successful loading. Model use still requires an eligible device and
+enabled/downloaded Apple Intelligence models. Downstream callers can set
+`omp.override { withAppleFm = false; }` to omit the Swift/SDK dependencies and
+bridge requirement; the official Apple Silicon package enables it by default.
 
 ### Debug Command
 

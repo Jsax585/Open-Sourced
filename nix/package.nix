@@ -117,6 +117,9 @@ let
     '';
   };
 in
+assert lib.assertMsg (
+  withAppleFm -> apple-sdk_27 != null
+) "Apple Foundation Models requires apple-sdk_27; provide it or set withAppleFm = false.";
 stdenv.mkDerivation {
   pname = "omp";
   inherit (packageJson) version;
@@ -174,11 +177,11 @@ stdenv.mkDerivation {
   // lib.optionalAttrs stdenv.hostPlatform.isDarwin { BUN_NO_CODESIGN_MACHO_BINARY = "1"; }
   // lib.optionalAttrs withAppleFm { OMP_APPLEFM_SWIFTC = "${swiftToolchain}/bin/swiftc"; };
 
-  # Cargo otherwise succeeds with an empty bridge when detection fails.
+  # Reject both a missing compiler and fallback to a host Xcode/CLT compiler.
   preBuild = lib.optionalString withAppleFm ''
     toolchain="$(/bin/sh crates/pi-natives/src/applefm/build-bridge.sh detect)"
-    if [ -z "$toolchain" ]; then
-      echo "OMP requires Swift 6.4+ and the macOS 27 SDK for Foundation Models" >&2
+    if [ -z "$toolchain" ] || [ "''${toolchain%%$'\t'*}" != "$OMP_APPLEFM_SWIFTC" ]; then
+      echo "OMP requires its Nix Swift 6.4+ compiler and the macOS 27 SDK; host toolchains are not supported" >&2
       exit 1
     fi
     echo "Apple Foundation Models toolchain: $toolchain"
@@ -343,8 +346,9 @@ stdenv.mkDerivation {
       fi
     ''}
     ${lib.optionalString withAppleFm ''
-      # Model/device eligibility is not a build requirement. Missing or
-      # unloadable bridge code is; older macOS may report unsupported_os.
+      # Model/device eligibility is not a build requirement. On macOS 27+,
+      # this exercises materialization/dlopen. On older macOS, unsupported_os
+      # only proves the embedded bridge is non-empty; it is not loaded.
       HOME="$TMPDIR" bun -e '
         const native = require("./packages/natives/native/${platform.addon}");
         const status = JSON.parse(await native.appleFmAvailability());
