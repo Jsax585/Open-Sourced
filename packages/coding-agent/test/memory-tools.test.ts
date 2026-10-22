@@ -630,7 +630,10 @@ describe("retain.execute (Mnemopi backend)", () => {
 
 describe("global memory scope exposure", () => {
 	const offersScope = (tool: MemoryRetainTool | LearnTool) => ({
-		schema: JSON.stringify(tool.parameters.toJsonSchema()).includes('"scope"'),
+		// The lesson `scope`; `learn`'s nested `skill.scope` picks the managed-skill store instead.
+		schema: JSON.stringify(tool.parameters.toJsonSchema(), (key, value) =>
+			key === "skill" ? undefined : value,
+		).includes('"scope"'),
 		prompt: tool.description.includes("scope: global"),
 	});
 

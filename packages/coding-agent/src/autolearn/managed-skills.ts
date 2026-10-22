@@ -1,16 +1,22 @@
 /**
  * Managed-skills primitives for the experimental auto-learn feature.
  *
- * Managed skills are auto-generated/enhanced `SKILL.md` files kept in an
- * isolated directory (`~/.omp/agent/managed-skills`) separate from
- * user-authored skills (`~/.omp/agent/skills`). They are discovered and
- * surfaced like normal skills, but every write here is confined to
- * `getManagedSkillsDir()` — auto-management can never touch authored skills.
+ * Managed skills are auto-generated/enhanced `SKILL.md` files kept in isolated
+ * omp-owned directories separate from user-authored skills
+ * (`~/.omp/agent/skills`, `<repo>/.omp/skills`). Two scopes exist:
+ * - global: `~/.omp/agent/managed-skills`, discovered in every session;
+ * - project: `~/.omp/agent/project-managed-skills/<project-key>`, discovered
+ *   only for sessions in that project. The store lives under the agent dir,
+ *   never inside the repository.
+ * They are discovered and surfaced like normal skills, but every write here is
+ * confined to {@link getManagedSkillsRoot} — auto-management can never touch
+ * authored skills.
  */
 import { constants as fsConstants, type Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { encodeProjectStateKey, getAgentDir, isEnoent, resolveEquivalentPath } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
 /** Provider id stamped on discovered managed skills (distinguishes them from authored). */
@@ -21,14 +27,56 @@ export const MAX_MANAGED_SKILL_BYTES = 64_000;
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Resolve the isolated managed-skills directory (`~/.omp/agent/managed-skills`). */
+/** Where a managed skill lives: every session (`global`) or one project's store (`project`). */
+export type ManagedSkillScope = "global" | "project";
+
+/** A resolved managed-skill store. A project store is keyed by the session cwd's project. */
+export type ManagedSkillLocation = { readonly scope: "global" } | { readonly scope: "project"; readonly cwd: string };
+
+export const GLOBAL_MANAGED_SKILLS: ManagedSkillLocation = { scope: "global" };
+
+/** Build the store for a tool call: `project` binds the session cwd, anything else is global. */
+export function managedSkillLocation(scope: ManagedSkillScope | undefined, cwd: string): ManagedSkillLocation {
+	return scope === "project" ? { scope, cwd } : GLOBAL_MANAGED_SKILLS;
+}
+
+/** Resolve the isolated global managed-skills directory (`~/.omp/agent/managed-skills`). */
 export function getManagedSkillsDir(agentDir: string = getAgentDir()): string {
 	return path.join(agentDir, "managed-skills");
 }
 
+/** Parent of every project store (`~/.omp/agent/project-managed-skills`). */
+export function getProjectManagedSkillsBaseDir(agentDir: string = getAgentDir()): string {
+	return path.join(agentDir, "project-managed-skills");
+}
+
+/**
+ * Canonical directory that identifies the project of `cwd`: the repository
+ * root (a linked worktree is its own root), else `cwd` itself. Same rule as
+ * the other omp-owned per-project stores (security, autoresearch), and the
+ * same reach as authored `<repo>/.omp/skills`, which every subdirectory sees.
+ */
+export function resolveManagedSkillsProjectRoot(cwd: string): string {
+	const resolved = path.resolve(cwd);
+	return resolveEquivalentPath(vcs.repo(resolved)?.root() ?? resolved);
+}
+
+/** Project store for `cwd` (`~/.omp/agent/project-managed-skills/<project-key>`). */
+export function getProjectManagedSkillsDir(cwd: string, agentDir: string = getAgentDir()): string {
+	return path.join(
+		getProjectManagedSkillsBaseDir(agentDir),
+		encodeProjectStateKey(resolveManagedSkillsProjectRoot(cwd)),
+	);
+}
+
+/** Directory that holds the skills of `location`. */
+export function getManagedSkillsRoot(location: ManagedSkillLocation): string {
+	return location.scope === "project" ? getProjectManagedSkillsDir(location.cwd) : getManagedSkillsDir();
+}
+
 /**
  * Validate + normalize a managed-skill name. Throws on anything outside the
- * strict allowlist so a bad name can never escape `getManagedSkillsDir()`
+ * strict allowlist so a bad name can never escape its managed root
  * (blocks `..`, slashes, empty, and uppercase).
  */
 export function sanitizeSkillName(raw: string): string {
@@ -89,38 +137,42 @@ export interface WriteManagedSkillInput {
 }
 
 /**
- * Serialize create/update/delete on the same skill name. Both tools are
+ * Serialize create/update/delete on the same skill. Both tools are
  * non-exclusive, so a parallel tool batch in one turn can run two mutations on
  * the same skill at once (e.g. an update observing the file mid-delete). This
- * per-name promise chain runs same-skill mutations in submission order while
- * different names still proceed in parallel. In-process only; cross-process
- * races are out of scope.
+ * per-skill-directory promise chain runs same-skill mutations in submission
+ * order while different skills (other names or other scopes) still proceed in
+ * parallel. In-process only; cross-process races are out of scope.
  */
 const skillMutationChains = new Map<string, Promise<unknown>>();
-function serializeSkillMutation<T>(name: string, op: () => Promise<T>): Promise<T> {
-	const prev = skillMutationChains.get(name) ?? Promise.resolve();
+function serializeSkillMutation<T>(skillDir: string, op: () => Promise<T>): Promise<T> {
+	const prev = skillMutationChains.get(skillDir) ?? Promise.resolve();
 	const run = prev.then(op, op);
 	const guarded = run.catch(() => {});
-	skillMutationChains.set(name, guarded);
+	skillMutationChains.set(skillDir, guarded);
 	void guarded.finally(() => {
-		if (skillMutationChains.get(name) === guarded) skillMutationChains.delete(name);
+		if (skillMutationChains.get(skillDir) === guarded) skillMutationChains.delete(skillDir);
 	});
 	return run;
 }
 
 /**
- * Reject when the managed-skills root itself is a symlink. lstat on a child
- * follows intermediate components, so a symlinked root would let an otherwise
- * valid name write/delete outside the isolated directory (e.g. onto authored
- * skills). Checked before composing any child path.
+ * Reject when a managed-skills root (or, for a project store, its parent) is a
+ * symlink. lstat on a child follows intermediate components, so a symlinked
+ * root would let an otherwise valid name write/delete outside the isolated
+ * directory (e.g. onto authored skills). Checked before composing any child
+ * path.
  */
-async function assertManagedRootSafe(): Promise<void> {
-	const rootStat = await fs.lstat(getManagedSkillsDir()).catch(err => {
-		if (isEnoent(err)) return null;
-		throw err;
-	});
-	if (rootStat?.isSymbolicLink()) {
-		throw new Error("The managed-skills root is a symlink; refusing to operate outside the managed directory.");
+async function assertManagedRootSafe(location: ManagedSkillLocation, root: string): Promise<void> {
+	const guarded = location.scope === "project" ? [getProjectManagedSkillsBaseDir(), root] : [root];
+	for (const dir of guarded) {
+		const dirStat = await fs.lstat(dir).catch(err => {
+			if (isEnoent(err)) return null;
+			throw err;
+		});
+		if (dirStat?.isSymbolicLink()) {
+			throw new Error("The managed-skills root is a symlink; refusing to operate outside the managed directory.");
+		}
 	}
 }
 
@@ -148,8 +200,11 @@ async function openManagedSkillFileForUpdate(name: string, file: string) {
 	}
 }
 
-/** Create or update a managed `SKILL.md`. Returns the resolved file path. */
-export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<{ path: string }> {
+/** Create or update a managed `SKILL.md` in `location` (default: global). Returns the resolved file path. */
+export async function writeManagedSkill(
+	input: WriteManagedSkillInput,
+	location: ManagedSkillLocation = GLOBAL_MANAGED_SKILLS,
+): Promise<{ path: string }> {
 	const name = sanitizeSkillName(input.name);
 	const description = sanitizeManagedDescription(input.description);
 	const body = input.body.trim();
@@ -171,10 +226,11 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			`Managed skill is ${bytes} bytes; the limit is ${MAX_MANAGED_SKILL_BYTES}. Trim the body or description.`,
 		);
 	}
-	return serializeSkillMutation(name, async () => {
-		await assertManagedRootSafe();
-		const dir = path.join(getManagedSkillsDir(), name);
-		const file = path.join(dir, "SKILL.md");
+	const root = getManagedSkillsRoot(location);
+	const dir = path.join(root, name);
+	const file = path.join(dir, "SKILL.md");
+	return serializeSkillMutation(dir, async () => {
+		await assertManagedRootSafe(location, root);
 		// Reject a symlinked skill directory: an intermediate symlink would let the
 		// write escape the isolated managed root. lstat does not follow the final
 		// component, so a symlinked `dir` is caught here.
@@ -195,7 +251,9 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 				await fs.writeFile(file, content, { flag: "wx" });
 			} catch (err) {
 				if ((err as { code?: string }).code === "EEXIST") {
-					throw new Error(`Managed skill "${name}" already exists. Use action "update" to change it.`);
+					throw new Error(
+						`Managed skill "${name}" already exists in the ${location.scope} scope. Use action "update" to change it.`,
+					);
 				}
 				throw err;
 			}
@@ -210,7 +268,9 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 			throw err;
 		});
 		if (fileStat === null) {
-			throw new Error(`Managed skill "${name}" does not exist. Use action "create" to add it.`);
+			throw new Error(
+				`Managed skill "${name}" does not exist in the ${location.scope} scope. Use action "create" to add it.`,
+			);
 		}
 		if (fileStat.isSymbolicLink()) {
 			throw new Error(`Managed skill "${name}" SKILL.md is a symlink; refusing to overwrite it.`);
@@ -229,12 +289,16 @@ export async function writeManagedSkill(input: WriteManagedSkillInput): Promise<
 	});
 }
 
-/** Delete a managed skill directory. Throws when it does not exist. */
-export async function deleteManagedSkill(name: string): Promise<void> {
+/** Delete a managed skill directory from `location` (default: global). Throws when it does not exist. */
+export async function deleteManagedSkill(
+	name: string,
+	location: ManagedSkillLocation = GLOBAL_MANAGED_SKILLS,
+): Promise<void> {
 	const safe = sanitizeSkillName(name);
-	await serializeSkillMutation(safe, async () => {
-		await assertManagedRootSafe();
-		const dir = path.join(getManagedSkillsDir(), safe);
+	const root = getManagedSkillsRoot(location);
+	const dir = path.join(root, safe);
+	await serializeSkillMutation(dir, async () => {
+		await assertManagedRootSafe(location, root);
 		// Refuse to follow a symlinked skill directory (rm would delete the target).
 		const dirStat = await fs.lstat(dir).catch(err => {
 			if (isEnoent(err)) return null;
@@ -247,7 +311,7 @@ export async function deleteManagedSkill(name: string): Promise<void> {
 			await fs.rm(dir, { recursive: true });
 		} catch (err) {
 			if (isEnoent(err)) {
-				throw new Error(`Managed skill "${safe}" does not exist.`);
+				throw new Error(`Managed skill "${safe}" does not exist in the ${location.scope} scope.`);
 			}
 			throw err;
 		}

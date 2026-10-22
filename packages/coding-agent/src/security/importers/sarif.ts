@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { encodeProjectStateKey } from "@oh-my-pi/pi-utils";
 import type {
 	SecurityCoverage,
 	SecurityFinding,
@@ -16,7 +17,6 @@ import {
 	createSecurityFindingId,
 	createSecurityOccurrenceId,
 	createSecurityScanId,
-	encodeSecurityProjectKey,
 	parseSecurityScanBundle,
 } from "../contracts";
 import { pathIsWithin } from "../preflight";
@@ -318,7 +318,7 @@ export async function importSarif(input: unknown, options: SarifImportOptions): 
 			documentType: "omp-security.scan",
 			schemaVersion: "1.0",
 			id: scanId,
-			projectKey: encodeSecurityProjectKey(canonicalRoot),
+			projectKey: encodeProjectStateKey(canonicalRoot),
 			status: "completed",
 			createdAt,
 			completedAt: createdAt,

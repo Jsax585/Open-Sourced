@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { getSecurityProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
+import { encodeProjectStateKey, getSecurityProjectDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { compareSecurityLineage } from "./comparison";
 import type {
@@ -14,13 +14,7 @@ import type {
 	SecurityScanPlan,
 	SecurityValidation,
 } from "./contracts";
-import {
-	encodeSecurityProjectKey,
-	parseSecurityFinding,
-	parseSecurityScan,
-	parseSecurityScanBundle,
-	parseSecurityScanPlan,
-} from "./contracts";
+import { parseSecurityFinding, parseSecurityScan, parseSecurityScanBundle, parseSecurityScanPlan } from "./contracts";
 import { createPublicSecurityScan, redactPrivateSecurityMetadata } from "./provenance";
 import { exportSecurityBundleToSarif } from "./sarif";
 
@@ -157,7 +151,7 @@ export class SecurityStore {
 
 	static async open(repositoryRoot: string, options: SecurityStoreOptions = {}): Promise<SecurityStore> {
 		const canonicalRoot = await fs.realpath(path.resolve(repositoryRoot)).catch(() => path.resolve(repositoryRoot));
-		const projectKey = encodeSecurityProjectKey(canonicalRoot);
+		const projectKey = encodeProjectStateKey(canonicalRoot);
 		const projectDirectory = options.stateRoot
 			? path.join(path.resolve(options.stateRoot), projectKey)
 			: getSecurityProjectDir(projectKey);

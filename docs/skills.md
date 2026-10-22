@@ -78,7 +78,7 @@ Current runtime behavior:
 
 1. **Capability providers** via `loadCapability("skills")` (the managed/auto-learn provider's skills are skipped here and handled in pass 3)
 2. **Custom directories** via `scanSkillsFromDir(..., { requireDescription: true })` (one-level directory enumeration). A custom-directory skill overrides a same-named default provider skill; the displaced provider skill stays reachable under its namespaced name unless its body is identical.
-3. **Managed (auto-learn) skills** (`omp-managed` provider) resolved dead-last, so any same-named enabled authored skill from a provider or custom directory takes precedence
+3. **Managed (auto-learn) skills** (`omp-managed` provider) resolved dead-last, so any same-named enabled authored skill from a provider or custom directory takes precedence. Within managed skills, the current project's store wins over the global store.
 
 If `skills.enabled` is `false`, discovery returns no skills.
 
@@ -99,7 +99,9 @@ Current registered skill providers:
    - `codex`
 7. `opencode` (priority 55)
 8. `github` (priority 30) — `.github/skills/<name>/SKILL.md` (GitHub Agent Skills layout, project-only)
-9. `omp-managed` (priority 5) — auto-learn skills under `~/.omp/agent/managed-skills`, registered in `src/discovery/builtin.ts` and discovered unconditionally (only writing/nudging is gated by `autolearn.enabled`); always defers to a same-named authored skill
+9. `omp-managed` (priority 5) — auto-learn skills, registered in `src/discovery/builtin.ts` and discovered unconditionally (only writing/nudging is gated by `autolearn.enabled`); always defers to a same-named authored skill. Two stores:
+   - project (`omp-managed:project`): `~/.omp/agent/project-managed-skills/<project-key>/<name>/SKILL.md`, loaded only for sessions in that project. The project is the repository root of the session cwd (a linked worktree is its own root), else the cwd; `<project-key>` is a readable path tail plus a SHA-256 prefix of the canonical root. The store lives under the agent dir, never in the repository.
+   - global (`omp-managed:user`): `~/.omp/agent/managed-skills/<name>/SKILL.md`, loaded in every session.
 
 Capability dedup key is skill name; the first item with a given name wins in the deduped `items` view. `loadSkills()` resolves same-name collisions itself (see "Collision and duplicate handling").
 

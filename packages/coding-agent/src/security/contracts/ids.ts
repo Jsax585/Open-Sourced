@@ -99,13 +99,3 @@ export function createSecurityScanId(randomUuid: () => string = () => Bun.random
 export function createSecurityPlanId(fingerprint: string): string {
 	return `secplan_${Bun.SHA256.hash(fingerprint, "hex").slice(0, 24)}`;
 }
-
-export function encodeSecurityProjectKey(repositoryRoot: string): string {
-	const normalized = repositoryRoot.replaceAll("\\", "/").replace(/\/$/, "");
-	const readable = normalized
-		.replace(/^\//, "")
-		.replace(/[^a-zA-Z0-9._-]+/g, "-")
-		.replace(/^-+|-+$/g, "")
-		.slice(-80);
-	return `${readable || "project"}-${Bun.SHA256.hash(normalized, "hex").slice(0, 12)}`;
-}

@@ -6,7 +6,11 @@
 import * as path from "node:path";
 import { getAgentDir, logger, normalizePathForComparison, parseFrontmatter, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
-import { getManagedSkillsDir, MANAGED_SKILLS_PROVIDER_ID } from "../autolearn/managed-skills";
+import {
+	getManagedSkillsDir,
+	getProjectManagedSkillsDir,
+	MANAGED_SKILLS_PROVIDER_ID,
+} from "../autolearn/managed-skills";
 import { registerProvider } from "../capability";
 import { type ContextFile, contextFileCapability } from "../capability/context-file";
 import { type Extension, type ExtensionManifest, extensionCapability } from "../capability/extension";
@@ -340,14 +344,28 @@ async function loadSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 // priority, so an authored skill of the same name from ANY other provider wins
 // the capability-level priority dedup. Discovery is unconditional (an empty
 // managed dir is a no-op); only writing/nudging is gated by `autolearn.enabled`.
+// The cwd's project store is scanned first so a project-scoped managed skill
+// wins over a same-named global one (`loadSkills` resolves managed first-wins).
 const MANAGED_SKILLS_PRIORITY = 5;
 async function loadManagedSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
-	return scanSkillsFromDir(ctx, {
-		dir: getManagedSkillsDir(),
-		providerId: MANAGED_SKILLS_PROVIDER_ID,
-		level: "user",
-		requireDescription: true,
-	});
+	const results = await Promise.all([
+		scanSkillsFromDir(ctx, {
+			dir: getProjectManagedSkillsDir(ctx.cwd),
+			providerId: MANAGED_SKILLS_PROVIDER_ID,
+			level: "project",
+			requireDescription: true,
+		}),
+		scanSkillsFromDir(ctx, {
+			dir: getManagedSkillsDir(),
+			providerId: MANAGED_SKILLS_PROVIDER_ID,
+			level: "user",
+			requireDescription: true,
+		}),
+	]);
+	return {
+		items: results.flatMap(r => r.items),
+		warnings: results.flatMap(r => r.warnings ?? []),
+	};
 }
 
 registerProvider<Skill>(skillCapability.id, {
@@ -361,7 +379,7 @@ registerProvider<Skill>(skillCapability.id, {
 registerProvider<Skill>(skillCapability.id, {
 	id: MANAGED_SKILLS_PROVIDER_ID,
 	displayName: "Managed Skills (auto-learn)",
-	description: "Auto-generated managed skills from ~/.omp/agent/managed-skills",
+	description: "Auto-generated managed skills from ~/.omp/agent/managed-skills and the project's managed store",
 	priority: MANAGED_SKILLS_PRIORITY,
 	load: loadManagedSkills,
 });

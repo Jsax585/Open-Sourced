@@ -830,6 +830,23 @@ export function hashPath(absPath: string): string {
 	return Bun.hash(path.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
 }
 
+/**
+ * Encode a canonical project root into one collision-resistant fs-safe segment:
+ * a readable tail of the path plus a SHA-256 prefix of the full path.
+ *
+ * Keys omp-owned per-project state stored outside the project (security scans,
+ * project-scoped managed skills). Callers canonicalize the root first.
+ */
+export function encodeProjectStateKey(projectRoot: string): string {
+	const normalized = projectRoot.replaceAll("\\", "/").replace(/\/$/, "");
+	const readable = normalized
+		.replace(/^\//, "")
+		.replace(/[^a-zA-Z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(-80);
+	return `${readable || "project"}-${Bun.SHA256.hash(normalized, "hex").slice(0, 12)}`;
+}
+
 /** Get the path to a single worktree directory (~/.omp/wt/<segment>). */
 export function getWorktreeDir(segment: string): string {
 	return path.join(getWorktreesDir(), segment);

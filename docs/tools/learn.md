@@ -23,15 +23,15 @@
 | `memory` | `string` | Yes | Durable, self-contained lesson to remember: what, when, and why. The schema has no minimum length; backend-specific sanitization/storage determines whether an empty value succeeds. |
 | `context` | `string` | No | Source context for the lesson. |
 | `scope` | `"project" \| "global"` | No | `global` stores the lesson in the Mnemopi bank every project recalls. In the schema and tool description only when `memory.backend = "mnemopi"` and `mnemopi.scoping` is `global` or `per-project-tagged`; omitted means `project`. |
-| `skill` | `{ action: "create" \| "update"; name: string; description: string; body: string }` | No | Managed skill to create or enhance after the lesson succeeds. `body` is Markdown without frontmatter. |
+| `skill` | `{ action: "create" \| "update"; name: string; scope?: "project" \| "global"; description: string; body: string }` | No | Managed skill to create or enhance after the lesson succeeds. `body` is Markdown without frontmatter. `skill.scope` picks the managed store (see `manage_skill`); omitted means `global`. It is independent of the memory `scope`. |
 
 ## Outputs
 - Lesson only:
   - `content[0].text = "Lesson stored."` or `"Lesson queued for retention."`
   - `details = { skill: null }`
 - Lesson plus skill:
-  - `content[0].text = "<lesson result>. Created managed skill \"<name>\"."` or `"... Updated ..."`
-  - `details = { skill: "<name>" }`
+  - `content[0].text = "<lesson result>. Created <scope> managed skill \"<name>\"."` or `"... Updated ..."`
+  - `details = { skill: "<name>", scope }`
 - Authored-skill name conflict returns `isError: true` after storing/queueing the lesson and reports `details = { skill: null, shadowed: true }`.
 
 ## Flow
@@ -55,7 +55,7 @@
 ## Side Effects
 - Filesystem:
   - Local backend writes `<agent-dir>/memories/<encoded-cwd>/learned.md`.
-  - Managed skills write `<agent-dir>/managed-skills/<sanitized-name>/SKILL.md`; the default agent directory is `~/.omp/agent`.
+  - Managed skills write `<agent-dir>/managed-skills/<sanitized-name>/SKILL.md` (global) or `<agent-dir>/project-managed-skills/<project-key>/<sanitized-name>/SKILL.md` (`skill.scope: "project"`); the default agent directory is `~/.omp/agent`.
   - Mnemopi writes its scoped SQLite database.
 - Network: Hindsight queue flushes to the configured server later. Mnemopi can schedule configured embedding/fact-extraction provider work after the synchronous row write; local file-backed storage itself is offline.
 - Session state: reads backend state, settings, cwd, and session id. A skill created here is not immediately injected into the active skill list.

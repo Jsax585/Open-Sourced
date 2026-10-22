@@ -2,13 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getManagedSkillsDir } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
+import { getManagedSkillsDir, writeManagedSkill } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import { disableUserSource, enableUserSource } from "@oh-my-pi/pi-coding-agent/capability";
 import "@oh-my-pi/pi-coding-agent/discovery";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
+import { $ } from "bun";
 import { restoreEnvValue } from "./helpers/settings-test-state";
+
+async function initRepo(dir: string): Promise<void> {
+	await fs.mkdir(dir, { recursive: true });
+	await $`git init -q`.cwd(dir).quiet();
+}
 
 async function writeSkill(dir: string, name: string, description: string): Promise<void> {
 	const file = path.join(dir, name, "SKILL.md");
@@ -194,5 +200,59 @@ describe("managed-skills discovery", () => {
 		const { skills, warnings } = await loadSkills({ cwd: tempCwd });
 		expect(skills.some(s => s.source === "omp-managed:user")).toBe(false);
 		expect(warnings.some(w => w.message.includes("managed-skills"))).toBe(false);
+	});
+
+	it("loads a project-managed skill only in its own repository, from any subdirectory", async () => {
+		const repoA = path.join(tempHome, "repo-a");
+		const repoB = path.join(tempHome, "repo-b");
+		await initRepo(repoA);
+		await initRepo(repoB);
+		const subdir = path.join(repoA, "packages", "app");
+		await fs.mkdir(subdir, { recursive: true });
+		await writeManagedSkill(
+			{ action: "create", name: "deploy-a", description: "Deploy repo A.", body: "# Deploy" },
+			{ scope: "project", cwd: subdir },
+		);
+
+		const inRepoA = await loadSkills({ cwd: repoA });
+		expect(inRepoA.skills.find(s => s.name === "deploy-a")?.source).toBe("omp-managed:project");
+		const inRepoB = await loadSkills({ cwd: repoB });
+		expect(inRepoB.skills.some(s => s.name === "deploy-a")).toBe(false);
+		// The store is omp-owned; nothing lands in the repository.
+		expect(await fs.readdir(repoA)).not.toContain(".omp");
+	});
+
+	it("lets a project-managed skill shadow a same-named global one, and an authored skill beat both", async () => {
+		const repo = path.join(tempHome, "repo");
+		await initRepo(repo);
+		await writeSkill(managedDir, "dup", "Global dup.");
+		await writeManagedSkill(
+			{ action: "create", name: "dup", description: "Project dup.", body: "# dup" },
+			{ scope: "project", cwd: repo },
+		);
+
+		const inRepo = (await loadSkills({ cwd: repo })).skills.filter(s => s.name === "dup");
+		expect(inRepo.map(s => s.description)).toEqual(["Project dup."]);
+		const elsewhere = (await loadSkills({ cwd: tempCwd })).skills.filter(s => s.name === "dup");
+		expect(elsewhere.map(s => s.description)).toEqual(["Global dup."]);
+
+		await writeSkill(path.join(repo, ".omp", "skills"), "dup", "Authored dup.");
+		const withAuthored = (await loadSkills({ cwd: repo })).skills.filter(s => s.name === "dup");
+		expect(withAuthored.map(s => [s.description, s.source])).toEqual([["Authored dup.", "native:project"]]);
+	});
+
+	it("treats a linked worktree as its own project", async () => {
+		const primary = path.join(tempHome, "primary");
+		const worktree = path.join(tempHome, "linked");
+		await initRepo(primary);
+		await $`git -c user.email=t@example.com -c user.name=t commit -q --allow-empty -m init`.cwd(primary).quiet();
+		await $`git worktree add -q ${worktree}`.cwd(primary).quiet();
+		await writeManagedSkill(
+			{ action: "create", name: "primary-only", description: "Primary checkout.", body: "# p" },
+			{ scope: "project", cwd: primary },
+		);
+
+		expect((await loadSkills({ cwd: primary })).skills.some(s => s.name === "primary-only")).toBe(true);
+		expect((await loadSkills({ cwd: worktree })).skills.some(s => s.name === "primary-only")).toBe(false);
 	});
 });

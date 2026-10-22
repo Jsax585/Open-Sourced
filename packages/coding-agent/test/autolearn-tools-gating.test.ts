@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import { getManagedSkillsDir } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
+import { getManagedSkillsDir, getProjectManagedSkillsDir } from "@oh-my-pi/pi-coding-agent/autolearn/managed-skills";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { resetActiveSkillsForTests, type Skill, setActiveSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { HindsightSessionState } from "@oh-my-pi/pi-coding-agent/hindsight/state";
@@ -189,6 +189,25 @@ describe("manage_skill execute", () => {
 		// Nothing was written, so the managed skill can never surface.
 		expect(await Bun.file(path.join(getManagedSkillsDir(), "demo", "SKILL.md")).exists()).toBe(false);
 	});
+
+	it("scope project writes the session project's store and leaves the global store alone", async () => {
+		const cwd = path.join(tempHome, "work");
+		await fs.mkdir(cwd, { recursive: true });
+		const projectTool = ManageSkillTool.createIf(makeSession({ "autolearn.enabled": true }, { cwd }))!;
+		await projectTool.execute("p1", {
+			action: "create",
+			name: "local",
+			scope: "project",
+			description: "Repo-only procedure.",
+			body: "# Local",
+		});
+		expect(await Bun.file(path.join(getProjectManagedSkillsDir(cwd), "local", "SKILL.md")).exists()).toBe(true);
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "local", "SKILL.md")).exists()).toBe(false);
+		// Omitted scope means global, so the project copy is not found there.
+		await expect(projectTool.execute("p2", { action: "delete", name: "local" })).rejects.toThrow(
+			/does not exist in the global scope/,
+		);
+	});
 });
 
 describe("learn execute", () => {
@@ -196,7 +215,7 @@ describe("learn execute", () => {
 	let remembered: string[];
 	let originalAgentDir: string;
 
-	function learnSession(): ToolSession {
+	function learnSession(cwd = "/tmp/test"): ToolSession {
 		const fakeState = {
 			sessionId: "sess-1",
 			session: { sessionManager: { getCwd: () => "/tmp/work" } },
@@ -207,7 +226,7 @@ describe("learn execute", () => {
 		};
 		return makeSession(
 			{ "autolearn.enabled": true, "memory.backend": "mnemopi" },
-			{ getMnemopiSessionState: () => fakeState as unknown as MnemopiSessionState },
+			{ cwd, getMnemopiSessionState: () => fakeState as unknown as MnemopiSessionState },
 		);
 	}
 
@@ -239,6 +258,25 @@ describe("learn execute", () => {
 		});
 		expect(remembered).toHaveLength(1);
 		expect(await Bun.file(path.join(getManagedSkillsDir(), "worker-host", "SKILL.md")).exists()).toBe(true);
+	});
+
+	it("mints a skill.scope project skill into the session project's store", async () => {
+		const cwd = path.join(tempHome, "work");
+		await fs.mkdir(cwd, { recursive: true });
+		await new LearnTool(learnSession(cwd)).execute("2p", {
+			memory: "Deploy through the staging gate.",
+			skill: {
+				action: "create",
+				name: "staging-gate",
+				scope: "project",
+				description: "Deploy via staging.",
+				body: "# Staging",
+			},
+		});
+		expect(await Bun.file(path.join(getProjectManagedSkillsDir(cwd), "staging-gate", "SKILL.md")).exists()).toBe(
+			true,
+		);
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "staging-gate", "SKILL.md")).exists()).toBe(false);
 	});
 
 	it("surfaces a partial-outcome error when the skill name is invalid", async () => {
