@@ -2003,20 +2003,17 @@ export class TurnRecovery {
 					),
 				);
 				const summaries = priorityOrderedSavedResetAccounts(authStorage, resetProvider, sessionId);
-				const healthAccountsByCredentialId = new Map(
+				const remainingHealthAccountsByCredentialId = new Map(
 					health.accounts.map(account => [account.credentialId, account] as const),
 				);
-				const rankedCredentialIds = new Set<number>();
-				const rankedAccounts = health.accounts.slice(0, 0);
+				const rankedAccounts: typeof health.accounts = [];
 				for (const summary of summaries) {
-					const account = healthAccountsByCredentialId.get(summary.credentialId);
+					const account = remainingHealthAccountsByCredentialId.get(summary.credentialId);
 					if (!account) continue;
-					rankedCredentialIds.add(account.credentialId);
+					remainingHealthAccountsByCredentialId.delete(summary.credentialId);
 					rankedAccounts.push(account);
 				}
-				for (const account of health.accounts) {
-					if (!rankedCredentialIds.has(account.credentialId)) rankedAccounts.push(account);
-				}
+				rankedAccounts.push(...remainingHealthAccountsByCredentialId.values());
 				for (const account of rankedAccounts) {
 					if (account.fundingTier === "allowance") break;
 					if (
