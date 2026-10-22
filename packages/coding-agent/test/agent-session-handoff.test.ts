@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { HandoffResult } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
@@ -32,6 +33,44 @@ import {
 
 const HANDOFF_SECRET = "HANDOFF_SECRET_TOKEN_12345";
 const UNRENDERABLE_SNAPCOMPACT_TEXT = "\uE000\uE001\uE002\uE003\uE004\uE005\uE006\uE007\uE008\uE009";
+const LIFECYCLE_TRACE_PREFIX = "[OMP_TEST_LIFECYCLE_TRACE]";
+const lifecycleTraceEnabled = Boolean(process.env.OMP_TEST_LIFECYCLE_TRACE);
+
+function beginLifecycleTrace(fixture: string, stage: string, fixturePath?: string): number | undefined {
+	if (!lifecycleTraceEnabled) return undefined;
+
+	const startedAt = performance.now();
+	process.stderr.write(
+		`${LIFECYCLE_TRACE_PREFIX} ${JSON.stringify({
+			pid: process.pid,
+			fixture,
+			stage,
+			phase: "begin",
+			...(fixturePath === undefined ? {} : { path: fixturePath }),
+		})}\n`,
+	);
+	return startedAt;
+}
+
+function endLifecycleTrace(
+	fixture: string,
+	stage: string,
+	startedAt: number | undefined,
+	fixturePath?: string,
+): void {
+	if (startedAt === undefined) return;
+
+	process.stderr.write(
+		`${LIFECYCLE_TRACE_PREFIX} ${JSON.stringify({
+			pid: process.pid,
+			fixture,
+			stage,
+			phase: "end",
+			durationMs: Number((performance.now() - startedAt).toFixed(3)),
+			...(fixturePath === undefined ? {} : { path: fixturePath }),
+		})}\n`,
+	);
+}
 
 describe("AgentSession handoff", () => {
 	// Immutable across the whole file: the model registry's synchronous bundled-model
@@ -48,6 +87,8 @@ describe("AgentSession handoff", () => {
 	let sessionManager: SessionManager;
 	let events: AgentSessionEvent[];
 	let obfuscator: SecretObfuscator;
+	let fixtureNumber = 0;
+	let fixtureIdentity = "handoff-uninitialized";
 
 	/** Drain post-turn maintenance deterministically for negative tests (those proving
 	 *  maintenance did NOT run, where there is no positive signal to poll on). Post-turn
@@ -60,90 +101,165 @@ describe("AgentSession handoff", () => {
 	}
 
 	beforeAll(async () => {
-		sharedDir = TempDir.createSync("@pi-handoff-shared-");
-		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
-		authStorage.keys.setRuntime("anthropic", "test-key");
-		modelRegistry = new ModelRegistry(authStorage);
-
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
+		const sharedTempTrace = beginLifecycleTrace("handoff-suite", "beforeAll.shared-temp");
+		try {
+			sharedDir = TempDir.createSync("@pi-handoff-shared-");
+		} finally {
+			endLifecycleTrace("handoff-suite", "beforeAll.shared-temp", sharedTempTrace, sharedDir?.path());
 		}
-		model = bundled;
+
+		const authStorageTrace = beginLifecycleTrace("handoff-suite", "beforeAll.auth-storage", sharedDir.path());
+		try {
+			authStorage = await AuthStorage.create(path.join(sharedDir.path(), "testauth.db"));
+			authStorage.keys.setRuntime("anthropic", "test-key");
+		} finally {
+			endLifecycleTrace("handoff-suite", "beforeAll.auth-storage", authStorageTrace, sharedDir.path());
+		}
+
+		const modelRegistryTrace = beginLifecycleTrace("handoff-suite", "beforeAll.model-registry", sharedDir.path());
+		try {
+			modelRegistry = new ModelRegistry(authStorage);
+		} finally {
+			endLifecycleTrace("handoff-suite", "beforeAll.model-registry", modelRegistryTrace, sharedDir.path());
+		}
+
+		const bundledModelTrace = beginLifecycleTrace("handoff-suite", "beforeAll.bundled-model-lookup", sharedDir.path());
+		try {
+			const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!bundled) {
+				throw new Error("Expected built-in anthropic model to exist");
+			}
+			model = bundled;
+		} finally {
+			endLifecycleTrace("handoff-suite", "beforeAll.bundled-model-lookup", bundledModelTrace, sharedDir.path());
+		}
 	});
 
 	afterAll(async () => {
-		authStorage.close();
+		const authCloseTrace = beginLifecycleTrace("handoff-suite", "afterAll.auth-close", sharedDir?.path());
+		try {
+			authStorage.close();
+		} finally {
+			endLifecycleTrace("handoff-suite", "afterAll.auth-close", authCloseTrace, sharedDir?.path());
+		}
+
+		const sharedRemoveTrace = beginLifecycleTrace("handoff-suite", "afterAll.shared-rm", sharedDir?.path());
 		try {
 			await sharedDir.remove();
-		} catch {}
+		} catch {
+		} finally {
+			endLifecycleTrace("handoff-suite", "afterAll.shared-rm", sharedRemoveTrace, sharedDir?.path());
+		}
 	});
 
 	beforeEach(async () => {
-		tempDir = TempDir.createSync("@pi-handoff-");
-		sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
-		events = [];
-		obfuscator = new SecretObfuscator([{ type: "plain", content: HANDOFF_SECRET }]);
+		fixtureIdentity = `handoff-fixture-${++fixtureNumber}`;
 
-		const agent = new Agent({
-			initialState: {
-				model,
-				systemPrompt: ["Test"],
-				tools: [],
-				messages: [],
-			},
-			convertToLlm: compactionModule.defaultConvertToLlm,
-		});
+		const tempDirTrace = beginLifecycleTrace(fixtureIdentity, "beforeEach.temp-dir");
+		try {
+			tempDir = TempDir.createSync("@pi-handoff-");
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "beforeEach.temp-dir", tempDirTrace, tempDir?.path());
+		}
 
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settings: Settings.isolated({
-				"compaction.enabled": true,
-				"compaction.autoContinue": false,
-				"compaction.asyncEnabled": false,
-				"compaction.keepRecentTokens": 1,
-			}),
-			modelRegistry,
-			obfuscator,
-		});
+		const sessionManagerTrace = beginLifecycleTrace(fixtureIdentity, "beforeEach.session-manager", tempDir.path());
+		try {
+			sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "beforeEach.session-manager", sessionManagerTrace, tempDir.path());
+		}
+		const agentSessionTrace = beginLifecycleTrace(fixtureIdentity, "beforeEach.agent-session", tempDir.path());
+		try {
+			events = [];
+			obfuscator = new SecretObfuscator([{ type: "plain", content: HANDOFF_SECRET }]);
 
-		session.subscribe(event => {
-			events.push(event);
-		});
+			const agent = new Agent({
+				initialState: {
+					model,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+				convertToLlm: compactionModule.defaultConvertToLlm,
+			});
 
-		sessionManager.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "seed" }],
-			timestamp: Date.now() - 2,
-		});
-		sessionManager.appendMessage({
-			role: "assistant",
-			content: [{ type: "text", text: "seed response" }],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-			usage: {
-				input: 16,
-				output: 8,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 24,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now() - 1,
-		});
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated({
+					"compaction.enabled": true,
+					"compaction.autoContinue": false,
+					"compaction.asyncEnabled": false,
+					"compaction.keepRecentTokens": 1,
+				}),
+				modelRegistry,
+				obfuscator,
+			});
+
+			session.subscribe(event => {
+				events.push(event);
+			});
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "beforeEach.agent-session", agentSessionTrace, tempDir.path());
+		}
+
+		const seedAppendsTrace = beginLifecycleTrace(fixtureIdentity, "beforeEach.seed-appends", tempDir.path());
+		try {
+			sessionManager.appendMessage({
+				role: "user",
+				content: [{ type: "text", text: "seed" }],
+				timestamp: Date.now() - 2,
+			});
+			sessionManager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: "seed response" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+				usage: {
+					input: 16,
+					output: 8,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 24,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now() - 1,
+			});
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "beforeEach.seed-appends", seedAppendsTrace, tempDir.path());
+		}
 	});
 
 	afterEach(async () => {
 		if (session) {
-			await session.dispose();
+			const sessionDisposeTrace = beginLifecycleTrace(
+				fixtureIdentity,
+				"afterEach.session-dispose",
+				tempDir?.path(),
+			);
+			try {
+				await session.dispose();
+			} finally {
+				endLifecycleTrace(fixtureIdentity, "afterEach.session-dispose", sessionDisposeTrace, tempDir?.path());
+			}
 		}
+
+		const tempRemoveTrace = beginLifecycleTrace(fixtureIdentity, "afterEach.temp-rm", tempDir?.path());
 		try {
 			await tempDir.remove();
-		} catch {}
-		vi.restoreAllMocks();
+		} catch {
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "afterEach.temp-rm", tempRemoveTrace, tempDir?.path());
+		}
+
+		const mockRestoreTrace = beginLifecycleTrace(fixtureIdentity, "afterEach.mock-restore", tempDir?.path());
+		try {
+			vi.restoreAllMocks();
+		} finally {
+			endLifecycleTrace(fixtureIdentity, "afterEach.mock-restore", mockRestoreTrace, tempDir?.path());
+		}
 	});
 
 	it("commits a handoff document as an in-place compaction", async () => {
@@ -154,8 +270,39 @@ describe("AgentSession handoff", () => {
 			.spyOn(compactionModule, "generateHandoffFromContext")
 			.mockResolvedValue(handoffText);
 
-		const result = await session.handoff();
-		await drainMaintenance();
+		const inPlaceCompactionFixture = `${fixtureIdentity}:in-place-compaction`;
+		const handoffTrace = beginLifecycleTrace(
+			inPlaceCompactionFixture,
+			"test.in-place-compaction.handoff",
+			tempDir.path(),
+		);
+		let result: HandoffResult | undefined;
+		try {
+			result = await session.handoff();
+		} finally {
+			endLifecycleTrace(
+				inPlaceCompactionFixture,
+				"test.in-place-compaction.handoff",
+				handoffTrace,
+				tempDir.path(),
+			);
+		}
+
+		const maintenanceDrainTrace = beginLifecycleTrace(
+			inPlaceCompactionFixture,
+			"test.in-place-compaction.maintenance-drain",
+			tempDir.path(),
+		);
+		try {
+			await drainMaintenance();
+		} finally {
+			endLifecycleTrace(
+				inPlaceCompactionFixture,
+				"test.in-place-compaction.maintenance-drain",
+				maintenanceDrainTrace,
+				tempDir.path(),
+			);
+		}
 
 		expect(generateHandoffSpy).toHaveBeenCalledTimes(1);
 		expect(result?.document).toBe(handoffText);
