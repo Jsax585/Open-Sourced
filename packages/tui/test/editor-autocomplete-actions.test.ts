@@ -552,7 +552,7 @@ describe("Editor slash autocomplete acceptance", () => {
 	});
 
 	describe("a command listed only because its description matches the typed text", () => {
-		// `not-a-command` is a subsequence of this description, never of the name `loop` (#16265).
+		// `toggle` starts a word of the description and is no spelling of the name `loop`.
 		const commands = [
 			{ name: "loop", description: "Toggle loop mode, not a re-run: gate a re-check on command status" },
 		];
@@ -569,7 +569,7 @@ describe("Editor slash autocomplete acceptance", () => {
 			const typing = loopEditor();
 			typing.editor.handleInput("/");
 			await untilAutocompleteShown(typing.editor);
-			for (const char of "not-a-command") typing.editor.handleInput(char);
+			for (const char of "toggle") typing.editor.handleInput(char);
 			await untilAutocompleteShown(typing.editor);
 			expect(typing.editor.render(80).join("\n")).toContain("loop");
 			return typing;
@@ -578,7 +578,7 @@ describe("Editor slash autocomplete acceptance", () => {
 		it("submits the typed command on Enter instead of running the listed one", async () => {
 			const { editor, submitted } = await typed();
 			editor.handleInput("\r");
-			expect(submitted()).toBe("/not-a-command");
+			expect(submitted()).toBe("/toggle");
 		});
 
 		it("runs the listed command once the user moves the selection onto it", async () => {
@@ -590,43 +590,51 @@ describe("Editor slash autocomplete acceptance", () => {
 
 		it("submits the typed command on an Enter that outruns the popup", () => {
 			const { editor, submitted } = loopEditor();
+			editor.setText("/toggle");
+			editor.handleInput("\r");
+			expect(submitted()).toBe("/toggle");
+		});
+
+		it("never runs a command whose description only holds the typed letters scattered (#16265)", () => {
+			const { editor, submitted } = loopEditor();
 			editor.setText("/not-a-command");
 			editor.handleInput("\r");
 			expect(submitted()).toBe("/not-a-command");
 		});
 	});
 
-	it("applies a matching alias on Enter even when the description ranks higher", () => {
+	it("applies a matching alias on Enter even when the description also matches", () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
-			new CombinedAutocompleteProvider([{ name: "x", aliases: ["abcd"], description: "ace" }], "/tmp"),
+			new CombinedAutocompleteProvider([{ name: "x", aliases: ["abcd"], description: "abc" }], "/tmp"),
 		);
 		let submitted = "";
 		editor.onSubmit = text => {
 			submitted = text;
 		};
 
-		editor.setText("/ac");
+		editor.setText("/ab");
 		editor.handleInput("\r");
 
-		expect(submitted).toBe("/x");
+		// A name or alias match outranks the description, so the alias is the row Enter runs.
+		expect(submitted).toBe("/abcd");
 	});
 
 	it("applies a matching alias from the slash popup on Enter", async () => {
 		const editor = new Editor(defaultEditorTheme);
 		editor.setAutocompleteProvider(
-			new CombinedAutocompleteProvider([{ name: "x", aliases: ["abcd"], description: "ace" }], "/tmp"),
+			new CombinedAutocompleteProvider([{ name: "x", aliases: ["abcd"], description: "abc" }], "/tmp"),
 		);
 		let submitted = "";
 		editor.onSubmit = text => {
 			submitted = text;
 		};
 
-		editor.handleInput("/ac");
+		editor.handleInput("/ab");
 		await untilAutocompleteShown(editor);
 		editor.handleInput("\r");
 
-		expect(submitted).toBe("/x");
+		expect(submitted).toBe("/abcd");
 	});
 
 	it("never completes Enter to the bare skill namespace row", () => {

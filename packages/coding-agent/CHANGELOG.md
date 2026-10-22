@@ -6,6 +6,11 @@
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
+### Fixed
+
+- Fixed `/settings`, `/model`, `/resume`, `/tree`, `/agents` and `/extensions` search finding nothing for a mistyped word (`temperatute`, `claude opsu`) ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+- Fixed "did you mean" suggestions for an unknown `--model`, `cfg://` setting or `agent://` id missing near-miss spellings ([#15579](https://github.com/can1357/oh-my-pi/pull/15579) by [@azain47](https://github.com/azain47))
+
 ## [18.12.6] - 2026-10-21
 
 ### Added
