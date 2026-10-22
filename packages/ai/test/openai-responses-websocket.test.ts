@@ -304,6 +304,31 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.requests[1]?.body.input).toHaveLength(3);
 	});
 
+	it("keeps generation and socket reuse intact when the diagnostic observer throws", async () => {
+		const fixture = endpoint((socket, _body, index) => {
+			send(socket, textEvents(`TURN ${index}`, `resp_${index}`));
+		});
+		let observedDeltas = 0;
+		const options: OpenAIResponsesOptions = {
+			...fixture.options,
+			preferWebsockets: true,
+			onSseEvent: event => {
+				if (event.event !== "response.output_text.delta") return;
+				observedDeltas++;
+				throw new Error("Diagnostic observer failed");
+			},
+		};
+		for (const turn of [1, 2]) {
+			const result = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
+			expect(result.stopReason).toBe("stop");
+			expect(result.content).toMatchObject([{ type: "text", text: `TURN ${turn}` }]);
+		}
+		expect(observedDeltas).toBe(2);
+		expect(fixture.upgrades).toHaveLength(1);
+		expect(fixture.requests).toHaveLength(2);
+		expect(fixture.httpRequests).toHaveLength(0);
+	});
+
 	it("rejects previous_response_id injected by onPayload rather than silently changing it", async () => {
 		const fixture = endpoint();
 		const result = await streamOpenAIResponses(fixture.model, fixture.context, {

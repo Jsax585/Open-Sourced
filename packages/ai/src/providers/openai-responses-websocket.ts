@@ -1,6 +1,7 @@
 import type { ServerSentEvent } from "@oh-my-pi/pi-utils";
 import { AbortError } from "../error/abort";
 import { getProxyForUrl } from "../utils/proxy";
+import { notifyRawSseEvent } from "../utils/sse-debug";
 import { extractWebSocketHandshakeHeaders, toWebSocketUrl } from "../utils/websocket";
 import type { ResponseStreamEvent } from "./openai-responses-wire";
 
@@ -114,7 +115,7 @@ export class OpenAIResponsesWebSocketConnection {
 				if (event instanceof Error) throw event;
 				if (observer) {
 					const data = JSON.stringify(event);
-					observer({
+					notifyRawSseEvent(observer, {
 						event: event.type,
 						data,
 						raw: [`: ws ← ${event.type}`, `event: ${event.type}`, `data: ${data}`],
