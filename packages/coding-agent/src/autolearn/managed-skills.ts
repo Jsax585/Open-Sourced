@@ -24,10 +24,24 @@ export const MAX_MANAGED_SKILL_BYTES = 64_000;
  * pattern bans everything that could climb out of it (`/`, `\`, `..`) or break
  * the system prompt's `<skills>` listing (whitespace, angle brackets, backticks).
  * Within those limits any script is allowed — `般若理趣分` is as valid as
- * `banruo-liqu-fen` — and `\p{M}` keeps combining marks (Thai vowels, decomposed
- * accents, Devanagari matras) usable. ASCII is lowercased before the check.
+ * `banruo-liqu-fen` — and `\p{M}` keeps combining marks that have no
+ * precomposed form (Thai vowels, Devanagari matras) usable after NFC
+ * normalization. The name is trimmed, lowercased, and NFC-normalized before
+ * the check.
  */
 const SKILL_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}-]{0,63}$/u;
+
+/**
+ * The one canonical form of a managed-skill name: trimmed, lowercased, and
+ * NFC-normalized. Case folding and Unicode normalization both rewrite the
+ * string, and the result is a path segment, so every consumer (write, delete,
+ * discovery) must derive the on-disk name through here or two spellings of one
+ * name (`é` vs `e` + U+0301, `Demo` vs `demo`) would resolve to different
+ * directories — or one spelling would silently delete the other's skill.
+ */
+function normalizeSkillName(raw: string): string {
+	return raw.trim().toLowerCase().normalize("NFC");
+}
 
 /** Resolve the isolated managed-skills directory (`~/.omp/agent/managed-skills`). */
 export function getManagedSkillsDir(agentDir: string = getAgentDir()): string {
@@ -37,11 +51,12 @@ export function getManagedSkillsDir(agentDir: string = getAgentDir()): string {
 /**
  * Validate + normalize a managed-skill name. Throws on anything outside the
  * allowlist so a bad name can never escape `getManagedSkillsDir()` (blocks
- * `..`, slashes, whitespace, and empty names). Letters and digits of any script
- * are accepted; ASCII is lowercased so case never splits one name in two.
+ * `..`, slashes, whitespace, and empty names). Letters, digits, and marks of
+ * any script are accepted; case and Unicode normalization are folded first so
+ * neither split one skill into two.
  */
 export function sanitizeSkillName(raw: string): string {
-	const name = raw.trim().toLowerCase();
+	const name = normalizeSkillName(raw);
 	if (!SKILL_NAME_PATTERN.test(name)) {
 		throw new Error(
 			`Invalid skill name "${raw}". Use letters, digits, and hyphens in any script (1-64 chars, starting with a letter or digit).`,
@@ -55,9 +70,15 @@ export function sanitizeSkillName(raw: string): string {
  * Used to validate names read from disk at discovery time — a managed
  * `SKILL.md` whose `frontmatter.name` was not produced by `sanitizeSkillName`
  * (e.g. hand-placed) must not render unescaped into the system prompt.
+ *
+ * The check is equality with the sanitized form, not just the pattern: a
+ * discovered name becomes a write/delete path segment through
+ * `sanitizeSkillName`, so a name that normalization or lowercasing would
+ * rewrite (`Demo`, `e` + U+0301) must be rejected here — otherwise discovery
+ * advertises `Demo` while a delete resolves `demo` and removes the other skill.
  */
 export function isValidManagedSkillName(name: string): boolean {
-	return SKILL_NAME_PATTERN.test(name);
+	return SKILL_NAME_PATTERN.test(name) && normalizeSkillName(name) === name;
 }
 
 /**

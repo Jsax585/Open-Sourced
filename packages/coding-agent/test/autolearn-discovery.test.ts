@@ -203,6 +203,31 @@ describe("managed-skills discovery", () => {
 		expect(hanzi?.source).toBe("omp-managed:user");
 	});
 
+	it("surfaces a managed skill whose name carries a combining mark", async () => {
+		await writeSkill(managedDir, "กิ", "Thai.");
+		const { skills } = await loadSkills({ cwd: tempCwd });
+		expect(skills.find(s => s.name === "กิ")?.source).toBe("omp-managed:user");
+	});
+
+	it("skips a managed name that lowercasing would rewrite", async () => {
+		// A hand-placed `Demo` is advertised by discovery but every mutation
+		// resolves `demo`, deleting the *other* skill. Only the canonical shape
+		// may surface.
+		await writeSkill(managedDir, "Demo", "Hand-placed uppercase.");
+		await writeSkill(managedDir, "demo", "Canonical.");
+		const { skills } = await loadSkills({ cwd: tempCwd });
+		expect(skills.filter(s => s.source === "omp-managed:user").map(s => s.name)).toEqual(["demo"]);
+	});
+
+	it("skips a managed name that Unicode normalization would rewrite", async () => {
+		// The decomposed spelling can coexist with the precomposed one on disk;
+		// exposing both would show two identical-looking skills.
+		await writeSkill(managedDir, "cafe\u0301", "Decomposed.");
+		await writeSkill(managedDir, "caf\u00e9", "Precomposed.");
+		const { skills } = await loadSkills({ cwd: tempCwd });
+		expect(skills.filter(s => s.source === "omp-managed:user").map(s => s.name)).toEqual(["caf\u00e9"]);
+	});
+
 	it("is a no-op when the managed dir is absent", async () => {
 		const { skills, warnings } = await loadSkills({ cwd: tempCwd });
 		expect(skills.some(s => s.source === "omp-managed:user")).toBe(false);
