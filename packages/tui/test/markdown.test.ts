@@ -199,6 +199,18 @@ describe("Markdown component", () => {
 			]);
 		});
 
+		it("passes custom listBullet themes the bare marker on task items", () => {
+			const theme = {
+				...defaultMarkdownTheme,
+				listBullet: (bullet: string) => (bullet === "- " ? "• " : bullet === "10. " ? "10) " : bullet),
+			};
+			const markdown = new Markdown("- [x] Ship the fix\n- [ ] Add a test\n\n10. [x] Tag it", 0, 0, theme);
+
+			const plainLines = markdown.render(40).map(line => stripVTControlCharacters(line).trimEnd());
+
+			expect(plainLines).toEqual(["• [x] Ship the fix", "• [ ] Add a test", "", "10) [x] Tag it"]);
+		});
+
 		it("keeps list rows within width when the marker consumes the line", () => {
 			const markdown = new Markdown("123456789. x", 0, 0, defaultMarkdownTheme);
 
