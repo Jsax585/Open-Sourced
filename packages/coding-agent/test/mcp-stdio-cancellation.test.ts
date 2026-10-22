@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, type Mock, spyOn, vi } from "bun:test";
 import type { BunFile } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
