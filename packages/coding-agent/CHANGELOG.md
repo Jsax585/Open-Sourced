@@ -6,6 +6,7 @@
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
+- Added `/jobs logs` to select background jobs and follow captured output in a nonfullscreen sheet, while keeping the `/jobs` tree report and focused-agent read-only permissions ([#14575](https://github.com/can1357/oh-my-pi/issues/14575), [#15595](https://github.com/can1357/oh-my-pi/pull/15595) by [@wyyyz1937365497](https://github.com/wyyyz1937365497))
 
 ### Fixed
 
