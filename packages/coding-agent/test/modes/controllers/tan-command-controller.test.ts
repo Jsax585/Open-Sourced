@@ -49,6 +49,7 @@ interface TanSessionEvent {
 	type: string;
 	result?: unknown;
 	aborted?: boolean;
+	message?: AgentMessage;
 }
 
 /** Minimal tan clone session stub covering the surface `TanCommandController` drives. */
@@ -652,7 +653,7 @@ describe("TanCommandController", () => {
 		expect(stub.compactionListener).toBeUndefined();
 	});
 
-	it("sends /tan images with the request and replays the admitted request after compaction", async () => {
+	it("sends /tan images with the request and replays the admitted, template-expanded request after compaction", async () => {
 		const harness = createContext();
 		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
 		const screenshot: ImageContent = { type: "image", data: "cmF3", mimeType: "image/png" };
@@ -667,7 +668,7 @@ describe("TanCommandController", () => {
 		const request: AgentMessage = {
 			role: "user",
 			content: [
-				{ type: "text", text: "fix the block in this screenshot" },
+				{ type: "text", text: "Review the block in this screenshot for layout bugs." },
 				{ type: "image", data: "bm9ybWFsaXplZA==", mimeType: "image/webp" },
 			],
 			attribution: "user",
@@ -675,10 +676,13 @@ describe("TanCommandController", () => {
 		};
 		const stub = createCloneStub({
 			prompt: async () => {
-				// The session admits the request with its normalized image and hidden
-				// source notice, then compaction summarizes all of it away.
+				// The session admits the request as its prompt template expanded it, with
+				// the normalized image and hidden source notice; compaction then
+				// summarizes all of it away.
 				stub.compactionListener?.({ type: "agent_start" });
 				stub.messages.push(sourceNotice, request);
+				stub.compactionListener?.({ type: "message_end", message: sourceNotice });
+				stub.compactionListener?.({ type: "message_end", message: request });
 				stub.compactionListener?.({ type: "auto_compaction_start" });
 				stub.messages.length = 0;
 				stub.compactionListener?.({ type: "auto_compaction_end", result: {}, aborted: false });
@@ -689,12 +693,12 @@ describe("TanCommandController", () => {
 		} as unknown as CreateAgentSessionResult);
 		const controller = new TanCommandController(harness.ctx);
 
-		await controller.start("fix the block in this screenshot", [screenshot]);
+		await controller.start("/review-shot", [screenshot]);
 		const run = harness.capturedRun;
 		if (!run) throw new Error("run function was not captured");
 		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
 
-		expect(stub.clone.prompt).toHaveBeenCalledWith("fix the block in this screenshot", {
+		expect(stub.clone.prompt).toHaveBeenCalledWith("/review-shot", {
 			attribution: "user",
 			images: [screenshot],
 		});

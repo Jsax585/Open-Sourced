@@ -540,18 +540,30 @@ describe("interactive native input ingress", () => {
 		},
 	);
 
-	it("Enter /tan that does not dispatch gives its draft back", async () => {
-		const h = await createHarness(() => {});
-		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
-		h.ctx.handleTanCommand = vi.fn(async () => false);
-		h.draftWithImage("/tan fix this block [Image #1]");
+	it.each([
+		["tan", "handleTanCommand"],
+		["btw", "handleBtwCommand"],
+	] as const)(
+		"Enter /%s that does not start gives its draft back, with or without an image",
+		async (command, handler) => {
+			const h = await createHarness(() => {});
+			Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+			h.ctx[handler] = vi.fn(async () => false);
+			h.draftWithImage(`/${command} fix this block [Image #1]`);
 
-		await h.pressSubmit(ENTER);
+			await h.pressSubmit(ENTER);
 
-		expect(h.editor.getExpandedText()).toBe("/tan fix this block [Image #1]");
-		expect(h.editor.pendingImages).toEqual([originalImage]);
-		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
-	});
+			expect(h.editor.getExpandedText()).toBe(`/${command} fix this block [Image #1]`);
+			expect(h.editor.pendingImages).toEqual([originalImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
+
+			h.editor.clearDraft();
+			h.editor.setText(`/${command} just text`);
+			await h.pressSubmit(ENTER);
+
+			expect(h.editor.getExpandedText()).toBe(`/${command} just text`);
+		},
+	);
 
 	it("Enter /tan renumbers an image pasted while its input hook runs", async () => {
 		const entered = Promise.withResolvers<void>();

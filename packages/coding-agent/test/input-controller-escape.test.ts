@@ -100,7 +100,7 @@ function createContext(): {
 	const showStatus = vi.fn();
 	const inputListeners: Array<(data: string) => { consume?: boolean; data?: string } | undefined> = [];
 	const sessionListeners: Array<(event: { type: string }) => void> = [];
-	const handleBtwCommand = vi.fn(async () => {});
+	const handleBtwCommand = vi.fn(async () => true);
 	const handleBtwEscape = vi.fn(() => true);
 	const hasActiveBtw = vi.fn(() => false);
 	const handleOmfgEscape = vi.fn(() => true);

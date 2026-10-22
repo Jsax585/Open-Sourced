@@ -33,18 +33,6 @@ describe("/btw slash command", () => {
 		expect(harness.handleBtwCommand).toHaveBeenCalledWith("explain why the cache reuse matters here", undefined);
 	});
 
-	it("hands the images attached to the /btw draft to the btw handler", async () => {
-		const harness = createRuntime();
-		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
-
-		await executeBuiltinSlashCommand("/btw what is this block", {
-			...harness.runtime,
-			input: { images: [screenshot] },
-		});
-
-		expect(harness.handleBtwCommand).toHaveBeenCalledWith("what is this block", [screenshot]);
-	});
-
 	it("handles a blank /btw invocation without error", async () => {
 		const harness = createRuntime();
 

@@ -33,31 +33,33 @@ export function restoreDetachedDraft(
  * Run a command that takes its whole draft, images included. A draft it does not
  * submit comes back to the editor; on the Enter and Ctrl+Enter paths the caller
  * already took the draft out of the editor and restores it when `run` throws.
+ * Mode toggles get back only the attachments of an unsent draft; with
+ * `restoreText`, a command that starts nothing gets its text back too.
  */
 export async function runWithDetachedDraft(
 	command: ParsedSlashCommand,
 	runtime: TuiSlashCommandRuntime,
 	run: () => Promise<boolean>,
+	options?: { restoreText?: boolean },
 ): Promise<void> {
 	const { editor } = runtime.ctx;
 	if (!runtime.draftDetached) editor.clearDraft();
 	try {
 		const submitted = await run();
 		const hasAttachments = (runtime.input?.images?.length ?? 0) > 0 || (runtime.input?.imageLinks?.length ?? 0) > 0;
-		if (!submitted && hasAttachments) {
-			if (runtime.draftDetached) {
-				// Newer typing may already sit in the editor: merge the submission
-				// back beside it so each draft's image markers keep their images.
-				restoreDetachedDraft(editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
-				return;
-			}
-			editor.pendingImages = [...(runtime.input?.images ?? []), ...editor.pendingImages];
-			editor.pendingImageLinks = [
-				...(runtime.input?.imageLinks ?? runtime.input?.images?.map(() => undefined) ?? []),
-				...editor.pendingImageLinks,
-			];
-			editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
+		if (submitted || !(hasAttachments || options?.restoreText)) return;
+		if (runtime.draftDetached || options?.restoreText) {
+			// Newer typing may already sit in the editor: merge the submission
+			// back beside it so each draft's image markers keep their images.
+			restoreDetachedDraft(editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
+			return;
 		}
+		editor.pendingImages = [...(runtime.input?.images ?? []), ...editor.pendingImages];
+		editor.pendingImageLinks = [
+			...(runtime.input?.imageLinks ?? runtime.input?.images?.map(() => undefined) ?? []),
+			...editor.pendingImageLinks,
+		];
+		editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
 	} catch (error) {
 		if (runtime.draftDetached) {
 			// The caller already took this draft out of the editor before

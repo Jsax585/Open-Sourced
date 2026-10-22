@@ -455,8 +455,11 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const question = command.text.slice(`/${command.name}`.length).trim();
-			await runWithDetachedDraft(command, runtime, () =>
-				runtime.ctx.handleBtwCommand(question, runtime.input?.images),
+			await runWithDetachedDraft(
+				command,
+				runtime,
+				() => runtime.ctx.handleBtwCommand(question, runtime.input?.images),
+				{ restoreText: true },
 			);
 		},
 	},
@@ -468,7 +471,9 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
-			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images));
+			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images), {
+				restoreText: true,
+			});
 		},
 	},
 	{

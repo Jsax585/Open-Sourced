@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
 import tanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
@@ -236,15 +236,19 @@ export class TanCommandController {
 						// the same assignment again and risk restarting completed work.
 						// The restored request is the one the clone admitted, captured when
 						// compaction starts: normalized images with their hidden companions
-						// (source path, vision description), never the raw input.
+						// (source path, vision description), never the raw input. It is found
+						// by its admitted text, which a prompt template may have expanded
+						// from the `/tan` work: the turn's first user message carries it.
 						let requestDispatched = false;
+						let requestText: string | undefined;
 						let admittedRequest: AgentMessage[] | undefined;
 						const isRequest = (message: AgentMessage) => {
 							if (message.role !== "user") return false;
+							const text = requestText ?? trimmedWork;
 							const content = message.content;
 							return typeof content === "string"
-								? content === trimmedWork
-								: content.some(part => part.type === "text" && part.text === trimmedWork);
+								? content === text
+								: content.some(part => part.type === "text" && part.text === text);
 						};
 						const textRequest: AgentMessage = {
 							role: "user",
@@ -255,6 +259,16 @@ export class TanCommandController {
 						const unsubscribeCompaction = clone.subscribe(event => {
 							if (event.type === "agent_start") {
 								requestDispatched = true;
+								return;
+							}
+							if (event.type === "message_end") {
+								const message = event.message;
+								if (!requestDispatched || requestText !== undefined || message.role !== "user") return;
+								const content = message.content;
+								requestText =
+									typeof content === "string"
+										? content
+										: content.find((part): part is TextContent => part.type === "text")?.text;
 								return;
 							}
 							const messages = clone?.agent.state.messages ?? [];

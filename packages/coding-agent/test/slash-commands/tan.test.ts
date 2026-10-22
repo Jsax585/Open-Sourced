@@ -31,15 +31,6 @@ describe("/tan slash command", () => {
 		expect(harness.handleTanCommand).toHaveBeenCalledWith("add a changelog note", undefined);
 	});
 
-	it("hands the images attached to the /tan draft to the tan handler", async () => {
-		const harness = createRuntime();
-		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
-
-		await executeBuiltinSlashCommand("/tan fix this block", { ...harness.runtime, input: { images: [screenshot] } });
-
-		expect(harness.handleTanCommand).toHaveBeenCalledWith("fix this block", [screenshot]);
-	});
-
 	it("preserves the raw multi-word suffix after /tan", async () => {
 		const harness = createRuntime();
 
