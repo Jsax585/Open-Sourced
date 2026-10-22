@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { AsyncJobRegisterOptions } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -650,6 +650,38 @@ describe("TanCommandController", () => {
 		);
 		// The compaction listener is released once the tan finishes.
 		expect(stub.compactionListener).toBeUndefined();
+	});
+
+	it("sends the images attached to /tan with the request and restores them after compaction", async () => {
+		const harness = createContext();
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue(harness.cloneManager);
+		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+		const stub = createCloneStub({
+			prompt: async () => {
+				stub.compactionListener?.({ type: "agent_start" });
+				stub.compactionListener?.({ type: "auto_compaction_end", result: {}, aborted: false });
+			},
+		});
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: stub.clone,
+		} as unknown as CreateAgentSessionResult);
+		const controller = new TanCommandController(harness.ctx);
+
+		await controller.start("fix the block in this screenshot", [screenshot]);
+		const run = harness.capturedRun;
+		if (!run) throw new Error("run function was not captured");
+		await run({ jobId: "job-123", signal: new AbortController().signal, reportProgress: async () => {} });
+
+		expect(stub.clone.prompt).toHaveBeenCalledWith("fix the block in this screenshot", {
+			attribution: "user",
+			images: [screenshot],
+		});
+		expect(stub.appendMessage.mock.calls.at(-1)?.[0]).toEqual(
+			expect.objectContaining({
+				role: "user",
+				content: [{ type: "text", text: "fix the block in this screenshot" }, screenshot],
+			}),
+		);
 	});
 
 	it("does not duplicate the request when compaction runs before the initial dispatch", async () => {

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { prompt, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
 import backgroundTanDispatchPrompt from "../../prompts/system/background-tan-dispatch.md" with { type: "text" };
 import tanContextSwitchPrompt from "../../prompts/system/tan-context-switch.md" with { type: "text" };
@@ -42,7 +42,7 @@ async function removeCloneSession(cloneFile: string): Promise<void> {
 export class TanCommandController {
 	constructor(private readonly ctx: InteractiveModeContext) {}
 
-	async start(work: string): Promise<void> {
+	async start(work: string, images?: ImageContent[]): Promise<void> {
 		const trimmedWork = work.trim();
 		if (!trimmedWork) {
 			this.ctx.showStatus("Usage: /tan <work>");
@@ -253,7 +253,7 @@ export class TanCommandController {
 							injectContextSwitch();
 							clone?.agent.appendMessage({
 								role: "user",
-								content: [{ type: "text", text: trimmedWork }],
+								content: [{ type: "text", text: trimmedWork }, ...(images ?? [])],
 								attribution: "user",
 								timestamp: Date.now(),
 							});
@@ -267,7 +267,7 @@ export class TanCommandController {
 							// it is a tangential fork — its parent owns the prior conversation;
 							// this agent must focus exclusively on the user's request.
 							injectContextSwitch();
-							await clone.prompt(trimmedWork, { attribution: "user" });
+							await clone.prompt(trimmedWork, { attribution: "user", images });
 							await clone.waitForIdle();
 							while (clone.hasPendingAsyncWork()) {
 								if (signal.aborted) throw new Error("Aborted while settling descendant work");

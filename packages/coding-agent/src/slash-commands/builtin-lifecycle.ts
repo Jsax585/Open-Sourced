@@ -468,7 +468,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
 			clearSubmittedText(runtime);
-			await runtime.ctx.handleTanCommand(work);
+			await runtime.ctx.handleTanCommand(work, runtime.input?.images);
 		},
 	},
 	{

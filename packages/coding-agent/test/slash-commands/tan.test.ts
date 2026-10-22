@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
@@ -27,7 +28,16 @@ describe("/tan slash command", () => {
 
 		expect(handled).toBe(true);
 		expect(harness.setText).toHaveBeenCalledWith("");
-		expect(harness.handleTanCommand).toHaveBeenCalledWith("add a changelog note");
+		expect(harness.handleTanCommand).toHaveBeenCalledWith("add a changelog note", undefined);
+	});
+
+	it("hands the images attached to the /tan draft to the tan handler", async () => {
+		const harness = createRuntime();
+		const screenshot: ImageContent = { type: "image", data: "c2NyZWVuc2hvdA==", mimeType: "image/png" };
+
+		await executeBuiltinSlashCommand("/tan fix this block", { ...harness.runtime, input: { images: [screenshot] } });
+
+		expect(harness.handleTanCommand).toHaveBeenCalledWith("fix this block", [screenshot]);
 	});
 
 	it("preserves the raw multi-word suffix after /tan", async () => {
@@ -39,7 +49,10 @@ describe("/tan slash command", () => {
 		);
 
 		expect(handled).toBe(true);
-		expect(harness.handleTanCommand).toHaveBeenCalledWith("investigate why prompt cache reuse matters here");
+		expect(harness.handleTanCommand).toHaveBeenCalledWith(
+			"investigate why prompt cache reuse matters here",
+			undefined,
+		);
 	});
 
 	it("handles a blank /tan invocation without error", async () => {
@@ -49,6 +62,6 @@ describe("/tan slash command", () => {
 
 		expect(handled).toBe(true);
 		expect(harness.setText).toHaveBeenCalledWith("");
-		expect(harness.handleTanCommand).toHaveBeenCalledWith("");
+		expect(harness.handleTanCommand).toHaveBeenCalledWith("", undefined);
 	});
 });
