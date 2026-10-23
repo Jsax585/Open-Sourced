@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import { type as schemaType } from "@oh-my-pi/omptype";
@@ -457,6 +457,51 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 				expect.objectContaining({ type: "function_call_output", call_id: "call_lookup", output: "found" }),
 			]),
 		);
+	});
+
+	it("reconnects a silent OPEN socket before submitting another generation", async () => {
+		const actualNow = Date.now.bind(Date);
+		let clockOffset = 0;
+		const clock = spyOn(Date, "now").mockImplementation(() => actualNow() + clockOffset);
+		const OriginalWebSocket = globalThis.WebSocket;
+		resources.push(async () => {
+			clock.mockRestore();
+			globalThis.WebSocket = OriginalWebSocket;
+		});
+		let silent = false;
+		let connections = 0;
+		let firstSocket: WebSocket | undefined;
+		globalThis.WebSocket = new Proxy(OriginalWebSocket, {
+			construct(target, args) {
+				const socket: WebSocket = Reflect.construct(target, args);
+				const first = ++connections === 1;
+				if (first) firstSocket = socket;
+				socket.send = new Proxy(socket.send, {
+					apply(target, receiver, args) {
+						// Model Bun's half-open state: writes succeed without a close event
+						// but never reach the peer after idle eviction.
+						if (first && silent) return;
+						return Reflect.apply(target, receiver, args);
+					},
+				});
+				return socket;
+			},
+		});
+		const fixture = endpoint();
+		const options = { ...fixture.options, preferWebsockets: true };
+		expect((await streamOpenAIResponses(fixture.model, fixture.context, options).result()).stopReason).toBe("stop");
+		clockOffset += 30_001;
+		silent = true;
+		expect(firstSocket?.readyState).toBe(OriginalWebSocket.OPEN);
+		const result = await streamOpenAIResponses(fixture.model, fixture.context, {
+			...options,
+			streamFirstEventTimeoutMs: 250,
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "WS" }));
+		expect(fixture.upgrades).toHaveLength(2);
+		expect(fixture.requests).toHaveLength(2);
+		expect(fixture.httpRequests).toHaveLength(0);
 	});
 
 	it("reconnects after server close without sending a cross-connection response anchor", async () => {

@@ -121,7 +121,10 @@ and recovery contracts identical.
 
 Each lease admits one active `response.create`. A concurrent request for the same
 session receives an independent ephemeral socket rather than stealing a busy
-connection. Successful idle connections can be reused; failure or cancellation
+connection. Reuse requires a successful response and an inbound data frame within
+the past 30 seconds; idle leases expire after the same interval. This conservative
+freshness gate avoids trusting Bun's `OPEN` state alone after silent upstream
+eviction, without adding heartbeats or generation retries. Failure or cancellation
 retires the connection. `ProviderSessionState.releaseSession` and `close` own
 teardown. Without provider session state, the connection closes after the request.
 

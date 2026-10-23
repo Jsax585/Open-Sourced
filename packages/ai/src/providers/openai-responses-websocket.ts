@@ -7,7 +7,7 @@ import { notifyRawSseEvent } from "../utils/sse-debug";
 import { extractWebSocketHandshakeHeaders, toWebSocketHeaders, toWebSocketUrl } from "../utils/websocket";
 import type { ResponseStreamEvent } from "./openai-responses-wire";
 
-const IDLE_REUSE_MS = 60_000;
+const IDLE_REUSE_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const MESSAGE_QUEUE_CAPACITY = 4096;
 
@@ -42,6 +42,7 @@ export class OpenAIResponsesWebSocketConnection {
 	#receiving = false;
 	#completed = false;
 	#lastResponseId?: string;
+	#lastInboundAt?: number;
 	handshakeHeaders?: Headers;
 
 	constructor(
@@ -56,7 +57,14 @@ export class OpenAIResponsesWebSocketConnection {
 	}
 
 	get reusable(): boolean {
-		return this.#completed && !this.#failure && this.#socket?.readyState === WebSocket.OPEN;
+		// Bun can keep silently evicted sockets OPEN; trust only recent peer activity.
+		return (
+			this.#completed &&
+			!this.#failure &&
+			this.#socket?.readyState === WebSocket.OPEN &&
+			this.#lastInboundAt !== undefined &&
+			Date.now() - this.#lastInboundAt <= IDLE_REUSE_MS
+		);
 	}
 
 	async open(signal: AbortSignal): Promise<void> {
@@ -116,6 +124,7 @@ export class OpenAIResponsesWebSocketConnection {
 		socket.onerror = () => this.close(new Error("OpenAI responses WebSocket connection error"));
 		socket.onclose = event => this.close(new Error(`OpenAI responses WebSocket closed (${event.code})`));
 		socket.onmessage = event => {
+			this.#lastInboundAt = Date.now();
 			if (!this.#receiving) return;
 			try {
 				const text = typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf-8");
