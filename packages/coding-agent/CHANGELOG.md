@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Upgraded collaboration sessions to protocol version 4 so guests receive archived branch state ([#8301](https://github.com/can1357/oh-my-pi/pull/8301) by [@ParadaCarleton](https://github.com/ParadaCarleton))
+
+### Added
+
+- Added `/prune` to archive conversation branches with no completed assistant reply, with `/prune delete` available for permanent removal ([#8301](https://github.com/can1357/oh-my-pi/pull/8301) by [@ParadaCarleton](https://github.com/ParadaCarleton))
+- Added `/unarchive` and tree controls for revealing, archiving, and restoring branches; exports and shares omit archived content by default ([#8301](https://github.com/can1357/oh-my-pi/pull/8301) by [@ParadaCarleton](https://github.com/ParadaCarleton))
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
@@ -826,6 +834,12 @@
 
 ### Fixed
 
+- Archived branches retain the ancestry, selected branch, and active bookkeeping needed for cycle-safe pruning and branching, nested restoration from every navigation API, privacy-safe live collaboration resynchronization, and efficient leak-free exports ([#8301](https://github.com/can1357/oh-my-pi/pull/8301) by [@ParadaCarleton](https://github.com/ParadaCarleton))
+- Collaboration guests keep an archived branch hidden when local-only entries such as service-tier changes sit inside it, and their replicated branch no longer breaks at such entries ([#8301](https://github.com/can1357/oh-my-pi/pull/8301) by [@ParadaCarleton](https://github.com/ParadaCarleton))
+- Fixed a Collab host ending with `a host is already connected for this room` after a brief network drop: when the relay still holds the dropped connection, the host now retries for up to 150 s and reclaims its room ([#12514](https://github.com/can1357/oh-my-pi/issues/12514), [#13355](https://github.com/can1357/oh-my-pi/pull/13355) by [@alphastorm](https://github.com/alphastorm))
+- Fixed a one-shot command that stopped before completing (for example `omp config set` on a fresh Windows profile) exiting 0 with no output; it now exits 1 with a stderr line pointing at `PI_DEBUG_STARTUP` ([#13373](https://github.com/can1357/oh-my-pi/pull/13373) by [@alphastorm](https://github.com/alphastorm))
+- Fixed a Collab host ending with `a host is already connected for this room` after a brief network drop: when the relay still holds the dropped connection, the host now retries every few seconds for up to 150 s and reclaims its room, and a refused retry no longer resets the guest list or drops queued updates ([#12514](https://github.com/can1357/oh-my-pi/issues/12514), [#13355](https://github.com/can1357/oh-my-pi/pull/13355) by [@alphastorm](https://github.com/alphastorm))
+- Fixed a one-shot command that stopped before completing (for example `omp config set` on a fresh Windows profile) exiting 0 with no output; it now exits 1 with a stderr line naming the command and pointing at `PI_DEBUG_STARTUP` ([#13373](https://github.com/can1357/oh-my-pi/pull/13373) by [@alphastorm](https://github.com/alphastorm))
 - Reduced memory growth after one-shot side requests without interrupting ongoing conversations ([#14334](https://github.com/can1357/oh-my-pi/pull/14334) by [@iliaal](https://github.com/iliaal)).
 - Fixed sessions staying untitled when you interrupted the first reply to send a queued steer message.
 - Fixed browser downloads saving into another tab's `downloads` folder, and `tab.waitForDownload()` saving into the system Downloads folder once another tab closed; each tab in a Chromium omp launched or spawned now saves into its own, iframe downloads included. In those browsers a download no tab tracks (started by a page omp did not open, or finishing after its tab closed) now keeps Chromium's GUID file name instead of its suggested name; connected and relay browsers keep real file names ([#14544](https://github.com/can1357/oh-my-pi/pull/14544) by [@will-bogusz](https://github.com/will-bogusz))

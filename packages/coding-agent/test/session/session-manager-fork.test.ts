@@ -21,7 +21,8 @@ import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-l
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage, MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
-import { isTaskToolDetails, type TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import type { TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import { isTaskToolDetails } from "@oh-my-pi/pi-tui/tools/task-details";
 import { getAgentDir, getTerminalSessionsDir, removeWithRetries, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 
 interface JsonlMessageEntry {

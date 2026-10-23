@@ -169,6 +169,7 @@ import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
+import type { PruneMode, UnarchiveMode } from "../slash-commands/prune-modes";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
 import { labelEchoesHandle } from "../task/label";
@@ -8417,6 +8418,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleShakeCommand(mode: ShakeMode): Promise<void> {
 		return this.#commandController.handleShakeCommand(mode);
+	}
+
+	handlePruneCommand(mode?: PruneMode): Promise<void> {
+		return this.#commandController.handlePruneCommand(mode);
+	}
+
+	handleUnarchiveCommand(mode?: UnarchiveMode): Promise<void> {
+		return this.#commandController.handleUnarchiveCommand(mode);
 	}
 
 	executeCompaction(
