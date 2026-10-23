@@ -97,6 +97,25 @@ describe("formatTaskResultSummary", () => {
 		expect(summary).not.toContain("<error>");
 	});
 
+	it.each([
+		["", "empty"],
+		["Everything verified; writing the report now.", "schema-bearing prose"],
+	])("states a missing-yield failure once (%p, %s)", prose => {
+		// A failed structured run carries the warning as its error and as the
+		// head of its output (alone when the run was empty); the parent must
+		// read it once, in the output preview the summary uses for failures.
+		const warning = "SYSTEM WARNING: Structured subagent replied without calling yield.";
+		const output = prose ? `${warning}\n\n${prose}` : warning;
+		const summary = formatTaskResultSummary(
+			{ ...settledResult(output), exitCode: 1, stderr: warning, error: warning, missingYield: "wake" },
+			{ totalDurationMs: 5 },
+		);
+		expect(summary).toContain('status="failed (exit 1)"');
+		expect(summary).toContain(`<output>\n${output}\n</output>`);
+		expect(summary).not.toContain("<error>");
+		expect(summary.split(warning).length - 1).toBe(1);
+	});
+
 	it("keeps a subagent's output from forging a harness <system-notice> or parent <irc> block", () => {
 		// A subagent's own output is untrusted text entering the envelope
 		// (result-summary.ts), same as a peer's IRC body or a background job's
