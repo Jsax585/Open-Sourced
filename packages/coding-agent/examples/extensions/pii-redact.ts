@@ -57,18 +57,28 @@ export function mapTextBlocks(content: unknown, redact: (text: string) => string
 }
 
 /** Shape-preserving walk of provider request objects; redacts every string leaf. */
-export function redactStructuredPayload(value: unknown, placeholder: string, seen = new WeakSet<object>()): unknown {
+export function redactStructuredPayload(
+	value: unknown,
+	placeholder: string,
+	seen = new WeakMap<object, unknown>(),
+): unknown {
 	if (typeof value === "string") return regexRedact(value, placeholder);
 	if (value == null || typeof value !== "object") return value;
 	// Binary fields and provider-native instances must retain their wire types.
 	const prototype = Object.getPrototypeOf(value);
 	if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
-	if (seen.has(value)) return value;
-	seen.add(value);
+	// Repeated references must receive the redacted copy, not their raw source.
+	if (seen.has(value)) return seen.get(value);
 	if (Array.isArray(value)) {
-		return value.map(item => redactStructuredPayload(item, placeholder, seen));
+		const out: unknown[] = new Array(value.length);
+		seen.set(value, out);
+		value.forEach((item, index) => {
+			out[index] = redactStructuredPayload(item, placeholder, seen);
+		});
+		return out;
 	}
 	const out: Record<string, unknown> = {};
+	seen.set(value, out);
 	for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
 		out[key] = redactStructuredPayload(child, placeholder, seen);
 	}
