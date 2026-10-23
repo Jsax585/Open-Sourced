@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { ResponseCreateParamsStreaming } from "@oh-my-pi/pi-ai/providers/openai-responses-wire";
+import { convertMessages } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import {
 	applyChatCompletionsCompatPolicy,
 	applyOpenAIExtraBody,
@@ -7,10 +8,11 @@ import {
 	type OpenAICompletionsParams,
 	resolveOpenAICompatPolicy,
 } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import type { Model, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-ai/types";
+import type { Context, Model, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import type { ResolvedOpenAICompat } from "@oh-my-pi/pi-catalog/types";
 
 function chatModel(compat: OpenAICompat): Model<"openai-completions"> {
 	return buildModel({
@@ -157,18 +159,113 @@ describe("OpenAI compat policy", () => {
 		expect(disabledParams.enable_thinking).toBe(false);
 	});
 
-	it("keeps Token Plan qwen3.8-max-preview on the enable_thinking dialect", () => {
+	it("keeps Token Plan qwen3.8-max-preview on the binary toggle without replaying reasoning history", () => {
 		// The preview rides Alibaba's binary enable_thinking toggle, not the
 		// OpenAI reasoning_effort control, so effort selections must not leak an
-		// unsupported reasoning_effort onto the wire.
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.8-max-preview");
-		const params = chatParams();
-		applyChatCompletionsCompatPolicy(
-			params,
-			resolveOpenAICompatPolicy(model, { endpoint: "chat-completions", reasoning: Effort.High }),
-		);
-		expect(params.enable_thinking).toBe(true);
-		expect(params.reasoning_effort).toBeUndefined();
+		// unsupported reasoning_effort onto the wire, and reasoning history is
+		// not replayed.
+		const model = buildModel({
+			id: "qwen3.8-max-preview",
+			name: "Qwen3.8 Max Preview",
+			api: "openai-completions",
+			provider: "alibaba-token-plan",
+			baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 983_616,
+			maxTokens: 131_072,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.XHigh], requiresEffort: true },
+		} satisfies ModelSpec<"openai-completions">);
+		for (const effort of [Effort.Low, Effort.High, Effort.XHigh]) {
+			const params = chatParams();
+			params.model = model.id;
+			const policy = resolveOpenAICompatPolicy(model, { endpoint: "chat-completions", reasoning: effort });
+			applyChatCompletionsCompatPolicy(params, policy);
+			applyOpenAIExtraBody(params, policy.compat.extraBody);
+			expect(params.enable_thinking).toBe(true);
+			expect(params.reasoning_effort).toBeUndefined();
+			expect(params.chat_template_kwargs).toBeUndefined();
+		}
+
+		const disabledParams = chatParams();
+		disabledParams.model = model.id;
+		const disabledPolicy = resolveOpenAICompatPolicy(model, {
+			endpoint: "chat-completions",
+			disableReasoning: true,
+		});
+		applyChatCompletionsCompatPolicy(disabledParams, disabledPolicy);
+		applyOpenAIExtraBody(disabledParams, disabledPolicy.compat.extraBody);
+		expect(disabledParams.enable_thinking).toBe(false);
+		expect(disabledParams.reasoning_effort).toBeUndefined();
+		expect(disabledParams.chat_template_kwargs).toBeUndefined();
+
+		const activePolicy = resolveOpenAICompatPolicy(model, { endpoint: "chat-completions", reasoning: Effort.High });
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "Choose an implementation.", timestamp: 1 },
+				{
+					role: "assistant",
+					content: [
+						{
+							type: "thinking",
+							thinking: "Keep this decision for the next turn.",
+							thinkingSignature: "reasoning_content",
+						},
+						{ type: "text", text: "I chose the indexed path." },
+					],
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+					stopReason: "stop",
+					timestamp: 2,
+				},
+				{ role: "user", content: "Continue.", timestamp: 3 },
+			],
+		};
+		const wireMessages = convertMessages(model, context, activePolicy.compat as ResolvedOpenAICompat);
+		const assistant = wireMessages.find(m => m.role === "assistant") as Record<string, unknown> | undefined;
+		expect(assistant?.content).toBe("I chose the indexed path.");
+		expect(assistant?.reasoning_content).toBeUndefined();
+		expect(assistant?.reasoning).toBeUndefined();
+		expect(assistant?.reasoning_text).toBeUndefined();
+	});
+
+	it("extends the OpenAI effort dialect to discovered Qwen 3.8 siblings", () => {
+		// Regression for #12376: only the exact qwen3.8-max/flash ids carried the
+		// wire contract, so a discovered sibling (e.g. qwen3.8-plus) silently
+		// dropped every effort selection on the Qwen dialect. The revision-scoped
+		// class rule now carries it; max-preview stays on the binary toggle.
+		const model = buildModel({
+			id: "qwen3.8-plus",
+			name: "Qwen3.8 Plus",
+			api: "openai-completions",
+			provider: "alibaba-token-plan",
+			baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+		} satisfies ModelSpec<"openai-completions">);
+		for (const effort of [Effort.Low, Effort.Medium, Effort.High]) {
+			const params = chatParams();
+			params.model = model.id;
+			const policy = resolveOpenAICompatPolicy(model, { endpoint: "chat-completions", reasoning: effort });
+			applyChatCompletionsCompatPolicy(params, policy);
+			applyOpenAIExtraBody(params, policy.compat.extraBody);
+			expect(params.reasoning_effort).toBe(effort);
+			expect(params.enable_thinking).toBe(true);
+			expect(params.chat_template_kwargs).toBeUndefined();
+		}
 	});
 
 	function localQwenModel(

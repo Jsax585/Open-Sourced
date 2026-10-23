@@ -936,6 +936,94 @@ describe("openai-completions compatibility", () => {
 		expect(payload?.thinking_budget).toBeUndefined();
 	});
 
+	it("sends reasoning_effort for a discovered Qwen 3.8 sibling without curated metadata", async () => {
+		// Regression for #12376: the wire contract was exact-id scoped, so a
+		// discovered `qwen3.8-plus` fell back to the Qwen dialect and silently
+		// dropped every effort selection. The revision-scoped class rule now
+		// routes siblings through the OpenAI dialect too.
+		const model = buildModel({
+			id: "qwen3.8-plus",
+			name: "Qwen3.8 Plus",
+			api: "openai-completions",
+			provider: "alibaba-token-plan",
+			baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+		} satisfies ModelSpec<"openai-completions">);
+		expect(getSupportedEfforts(model)).toEqual([Effort.Low, Effort.Medium, Effort.High]);
+		const payload = toObject(
+			await captureOpenAICompletionsPayload(model, undefined, {
+				apiKey: alibabaTokenPlanApiKey,
+				reasoning: Effort.Low,
+			}),
+		);
+
+		expect(payload?.enable_thinking).toBe(true);
+		expect(payload?.reasoning_effort).toBe("low");
+		// OpenAI-dialect siblings must not emit any chat-template kwargs copy:
+		// effort rides the top-level field only.
+		expect(payload).not.toHaveProperty("chat_template_kwargs");
+	});
+
+	it("replays reasoning history for a discovered Qwen 3.8 sibling", async () => {
+		// The revision rule carries replay-reasoning-content for reference-less
+		// siblings too, not just curated max/flash rows.
+		const model = buildModel({
+			id: "qwen3.8-plus",
+			name: "Qwen3.8 Plus",
+			api: "openai-completions",
+			provider: "alibaba-token-plan",
+			baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+		} satisfies ModelSpec<"openai-completions">);
+		const priorAssistant: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: "Keep this decision for the next turn.",
+					thinkingSignature: "reasoning_content",
+				},
+				{ type: "text", text: "I chose the indexed path." },
+			],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const payload = await captureOpenAICompletionsPayload(
+			model,
+			{
+				messages: [
+					{ role: "user", content: "Choose an implementation.", timestamp: Date.now() },
+					priorAssistant,
+					{ role: "user", content: "Continue.", timestamp: Date.now() },
+				],
+			},
+			{ apiKey: alibabaTokenPlanApiKey },
+		);
+		const assistant = getPayloadMessages(payload).find(message => message.role === "assistant");
+
+		expect(assistant?.reasoning_content).toBe("Keep this decision for the next turn.");
+		expect(assistant?.content).toBe("I chose the indexed path.");
+	});
+
 	it("replays Alibaba Qwen 3.8 Flash reasoning history", async () => {
 		const model = alibabaQwen38Flash;
 		const priorAssistant: AssistantMessage = {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- models.yml `compat` now type-checks the `replayReasoningContent` and `qwenPreserveThinking` boolean keys, so a mistyped reasoning-history replay override for remote OpenAI-compatible endpoints that require historical reasoning content (e.g. DashScope Qwen 3.8) fails validation instead of passing through silently ([#12376](https://github.com/can1357/oh-my-pi/issues/12376), [#12386](https://github.com/can1357/oh-my-pi/pull/12386) by [@szavadsky](https://github.com/szavadsky)).
+
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))

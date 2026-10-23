@@ -70,6 +70,8 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"disableReasoningWithTools?": "boolean",
 		"thinkingFormat?": '"openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template"',
 		"qwenTemplateReasoningEffort?": "boolean",
+		"replayReasoningContent?": "boolean",
+		"qwenPreserveThinking?": "boolean",
 		"openRouterRouting?": OpenRouterRoutingSchema,
 		"vercelGatewayRouting?": VercelGatewayRoutingSchema,
 		"extraBody?": { "[string]": "unknown" },

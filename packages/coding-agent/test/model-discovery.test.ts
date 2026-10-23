@@ -4170,4 +4170,91 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("github-copilot", cachedAlias.id)).toBeUndefined();
 		expect(registry.find("github-copilot", bundledBase.id)?.headers).toEqual(bundledBase.headers);
 	});
+
+	test("models config compat overrides for reasoning history replay flow into resolved model", async () => {
+		// Regression for #12376: models.yml compat overrides for replayReasoningContent
+		// and qwenPreserveThinking must round-trip into the resolved model policy so
+		// remote endpoints requiring historical reasoning content can opt in.
+		writeRawModelsJson({
+			"custom-dashscope": {
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				auth: "none",
+				compat: {
+					replayReasoningContent: true,
+					qwenPreserveThinking: true,
+				},
+				models: [
+					{
+						id: "qwen-max",
+						name: "Qwen Max",
+						reasoning: true,
+					},
+				],
+			},
+			"alibaba-token-plan": {
+				modelOverrides: {
+					"qwen3.8-max-preview": {
+						compat: {
+							replayReasoningContent: true,
+							qwenPreserveThinking: true,
+						},
+					},
+				},
+			},
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async () => Response.json({}, { status: 200 }),
+		});
+		await registry.refresh();
+
+		const customModel = registry.find("custom-dashscope", "qwen-max");
+		expect(customModel?.compat).toMatchObject({
+			replayReasoningContent: true,
+			qwenPreserveThinking: true,
+		});
+
+		const overridden = registry.find("alibaba-token-plan", "qwen3.8-max-preview");
+		expect(overridden?.compat).toMatchObject({
+			replayReasoningContent: true,
+			qwenPreserveThinking: true,
+		});
+	});
+
+	test("models config rejects wrong-typed replay compat overrides with a schema error", async () => {
+		// The schema declares replayReasoningContent/qwenPreserveThinking as
+		// booleans: a mistyped value ("yes") must fail config load with a
+		// schema error naming the key, not pass raw into model.compat. Without
+		// the schema declaration omptype keeps the unknown key and the raw
+		// string lands on compat (no error, model resolves).
+		writeRawModelsJson({
+			"custom-dashscope": {
+				baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				api: "openai-completions",
+				auth: "none",
+				compat: {
+					replayReasoningContent: "yes",
+					qwenPreserveThinking: "yes",
+				},
+				models: [
+					{
+						id: "qwen-max",
+						name: "Qwen Max",
+						reasoning: true,
+					},
+				],
+			},
+		});
+
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+			fetch: async () => Response.json({}, { status: 200 }),
+		});
+		await registry.refresh();
+
+		const error = registry.getError();
+		expect(error?.message).toContain("Schema error");
+		expect(error?.message).toContain("replayReasoningContent");
+		expect(registry.find("custom-dashscope", "qwen-max")).toBeUndefined();
+	});
 });
