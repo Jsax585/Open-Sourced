@@ -6,25 +6,17 @@ On error, retry only the failed step; earlier steps may have taken effect.
 Printing an image{{#if py}} or figure{{/if}} attaches it.
 
 <prelude>
-`await` marks async helpers; the rest are sync.
 {{#ifAll py js}}
-Same in Python and JS:
+Python helpers take kwargs; JS helpers take positional args or ONE trailing options object.
 ```
-print(value, ...)  log(message)  phase(title)  env(key?, value?)
-await tool.<name>(args) — session tool; `args` is its parameter object
+print(value, ...)  log(message)  phase(title)  env(key?, value?) — sync
+read(path, offset?, limit?)  write(path, content); JS: await read(path, offset?, limit?)  await write(path, content) — Python: sync; JS: async
+output(*ids, format?, query?, offset?, limit?); JS: await output(...ids, { format?, query?, offset?, limit? }) — Python: sync; JS: async
+wait(handles, timeout?=None, raise_errors?=True); JS: await wait(handles, { timeout?, raiseErrors? }) — Python: sync; JS: async; agent/completion barrier, ordered results; `raise_errors=False` / `raiseErrors: false` retains failures.
+await tool.<name>(args) — async; session tool; `args` is its parameter object
 ```
-Python only (kwargs):
-```py
-read(path, offset?, limit?)  write(path, content)  output(*ids, format?, query?, offset?, limit?)
-wait(handles, timeout?=None, raise_errors?=True)
-```
-JS only (positional args or ONE trailing options object):
-```js
-await read(path, offset?, limit?)  await write(path, content)  await output(...ids, { format?, query?, offset?, limit? })
-await wait(handles, { timeout?, raiseErrors? })
-```
-- `wait(handles, …)`: agent/completion barrier, ordered results; `raise_errors=False` / `raiseErrors: false` retains failures.
 {{else}}
+`await` marks async helpers; the rest are sync.
 {{#if py}}
 Python (kwargs):
 ```py

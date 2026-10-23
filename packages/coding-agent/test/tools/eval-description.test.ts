@@ -226,20 +226,25 @@ describe("eval tool description await markers", () => {
 	});
 
 	/**
-	 * Helper name → whether its documented signature is prefixed with `await`, read from the prelude's
-	 * `lang` block plus the untagged block both runtimes share (rendered when both are enabled).
+	 * Helper name → whether its documented `lang` signature is prefixed with `await`, read from the prelude's
+	 * `lang` block and its untagged block. A line is `signatures — note`; with both runtimes enabled the untagged
+	 * block writes `python signatures; JS: js signatures`, and a line without `; JS: ` applies to both.
 	 */
 	function documentedAwaits(description: string, lang: "py" | "js"): Map<string, boolean> {
 		const prelude = description.slice(description.indexOf("<prelude>"), description.indexOf("</prelude>"));
-		const blocks = [...prelude.matchAll(/```(\w*)\n([\s\S]*?)\n```/g)];
-		if (!blocks.some(([, tag]) => tag === lang)) throw new Error(`no \`\`\`${lang} block in eval description`);
 		const awaits = new Map<string, boolean>();
-		for (const [, tag, body] of blocks) {
+		for (const [, tag, body] of prelude.matchAll(/```(\w*)\n([\s\S]*?)\n```/g)) {
 			if (tag !== lang && tag !== "") continue;
-			for (const match of body.matchAll(/(await\s+)?(tool\.<name>|[A-Za-z_]\w*)\(/g)) {
-				awaits.set(match[2], match[1] !== undefined);
+			for (const line of body.split("\n")) {
+				const [signatures] = line.split(" — ");
+				const [pySignatures, jsSignatures = pySignatures] = signatures.split("; JS: ");
+				const langSignatures = lang === "py" ? pySignatures : jsSignatures;
+				for (const match of langSignatures.matchAll(/(await\s+)?(tool\.<name>|[A-Za-z_]\w*)\(/g)) {
+					awaits.set(match[2], match[1] !== undefined);
+				}
 			}
 		}
+		if (awaits.size === 0) throw new Error(`no ${lang} helper signatures in eval description`);
 		return awaits;
 	}
 
