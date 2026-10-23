@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Task results from a structured subagent that replied without calling `yield` now show a warning callout in the web view and HTML export, and the footer counts them as succeeded instead of failed; report text that only looks like that warning is shown as ordinary output
+
 ## [18.8.0] - 2026-10-07
 
 ### Changed
