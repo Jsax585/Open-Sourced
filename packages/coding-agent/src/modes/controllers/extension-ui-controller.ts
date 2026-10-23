@@ -44,15 +44,9 @@ import type { InteractiveModeContext, InteractiveSelectorDialogOptions } from ".
 import { normalizeCustomMessagePayload, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { disambiguateDisplayLabels, sanitizeCarriageReturns } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setExtensionTerminalTitle, setSessionTerminalTitle } from "../../utils/title-generator";
-import {
-	APPROVAL_DENY_LABEL,
-	APPROVAL_ONCE_LABEL,
-	approvalApproveOptionLabel,
-	approvalDirectoryOptionLabel,
-	approvalToolOptionLabel,
-} from "../../tools/approval";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
+import { approvalAnswerForChoice, approvalChoiceLabels, approvalOnceLabel } from "../../tools/approval";
 
 const MAX_WIDGET_LINES = 10;
 
@@ -668,8 +662,9 @@ export class ExtensionUiController {
 
 	/**
 	 * The tool-approval prompt in the composer's place; a collab guest answers it as a select over
-	 * the full prompt with the same choices: Approve, the prompt's "for this session" choice when it
-	 * offers one, and Deny. Locally it shows the compact prompt (the details summarized to a
+	 * the full prompt with the same choices ({@link approvalChoiceLabels}): the prompt's grants when
+	 * it offers any, Approve, its "for this session" choice when it offers one, and Deny. Locally it
+	 * shows the compact prompt (the details summarized to a
 	 * row, so the composer beneath keeps its room) over that list, and the expand key
 	 * swaps in the full one, wrapped — even when the two match, since a row the summary kept whole
 	 * can still clip. The composer stays mounted beneath it and takes the typing: a user message
@@ -681,39 +676,17 @@ export class ExtensionUiController {
 		prompt: ExtensionApprovalPrompt,
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionApprovalAnswer> {
-		const folderLabel = prompt.folderLabel;
-		const exactGrant = prompt.exactGrant === true;
-		const fileGrant = exactGrant && prompt.fileTarget !== false;
-		const exactAnswer = prompt.exactAnswer ?? exactGrant;
-		const fileOption = approvalApproveOptionLabel(fileGrant, false);
-		const alwaysFileOption = exactAnswer ? approvalApproveOptionLabel(fileGrant, true) : undefined;
-		const directoryOption = folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, false);
-		const alwaysDirectoryOption =
-			folderLabel === undefined ? undefined : approvalDirectoryOptionLabel(folderLabel, true);
-		const toolName = prompt.toolName;
-		const toolOption = toolName === undefined ? undefined : approvalToolOptionLabel(toolName);
-		// "Approve Once" accompanies the grant answers, and stands in for the plain answer when the
-		// call records no exact target — that answer would record just as little.
-		const offersGrants = folderLabel !== undefined || exactGrant || toolName !== undefined;
-		const onceOption = offersGrants ? APPROVAL_ONCE_LABEL : undefined;
-		const plainOption = exactAnswer || onceOption === undefined ? fileOption : undefined;
+		const sessionLabel = prompt.session;
+		const onceLabel = approvalOnceLabel(prompt);
 		const request: CollabUiRequestDraft = {
 			kind: "select",
 			title: prompt.full,
-			options: [
-				...(directoryOption === undefined ? [] : [directoryOption]),
-				...(toolOption === undefined ? [] : [toolOption]),
-				...(plainOption === undefined ? [] : [plainOption]),
-				...(alwaysDirectoryOption === undefined ? [] : [alwaysDirectoryOption]),
-				...(alwaysFileOption === undefined ? [] : [alwaysFileOption]),
-				...(onceOption === undefined ? [] : [onceOption]),
-				APPROVAL_DENY_LABEL,
-			],
+			options: approvalChoiceLabels(prompt),
 		};
 		const session = this.ctx.session;
 		const agent = session.agent;
 		const pendingSteering = agent.peekSteeringQueue();
-		if (this.#denyingSteering?.some(message => pendingSteering.includes(message))) return false;
+		if (this.#denyingSteering?.some(message => pendingSteering.includes(message))) return "deny";
 		this.#denyingSteering = undefined;
 		const steered = new AbortController();
 		let steeringBaseline = session.getQueuedMessages().steering.length;
@@ -740,28 +713,23 @@ export class ExtensionUiController {
 					const editor = this.ctx.editor;
 					const dialog = new ApprovalDialogComponent(
 						prompt.compact,
-						{
-							onApprove: always => settle(approvalApproveOptionLabel(fileGrant, always)),
-							...(toolOption === undefined ? {} : { onApproveTool: () => settle(toolOption) }),
-							...(onceOption === undefined ? {} : { onApproveOnce: () => settle(onceOption) }),
-							...(folderLabel === undefined
-								? {}
-								: {
-										onApproveFolder: (always: boolean) =>
-											settle(approvalDirectoryOptionLabel(folderLabel, always)),
-									}),
-							onDeny: () => settle(APPROVAL_DENY_LABEL),
-						},
+						{ onApprove: () => settle(onceLabel), onDeny: () => settle("Deny") },
 						{
 							tui: this.ctx.ui,
 							fullPrompt: prompt.full,
-							...(prompt.folderLabel === undefined ? {} : { folderLabel: prompt.folderLabel }),
-							...(prompt.exactGrant === true ? { exactGrant: true, fileTarget: fileGrant, exactAnswer } : {}),
-							...(toolName === undefined ? {} : { toolName }),
 							timeout: dialogOptions?.timeout,
 							onTimeout: dialogOptions?.onTimeout,
 							onTimeoutStart: dialogOptions?.onTimeoutStart,
 							onTimeoutReset: dialogOptions?.onTimeoutReset,
+							...(sessionLabel
+								? { session: { label: sessionLabel, onApprove: () => settle(sessionLabel) } }
+								: {}),
+							...(prompt.grants?.length
+								? {
+										grants: prompt.grants,
+										onGrant: (grant, always) => settle(always ? grant.alwaysLabel : grant.label),
+									}
+								: {}),
 							draft: {
 								hasDraft: () =>
 									editor.getText().length > 0 || editor.pendingImages.length > 0 || editor.pasteInFlight,
@@ -788,15 +756,7 @@ export class ExtensionUiController {
 					};
 				}),
 			);
-			if (choice === fileOption) return true;
-			if (onceOption !== undefined && choice === onceOption) return { approved: true, once: true };
-			if (toolOption !== undefined && choice === toolOption) return { approved: true, scope: "tool" };
-			if (directoryOption !== undefined && choice === directoryOption) return { approved: true, scope: "folder" };
-			if (alwaysFileOption !== undefined && choice === alwaysFileOption) return { approved: true, global: true };
-			if (alwaysDirectoryOption !== undefined && choice === alwaysDirectoryOption) {
-				return { approved: true, scope: "folder", global: true };
-			}
-			return false;
+			return approvalAnswerForChoice(prompt, choice);
 		} finally {
 			unsubscribe();
 		}
@@ -979,6 +939,7 @@ export class ExtensionUiController {
 		const remote = host.requestGuestUi(
 			request,
 			signal ? AbortSignal.any([signal, remoteAbort.signal]) : remoteAbort.signal,
+			{ retainOnReconnect: true },
 		);
 		if (!remote) return local(signal);
 		const localWinner = local(signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal).then(
@@ -1140,7 +1101,7 @@ export class ExtensionUiController {
 		request: CollabUiRequestDraft,
 		signal: AbortSignal,
 	): Promise<GuestUiResult> {
-		const remote = host.requestGuestUi(request, signal);
+		const remote = host.requestGuestUi(request, signal, { retainOnReconnect: true });
 		if (!remote) return { kind: "unavailable" };
 		const result = await remote;
 		if (result.kind === "unavailable") return { kind: "unavailable" };
@@ -1474,10 +1435,17 @@ export class ExtensionUiController {
 			options?.deliverAs === "aside";
 		if (startsTurn && this.#rejectGuestExtensionTurn()) return;
 		const wasStreaming = this.ctx.session.isStreaming;
+		const messageCountBefore = this.ctx.session.messages.length;
 		const normalized = normalizeCustomMessagePayload(message);
 		this.ctx.session
 			.sendCustomMessage(normalized, options)
-			.then(() => this.#applyCustomMessageDisplay(wasStreaming, normalized.display))
+			.then(() => {
+				// `deliverAs: "nextTurn"` without a trigger is the one idle arm that appends
+				// to the session silently (no message_start/message_end), so nothing else
+				// paints it and nothing else in the transcript changed.
+				const silentAppend = options?.deliverAs === "nextTurn" && options.triggerTurn !== true;
+				this.#applyCustomMessageDisplay(wasStreaming, normalized, silentAppend ? messageCountBefore : undefined);
+			})
 			.catch((err: unknown) => {
 				this.ctx.showError(`Extension sendMessage failed: ${err instanceof Error ? err.message : String(err)}`);
 			});
@@ -1491,16 +1459,40 @@ export class ExtensionUiController {
 		});
 	};
 
-	#applyCustomMessageDisplay(wasStreaming: boolean, shouldDisplay: boolean | undefined): void {
+	/**
+	 * @param silentAppendBaseline message count before a silent idle `nextTurn` append,
+	 *   or `undefined` when the send was not such an append.
+	 */
+	#applyCustomMessageDisplay(
+		wasStreaming: boolean,
+		message: { customType: string; display?: boolean },
+		silentAppendBaseline: number | undefined,
+	): void {
 		// For non-streaming cases with display=true, update UI
 		// (streaming cases update via message_end event).
 		// Gate on initialChatRendered (#1955): an extension's session_start
 		// sendMessage({display:true}) runs before renderInitialMessages, which would
 		// re-render from session entries AND re-append via preserveExistingChat,
-		// duplicating the message. After the initial render the rebuild must run.
-		if (!wasStreaming && shouldDisplay && this.ctx.initialChatRendered) {
-			this.ctx.rebuildChatFromMessages();
+		// duplicating the message. After the initial render the chat must be updated.
+		if (wasStreaming || !message.display || !this.ctx.initialChatRendered) return;
+		if (silentAppendBaseline !== undefined && !this.ctx.session.isStreaming) {
+			// Append only the new message instead of replaying the whole transcript (#12183).
+			// The count and type checks fail when the send did not land as a plain append
+			// (e.g. it was queued behind a turn that began meanwhile), which falls through
+			// to the rebuild below.
+			const messages = this.ctx.session.messages;
+			const appended = messages.at(-1);
+			if (
+				messages.length === silentAppendBaseline + 1 &&
+				appended?.role === "custom" &&
+				appended.customType === message.customType
+			) {
+				this.ctx.addMessageToChat(appended);
+				this.ctx.ui.requestRender();
+				return;
+			}
 		}
+		this.ctx.rebuildChatFromMessages();
 	}
 
 	/**

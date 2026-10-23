@@ -22,7 +22,6 @@ import {
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
-import { cfgToolsRestrictedFolders } from "../tools/settings";
 import { getApprovalGrants } from "../tools/approval-cache";
 import { CONVERTIBLE_EXTENSIONS } from "../utils/markit";
 import {
@@ -229,7 +228,6 @@ export class CodingAgentSpeculativeExecutionHost implements SpeculativeExecution
 			cfgToolsApprovalMode.get(this.settings),
 			cfgToolsApproval.get(this.settings),
 			getApprovalGrants(this.settings.getAgentDir(), this.toolSession.sessionManager?.getSessionId?.()),
-			{ restrictedFolders: cfgToolsRestrictedFolders.get(this.settings), cwd: this.toolSession.cwd },
 		);
 		if (approval.policy !== "allow") return { allowed: false, reason: "tool approval is not auto-allow" };
 		return { allowed: true };

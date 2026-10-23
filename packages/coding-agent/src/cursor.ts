@@ -37,7 +37,6 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./cursor-bridge-tools";
 import type { MCPResourceReadResult } from "./mcp/types";
 import { resolveApproval, resolveApprovalFromContext } from "./tools/approval";
-import { cfgToolsRestrictedFolders } from "./tools/settings";
 import { getApprovalGrants } from "./tools/approval-cache";
 import {
 	confineToWorkspace,
@@ -365,7 +364,6 @@ function refuseByWritePolicy(options: CursorExecBridgeOptions, toolName: string,
 		approvalMode,
 		userPolicies,
 		getApprovalGrants(context?.settings?.getAgentDir(), context?.sessionManager?.getSessionId()),
-		context?.settings ? { restrictedFolders: cfgToolsRestrictedFolders.get(context.settings) } : undefined,
 	);
 	if (approval.policy === "allow") return null;
 	return approval.policy === "deny"
@@ -1096,7 +1094,6 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			approvalMode,
 			userPolicies,
 			getApprovalGrants(context?.settings?.getAgentDir(), context?.sessionManager?.getSessionId()),
-			context?.settings ? { restrictedFolders: cfgToolsRestrictedFolders.get(context.settings) } : undefined,
 		);
 		return approval.policy === "allow";
 	}
