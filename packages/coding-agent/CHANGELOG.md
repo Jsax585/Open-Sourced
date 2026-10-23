@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- models.yml `compat` now accepts the `replayReasoningContent` and `qwenPreserveThinking` keys, so remote OpenAI-compatible endpoints that require historical reasoning content (e.g. DashScope Qwen 3.8) can opt into reasoning-history replay instead of the schema rejecting the override ([#12376](https://github.com/can1357/oh-my-pi/issues/12376), [#12386](https://github.com/can1357/oh-my-pi/pull/12386) by [@szavadsky](https://github.com/szavadsky)).
+- models.yml `compat` now type-checks the `replayReasoningContent` and `qwenPreserveThinking` boolean keys, so remote OpenAI-compatible endpoints that require historical reasoning content (e.g. DashScope Qwen 3.8) get validated reasoning-history replay overrides instead of unknown-key diagnostics ([#12376](https://github.com/can1357/oh-my-pi/issues/12376), [#12386](https://github.com/can1357/oh-my-pi/pull/12386) by [@szavadsky](https://github.com/szavadsky)).
 
 ### Added
 

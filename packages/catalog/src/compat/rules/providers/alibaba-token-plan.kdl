@@ -137,8 +137,8 @@ provider "alibaba-token-plan" {
 	// ids for this reason; this PR re-widens it to cover discovered siblings, so
 	// preview inherits the class replay + when-thinking unless re-pinned. The
 	// pin below keeps preview wire-identical to its baked models.json row —
-	// replay off, Qwen dialect, no reasoning_effort — which the policy test and
-	// the payload path both assert. The baked row records no whenThinking
+	// replay off, Qwen dialect, no reasoning_effort — as the policy test asserts
+	// for params and history handling. The baked row records no whenThinking
 	// object, so one compat-parity diff (present-vs-undefined whenThinking)
 	// remains; it is structural — any class when-thinking rule materializes the
 	// variant — and covered by the sibling regression tests, not the parity row.)
@@ -152,8 +152,8 @@ provider "alibaba-token-plan" {
 	}
 	// Max exposes a distinct low/medium/xhigh ladder; Flash retains its
 	// provider-authored minimal/low/medium/high ladder (the class revision
-	// rule below would otherwise narrow discovered-tier siblings and flash
-	// alike to low/medium/high).
+	// rule above would otherwise narrow flash to low/medium/high — the ladder
+	// it intentionally gives discovered-tier siblings).
 	models "qwen3.8-max" {
 		thinking-default-level "xhigh"
 		thinking-efforts "low" "medium" "xhigh"

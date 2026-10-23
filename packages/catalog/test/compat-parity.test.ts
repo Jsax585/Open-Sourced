@@ -141,10 +141,14 @@ describe("compat parity", () => {
 					// for discovered siblings (OpenAI dialect); preview re-pins the Qwen
 					// dialect, so its resolved policy materializes a `whenThinking` variant
 					// that is wire-identical (only binary toggle emitted) while the baked
-					// row records no whenThinking object. Exemption is conditional on
+					// row records no whenThinking object. The exemption applies only while
+					// the baked row stays whenThinking-less: the generator bakes resolved
+					// policy into rows, so a future regen would bake the stub and make the
+					// deletion manufacture a parity failure. Exemption is conditional on
 					// wire-identity: thinkingFormat === 'qwen', extraBody === undefined,
 					// and reasoningEffortMap deep-equals {}.
 					if (provider === "alibaba-token-plan" && modelId === "qwen3.8-max-preview") {
+						const bakedCompat = row.compat as Record<string, unknown> | undefined;
 						const wt = engineCompat.whenThinking as Record<string, unknown> | undefined;
 						const wtMismatches: string[] = [];
 						if (!wt) {
@@ -162,6 +166,10 @@ describe("compat parity", () => {
 						}
 						if (wtMismatches.length > 0) {
 							diffs.push(`${label}: preview whenThinking diverged: ${wtMismatches.join(", ")}`);
+						} else if (bakedCompat?.whenThinking !== undefined) {
+							diffs.push(
+								`${label}: baked row gained whenThinking; delete this exemption and let the parity diff compare values`,
+							);
 						} else {
 							delete engineCompat.whenThinking;
 						}
