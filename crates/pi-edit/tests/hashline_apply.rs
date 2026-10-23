@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use pi_edit::modes::hashline::{
 	apply::{ApplyOptions, EmptyPaste, apply_edits},
 	block::{Unresolved, native_block_resolver, resolve_block_edits},

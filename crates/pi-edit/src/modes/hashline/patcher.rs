@@ -598,41 +598,6 @@ pub(crate) fn recover_target(
 	let display = path.to_string_lossy().into_owned();
 	Some((section.with_path(&display), Resolved { absolute: path, display }))
 }
-/// Stage a whole-file delete for a target whose bytes cannot be decoded:
-/// existence is proven, but there is no content to diff or snapshot.
-#[allow(
-	clippy::too_many_arguments,
-	reason = "delete staging threads section, resolution, dedup, and clipboard state"
-)]
-fn undecodable_delete_staged(
-	section: &PatchSection,
-	resolved: &Resolved,
-	original_path: &str,
-	tag: &str,
-	mut warnings: Vec<String>,
-	canonical_paths: &mut HashMap<std::path::PathBuf, String>,
-	clipboard: &Clipboard,
-) -> Result<StagedFile, EditError> {
-	if section.path != original_path {
-		warnings.push(path_recovered_from_tag_message(original_path, &section.path, tag));
-	}
-	if let Some(previous) = canonical_paths
-		.insert(crate::path_policy::canonical_key(&resolved.absolute), original_path.to_owned())
-	{
-		return Err(EditError::apply(format!(
-			"Multiple hashline sections resolve to the same file ({previous} and {original_path}). \
-			 Merge their ops under one header before applying."
-		)));
-	}
-	let mut item =
-		StagedFile::new(section.path.clone(), resolved.absolute.clone(), EngineFileOp::Delete);
-	item.header = HeaderKind::HashlineTag;
-	item.warnings = warnings;
-	item.record_snapshot = true;
-	item.clipboard_after = Some(clipboard.fork());
-	Ok(item)
-}
-
 /// Stage every parsed hashline section atomically.
 pub fn stage_patch(
 	patch: &Patch,
@@ -653,29 +618,10 @@ pub fn stage_patch(
 		let (section, resolved) = recovered
 			.as_ref()
 			.map_or((original, &initial), |(section, resolved)| (section, resolved));
-		// Whole-file delete needs existence, not text, so an undecodable file
-		// stages without its content; anything else still rejects.
-		let undecodable_delete = tag.filter(|_| matches!(parsed.file_op, Some(FileOp::Rem)));
-		let read = match files.try_read(resolved) {
-			Ok(read) => read,
-			Err(err) if err.is_invalid_utf8() && undecodable_delete.is_some() => None,
-			Err(err) => return Err(err),
-		};
-		let Some(read) = read else {
-			if let Some(tag) = undecodable_delete
-				&& files.exists(&resolved.absolute)
-			{
-				staged.push(undecodable_delete_staged(
-					section,
-					resolved,
-					&original.path,
-					tag,
-					parsed.warnings.clone(),
-					&mut canonical_paths,
-					&clipboard.fork(),
-				)?);
-				continue;
-			}
+		// Whole-file delete (REM) needs existence plus a verifiable tag: an
+		// undecodable target has no whole-file text to hash, so no tag —
+		// current, stale, or arbitrary — can authorize deleting it.
+		let Some(read) = files.try_read(resolved)? else {
 			return Err(EditError::apply(format!(
 				"File not found: {}. Use the write tool to create new files.",
 				section.path

@@ -136,29 +136,13 @@ fn preview_section(
 			.as_ref()
 			.map_or((section, &initial), |(target, resolved)| (target, resolved));
 		result.display.clone_from(&target.path);
+		// An undecodable target rejects here as in staging: no whole-file
+		// text tag can be verified, so the preview never claims a
+		// successful REM delete.
 		let read = match files.try_read(resolved) {
 			Ok(Some(read)) => read,
 			Ok(None) => {
 				return Err(crate::error::EditError::apply(format!("File not found: {}", target.path)));
-			},
-			// Whole-file delete preview needs existence, not text. Streaming
-			// sections parse partially, so a trailing-incomplete section must
-			// not claim the delete preview; the drop at preview_patch already
-			// hides the last section while more payload may arrive.
-			Err(err) if err.is_invalid_utf8() => {
-				let is_delete = !streaming
-					|| parse_patch_streaming(&target.diff)
-						.is_ok_and(|parsed| !parsed.edits.is_empty() || parsed.file_op.is_some());
-				let is_delete = is_delete
-					&& target.parse().is_ok_and(|parsed| {
-						target.file_hash.is_some() && matches!(parsed.file_op, Some(FileOp::Rem))
-					});
-				if !is_delete {
-					return Err(err);
-				}
-				result.op = Some(EngineFileOp::Delete);
-				result.diff = Some(String::new());
-				return Ok(());
 			},
 			Err(err) => return Err(err),
 		};
