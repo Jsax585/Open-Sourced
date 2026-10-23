@@ -133,6 +133,8 @@ none is set.
 
 `omp bench` uses the same model/provider/global preferences for standard Responses,
 without enabling WS implicitly. Its Codex WebSocket preference is unchanged.
+The coding-agent also applies these preferences to side requests, including branch
+summaries, rather than requiring every caller to repeat the transport hint.
 
 For mixed providers, leave the global setting off and configure provider defaults
 in `models.yml`. Models inherit their provider's default unless explicitly overridden:

@@ -143,12 +143,17 @@ export function createSettingsAwareStreamFn(
 		const maxInFlightRequests = validateProviderMaxInFlightRequests(
 			streamOptions?.maxInFlightRequests ?? cfgProvidersMaxInFlightRequests.get(settings),
 		);
+		const preferWebsockets =
+			streamOptions?.preferWebsockets ??
+			(model.api === "openai-responses" || model.api === "openrouter"
+				? resolveOpenAIWebsocketPreference(settings, model)
+				: undefined);
 		// A queued HTTP request may be built after another response warms its
 		// session. Connection-bound WS always rebuilds, even after waiting.
 		const nativeHistoryReplay = openAIResponsesReplaysNativeHistory(
 			model,
 			Object.hasOwn(maxInFlightRequests, model.provider) ? undefined : streamOptions?.providerSessionState,
-			streamOptions?.preferWebsockets,
+			preferWebsockets,
 		);
 		const tokenizerKey = `${model.provider}\0${model.api}\0${model.id}\0${nativeHistoryReplay}`;
 		let tokenizer = tokenizers.get(tokenizerKey);
@@ -160,6 +165,7 @@ export function createSettingsAwareStreamFn(
 		const merged: SimpleStreamOptions = {
 			...streamOptions,
 			maxTokens,
+			preferWebsockets,
 			openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
 			antigravityEndpointMode: streamOptions?.antigravityEndpointMode ?? antigravityEndpointMode,
 			textVerbosity: streamOptions?.textVerbosity ?? textVerbosity,

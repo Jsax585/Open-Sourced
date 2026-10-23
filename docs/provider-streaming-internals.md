@@ -167,6 +167,11 @@ Standard Responses then uses the resolved model preference before
 Responses dispatch. An explicit SDK request preference takes precedence over
 that hint.
 
+`createSettingsAwareStreamFn` also resolves this standard Responses default for
+callers without a transport hint, including branch summarization. It passes the
+same value to output-budget fitting and provider dispatch; an explicit request
+`false` is preserved.
+
 ## Google Generative AI (`google-generative-ai`)
 
 Source: `packages/ai/src/providers/google.ts` (thin request wrapper) and `google-shared.ts` (`streamGoogleGenAI`, shared chunk-to-block translation)

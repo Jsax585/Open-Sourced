@@ -341,6 +341,80 @@ describe("createSettingsAwareStreamFn", () => {
 		expect(calls[1]?.options?.maxTokens).toBeLessThan(9_000);
 	});
 
+	it("uses global Responses WS for side requests and preserves an explicit HTTP override and budget", async () => {
+		const wire: Array<{ transport: string; body: Record<string, unknown> }> = [];
+		const item = {
+			type: "message",
+			id: "msg_side",
+			role: "assistant",
+			status: "completed",
+			content: [{ type: "output_text", text: "OK" }],
+		};
+		const events = [
+			{ type: "response.created", response: { id: "resp_side" } },
+			{ type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+			{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "OK" },
+			{ type: "response.output_item.done", output_index: 0, item },
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_side",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+				},
+			},
+		];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request, server) {
+				if (request.headers.get("upgrade")) {
+					if (server.upgrade(request)) return;
+					return new Response("Upgrade failed", { status: 400 });
+				}
+				wire.push({ transport: "http", body: (await request.json()) as Record<string, unknown> });
+				return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+			websocket: {
+				message(socket, message) {
+					wire.push({ transport: "websocket", body: JSON.parse(String(message)) as Record<string, unknown> });
+					for (const event of events) socket.send(JSON.stringify(event));
+				},
+			},
+		});
+		try {
+			const model: Model = {
+				...getBundledModel("github-copilot", "gpt-5.4"),
+				baseUrl: `http://127.0.0.1:${server.port}/v1`,
+				contextWindow: 10_000,
+				maxTokens: 9_000,
+			};
+			const wrapped = createSettingsAwareStreamFn(
+				Settings.isolated({
+					"providers.openaiResponsesWebsockets": true,
+					"providers.maxInFlightRequests": { "github-copilot": 1 },
+				}),
+			);
+			for (const transport of [{}, { preferWebsockets: false }]) {
+				const stream = await wrapped(model, replayedReasoningContext(model), {
+					apiKey: "side-test-key",
+					maxTokens: 9_000,
+					...transport,
+				});
+				const result = await stream.result();
+				expect(result.stopReason).toBe("stop");
+				expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "OK" }));
+			}
+			expect(wire.map(request => request.transport)).toEqual(["websocket", "http"]);
+			expect(wire[0]?.body.max_output_tokens).toBe(9_000);
+			expect(wire[1]?.body.max_output_tokens).toBeLessThan(9_000);
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	it("fits a cold request that may wait for a provider slot as replaying", () => {
 		const copilot: Model = {
 			...getBundledModel("github-copilot", "gpt-5.4"),
