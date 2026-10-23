@@ -1295,6 +1295,39 @@ console.log("ok");
 			expect(diff.totalMatches).toBe(0);
 		});
 
+		// Needs this PR's Rust; PR CI loads the published natives leaf.
+		it.skipIf(process.env.GITHUB_EVENT_NAME === "pull_request")(
+			"matches structured rules with negative clauses and constraints",
+			async () => {
+				const negative = await astMatch({
+					source: 'console.log("safe"); console.log(secret);',
+					lang: "ts",
+					patterns: [],
+					ruleConfigs: [
+						JSON.stringify({
+							rule: {
+								all: [{ pattern: "console.log($A)" }, { not: { pattern: 'console.log("safe")' } }],
+							},
+						}),
+					],
+				});
+				const constrained = await astMatch({
+					source: "console.log(secret); console.log(publicValue);",
+					lang: "ts",
+					patterns: [],
+					ruleConfigs: [
+						JSON.stringify({
+							rule: { pattern: "console.log($A)" },
+							constraints: { A: { regex: "^secret$" } },
+						}),
+					],
+				});
+
+				expect(negative.matches.map(match => match.text)).toEqual(["console.log(secret)"]);
+				expect(constrained.matches.map(match => match.text)).toEqual(["console.log(secret)"]);
+			},
+		);
+
 		it("reports parse errors for incomplete source without throwing", async () => {
 			const result = await astMatch({ source: "console.log(", lang: "ts", patterns: ["console.log($A)"] });
 			expect(result.totalMatches).toBe(0);
