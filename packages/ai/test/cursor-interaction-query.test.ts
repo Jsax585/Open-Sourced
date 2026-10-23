@@ -120,7 +120,10 @@ async function dispatchQuery(
 	return frames;
 }
 
-function askQuery(id: number, runAsync = false): InteractionQuery {
+function askQuery(
+	id: number,
+	asyncFlags: { runAsync?: boolean; asyncOriginalToolCallId?: string } = {},
+): InteractionQuery {
 	return create(InteractionQuerySchema, {
 		id,
 		query: {
@@ -129,7 +132,7 @@ function askQuery(id: number, runAsync = false): InteractionQuery {
 				toolCallId: "tool_ask_1",
 				args: create(AskQuestionArgsSchema, {
 					title: "Pick storage",
-					runAsync,
+					...asyncFlags,
 					questions: [
 						create(AskQuestionArgs_QuestionSchema, {
 							id: "db",
@@ -226,22 +229,75 @@ describe("cursor native AskQuestion bridge", () => {
 		});
 	});
 
-	it("passes the request abort signal to the ask handler", async () => {
+	it("records the cancellation inside the abort event, without waiting for the handler", async () => {
+		// The Agent finalizes an aborted turn without waiting for the provider; the
+		// resolved `ask` block is paired only if its result is reserved by then.
 		const controller = new AbortController();
-		const signals: (AbortSignal | undefined)[] = [];
-		await dispatchQuery(
-			askQuery(34),
+		const recorded: ToolResultMessage[] = [];
+		const handlerStarted = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const dispatched = dispatchQuery(
+			askQuery(37),
 			{
-				askQuestion: async (call): Promise<CursorAskQuestionResult> => {
-					signals.push(call.signal);
+				askQuestion: async () => {
+					handlerStarted.resolve();
+					await release.promise;
 					return { toolResult: askToolResult("Ask input was cancelled", true) };
 				},
 			},
-			undefined,
+			result => {
+				recorded.push(result);
+				return result;
+			},
 			undefined,
 			controller.signal,
 		);
-		expect(signals).toEqual([controller.signal]);
+		await handlerStarted.promise;
+		controller.abort();
+
+		expect(recorded).toMatchObject([
+			{
+				toolCallId: "tool_ask_1",
+				toolName: "ask",
+				isError: true,
+				content: [{ type: "text", text: "Question was cancelled" }],
+			},
+		]);
+		const frames = await dispatched;
+		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
+			id: 37,
+			result: {
+				case: "askQuestionInteractionResponse",
+				value: { result: { result: { case: "rejected", value: { reason: "Question was cancelled" } } } },
+			},
+		});
+		release.resolve();
+		await Bun.sleep(0);
+		expect(recorded).toHaveLength(1);
+	});
+
+	it("rejects a question that arrives after the abort without filing it", async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const output = cursorAssistantMessage();
+		let called = false;
+		const frames = await dispatchQuery(
+			askQuery(38),
+			{
+				askQuestion: async () => {
+					called = true;
+					return { toolResult: askToolResult("unreachable") };
+				},
+			},
+			undefined,
+			output,
+			controller.signal,
+		);
+		expect(called).toBe(false);
+		expect(output.content).toEqual([]);
+		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
+			result: { value: { result: { result: { case: "rejected" } } } },
+		});
 	});
 
 	it("calls a class-method handler with its own receiver", async () => {
@@ -273,42 +329,6 @@ describe("cursor native AskQuestion bridge", () => {
 		});
 	});
 
-	it("rejects with the tool's own text when ask fails", async () => {
-		const frames = await dispatchQuery(askQuery(31), {
-			askQuestion: async () => ({ toolResult: askToolResult('Tool "ask" not available', true) }),
-		});
-		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
-			id: 31,
-			result: {
-				case: "askQuestionInteractionResponse",
-				value: { result: { result: { case: "rejected", value: { reason: 'Tool "ask" not available' } } } },
-			},
-		});
-	});
-
-	it("rejects and records a failed ask when the handler throws", async () => {
-		const recorded: ToolResultMessage[] = [];
-		const frames = await dispatchQuery(
-			askQuery(34),
-			{
-				askQuestion: async () => {
-					throw new Error("dialog crashed");
-				},
-			},
-			result => {
-				recorded.push(result);
-			},
-		);
-		expect(recorded).toMatchObject([{ toolCallId: "tool_ask_1", toolName: "ask", isError: true }]);
-		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
-			id: 34,
-			result: {
-				case: "askQuestionInteractionResponse",
-				value: { result: { result: { case: "rejected", value: { reason: "dialog crashed" } } } },
-			},
-		});
-	});
-
 	it("rejects with the host-rewritten text when ask fails", async () => {
 		const frames = await dispatchQuery(
 			askQuery(35),
@@ -324,7 +344,8 @@ describe("cursor native AskQuestion bridge", () => {
 		});
 	});
 
-	it("rejects with the host-rewritten text when the handler throws", async () => {
+	it("records a failed ask and rejects with the host-rewritten text when the handler throws", async () => {
+		const recorded: ToolResultMessage[] = [];
 		const frames = await dispatchQuery(
 			askQuery(36),
 			{
@@ -332,8 +353,12 @@ describe("cursor native AskQuestion bridge", () => {
 					throw new Error("dialog crashed at /secret/path");
 				},
 			},
-			result => ({ ...result, content: [{ type: "text", text: "dialog crashed" }] }),
+			result => {
+				recorded.push(result);
+				return { ...result, content: [{ type: "text", text: "dialog crashed" }] };
+			},
 		);
+		expect(recorded).toMatchObject([{ toolCallId: "tool_ask_1", toolName: "ask", isError: true }]);
 		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
 			id: 36,
 			result: {
@@ -343,9 +368,34 @@ describe("cursor native AskQuestion bridge", () => {
 		});
 	});
 
-	it("rejects async questions without opening the dialog", async () => {
+	it("does not send the original answers when the host rewrites a successful ask", async () => {
+		const frames = await dispatchQuery(
+			askQuery(39),
+			{
+				askQuestion: async () => ({
+					toolResult: askToolResult('User answers: db: "my password is hunter2"'),
+					answers: [{ selectedOptions: [], customInput: "my password is hunter2" }, { selectedOptions: [] }],
+				}),
+			},
+			result => ({ ...result, content: [{ type: "text", text: "User answers: db: [redacted]" }] }),
+		);
+		const response = decodeConnectFrame(frames[0]!).message.value;
+		expect(response).toMatchObject({
+			id: 39,
+			result: {
+				case: "askQuestionInteractionResponse",
+				value: { result: { result: { case: "rejected", value: { reason: "User answers: db: [redacted]" } } } },
+			},
+		});
+		expect(JSON.stringify(response)).not.toContain("hunter2");
+	});
+
+	it.each([
+		["async questions", { runAsync: true }],
+		["an async question's completion frame", { asyncOriginalToolCallId: "tool_ask_0" }],
+	])("rejects %s without opening the dialog", async (_label, asyncFlags) => {
 		let called = false;
-		const frames = await dispatchQuery(askQuery(32, true), {
+		const frames = await dispatchQuery(askQuery(32, asyncFlags), {
 			askQuestion: async () => {
 				called = true;
 				return { toolResult: askToolResult("unreachable") };
@@ -356,7 +406,7 @@ describe("cursor native AskQuestion bridge", () => {
 			id: 32,
 			result: {
 				case: "askQuestionInteractionResponse",
-				value: { result: { result: { case: "rejected" } } },
+				value: { result: { result: { case: "rejected", value: { reason: expect.stringContaining("Async") } } } },
 			},
 		});
 	});

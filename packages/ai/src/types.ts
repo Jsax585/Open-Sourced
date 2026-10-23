@@ -1418,7 +1418,7 @@ export interface CursorMcpCall {
 	 * not yet been asked about (and fire it twice once the real call arrives).
 	 */
 	approvalOnly?: boolean;
-	/** The request's abort signal. */
+	/** Aborted when the request is aborted or the Cursor stream ends; no result can reach Cursor after that. */
 	signal?: AbortSignal;
 }
 
@@ -1426,7 +1426,7 @@ export interface CursorMcpCall {
 export interface CursorAskQuestionCall {
 	toolCallId: string;
 	args: Record<string, unknown>;
-	/** Aborts the question when the request is aborted. */
+	/** Aborted when the request is aborted or the Cursor stream ends; the answer is discarded after that. */
 	signal?: AbortSignal;
 }
 
@@ -1603,6 +1603,14 @@ export interface CursorExecHandlers {
 	 * a handler the provider rejects the question; a handler whose session has
 	 * no `ask` tool (subagents, headless) returns an error result, which is
 	 * rejected too.
+	 *
+	 * The provider calls this once per query as it arrives and does not wait
+	 * for an open question; a handler backed by a single dialog must queue the
+	 * calls itself. A handler that delegates to omp's `ask` must also provide
+	 * {@link askQuestionReservedLabels}, or Cursor labels that collide with the
+	 * dialog's own rows are rejected by `ask`. If `onToolResult` replaces a
+	 * successful result, Cursor receives a rejection with the replacement's
+	 * text instead of the answers.
 	 */
 	askQuestion?: (call: CursorAskQuestionCall) => Promise<CursorAskQuestionResult>;
 	/** Option labels the `ask` dialog keeps for its own rows; Cursor labels that collide are renamed. */

@@ -247,7 +247,8 @@ export async function handleInteractionQuery(
 			let result: AskQuestionResult;
 			if (!askQuestion) {
 				result = askQuestionRejected(`Interactive questions are ${NOT_IMPLEMENTED_SUFFIX}`);
-			} else if (ask.args?.runAsync) {
+			} else if (ask.args?.runAsync || ask.args?.asyncOriginalToolCallId) {
+				// `asyncOriginalToolCallId` marks the synthetic completion of an earlier async question.
 				result = askQuestionRejected(`Async questions are ${NOT_IMPLEMENTED_SUFFIX}`);
 			} else {
 				try {

@@ -57,6 +57,7 @@ type Scenario =
 	| { kind: "exec-then-transport-error"; responseFinished: PromiseWithResolvers<void> }
 	| { kind: "exec-then-hang" }
 	| { kind: "question-then-transport-error" }
+	| { kind: "question-then-clean-end" }
 	| { kind: "todo-start-then-death" };
 
 let server: http2.Http2Server | undefined;
@@ -373,6 +374,12 @@ async function startServer(): Promise<string> {
 			stream.write(
 				Buffer.concat([askQuestionFrame(), connectEndErrorFrame("unavailable", "transport died mid-question")]),
 			);
+			stream.end();
+			return;
+		}
+
+		if (scenario.kind === "question-then-clean-end") {
+			stream.write(Buffer.concat([askQuestionFrame(), turnEndedFrame()]));
 			stream.end();
 			return;
 		}
@@ -982,6 +989,58 @@ describe("Cursor terminal lifecycle after turnEnded", () => {
 		expect(questionSignal?.aborted).toBe(true);
 		expect(eventTypes.at(-1)).toBe("error");
 		expect(result.errorMessage).toContain("transport died mid-question");
+	});
+
+	it("cancels an open question when the stream ends cleanly", async () => {
+		// No request signal: before the fix nothing ever aborted the dialog, and
+		// the success path's drain waited on it forever.
+		scenario = { kind: "question-then-clean-end" };
+		const baseUrl = await startServer();
+		const release = Promise.withResolvers<void>();
+		const paired: ToolResultMessage[] = [];
+		const stream = streamCursor(makeModel(baseUrl), context, {
+			apiKey: "test-token",
+			execHandlers: {
+				async askQuestion(call) {
+					call.signal?.addEventListener("abort", () => release.resolve(), { once: true });
+					await release.promise;
+					return {
+						toolResult: {
+							role: "toolResult",
+							toolCallId: call.toolCallId,
+							toolName: "ask",
+							content: [{ type: "text", text: "late dialog result" }],
+							isError: true,
+							timestamp: 1,
+						},
+					};
+				},
+			},
+			onToolResult: result => {
+				paired.push(result);
+				return result;
+			},
+		});
+
+		const hung = Symbol("hung");
+		const timer = Bun.sleep(2000).then(() => hung);
+		try {
+			const outcome = await Promise.race([stream.result(), timer]);
+			expect(outcome).not.toBe(hung);
+		} finally {
+			release.resolve();
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).not.toBe("error");
+		expect(paired).toMatchObject([
+			{
+				toolCallId: "call-ask",
+				toolName: "ask",
+				isError: true,
+				content: [{ type: "text", text: "Question was cancelled: the Cursor stream ended" }],
+			},
+		]);
 	});
 
 	it("does not hold the abort hostage to a hung exec handler", async () => {

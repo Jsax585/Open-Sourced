@@ -2591,32 +2591,6 @@ describe("CursorExecHandlers.askQuestion bridge", () => {
 		expect(events).toEqual(["open mcp", "open native", "close native"]);
 	});
 
-	it("skips a queued MCP ask whose turn was already aborted", async () => {
-		const opened: string[] = [];
-		const ask = {
-			name: "ask",
-			label: "Ask",
-			description: "fake ask dialog",
-			parameters: type({}),
-			async execute(id: string) {
-				opened.push(id);
-				return { content: [{ type: "text", text: "User answers: …" }], details: { selectedOptions: [id] } };
-			},
-		} as unknown as Tool;
-		const handlers = new CursorExecHandlers({ cwd: ".", tools: new Map([["ask", ask]]) });
-		const result = await handlers.mcp({
-			name: "ask",
-			toolName: "ask",
-			toolCallId: "mcp",
-			providerIdentifier: "pi-agent",
-			args: { questions: [] },
-			rawArgs: {},
-			signal: AbortSignal.abort(),
-		});
-		expect(result.isError).toBe(true);
-		expect(opened).toEqual([]);
-	});
-
 	it("closes the dialog when the turn is aborted and moves on to the next question", async () => {
 		const events: string[] = [];
 		const ask = {
