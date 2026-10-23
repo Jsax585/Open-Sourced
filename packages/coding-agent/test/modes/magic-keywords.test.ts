@@ -50,6 +50,13 @@ describe("orchestrate notice", () => {
 		expect(gitEnabled).toContain("Commit locally after each green phase");
 	});
 
+	it("forbids commits while plan mode keeps the working tree read-only", () => {
+		const planning = renderOrchestrateNotice({ tools: ["read", "task", "bash"], planMode: true });
+		expect(planning).not.toContain("Commit locally after each green phase");
+		expect(planning).not.toContain("Commit if applicable");
+		expect(planning).toContain("NEVER create a commit");
+	});
+
 	it("does not name write when only edit is available", () => {
 		const editOnly = renderOrchestrateNotice({ tools: ["read", "edit"] });
 		expect(editOnly).toContain("with `edit`");

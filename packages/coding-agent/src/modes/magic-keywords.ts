@@ -25,6 +25,8 @@ export interface MagicKeywordContext {
 	scoutAvailable: boolean;
 	/** `eval.tools.enabled`: whether `@tool`-defined kernel tools exist. */
 	evalTools: boolean;
+	/** Plan mode is active, so the working tree is read-only. */
+	planMode: boolean;
 }
 
 /** One magic keyword: trigger word, gradient, settings copy, and the notice it injects. */
@@ -52,8 +54,12 @@ export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 export const JEVIFY_NOTICE: string = jevifyNotice.trim();
 
 /** Hidden notice for "orchestrate", naming only the tools the session actually exposes. */
-export function renderOrchestrateNotice({ tools }: Pick<MagicKeywordContext, "tools">): string {
-	return prompt.render(orchestrateNotice, { tools }).trim();
+export function renderOrchestrateNotice({
+	tools,
+	planMode = false,
+}: Pick<MagicKeywordContext, "tools"> & Partial<Pick<MagicKeywordContext, "planMode">>): string {
+	const commitPhases = tools.includes("bash") && !planMode;
+	return prompt.render(orchestrateNotice, { tools, commitPhases }).trim();
 }
 
 /** Hidden notice for "workflowz", shaped by the active task/eval capabilities. */
