@@ -508,6 +508,7 @@ import {
 	cfgDefaultThinkingLevel,
 	cfgExternalThinking,
 	cfgPowerSleepPrevention,
+	cfgPrewalkAutoSubagents,
 	cfgPrewalkAutoTarget,
 	cfgPrewalkEnabled,
 	cfgProviderAppendOnlyContext,
@@ -1860,6 +1861,7 @@ export class AgentSession implements SettingsScope {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
+			agentKind: () => this.#agentKind,
 			model: () => this.model,
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
 			restoreThinkingLevel: level => this.#models.restoreThinkingLevel(level),
@@ -1867,7 +1869,7 @@ export class AgentSession implements SettingsScope {
 			resolveAutoPrewalkTarget: () => this.#resolveAutoPrewalkTarget(),
 			classifyAutoPrewalk: (request, signal) =>
 				classifyAutoPrewalk(
-					{ request, history: this.agent.state.messages },
+					{ request, history: this.agent.state.messages, agentKind: this.#agentKind },
 					{
 						settings: this.settings,
 						registry: this.#modelRegistry,
@@ -7855,6 +7857,7 @@ export class AgentSession implements SettingsScope {
 			const queued = await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				synthetic: options?.synthetic,
 				prependMessages: prependNotices,
 				rawText: typedText,
 				onPromptAdmitted: options?.onPromptAdmitted,
@@ -7930,6 +7933,7 @@ export class AgentSession implements SettingsScope {
 			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
+				synthetic: options?.synthetic,
 				prependMessages: prependNotices,
 				rawText: typedText,
 				preprocessed: {
@@ -8178,13 +8182,17 @@ export class AgentSession implements SettingsScope {
 		return images.length > 0 ? this.#buildImageDescriptionNotice(images) : undefined;
 	}
 
-	/** Queue ownership belongs to Agent; only actual user deliveries refresh submission policy. */
+	/** Queue ownership belongs to Agent; prepare user deliveries and eligible subagent assignments. */
 	#prepareQueuedUserMessages = (
 		messages: readonly AgentMessage[],
 		signal: AbortSignal,
 		queue: QueuedMessageQueue,
 	): Promise<QueuedMessagePreparation> | undefined => {
-		const userMessages = messages.filter(isUserAuthoredQueuedMessage);
+		const userMessages = messages.filter(
+			message =>
+				isUserAuthoredQueuedMessage(message) ||
+				(queue === "followUp" && this.#agentKind === "sub" && this.#isAutoPrewalkTask(message)),
+		);
 		const first = userMessages[0];
 		if (!first) return undefined;
 		const text: string[] = [];
@@ -8236,9 +8244,11 @@ export class AgentSession implements SettingsScope {
 		};
 	}
 
-	/** A new top-level task the user authored: a typed prompt or a user-invoked skill, never injected or delegated. */
+	/** A new user task, or an opted-in subagent assignment; never a synthetic continuation. */
 	#isAutoPrewalkTask(message: AgentMessage): boolean {
-		if (this.#agentKind !== "main") return false;
+		if (this.#agentKind === "sub") {
+			return cfgPrewalkAutoSubagents.get(this.settings) && message.role === "user" && !message.synthetic;
+		}
 		if (message.role === "user") return !message.synthetic && message.attribution !== "agent";
 		return message.role === "custom" && isUserInvokedSkillPrompt(message);
 	}
@@ -8998,6 +9008,7 @@ export class AgentSession implements SettingsScope {
 		options?: {
 			timestamp?: number;
 			attribution?: MessageAttribution;
+			synthetic?: boolean;
 			prependMessages?: readonly CustomMessage[];
 			/** Text the caller originally submitted, before slash/custom-command
 			 *  rewriting, prompt-template expansion, or `^model` mention substitution.
@@ -9098,7 +9109,13 @@ export class AgentSession implements SettingsScope {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			const records: AgentMessage[] = [...prependMessages, ...attachmentSourceNotices];
 			if (imageDescriptionNotice) records.push(imageDescriptionNotice);
-			const userMessage: AgentMessage = { role: "user", content, attribution, timestamp: timestamp ?? Date.now() };
+			const userMessage: AgentMessage = {
+				role: "user",
+				content,
+				attribution,
+				synthetic: options?.synthetic,
+				timestamp: timestamp ?? Date.now(),
+			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
 			records.push(userMessage);
 			this.#irc.queueAside(records);
@@ -9122,6 +9139,7 @@ export class AgentSession implements SettingsScope {
 				role: "user",
 				content,
 				attribution,
+				synthetic: options?.synthetic,
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);
@@ -9135,6 +9153,7 @@ export class AgentSession implements SettingsScope {
 				content,
 				steering: true,
 				attribution,
+				synthetic: options?.synthetic,
 				timestamp: timestamp ?? Date.now(),
 			};
 			this.#queuedMessageRawText.set(userMessage, rawText);

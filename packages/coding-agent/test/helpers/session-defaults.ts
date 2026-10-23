@@ -8,6 +8,7 @@ export function createSessionDefaults() {
 		prepareForHeadlessAdvisorDrain: () => {},
 		waitForAdvisorCatchup: async () => true,
 		getToolByName: () => undefined,
+		getPrewalkState: () => undefined,
 		getLastAssistantMessage: () => undefined,
 		hasPendingAsyncWork: () => false,
 		abort: async () => {},

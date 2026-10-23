@@ -43,6 +43,8 @@ export interface AutoPrewalkInput {
 	request: string;
 	/** Transcript before `request`; only its latest request/reply pair reaches the judge, to resolve follow-ups. */
 	history: readonly AgentMessage[];
+	/** Subagent assignments are agent-attributed; main-session injected messages are not task history. */
+	agentKind?: "main" | "sub";
 }
 
 export interface AutoPrewalkDecision {
@@ -65,10 +67,11 @@ export interface ClassifyAutoPrewalkDeps {
 	telemetry?: AgentTelemetryConfig;
 }
 
-/** Text of a user-authored request: a typed prompt or a user-invoked skill, never an injected or agent-attributed one. */
-function userRequestText(message: AgentMessage): string | undefined {
+/** Text of a substantive request, including delegated assignments only in subagent sessions. */
+function userRequestText(message: AgentMessage, agentKind: AutoPrewalkInput["agentKind"]): string | undefined {
 	if (message.role === "user") {
-		return message.synthetic || message.attribution === "agent" ? undefined : textContent(message.content);
+		if (message.synthetic || (agentKind === "sub" && message.steering)) return undefined;
+		return message.attribution === "agent" && agentKind !== "sub" ? undefined : textContent(message.content);
 	}
 	return message.role === "custom" ? titleTextFromSkillPrompt(message) : undefined;
 }
@@ -77,12 +80,12 @@ function userRequestText(message: AgentMessage): string | undefined {
  * The newest substantive user request and the agent's newest reply after it.
  * Acknowledgements ("ok", "thanks") are not requests, so the scan looks past them.
  */
-function recentContext(history: readonly AgentMessage[]): { request?: string; response?: string } {
+function recentContext({ history, agentKind }: AutoPrewalkInput): { request?: string; response?: string } {
 	let response: string | undefined;
 	for (let index = history.length - 1; index >= 0; index--) {
 		const message = history[index]!;
 		response ??= assistantText(message);
-		const request = userRequestText(message);
+		const request = userRequestText(message, agentKind);
 		if (request && !isLowSignalTitleInput(request)) return { request, response };
 	}
 	return { response };
@@ -91,7 +94,7 @@ function recentContext(history: readonly AgentMessage[]): { request?: string; re
 /** `request` leads and is authoritative; the earlier pair is included only when the transcript has one. */
 function buildState(input: AutoPrewalkInput): Record<string, string> {
 	const state: Record<string, string> = { request: preprocessTinyMessage(input.request) };
-	const { request, response } = recentContext(input.history);
+	const { request, response } = recentContext(input);
 	if (request) state.previous_request = preprocessTinyMessage(request);
 	if (response) state.previous_response = preprocessTinyMessage(response);
 	return state;

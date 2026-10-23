@@ -26,6 +26,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { cfgPrewalkAuto, cfgPrewalkAutoSubagents } from "@oh-my-pi/pi-coding-agent/session/settings";
 import {
 	findRetryFallbackCandidates,
 	getRetryFallbackChains,
@@ -1234,6 +1235,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		responses: MockResponseSource,
 		hooks: ExtensionHooks = {},
 		toolNames: string[] = ["read"],
+		settings: Settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
 	): RecordingSession {
 		const mock = createMockModel({ responses, handler: { content: ["done"] } });
 		const requests: string[][] = [];
@@ -1277,7 +1279,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		const session: AgentSession = new AgentSession({
 			agent,
 			sessionManager,
-			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+			settings,
 			modelRegistry: {
 				getApiKey: async () => "test-key",
 				getAvailable: () => [],
@@ -1318,6 +1320,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		responses: MockResponseSource,
 		hooks?: ExtensionHooks,
 		toolNames?: string[],
+		settings: Settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
 	): Promise<RecordingSession> {
 		let spawned: RecordingSession | undefined;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementationOnce(async options => {
@@ -1327,6 +1330,7 @@ describe("cold revival replays the system prompt the last request sent", () => {
 				responses,
 				hooks,
 				toolNames,
+				options!.settings,
 			);
 			// The SDK registers a spawned child, which keeps it live after it yields.
 			AgentRegistry.global().register({
@@ -1341,11 +1345,11 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		});
 		const result = await executorModule.runSubprocess({
 			cwd,
-			agent: { name: "task", description: "test", systemPrompt: "charter", source: "bundled" },
+			agent: { name: "task", description: "test", systemPrompt: "charter", source: "bundled", tools: toolNames },
 			task: "do work",
 			index: 0,
 			id: "prompt-blocks",
-			settings: Settings.isolated(),
+			settings,
 			modelRegistry: { refresh: async () => {} } as unknown as ModelRegistry,
 			enableLsp: false,
 			artifactsDir: cwd,
@@ -1461,6 +1465,64 @@ describe("cold revival replays the system prompt the last request sent", () => {
 		await live.waitForIdle();
 		expect(warm.requests.at(-1)).toEqual(spawned.requests.at(-1)!);
 		expect(warm.toolRequests.at(-1)).toBe(spawned.toolRequests.at(-1)!);
+	});
+
+	it.each([
+		["live", "opt-in"],
+		["live", "mode"],
+		["warm-revived", "opt-in"],
+		["warm-revived", "mode"],
+	] as const)(
+		"restores a granted todo before a %s request when auto-prewalk's %s turns on",
+		async (lifecycleState, toggle) => {
+			const cwd = makeTempDir("@pi-revive-live-prewalk-");
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"todo.enabled": false,
+				"prewalk.auto": toggle === "mode" ? "off" : "on",
+				"prewalk.autoSubagents": toggle === "mode",
+			});
+			const buildPrompt = (toolNames: string[]) => ["base", `tools: ${toolNames.join(",")}`];
+			let recording = await spawn(cwd, buildPrompt, spawnResponses(), {}, ["read", "todo"], settings);
+			expect(recording.session.getEnabledToolNames()).not.toContain("todo");
+			const lifecycle = AgentLifecycleManager.global();
+			if (lifecycleState === "warm-revived") await lifecycle.park("prompt-blocks");
+
+			if (toggle === "mode") cfgPrewalkAuto.override(settings, "on");
+			else cfgPrewalkAutoSubagents.override(settings, true);
+			if (lifecycleState === "warm-revived") {
+				vi.spyOn(sdkModule, "createAgentSession").mockImplementationOnce(async options => {
+					recording = createRecordingSession(
+						options!.sessionManager!,
+						buildPrompt,
+						[{ content: ["next"] }],
+						{},
+						["read", "todo"],
+						options!.settings,
+					);
+					return { session: recording.session } as CreateAgentSessionResult;
+				});
+			}
+			const live = await lifecycle.ensureLive("prompt-blocks");
+			await live.prompt("next assignment");
+			await live.waitForIdle();
+
+			const offered = JSON.parse(recording.toolRequests.at(-1)!) as Array<[string, string]>;
+			expect(offered.map(([name]) => name)).toContain("todo");
+		},
+	);
+
+	it("does not grant todo to an explicit tool list when subagent auto-prewalk turns on", async () => {
+		const cwd = makeTempDir("@pi-revive-prewalk-grant-");
+		const settings = Settings.isolated({ "prewalk.auto": "on", "prewalk.autoSubagents": false });
+		const recording = await spawn(cwd, () => ["base"], spawnResponses(), {}, ["read"], settings);
+
+		cfgPrewalkAutoSubagents.override(settings, true);
+		await recording.session.prompt("next assignment");
+		await recording.session.waitForIdle();
+
+		const offered = JSON.parse(recording.toolRequests.at(-1)!) as Array<[string, string]>;
+		expect(new Set(offered.map(([name]) => name))).toEqual(new Set(["read", "yield"]));
 	});
 
 	/** The executor's own subagent prompt over a default block listing the active tools. */

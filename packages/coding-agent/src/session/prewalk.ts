@@ -27,7 +27,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { PlanYolo, Prewalk } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
 import type { SessionManager } from "./session-manager";
-import { cfgPrewalkAuto } from "./settings";
+import { cfgPrewalkAuto, cfgPrewalkAutoSubagents } from "./settings";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
 
@@ -70,6 +70,7 @@ export interface PrewalkCoordinatorHost {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	agentKind(): "main" | "sub";
 	model(): Model | undefined;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void;
@@ -232,6 +233,7 @@ export class PrewalkCoordinator {
 	/** Effective `prewalk.auto` mode: session opt-outs and plan mode (whose plan-file write would trip a handoff) turn it off. */
 	#autoMode(): "off" | "suggest" | "on" {
 		if (this.#autoSuppressed || this.#host.getPlanModeState()?.enabled === true) return "off";
+		if (this.#host.agentKind() === "sub" && !cfgPrewalkAutoSubagents.get(this.#host.settings)) return "off";
 		return cfgPrewalkAuto.get(this.#host.settings);
 	}
 

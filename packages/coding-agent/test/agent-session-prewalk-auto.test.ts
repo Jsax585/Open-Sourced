@@ -13,7 +13,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgPrewalkAuto, cfgPrewalkAutoSubagents } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -146,6 +146,7 @@ describe("AgentSession auto-prewalk", () => {
 
 	interface FixtureOptions {
 		auto?: "off" | "suggest" | "on";
+		autoSubagents?: boolean;
 		/** Credential the native judge (default true). */
 		judge?: boolean;
 		agentKind?: "main" | "sub";
@@ -176,6 +177,7 @@ describe("AgentSession auto-prewalk", () => {
 			"prewalk.enabled": false,
 			modelRoles: { judge: "typesafe/jev-1.14.0" },
 			...(options.auto ? { "prewalk.auto": options.auto } : {}),
+			...(options.autoSubagents !== undefined ? { "prewalk.autoSubagents": options.autoSubagents } : {}),
 			...(options.todoEager ? { "todo.eager": options.todoEager } : {}),
 		});
 		settings.setModelRole("smol", `${target.provider}/${target.id}:low`);
@@ -425,23 +427,31 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.session.getPrewalkState()).toBeUndefined();
 		});
 
-		it("hands a short follow-up the earlier request and the agent's reply", async () => {
-			const calls = stubJudge([DIRECT, PREWALK]);
-			const reply = "The cursor resets because sync() reads a stale offset. Fix: persist it before awaiting.";
-			const f = createFixture([{ content: [reply] }, ...cycle()], { auto: "on" });
+		it.each(["main", "sub"] as const)(
+			"hands a %s-session follow-up its earlier request and reply",
+			async agentKind => {
+				const calls = stubJudge([DIRECT, PREWALK]);
+				const reply = "The cursor resets because sync() reads a stale offset. Fix: persist it before awaiting.";
+				const f = createFixture([{ content: [reply] }, ...cycle()], {
+					auto: "on",
+					autoSubagents: true,
+					agentKind,
+				});
+				const attribution = agentKind === "sub" ? "agent" : "user";
 
-			await f.session.prompt("why does the sync cursor reset after a reconnect?");
-			await f.session.prompt("do that");
+				await f.session.prompt("why does the sync cursor reset after a reconnect?", { attribution });
+				await f.session.prompt("do that", { attribution });
 
-			const [first, second] = asked(calls);
-			expect(first!.state).toEqual({ request: "why does the sync cursor reset after a reconnect?" });
-			expect(second!.state).toEqual({
-				request: "do that",
-				previous_request: "why does the sync cursor reset after a reconnect?",
-				previous_response: reply,
-			});
-			expect(f.session.model?.id).toBe(f.target.id);
-		});
+				const [first, second] = asked(calls);
+				expect(first!.state).toEqual({ request: "why does the sync cursor reset after a reconnect?" });
+				expect(second!.state).toEqual({
+					request: "do that",
+					previous_request: "why does the sync cursor reset after a reconnect?",
+					previous_response: reply,
+				});
+				expect(f.session.model?.id).toBe(f.target.id);
+			},
+		);
 	});
 
 	describe("queued input", () => {
@@ -505,6 +515,70 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.nudges[1]).toContain("prewalk-plan");
 			expect(f.requested).toEqual([f.primary.id, f.primary.id, f.primary.id, f.target.id]);
 		});
+
+		it.each([
+			["primary", PRIMARY],
+			["prewalk", PREWALK],
+		] as const)("restores and judges a queued subagent assignment routed to %s", async (route, verdict) => {
+			const calls = stubJudge([PREWALK, verdict]);
+			const f = createFixture([...cycle(), ...cycle()], {
+				auto: "on",
+				autoSubagents: true,
+				agentKind: "sub",
+			});
+			const nextTask = "trace the reconnect path, then fix the lost offset";
+			let queued = false;
+			f.session.agent.setOnBeforeYield(async () => {
+				if (queued) return;
+				queued = true;
+				await f.session.prompt(nextTask, { attribution: "agent", streamingBehavior: "followUp" });
+			});
+
+			await f.session.prompt(TASK, { attribution: "agent" });
+			await f.session.waitForIdle();
+
+			expect(asked(calls).map(call => call.state.request)).toEqual([TASK, nextTask]);
+			expect(asked(calls)[1]?.model).toBe(f.primary.id);
+			expect(f.requested).toEqual([
+				f.primary.id,
+				f.primary.id,
+				f.target.id,
+				f.primary.id,
+				f.primary.id,
+				route === "prewalk" ? f.target.id : f.primary.id,
+			]);
+			expect(f.efforts[3]).toBe(Effort.High);
+			expect(f.nudges[3]?.includes("prewalk-plan")).toBe(route === "prewalk");
+		});
+
+		it.each([
+			["steer", false],
+			["followUp", true],
+		] as const)(
+			"does not reroute a subagent's queued %s continuation (synthetic=%s)",
+			async (streamingBehavior, synthetic) => {
+				const calls = stubJudge([PREWALK, PRIMARY]);
+				const f = createFixture([...cycle(), done("continued")], {
+					auto: "on",
+					autoSubagents: true,
+					agentKind: "sub",
+				});
+				const continuation = "continue the current implementation";
+				let queued = false;
+				f.session.agent.setOnBeforeYield(async () => {
+					if (queued) return;
+					queued = true;
+					await f.session.prompt(continuation, { attribution: "agent", streamingBehavior, synthetic });
+				});
+
+				await f.session.prompt(TASK, { attribution: "agent" });
+				await f.session.waitForIdle();
+
+				expect(asked(calls).map(call => call.state.request)).toEqual([TASK]);
+				expect(f.requested).toEqual([f.primary.id, f.primary.id, f.target.id, f.target.id]);
+				expect(f.contexts.at(-1)).toContain(continuation);
+			},
+		);
 	});
 
 	describe("one task at a time", () => {
@@ -680,7 +754,7 @@ describe("AgentSession auto-prewalk", () => {
 		});
 	});
 
-	it("never judges a subagent's tasks", async () => {
+	it("does not judge subagent tasks by default, even when main-session auto-prewalk is on", async () => {
 		const calls = stubJudge([PREWALK]);
 		const f = createFixture([done("one"), done("two")], { auto: "on", agentKind: "sub" });
 
@@ -689,5 +763,69 @@ describe("AgentSession auto-prewalk", () => {
 
 		expect(asked(calls)).toHaveLength(0);
 		expect(f.requested).toEqual([f.primary.id, f.primary.id]);
+	});
+
+	it.each(["off", "suggest", "on"] as const)("opts subagent assignments into auto-prewalk %s", async auto => {
+		const calls = stubJudge([PREWALK]);
+		const f = createFixture(cycle(), { auto, autoSubagents: true, agentKind: "sub" });
+
+		await f.session.prompt(TASK, { attribution: "agent" });
+
+		expect(asked(calls)).toHaveLength(auto === "off" ? 0 : 1);
+		expect(f.requested).toEqual([f.primary.id, f.primary.id, auto === "on" ? f.target.id : f.primary.id]);
+		if (auto === "suggest") {
+			expect(f.notices).toEqual(["Auto-prewalk: prewalk 0.90"]);
+			expect(f.nudges.flat()).toEqual([]);
+		}
+	});
+
+	it("keeps synthetic subagent continuations on the handoff target, then restores for the next assignment", async () => {
+		const calls = stubJudge([PREWALK, PRIMARY]);
+		const f = createFixture([...cycle(), done("reminder"), done("next")], {
+			auto: "on",
+			autoSubagents: true,
+			agentKind: "sub",
+		});
+
+		await f.session.prompt(TASK, { attribution: "agent" });
+		await f.session.prompt("submit the result", { attribution: "agent", synthetic: true });
+		expect(asked(calls)).toHaveLength(1);
+		expect(f.requested.at(-1)).toBe(f.target.id);
+
+		await f.session.prompt("investigate the remaining race", { attribution: "agent" });
+		expect(asked(calls)).toHaveLength(2);
+		expect(f.requested.at(-1)).toBe(f.primary.id);
+	});
+
+	it("preserves configured subagent prewalk instead of judging or retargeting it", async () => {
+		const calls = stubJudge([PREWALK]);
+		const configured = modelOrThrow("claude-opus-4-6");
+		const f = createFixture(cycle(), {
+			auto: "on",
+			autoSubagents: true,
+			agentKind: "sub",
+			startupArm: configured,
+		});
+
+		await f.session.prompt(TASK, { attribution: "agent" });
+
+		expect(asked(calls)).toHaveLength(0);
+		expect(f.requested).toEqual([f.primary.id, f.primary.id, configured.id]);
+	});
+
+	it("does not arm a subagent when its opt-in is disabled while judgment is pending", async () => {
+		const hold = Promise.withResolvers<void>();
+		const requested = Promise.withResolvers<void>();
+		stubJudge([PREWALK], { hold: hold.promise, requested: requested.resolve });
+		const f = createFixture(cycle(), { auto: "on", autoSubagents: true, agentKind: "sub" });
+
+		const pending = f.session.prompt(TASK, { attribution: "agent" });
+		await requested.promise;
+		cfgPrewalkAutoSubagents.override(f.settings, false);
+		hold.resolve();
+		await pending;
+
+		expect(f.requested).toEqual([f.primary.id, f.primary.id, f.primary.id]);
+		expect(f.session.getPrewalkState()).toBeUndefined();
 	});
 });

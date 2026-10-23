@@ -154,6 +154,7 @@ describe("plan-yolo approval autosave", () => {
 			agent: { steer: () => {} } as unknown as PrewalkCoordinatorHost["agent"],
 			sessionManager: { getCwd: () => cwd } as unknown as SessionManager,
 			settings,
+			agentKind: () => "main",
 			model: () => undefined,
 			configuredThinkingLevel: () => undefined,
 			restoreThinkingLevel: () => {},

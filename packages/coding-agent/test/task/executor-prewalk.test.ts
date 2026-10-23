@@ -41,7 +41,7 @@ function yieldEmittingSession(
 	const session = {
 		...createSessionDefaults(),
 		state: { messages: [] },
-		agent: { state: { systemPrompt: ["test"] } },
+		agent: { state: { systemPrompt: ["test"] }, addBeforeModelCallHook: () => () => {} },
 		model: modelSwitch?.from,
 		servingModel: serving(modelSwitch?.from),
 		extensionRunner: undefined,
@@ -330,6 +330,22 @@ describe("runSubprocess per-agent prewalk", () => {
 				model: [`${primary.provider}/${primary.id}`],
 				prewalk: `${target.provider}/${target.id}`,
 			},
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(session.getActiveToolNames()).toContain("todo");
+	});
+
+	it("keeps the todo gate available before auto-prewalk judges a subagent assignment", async () => {
+		const session = yieldEmittingSession(["read", "todo", "yield"]);
+		vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+
+		const result = await runSubprocess({
+			...baseOptions(
+				"subagent-auto-prewalk-todo-kept",
+				Settings.isolated({ "prewalk.auto": "on", "prewalk.autoSubagents": true }),
+			),
+			agent: { ...baseAgent, model: [`${primary.provider}/${primary.id}`] },
 		});
 
 		expect(result.exitCode).toBe(0);

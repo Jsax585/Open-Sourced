@@ -262,24 +262,30 @@ describe("classifyAutoPrewalk follow-up context", () => {
 		expect(JSON.stringify(state)).not.toContain("billing exporter");
 	});
 
-	it("looks past acknowledgements and injected turns to the request they follow", async () => {
-		const requests = serveJudge(answer(0.1, 0.1, 0.8));
+	it.each(["main", "sub"] as const)(
+		"skips acknowledgements and injected turns in %s-session history",
+		async agentKind => {
+			const requests = serveJudge(answer(0.1, 0.1, 0.8));
 
-		await classify({
-			request: "yes, implement it",
-			history: [
-				userTurn("refactor the scheduler to use a priority queue"),
-				createAssistantMessage("Plan: replace the sorted array with a heap."),
-				userTurn("ok"),
-				userTurn("steered nudge", { attribution: "agent" }),
-				userTurn("auto-continue", { synthetic: true }),
-			],
-		});
+			await classify({
+				request: "yes, implement it",
+				agentKind,
+				history: [
+					userTurn("refactor the scheduler to use a priority queue", {
+						attribution: agentKind === "sub" ? "agent" : "user",
+					}),
+					createAssistantMessage("Plan: replace the sorted array with a heap."),
+					userTurn("ok"),
+					userTurn("steered nudge", { attribution: "agent", steering: true }),
+					userTurn("auto-continue", { synthetic: true }),
+				],
+			});
 
-		expect(requests[0]!.state).toEqual({
-			request: "yes, implement it",
-			previous_request: "refactor the scheduler to use a priority queue",
-			previous_response: "Plan: replace the sorted array with a heap.",
-		});
-	});
+			expect(requests[0]!.state).toEqual({
+				request: "yes, implement it",
+				previous_request: "refactor the scheduler to use a priority queue",
+				previous_response: "Plan: replace the sorted array with a heap.",
+			});
+		},
+	);
 });

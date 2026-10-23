@@ -4773,7 +4773,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,
-			suppressAutoPrewalk: options.suppressAutoPrewalk,
+			suppressAutoPrewalk: options.suppressAutoPrewalk || (isSubagentSession && restrictToolNames),
 			planYolo: options.planYolo,
 			serviceTierByFamily: initialServiceTierByFamily,
 			sessionManager,

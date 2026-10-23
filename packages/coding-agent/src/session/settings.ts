@@ -110,6 +110,19 @@ export const cfgPrewalkAuto = register({
 	},
 });
 
+export const cfgPrewalkAutoSubagents = register({
+	id: "prewalk.autoSubagents",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "Auto Prewalk for Subagents",
+		description:
+			"Apply Auto Prewalk's mode and target to subagent assignments too. Requires Auto Prewalk to be Suggest or On; configured subagent prewalk takes precedence. Restricted-tool sessions are excluded.",
+	},
+});
+
 export const cfgPrewalkAutoTarget = register({
 	id: "prewalk.autoTarget",
 	type: "string",

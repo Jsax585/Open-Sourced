@@ -151,6 +151,8 @@ import {
 	cfgTierOpenai,
 	cfgRetryFallbackChains,
 	cfgDefaultThinkingLevel,
+	cfgPrewalkAuto,
+	cfgPrewalkAutoSubagents,
 } from "../session/settings";
 import { cfgDisabledProviders } from "../config/model-settings";
 import { getRetryFallbackRole, installRetryFallbackRole } from "../session/retry-fallback-chains";
@@ -4039,8 +4041,6 @@ interface WarmReviveCapture {
 	/** Re-captured whenever the live session is disposed, so a revive restores its latest settings writes. */
 	settings: SubagentSettingsRecipe;
 	parentArtifactManager: ArtifactManager | undefined;
-	/** Todos are parent-owned and stripped from subagents, except under prewalk (its todo gate needs them). */
-	keepTodo: boolean;
 	wake: IrcWakeTurnMonitorOptions;
 	/** Exact agent name the live `task.agentAccountPools` entry is looked up by on revive. */
 	agentName: string;
@@ -4052,6 +4052,35 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
 	session.addDisposer(() => {
 		capture.settings = captureSubagentSettings(parent, session.settings);
 	});
+}
+
+/** Reconcile parent-owned todo before requests; the original tool grant remains the ceiling. */
+async function configureSubagentTodo(
+	session: AgentSession,
+	settings: Settings,
+	{ prewalk, restrictToolNames }: Pick<CreateAgentSessionOptions, "prewalk" | "restrictToolNames">,
+): Promise<(toolNames: string[]) => string[]> {
+	const todoGranted = session.getEnabledToolNames().includes("todo");
+	const keepTodo = (): boolean =>
+		prewalk !== undefined ||
+		(todoGranted && session.getPrewalkState() !== undefined) ||
+		(!restrictToolNames && cfgPrewalkAutoSubagents.get(settings) && cfgPrewalkAuto.get(settings) === "on");
+	const filterActiveTools = (toolNames: string[]): string[] =>
+		keepTodo() ? toolNames : toolNames.filter(name => name !== "todo");
+	const reconcile = async (): Promise<void> => {
+		const enabled = session.getEnabledToolNames();
+		const hasTodo = enabled.includes("todo");
+		if (keepTodo()) {
+			if (todoGranted && !hasTodo) await session.setActiveToolsByName([...enabled, "todo"]);
+		} else if (hasTodo) {
+			await session.setActiveToolsByName(enabled.filter(name => name !== "todo"));
+		}
+	};
+	if (todoGranted && !restrictToolNames) {
+		session.addDisposer(session.agent.addBeforeModelCallHook(reconcile));
+	}
+	await reconcile();
+	return filterActiveTools;
 }
 
 /**
@@ -4085,16 +4114,12 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		// Account pools are owner policy: take the live exact-name entry, as
 		// dispatch and persisted revival do, never the spawn-time copy.
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
+		const subagentSettings = restoreSubagentSettings(capture.settings);
 		capture.spec.prompt.reviving = true;
 		try {
 			try {
 				({ session: revived } = await createAgentSession({
-					...buildSubagentSessionOptions(
-						capture.spec,
-						restoreSubagentSettings(capture.settings),
-						reopened,
-						expectedAgentRef,
-					),
+					...buildSubagentSessionOptions(capture.spec, subagentSettings, reopened, expectedAgentRef),
 					oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
 						? agentAccountPools[capture.agentName]
 						: undefined,
@@ -4106,21 +4131,14 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 			mcpFollower?.bind(revived);
 			trackSubagentSettings(revived, capture);
 			trackSubagentIrcRoster(revived, capture.spec.prompt);
-			const withoutParentOwnedTools = (toolNames: string[]): string[] =>
-				capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo");
-			// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
-			const revivedToolNames = revived.getEnabledToolNames();
-			const subagentToolNames = withoutParentOwnedTools(revivedToolNames);
-			if (subagentToolNames.length !== revivedToolNames.length) {
-				await revived.setActiveToolsByName(subagentToolNames);
-			}
+			const filterActiveTools = await configureSubagentTodo(revived, subagentSettings, capture.spec.options);
 			// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
 			// runner pre-init, so a `tool_call` handler touching a runtime action trips the
 			// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
 			await initializeExtensions(revived, {
 				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
-				filterActiveTools: withoutParentOwnedTools,
+				filterActiveTools,
 			});
 		} finally {
 			capture.spec.prompt.reviving = false;
@@ -4781,17 +4799,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// createAgentSession was returning.
 				if (runRef.status === "aborted") monitor.requestAbort("signal");
 			}
-			// Todos are parent-owned bookkeeping and stripped from subagents —
-			// except under prewalk, whose plan nudge + todo gate require the
-			// subagent to commit its own todo list before the hand-off.
-			const isParentOwnedTool = (name: string): boolean => !prewalk && name === "todo";
+			const filterActiveTools = await awaitAbortable(
+				configureSubagentTodo(session, subagentSettings, sessionSpec.options),
+			);
 			if (sessionFile !== null) {
 				const reviveCapture: WarmReviveCapture = {
 					sessionFile,
 					spec: sessionSpec,
 					settings: captureSubagentSettings(settings, subagentSettings),
 					parentArtifactManager: preparedSession ? undefined : options.parentArtifactManager,
-					keepTodo: prewalk !== undefined,
 					wake: wakeOptions,
 					agentName: agent.name,
 				};
@@ -4814,11 +4830,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			};
 			emitSubagentFrame(options.eventBus, options.subagentEventBus, TASK_SUBAGENT_LIFECYCLE_CHANNEL, startedPayload);
 
-			const subagentToolNames = session.getEnabledToolNames();
-			const filteredSubagentTools = subagentToolNames.filter(name => !isParentOwnedTool(name));
-			if (filteredSubagentTools.length !== subagentToolNames.length) {
-				await awaitAbortable(session.setActiveToolsByName(filteredSubagentTools));
-			}
 			if (options.workPoolYieldItems) {
 				await awaitAbortable(session.setWorkPoolYieldItems(options.workPoolYieldItems));
 			}
@@ -4883,7 +4894,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					trackExtensionSend: task => {
 						pendingExtensionMessages.push(task.catch(() => {}));
 					},
-					filterActiveTools: toolNames => toolNames.filter(name => !isParentOwnedTool(name)),
+					filterActiveTools,
 				}),
 			);
 			while (pendingExtensionMessages.length > 0) {
