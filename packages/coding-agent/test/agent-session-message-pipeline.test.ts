@@ -1208,7 +1208,7 @@ describe("AgentSession message pipeline", () => {
 	it.each([
 		["sends the image to a vision model", ["text", "image"]],
 		["describes the image for a text-only model", ["text"]],
-	] as const)("ephemeral prompt images: %s", async (_label, input) => {
+	] as const)("ephemeral prompt and history images: %s", async (_label, input) => {
 		const describe = vi
 			.spyOn(imageVisionFallback, "describeAttachedImagesForTextModel")
 			.mockResolvedValue([{ type: "text", text: "A red square." }]);
@@ -1250,6 +1250,17 @@ describe("AgentSession message pipeline", () => {
 		expect(contexts[0]?.messages.at(-1)?.content).toContainEqual(expect.objectContaining({ type: "image" }));
 		expect(request.includes("A red square.")).toBe(input.length === 1);
 		expect(describe).toHaveBeenCalledTimes(input.length === 1 ? 1 : 0);
+
+		// A follow-up replays the image from history with the same handling.
+		await session.runEphemeralTurn({
+			promptText: "And the border?",
+			history: [
+				{ role: "user", content: [{ type: "text", text: "What colour is this?" }, screenshot], timestamp: 1 },
+				createAssistantMessage("Red"),
+			],
+		});
+		expect(JSON.stringify(contexts[1]?.messages).includes("A red square.")).toBe(input.length === 1);
+		expect(describe).toHaveBeenCalledTimes(input.length === 1 ? 2 : 0);
 		expect(agent.state.messages).toEqual([]);
 	});
 

@@ -403,15 +403,17 @@ export class BtwHistoryPanel implements Component, Focusable {
 		return this.#composer?.input.capturesInput(data) ?? false;
 	}
 
+	/** False while a follow-up is sent: it already took its images, and the composer clears after. */
 	get acceptsImages(): boolean {
-		return this.#composer !== undefined;
+		return this.#composer !== undefined && !this.#followUpPending;
 	}
 
 	/** Attach an image to the follow-up; returns its `[Image #N, WxH]` marker to paste. */
 	attachImage(image: ImageContent, dims?: { width: number; height: number }): string | undefined {
-		if (!this.#composer) return undefined;
-		this.#composer.images.push(image);
-		return formatVisionMarker("image", this.#composer.images.length, dims);
+		const composer = this.#composer;
+		if (!composer || this.#followUpPending) return undefined;
+		composer.images.push(image);
+		return formatVisionMarker("image", composer.images.length, dims);
 	}
 
 	/** Reserve ordered delivery for an image paste. Completion delivers its marker once, or releases on undefined. */

@@ -325,6 +325,9 @@ describe("BtwHistoryPanel native events", () => {
 			expect.any(AbortSignal),
 			[first],
 		);
+		// The sent follow-up already took its images: a new one would vanish when the composer clears.
+		expect(history.acceptsImages).toBe(false);
+		expect(history.attachImage(second)).toBeUndefined();
 	});
 
 	it("hands a follow-up's pasted image path and empty paste to the host, and types other pastes", () => {
