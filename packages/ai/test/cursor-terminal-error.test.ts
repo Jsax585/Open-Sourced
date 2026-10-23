@@ -1038,7 +1038,7 @@ describe("Cursor terminal lifecycle after turnEnded", () => {
 				toolCallId: "call-ask",
 				toolName: "ask",
 				isError: true,
-				content: [{ type: "text", text: "Question was cancelled: the Cursor stream ended" }],
+				content: [{ type: "text", text: "Question was cancelled" }],
 			},
 		]);
 	});

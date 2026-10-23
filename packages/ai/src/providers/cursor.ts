@@ -191,6 +191,7 @@ import type {
 	Api,
 	AssistantMessage,
 	Context,
+	CursorAskQuestionResult,
 	CursorExecHandlerResult,
 	CursorExecHandlers,
 	CursorExecPairing,
@@ -1576,7 +1577,7 @@ function streamCursorWithWireMode(
 			runTransport.write(frameConnectMessage(requestBytes));
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 			await h2Completion.promise;
-			transportDone.abort(new Error("the Cursor stream ended"));
+			transportDone.abort();
 			if (conversationId && baseConversationId && conversationId !== baseConversationId) {
 				successfulRotatedConversationIds.add(conversationId);
 				freshRotatedConversationIds.delete(conversationId);
@@ -5203,11 +5204,7 @@ async function pairSynthesizedExecResult(
 	return (await applyToolResultHandler(synthesized, onToolResult ?? state.onToolResult)) ?? synthesized;
 }
 
-function cancelledQuestionText(signal: AbortSignal): string {
-	const reason: unknown = signal.reason;
-	const detail = reason instanceof Error && reason.name !== "AbortError" ? reason.message : "";
-	return detail ? `Question was cancelled: ${detail}` : "Question was cancelled";
-}
+const QUESTION_CANCELLED = "Question was cancelled";
 
 /**
  * Run Cursor's native `AskQuestion` through the host's `ask` dialog and file
@@ -5229,38 +5226,29 @@ async function answerAskQuestion(
 	state: BlockState,
 	signal: AbortSignal | undefined,
 ): Promise<AskQuestionResult> {
-	if (signal?.aborted) return askQuestionRejected(cancelledQuestionText(signal));
+	if (signal?.aborted) return askQuestionRejected(QUESTION_CANCELLED);
 	const toolCallId = query.toolCallId || crypto.randomUUID();
 	const { args, optionIds } = cursorAskToolArgs(query.args, reservedLabels);
 	synthesizeCursorExecToolCall(output, stream, state, toolCallId, "ask", args);
 	let cancellation: Promise<ToolResultMessage> | undefined;
-	const aborted = Promise.withResolvers<undefined>();
 	const onAbort = (): void => {
-		cancellation = pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", cancelledQuestionText(signal!));
-		aborted.resolve(undefined);
+		cancellation = pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", QUESTION_CANCELLED);
 	};
 	signal?.addEventListener("abort", onAbort, { once: true });
-	const handled = Promise.try(() => handler({ toolCallId, args, signal })).then(
-		outcome => ({ outcome }),
-		(error: unknown) => ({ error }),
-	);
-	let settled: Awaited<typeof handled> | undefined;
+	let outcome: CursorAskQuestionResult | undefined;
+	let failure = "";
 	try {
-		settled = await (signal ? Promise.race([handled, aborted.promise]) : handled);
+		outcome = await handler({ toolCallId, args, signal });
+	} catch (error) {
+		failure = error instanceof Error ? error.message : String(error);
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
-	if (cancellation || !settled) {
-		const recorded = await cancellation;
-		return askQuestionRejected((recorded && toolResultToText(recorded)) || "Question was cancelled");
+	if (cancellation) return askQuestionRejected(toolResultToText(await cancellation) || QUESTION_CANCELLED);
+	if (!outcome) {
+		const recorded = await pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", failure);
+		return askQuestionRejected(toolResultToText(recorded) || failure);
 	}
-	if ("error" in settled) {
-		const { error } = settled;
-		const message = error instanceof Error ? error.message : String(error);
-		const recorded = await pairSynthesizedExecResult(state, onToolResult, toolCallId, "ask", message);
-		return askQuestionRejected(toolResultToText(recorded) || message);
-	}
-	const { outcome } = settled;
 	const toolResult =
 		(await applyToolResultHandler(outcome.toolResult, onToolResult ?? state.onToolResult)) ?? outcome.toolResult;
 	// The answers are structured and cannot be re-derived from a rewritten

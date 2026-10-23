@@ -1071,15 +1071,24 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	 * Cursor's native `AskQuestion`. Sessions without `ask` (subagents, headless)
 	 * answer with an error result, which the provider sends as a rejection.
 	 */
-	askQuestion(call: CursorAskQuestionCall): Promise<CursorAskQuestionResult> {
+	async askQuestion(call: CursorAskQuestionCall): Promise<CursorAskQuestionResult> {
+		const toolResult = await this.#runAsk("ask", call.toolCallId, call.args, call.signal);
+		return { toolResult, answers: cursorAskAnswers(toolResult.details as AskToolDetails | undefined) };
+	}
+
+	/** Native and MCP questions share the queue; one whose turn was aborted while it waited is not shown. */
+	#runAsk(
+		toolName: string,
+		toolCallId: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal | undefined,
+	): Promise<ToolResultMessage> {
 		return this.#askSerial.run(async () => {
-			if (call.signal?.aborted) {
+			if (signal?.aborted) {
 				const result = buildToolErrorResult("Question was cancelled before it was shown");
-				return { toolResult: createToolResultMessage(call.toolCallId, "ask", result, true) };
+				return createToolResultMessage(toolCallId, toolName, result, true);
 			}
-			const toolResult = await executeTool(this.options, "ask", call.toolCallId, call.args, undefined, call.signal);
-			if (toolResult.isError) return { toolResult };
-			return { toolResult, answers: cursorAskAnswers(toolResult.details as AskToolDetails | undefined) };
+			return await executeTool(this.options, toolName, toolCallId, args, undefined, signal);
 		});
 	}
 
@@ -1108,15 +1117,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 			return createToolResultMessage(toolCallId, toolName, result, true);
 		}
 
-		if (tool.name === "ask") {
-			return await this.#askSerial.run(async () => {
-				if (call.signal?.aborted) {
-					const result = buildToolErrorResult("Question was cancelled before it was shown");
-					return createToolResultMessage(toolCallId, toolName, result, true);
-				}
-				return await executeTool(this.options, toolName, toolCallId, args, undefined, call.signal);
-			});
-		}
+		if (tool.name === "ask") return await this.#runAsk(toolName, toolCallId, args, call.signal);
 		const toolResultMessage = await executeTool(this.options, toolName, toolCallId, args);
 		return toolResultMessage;
 	}

@@ -229,7 +229,7 @@ describe("cursor native AskQuestion bridge", () => {
 		});
 	});
 
-	it("records the cancellation inside the abort event, without waiting for the handler", async () => {
+	it("records the cancellation inside the abort event and drops the handler's late result", async () => {
 		// The Agent finalizes an aborted turn without waiting for the provider; the
 		// resolved `ask` block is paired only if its result is reserved by then.
 		const controller = new AbortController();
@@ -263,7 +263,9 @@ describe("cursor native AskQuestion bridge", () => {
 				content: [{ type: "text", text: "Question was cancelled" }],
 			},
 		]);
+		release.resolve();
 		const frames = await dispatched;
+		expect(recorded).toHaveLength(1);
 		expect(decodeConnectFrame(frames[0]!).message.value).toMatchObject({
 			id: 37,
 			result: {
@@ -271,9 +273,6 @@ describe("cursor native AskQuestion bridge", () => {
 				value: { result: { result: { case: "rejected", value: { reason: "Question was cancelled" } } } },
 			},
 		});
-		release.resolve();
-		await Bun.sleep(0);
-		expect(recorded).toHaveLength(1);
 	});
 
 	it("rejects a question that arrives after the abort without filing it", async () => {
