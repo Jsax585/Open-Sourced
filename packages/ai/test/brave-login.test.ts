@@ -6,7 +6,7 @@ import * as path from "node:path";
 
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai/auth-storage";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
-import * as aiStream from "@oh-my-pi/pi-ai/stream";
+import * as envApiKey from "@oh-my-pi/pi-ai/env-api-key";
 import * as logger from "../../utils/src/logger";
 import { removeWithRetries } from "../../utils/src/temp";
 
@@ -49,7 +49,7 @@ describe("brave AuthStorage credential source", () => {
 	let dbPath = "";
 	let store: SqliteAuthCredentialStore | null = null;
 	let authStorage: AuthStorage | null = null;
-	let getEnvApiKeySpy: Mock<typeof aiStream.getEnvApiKey>;
+	let getEnvApiKeySpy: Mock<typeof envApiKey.getEnvApiKey>;
 	const logCalls: string[] = [];
 
 	function captureLog(level: string) {
@@ -65,7 +65,7 @@ describe("brave AuthStorage credential source", () => {
 		vi.spyOn(logger, "info").mockImplementation(captureLog("info") as typeof logger.info);
 		vi.spyOn(logger, "warn").mockImplementation(captureLog("warn") as typeof logger.warn);
 		vi.spyOn(logger, "error").mockImplementation(captureLog("error") as typeof logger.error);
-		getEnvApiKeySpy = vi.spyOn(aiStream, "getEnvApiKey").mockReturnValue(undefined);
+		getEnvApiKeySpy = vi.spyOn(envApiKey, "getEnvApiKey").mockReturnValue(undefined);
 		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-brave-auth-"));
 		dbPath = path.join(tempDir, "agent.db");
 		store = await SqliteAuthCredentialStore.open(dbPath);
@@ -89,14 +89,14 @@ describe("brave AuthStorage credential source", () => {
 
 		getEnvApiKeySpy.mockImplementation(provider => (provider === "brave" ? "env-brave-key" : undefined));
 
-		await authStorage.login("brave", {
+		await authStorage.oauth.login("brave", {
 			onAuth: () => {},
 			onPrompt: async () => "stored-brave-key",
 		});
 
-		expect(await authStorage.getApiKey("brave", "session-brave-db-first")).toBe("stored-brave-key");
-		expect(authStorage.describeCredentialSource("brave", "session-brave-db-first")).toContain("api_key");
-		expect(authStorage.describeCredentialSource("brave", "session-brave-db-first")).not.toContain("env");
+		expect(await authStorage.keys.get("brave", "session-brave-db-first")).toBe("stored-brave-key");
+		expect(authStorage.keys.describe("brave", "session-brave-db-first")).toContain("api_key");
+		expect(authStorage.keys.describe("brave", "session-brave-db-first")).not.toContain("env");
 
 		const db = new Database(dbPath, { readonly: true });
 		try {
@@ -114,28 +114,28 @@ describe("brave AuthStorage credential source", () => {
 
 		getEnvApiKeySpy.mockImplementation(provider => (provider === "brave" ? "env-brave-only" : undefined));
 
-		expect(await authStorage.getApiKey("brave", "session-brave-env")).toBe("env-brave-only");
-		expect(authStorage.describeCredentialSource("brave")).toContain("env");
+		expect(await authStorage.keys.get("brave", "session-brave-env")).toBe("env-brave-only");
+		expect(authStorage.keys.describe("brave")).toContain("env");
 	});
 
 	it("fails closed when brave has neither stored credential nor env key", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		expect(await authStorage.getApiKey("brave", "session-brave-missing")).toBeUndefined();
-		expect(authStorage.hasAuth("brave")).toBe(false);
-		expect(authStorage.describeCredentialSource("brave")).toBeUndefined();
+		expect(await authStorage.keys.get("brave", "session-brave-missing")).toBeUndefined();
+		expect(authStorage.credentials.has("brave")).toBe(false);
+		expect(authStorage.keys.describe("brave")).toBeUndefined();
 	});
 
 	it("does not leak the stored brave key through logs or credential-source text", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
 		const secret = "BSA-secret-do-not-leak-xyz";
-		await authStorage.login("brave", {
+		await authStorage.oauth.login("brave", {
 			onAuth: () => {},
 			onPrompt: async () => secret,
 		});
 
-		const source = authStorage.describeCredentialSource("brave", "session-brave-noleak");
+		const source = authStorage.keys.describe("brave", "session-brave-noleak");
 		expect(source).toBeDefined();
 		expect(source).not.toContain(secret);
 		expect(logCalls.join("\n")).not.toContain(secret);

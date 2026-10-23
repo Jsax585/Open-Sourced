@@ -14,9 +14,9 @@ import {
 	type AgentHistorySummary,
 	type AgentMetricsSummary,
 	type AgentRegistry,
-	getAgentTombstonePath,
 	MAIN_AGENT_ID,
 } from "./agent-registry";
+import { getAgentTombstonePath } from "./agent-tombstone";
 
 /** Maximum prefix entries inspected for task metadata. */
 const MAX_METADATA_LINES = 64;
@@ -151,8 +151,12 @@ async function readPersistedAgentHistory(
 	const parents = new Map<string, string | undefined>();
 	const assistantById = new Map<string, AssistantMetrics>();
 	const modelChangeById = new Map<string, { model: string; role?: string; resolvedModelIsFallback: boolean }>();
+	// Raw-record copy of `sessionEntryLeafId`/`resolveSessionLeafId` (session-entries.ts); keep them in sync.
 	let leafId: string | undefined;
+	let selfSelectedLeafId: string | undefined;
 	let leafTimestamp: number | undefined;
+	let directCost = 0;
+	// Direct cost mirrors lifetime SessionManager usage; legacy metrics below stay leaf-scoped.
 	try {
 		await visitEntriesFromFileStream(
 			transcript.sessionFile,
@@ -163,9 +167,25 @@ async function readPersistedAgentHistory(
 				if (!id) return;
 				const parentId = typeof record.parentId === "string" ? record.parentId : undefined;
 				parents.set(id, parentId);
-				leafId = id;
+				// Same replay rule as `sessionEntryLeafId`: an entry written off the active
+				// branch (late usage, a routed bash result) restores the leaf it captured
+				// instead of becoming the leaf itself.
+				if (typeof record.activeLeafId === "string") {
+					leafId = record.activeLeafId;
+				} else if (record.activeLeafId === null) {
+					leafId = undefined;
+				} else {
+					leafId = id;
+					selfSelectedLeafId = id;
+				}
 				const parsedTimestamp = timestampOf(record.timestamp);
 				if (parsedTimestamp !== undefined) leafTimestamp = parsedTimestamp;
+				if (record.type === "model_usage") {
+					const usage = recordOf(record.usage);
+					const cost = recordOf(usage?.cost);
+					directCost += finiteNumber(cost?.total);
+					return;
+				}
 				if (record.type === "model_change" && typeof record.model === "string") {
 					modelChangeById.set(id, {
 						model: record.model,
@@ -176,7 +196,11 @@ async function readPersistedAgentHistory(
 				}
 				if (record.type !== "message") return;
 				const message = recordOf(record.message);
-				if (message?.role === "assistant") assistantById.set(id, assistantMetrics(message));
+				if (message?.role === "assistant") {
+					const assistant = assistantMetrics(message);
+					assistantById.set(id, assistant);
+					directCost += assistant.cost;
+				}
 			},
 			// Advisor transcripts are the one file that can grow pathologically large
 			// (issue #9553); cap their scan so one bad transcript can't stall the Hub
@@ -199,6 +223,7 @@ async function readPersistedAgentHistory(
 		return {};
 	}
 
+	if (leafId !== undefined && !parents.has(leafId)) leafId = selfSelectedLeafId;
 	const metrics: AgentMetricsSummary = {
 		tokens: 0,
 		requests: 0,
@@ -264,6 +289,7 @@ async function readPersistedAgentHistory(
 	}
 	if (contextTokens !== undefined) metrics.contextTokens = contextTokens;
 	return {
+		directCost,
 		...(metrics.requests > 0 ? { metrics } : {}),
 		...(resolvedModel ? { resolvedModel, resolvedModelIsFallback } : {}),
 		...(modelRole ? { modelRole } : {}),
@@ -271,11 +297,28 @@ async function readPersistedAgentHistory(
 }
 
 /**
+ * Nested-repo patch files the isolation runner wrote beside a transcript,
+ * picked out of the directory listing the scan already holds:
+ * `<id>.nested-<n>-<path>.patch`, in capture order.
+ */
+function nestedPatchFilesFor(dir: string, transcriptName: string, entries: readonly fs.Dirent[]): string[] {
+	const prefix = `${transcriptName.slice(0, -".jsonl".length)}.nested-`;
+	return entries
+		.filter(entry => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".patch"))
+		.map(entry => entry.name)
+		.sort((a, b) => Number.parseInt(a.slice(prefix.length), 10) - Number.parseInt(b.slice(prefix.length), 10))
+		.map(name => path.join(dir, name));
+}
+
+/**
  * Read only the small session prefix needed by the Hub. A subagent's first
  * `session_init` is written before its conversation, so this never walks a
  * multi-megabyte historical transcript just to populate one roster row.
  */
-async function readPersistedAgentMetadata(sessionFile: string): Promise<PersistedAgentMetadata> {
+async function readPersistedAgentMetadata(
+	sessionFile: string,
+	nestedPatchPaths: readonly string[] = [],
+): Promise<PersistedAgentMetadata> {
 	// Settle immediately instead of leaving a rejecting promise pending while
 	// the transcript stream runs: a stat fault (EACCES/EMFILE/EIO) must not
 	// surface as an unhandled rejection if the stream errors first or takes
@@ -324,7 +367,10 @@ async function readPersistedAgentMetadata(sessionFile: string): Promise<Persiste
 				hasSessionInit = true;
 				createdAt ??= timestampOf(record.timestamp);
 				if (typeof record.task === "string") activity = summarizePersistedTask(record.task);
-				const inferred = typeof record.systemPrompt === "string" ? inferBundledAgent(record.systemPrompt) : {};
+				const systemPrompt = Array.isArray(record.systemPrompt)
+					? record.systemPrompt.join("\n\n")
+					: record.systemPrompt;
+				const inferred = typeof systemPrompt === "string" ? inferBundledAgent(systemPrompt) : {};
 				history = {
 					...history,
 					...inferred,
@@ -361,6 +407,7 @@ async function readPersistedAgentMetadata(sessionFile: string): Promise<Persiste
 			...history,
 			...(hasOutput ? { outputPath } : {}),
 			...(hasPatch ? { patchPath } : {}),
+			...(nestedPatchPaths.length > 0 ? { nestedPatchPaths: [...nestedPatchPaths] } : {}),
 		},
 	};
 }
@@ -466,7 +513,8 @@ function rosterScanError(error: unknown): string {
 	return text.length <= 200 ? text : `${text.slice(0, 197)}...`;
 }
 
-function sessionFileBelongsToRoot(sessionFile: string, rootSessionFile: string): boolean {
+/** Whether `sessionFile` is the root transcript or lives in its artifacts tree. */
+export function sessionFileBelongsToRoot(sessionFile: string, rootSessionFile: string): boolean {
 	const file = path.resolve(sessionFile);
 	const root = path.resolve(rootSessionFile);
 	const artifactRoot = root.slice(0, -".jsonl".length);
@@ -661,6 +709,10 @@ async function registerPersistedSubagentsFromDir(
 		throw error;
 	}
 	if (!shouldContinue()) return;
+	const childDirectories = new Set<string>();
+	for (const entry of entries) {
+		if (entry.isDirectory()) childDirectories.add(entry.name);
+	}
 	let entriesSinceYield = 0;
 	for (const entry of entries) {
 		if (!shouldContinue()) return;
@@ -755,7 +807,7 @@ async function registerPersistedSubagentsFromDir(
 			}
 		} else {
 			const expected = existing ?? null;
-			const metadata = await readPersistedAgentMetadata(sessionFile);
+			const metadata = await readPersistedAgentMetadata(sessionFile, nestedPatchFilesFor(dir, entry.name, entries));
 			if (!shouldContinue()) return;
 			// Metadata reads yield. A spawn may claim the id while this scan is
 			// inspecting the file; never replace that live generation with a
@@ -794,15 +846,19 @@ async function registerPersistedSubagentsFromDir(
 				}
 			}
 		}
-		await registerPersistedSubagentsFromDir(
-			registry,
-			path.join(dir, id),
-			id,
-			vibeOwnedIds,
-			transcripts,
-			shouldContinue,
-			rootSessionFile,
-			owned,
-		);
+		// A transcript stem is not proof of a child directory: "." and ".."
+		// revisit ancestors, and symlinks can point back into the same tree.
+		if (childDirectories.has(id)) {
+			await registerPersistedSubagentsFromDir(
+				registry,
+				path.join(dir, id),
+				id,
+				vibeOwnedIds,
+				transcripts,
+				shouldContinue,
+				rootSessionFile,
+				owned,
+			);
+		}
 	}
 }

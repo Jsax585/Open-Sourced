@@ -62,7 +62,7 @@ describe("Brave web search credentials", () => {
 		};
 
 		await withLocalAuthStorage(async authStorage => {
-			await authStorage.login("brave", {
+			await authStorage.oauth.login("brave", {
 				onAuth: () => {},
 				onPrompt: async () => storedKey,
 			});
@@ -93,7 +93,7 @@ describe("Brave web search credentials", () => {
 		};
 
 		await withLocalAuthStorage(async authStorage => {
-			expect(authStorage.describeCredentialSource("brave")).toContain("env");
+			expect(authStorage.keys.describe("brave")).toContain("env");
 			const response = await searchBrave({
 				query: "capital of France",
 				authStorage,
@@ -150,7 +150,7 @@ describe("Brave web search credentials", () => {
 				expect(error).toBeInstanceOf(Error);
 				expect((error as Error).message).not.toContain(secret);
 			}
-			expect(authStorage.describeCredentialSource("brave")).not.toContain(secret);
+			expect(authStorage.keys.describe("brave")).not.toContain(secret);
 		});
 
 		expect(logCalls.join("\n")).not.toContain(secret);
