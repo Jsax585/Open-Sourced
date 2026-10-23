@@ -2817,6 +2817,12 @@ interface FinalizeRunArgs {
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	/** The structured result protocol was not submitted. */
 	missingYield?: "initial" | "wake";
+	/**
+	 * Output to finalize in place of the monitor's accumulated text. A structured
+	 * wake passes its final report turn, so narration set aside before later
+	 * tool calls never reaches the parent.
+	 */
+	rawOutput?: string;
 	signal?: AbortSignal;
 	artifactsDir?: string;
 	eventBus?: EventBus;
@@ -2849,10 +2855,10 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	let stderr = done.error ?? "";
 
 	// A structured run finalizes from its yield (falling back to the run's
-	// output); a message-result run is exactly its final report turn, never
-	// the narration of earlier turns.
+	// output, or the caller's final report turn); a message-result run is
+	// exactly its final report turn, never the narration of earlier turns.
 	const structured = args.structured !== false;
-	let rawOutput = structured ? monitor.rawOutput() : (monitor.lastReportTurnText() ?? "");
+	let rawOutput = args.rawOutput ?? (structured ? monitor.rawOutput() : (monitor.lastReportTurnText() ?? ""));
 	const yieldItems = progress.extractedToolData?.yield as YieldItem[] | undefined;
 	// Breadcrumb the synchronous yield-payload shaping (O(rawOutput)) so a block
 	// here is attributed to this subagent rather than logged as "unknown".
@@ -3427,16 +3433,19 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// even when the run-state mirror never delivers `idle`.
 				AgentRegistry.global().markResultAccepted(id, session, turnMonitor.yieldAcceptedAt());
 			}
-			// Capture peer-relay text before finalization. A parent-owned structured
-			// wake publishes its finalized result instead, so its protocol warning
+			// Read the final report turn before finalization. Like a first run's
+			// message result, the answer is the final report turn; the session's
+			// last assistant text stands in only when the monitor saw no assistant
+			// message, never for narration it set aside. Peers get it verbatim; a
+			// parent-owned structured wake finalizes it, so its protocol warning
 			// reaches the parent's task job without changing peer conversation.
-			// Like a first run's message result, the answer is the final report
-			// turn; the session's last assistant text stands in only when the
-			// monitor saw no assistant message, never for narration it set aside.
 			const turnText =
 				turnMonitor.lastReportTurnText() ??
 				(turnMonitor.sawAssistantMessage() ? undefined : turnMonitor.lastAssistantSalvageText()) ??
 				"";
+			// The parent owns this turn when its message woke the agent or its
+			// queued steer entered the turn a peer started.
+			const parentStructuredWake = (ownerWoken || ownerPrompted) && options.structured !== false;
 			const abortReason = aborted ? turnMonitor.resolveAbortReasonText() : undefined;
 			let result: SingleResult | undefined;
 			let finalizeError: unknown;
@@ -3460,7 +3469,8 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					outputSchema: options.outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					outputSchemaSource: options.outputSchemaSource,
-					missingYield: ownerWoken && options.structured !== false ? "wake" : undefined,
+					missingYield: parentStructuredWake ? "wake" : undefined,
+					rawOutput: options.structured !== false ? turnText : undefined,
 					artifactsDir: options.artifactsDir,
 					eventBus: options.eventBus,
 					subagentEventBus: options.subagentEventBus,
@@ -3499,7 +3509,6 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// parent whatever it is: the yield result, the failure that
 				// superseded it, or a structured parent wake's finalized
 				// missing-yield warning.
-				const parentStructuredWake = ownerWoken && options.structured !== false;
 				if (wakeJob && result && (yielded || messageResult || parentStructuredWake)) {
 					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
 					const structured = result.structuredOutput;
