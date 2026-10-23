@@ -114,6 +114,7 @@ async function fixture() {
 			showStatus: () => {},
 			showHookConfirm: async () => true,
 			rebuildChatFromMessages: () => {},
+			ui: { requestRender: () => {} },
 		} as unknown as InteractiveModeContext;
 	}
 	return {

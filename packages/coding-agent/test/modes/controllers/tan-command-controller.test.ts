@@ -1,20 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import type { AsyncJobRegisterOptions } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
-import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { resolveLocalRoot } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { TanCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/tan-command-controller";
+import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
-
+import { VirtualTerminal } from "../../../../tui/test/virtual-terminal";
+import { createInMemoryAuthStorage } from "../../helpers/agent-session-setup";
 interface CapturedJobRunContext {
 	jobId: string;
 	signal: AbortSignal;
@@ -168,6 +174,7 @@ function createContext(overrides?: {
 		showWarning: vi.fn(),
 		showError: vi.fn(),
 		rebuildChatFromMessages: vi.fn(),
+		ui: { requestRender: vi.fn() },
 	} as unknown as InteractiveModeContext;
 	return {
 		tempDir,
@@ -723,5 +730,93 @@ describe("TanCommandController", () => {
 				message.content.some(part => part.type === "text" && part.text === "follow the tangent"),
 		).length;
 		expect(requestCount).toBe(1);
+	});
+
+	it("clears retired scrollback when dispatching an idle background tan", async () => {
+		initTheme();
+		resetSettingsForTest();
+		const tempDir = TempDir.createSync("@pi-tan-scrollback-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		const authStorage = createInMemoryAuthStorage();
+		const modelRegistry = new ModelRegistry(authStorage);
+		const foundModel = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!foundModel) throw new Error("Expected claude-sonnet-4-5 test model");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model: foundModel, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager,
+			settings: Settings.isolated(),
+			modelRegistry,
+		});
+		Object.defineProperty(session, "asyncJobManager", {
+			value: { register: () => "job-scrollback" },
+			configurable: true,
+		});
+		const cloneFile = path.join(tempDir.path(), "clone.jsonl");
+		vi.spyOn(SessionManager, "forkFrom").mockResolvedValue({
+			getSessionFile: () => cloneFile,
+			appendCustomEntry: () => {},
+		} as unknown as SessionManager);
+		const term = new VirtualTerminal(120, 10);
+		const mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			() => {},
+			undefined,
+			undefined,
+			undefined,
+			new Composer({ terminal: term }),
+		);
+		try {
+			const retiredMarker = "RETIRED_TAN_HISTORY_ROW";
+			sessionManager.appendMessage({ role: "user", content: retiredMarker, timestamp: 1 });
+			for (let i = 0; i < 12; i++) {
+				sessionManager.appendMessage({
+					...assistantText(`Filler reply ${i} occupying a transcript row.`),
+					timestamp: i + 2,
+				});
+			}
+			await mode.init({ suppressWelcomeIntro: true });
+			await mode.renderInitialMessages();
+
+			const plainRows = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row).trimEnd());
+			const committedRows = () => {
+				const { baseY } = term.getBufferPosition();
+				return plainRows(term.getScrollBuffer()).slice(0, baseY);
+			};
+			for (let i = 0; i < 20 && !committedRows().some(row => row.includes(retiredMarker)); i++) {
+				mode.ui.requestRender(true);
+				await term.waitForRender();
+			}
+			expect(committedRows().some(row => row.includes(retiredMarker))).toBe(true);
+
+			const controller = new TanCommandController(mode);
+			await controller.start("write the release note");
+			await term.waitForRender();
+			let prevBaseY = -1;
+			for (
+				let i = 0;
+				i < 20 &&
+				(i === 0 ||
+					term.getBufferPosition().baseY !== prevBaseY ||
+					!committedRows().some(row => row.includes(retiredMarker)));
+				i++
+			) {
+				prevBaseY = term.getBufferPosition().baseY;
+				mode.ui.requestRender(true);
+				await term.waitForRender();
+			}
+
+			const rows = plainRows(term.getScrollBuffer());
+			expect(rows.filter(row => row.includes(retiredMarker))).toHaveLength(1);
+			expect(rows.some(row => row.includes("write the release note"))).toBe(true);
+		} finally {
+			mode.stop();
+			await session.dispose();
+			authStorage.close();
+			tempDir.removeSync();
+			resetSettingsForTest();
+		}
 	});
 });

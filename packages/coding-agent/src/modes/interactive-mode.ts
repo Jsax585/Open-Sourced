@@ -3526,7 +3526,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.loadingAnimation) {
 			this.#stopLoadingAnimation(true);
 		}
-		if (!submission.customType && !preserveDraft) {
+		const rebuiltChat = !submission.customType && !preserveDraft;
+		if (rebuiltChat) {
 			// Enter clears the submitted draft before this cancellation can run.
 			// Keep anything typed or attached since then, after the recovered input.
 			const laterText = this.editor.getExpandedText();
@@ -3545,7 +3546,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.setCollapsedText(recoveredText);
 		}
 		this.updateEditorBorderColor();
-		this.ui.requestRender();
+		if (rebuiltChat) this.ui.requestRender(true, { clearScrollback: true });
+		else this.ui.requestRender();
 		return true;
 	}
 
@@ -3570,7 +3572,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.imageLinks = this.editor.pendingImageLinks;
 			this.editor.setText(prompt.text);
 		}
-		this.ui.requestRender();
+		this.ui.requestRender(true, { clearScrollback: true });
 	}
 
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean {

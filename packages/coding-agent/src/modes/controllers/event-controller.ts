@@ -2595,10 +2595,9 @@ export class EventController {
 		} else if (isHandoffAction) {
 			this.ctx.clearTransientSessionUi();
 			this.ctx.lastAssistantUsage = undefined;
-			await this.ctx.renderInitialMessages();
+			await this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 			this.ctx.statusLine.invalidate();
 			await this.ctx.reloadTodos();
-			this.ctx.ui.requestRender(true, { clearScrollback: true });
 			this.ctx.showStatus("Auto-handoff completed");
 		} else if (event.skipped) {
 			// Benign skip: no model selected, no candidate models available, or nothing

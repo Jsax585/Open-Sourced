@@ -1,14 +1,18 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { DroppedPrompt } from "@oh-my-pi/pi-coding-agent/session/agent-session-types";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 /**
@@ -24,6 +28,8 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
+	let droppedPromptHandler: ((prompt: DroppedPrompt) => void) | undefined;
+	let term: VirtualTerminal;
 
 	beforeAll(async () => {
 		initTheme();
@@ -49,8 +55,21 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
-		mode.ui.requestRender = vi.fn();
+		vi.spyOn(session, "setPromptDropped").mockImplementation(handler => {
+			droppedPromptHandler = handler;
+		});
+		term = new VirtualTerminal(120, 10);
+		mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			() => {},
+			undefined,
+			undefined,
+			undefined,
+			new Composer({ terminal: term }),
+		);
+		await mode.init({ suppressWelcomeIntro: true });
 	});
 
 	beforeEach(() => {
@@ -212,7 +231,82 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		expect(mode.optimisticUserMessageSignature).toBeUndefined();
 	});
 
-	it("recovers a cancelled submission without losing text and images added after Enter", () => {
+	const usage: Usage = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+
+	function plainRows(rows: readonly string[]): string[] {
+		return rows.map(row => Bun.stripANSI(row).trimEnd());
+	}
+
+	function committedRows(): string[] {
+		const { baseY } = term.getBufferPosition();
+		return plainRows(term.getScrollBuffer()).slice(0, baseY);
+	}
+
+	async function retireTranscriptMarker(marker: string): Promise<void> {
+		const assistantText = (text: string): AssistantMessage => ({
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet",
+			usage,
+			stopReason: "stop",
+			timestamp: 1,
+		});
+		session.sessionManager.appendMessage({ role: "user", content: marker, timestamp: 1 });
+		for (let i = 0; i < 12; i++) {
+			session.sessionManager.appendMessage(assistantText(`Filler reply ${i} occupying a transcript row.`));
+		}
+		mode.rebuildChatFromMessages();
+		for (let i = 0; i < 20 && !committedRows().some(row => row.includes(marker)); i++) {
+			mode.ui.requestRender(true);
+			await term.waitForRender();
+		}
+		expect(committedRows().some(row => row.includes(marker))).toBe(true);
+	}
+
+	async function drainRetirement(marker: string): Promise<string[]> {
+		await term.waitForRender();
+		let prevBaseY = -1;
+		for (
+			let i = 0;
+			i < 20 &&
+			(i === 0 ||
+				term.getBufferPosition().baseY !== prevBaseY ||
+				!committedRows().some(row => row.includes(marker)));
+			i++
+		) {
+			prevBaseY = term.getBufferPosition().baseY;
+			mode.ui.requestRender(true);
+			await term.waitForRender();
+		}
+		return plainRows(term.getScrollBuffer());
+	}
+
+	it("clears scrollback when a dropped prompt rebuilds the transcript", async () => {
+		const marker = "RETIRED_DROPPED_PROMPT_ROW";
+		await retireTranscriptMarker(marker);
+		mode.editor.setText("");
+		mode.startPendingSubmission({ text: "dropped prompt" });
+
+		if (!droppedPromptHandler) throw new Error("Expected setPromptDropped handler");
+		droppedPromptHandler({ text: "dropped prompt" });
+		const rows = await drainRetirement(marker);
+
+		expect(rows.filter(row => row.includes(marker))).toHaveLength(1);
+		expect(mode.editor.getText()).toBe("dropped prompt");
+	});
+
+	it("recovers a cancelled submission without losing text and images added after Enter", async () => {
+		const marker = "RETIRED_CANCELLED_SUBMISSION_ROW";
+		await retireTranscriptMarker(marker);
 		const submittedImage = { type: "image" as const, data: "YQ==", mimeType: "image/png" };
 		const laterImage = { type: "image" as const, data: "Yg==", mimeType: "image/png" };
 		mode.editor.setText("");
@@ -225,6 +319,9 @@ describe("issue #2372 pre-streaming chat rebuild preserves optimistic submission
 		mode.editor.setCollapsedText("later [Image #1]");
 
 		expect(mode.cancelPendingSubmission()).toBe(true);
+		const rows = await drainRetirement(marker);
+
+		expect(rows.filter(row => row.includes(marker))).toHaveLength(1);
 		expect(mode.editor.getExpandedText()).toBe("first [Image #1]\nlater [Image #2]");
 		expect(mode.editor.pendingImages).toEqual([submittedImage, laterImage]);
 		expect(mode.editor.pendingImageLinks).toEqual(["file:///first.png", "file:///later.png"]);

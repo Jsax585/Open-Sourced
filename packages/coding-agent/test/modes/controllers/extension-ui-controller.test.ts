@@ -1,17 +1,30 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
-import { Agent } from "@oh-my-pi/pi-agent-core";
 import { stripVTControlCharacters } from "node:util";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
-import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
-import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
+import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
+import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { ModelRegistry } from "../../../src/config/model-registry";
+import { resetSettingsForTest, Settings } from "../../../src/config/settings";
+import type {
+	ExtensionActions,
+	ExtensionAskDialogQuestion,
+	ExtensionUIContext,
+} from "../../../src/extensibility/extensions";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
 import { InputController } from "../../../src/modes/controllers/input-controller";
-import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { InteractiveMode } from "../../../src/modes/interactive-mode";
 import type { InteractiveModeContext } from "../../../src/modes/types";
-
+import { AgentSession } from "../../../src/session/agent-session";
+import { SessionManager } from "../../../src/session/session-manager";
+import { VirtualTerminal } from "../../../../tui/test/virtual-terminal";
+import { createInMemoryAuthStorage } from "../../helpers/agent-session-setup";
 afterEach(() => {
 	setKeybindings(KeybindingsManager.inMemory());
 });
@@ -263,6 +276,126 @@ describe("ExtensionUiController Ask dialog input", () => {
 			results: [{ id: "answer", selectedOptions: [], customInput: "typed after failure" }],
 		});
 		expect(harness.editor.getText()).toBe("");
+	});
+});
+
+describe("ExtensionUiController transcript rebuilds", () => {
+	it("clears scrollback after a displayed next-turn message rebuilds retired history", async () => {
+		resetSettingsForTest();
+		const tempDir = TempDir.createSync("@pi-ext-ui-scrollback-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		const authStorage = createInMemoryAuthStorage();
+		const modelRegistry = new ModelRegistry(authStorage);
+		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected claude-sonnet-4-5 test model");
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated(),
+			modelRegistry,
+		});
+		const term = new VirtualTerminal(120, 10);
+		const mode = new InteractiveMode(
+			session,
+			"test",
+			undefined,
+			() => {},
+			undefined,
+			undefined,
+			undefined,
+			new Composer({ terminal: term }),
+		);
+		try {
+			const usage: Usage = {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			};
+			const retiredMarker = "RETIRED_EXTENSION_HISTORY_ROW";
+			const bannerMarker = "NEXT_TURN_EXTENSION_BANNER";
+			session.sessionManager.appendMessage({ role: "user", content: retiredMarker, timestamp: 1 });
+			for (let i = 0; i < 12; i++) {
+				const filler: AssistantMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: `Filler reply ${i} occupying a transcript row.` }],
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet",
+					usage,
+					stopReason: "stop",
+					timestamp: i + 2,
+				};
+				session.sessionManager.appendMessage(filler);
+			}
+			await mode.init({ suppressWelcomeIntro: true });
+			await mode.renderInitialMessages();
+
+			const plainRows = (rows: readonly string[]) => rows.map(row => Bun.stripANSI(row).trimEnd());
+			const committedRows = () => {
+				const { baseY } = term.getBufferPosition();
+				return plainRows(term.getScrollBuffer()).slice(0, baseY);
+			};
+			for (let i = 0; i < 20 && !committedRows().some(row => row.includes(retiredMarker)); i++) {
+				mode.ui.requestRender(true);
+				await term.waitForRender();
+			}
+			expect(committedRows().some(row => row.includes(retiredMarker))).toBe(true);
+
+			const uiContext = mode.getToolUIContext();
+			if (!uiContext) throw new Error("Expected initialized ExtensionUIContext");
+
+			let actions: ExtensionActions | undefined;
+			Object.defineProperty(session, "extensionRunner", {
+				value: {
+					getComposerShapes: () => [],
+					getAssistantThinkingRenderers: () => [],
+					getMessageRenderer: () => undefined,
+					initialize(providedActions: ExtensionActions) {
+						actions = providedActions;
+					},
+				},
+				configurable: true,
+			});
+			mode.initializeHookRunner(uiContext, true);
+			if (!actions) throw new Error("Expected extension actions");
+
+			const originalSendCustomMessage = session.sendCustomMessage.bind(session);
+			vi.spyOn(session, "sendCustomMessage").mockImplementation(async (message, options) => {
+				session.agent.appendMessage({ role: "user", content: "concurrent message", timestamp: 99 });
+				return originalSendCustomMessage(message, options);
+			});
+			actions.sendMessage(
+				{ customType: "displayed-next-turn", content: bannerMarker, display: true },
+				{ deliverAs: "nextTurn" },
+			);
+			await term.waitForRender(() => plainRows(term.getScrollBuffer()).some(row => row.includes(bannerMarker)));
+			let prevBaseY = -1;
+			for (
+				let i = 0;
+				i < 20 &&
+				(i === 0 ||
+					term.getBufferPosition().baseY !== prevBaseY ||
+					!committedRows().some(row => row.includes(retiredMarker)));
+				i++
+			) {
+				prevBaseY = term.getBufferPosition().baseY;
+				mode.ui.requestRender(true);
+				await term.waitForRender();
+			}
+
+			const rows = plainRows(term.getScrollBuffer());
+			expect(rows.filter(row => row.includes(retiredMarker))).toHaveLength(1);
+			expect(rows.some(row => row.includes(bannerMarker))).toBe(true);
+		} finally {
+			mode.stop();
+			await session.dispose();
+			authStorage.close();
+			tempDir.removeSync();
+			resetSettingsForTest();
+		}
 	});
 });
 
