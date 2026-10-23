@@ -84,9 +84,9 @@ function judgmentConfig(value: unknown): JudgmentConfig | undefined {
 	}
 	const typeField = Reflect.get(payload, "typeField");
 	if (typeof typeField === "string" && typeField !== "") config.typeField = typeField;
-	const typeMap = stringRecord(Reflect.get(payload, "typeMap"), ["noul", "choice", "score"]);
+	const typeMap = stringRecord(Reflect.get(payload, "typeMap"), ["noul", "choice", "score", "box"]);
 	if (typeMap !== undefined) config.typeMap = typeMap;
-	const valueMap = stringRecord(Reflect.get(payload, "valueMap"), ["noul", "choice", "score"]);
+	const valueMap = stringRecord(Reflect.get(payload, "valueMap"), ["noul", "choice", "score", "box"]);
 	if (valueMap !== undefined) config.valueMap = valueMap;
 	const usageMap = stringRecord(Reflect.get(payload, "usageMap"), ["input", "output"]);
 	if (usageMap !== undefined) config.usageMap = usageMap;

@@ -1,7 +1,7 @@
 import type { RemoteCompactionConfig, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
 import type { Api, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
+import { isVertexExpressOpenAIUrl, modelMatchesHost } from "@oh-my-pi/pi-catalog/hosts";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models";
 import {
@@ -64,8 +64,7 @@ export function resolveProviderBaseUrl<TApi extends Api>(
 	}
 	if (
 		override.baseUrlApis === undefined &&
-		modelApi === "typesafe" &&
-		(provider === "vercel-ai-gateway" || modelBaseUrl?.includes("ai-gateway.vercel.sh"))
+		modelMatchesHost({ provider: provider ?? "", baseUrl: modelBaseUrl ?? "" }, "vercelAIGateway")
 	) {
 		return vercelAiGatewayEvaluationBaseUrl(override.baseUrl);
 	}

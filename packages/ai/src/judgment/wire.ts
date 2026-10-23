@@ -70,11 +70,12 @@ const RESERVED_TYPE_FIELDS = new Set([
 	"criteria",
 	"probabilities",
 	"confidence",
+	"box",
 	...RESERVED_VALUE_KEYS,
 ]);
-const CANONICAL_ANSWER_KEYS = new Set(["choice", "noul", "score"]);
+const CANONICAL_ANSWER_KEYS = new Set(["choice", "noul", "score", "box"]);
 
-function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" {
+function isCanonicalAnswerKey(key: string): key is "choice" | "noul" | "score" | "box" {
 	return CANONICAL_ANSWER_KEYS.has(key);
 }
 

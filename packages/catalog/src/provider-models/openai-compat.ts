@@ -4120,14 +4120,11 @@ export function vercelAiGatewayModelManagerOptions(
 		model => {
 			const shouldRebase = model.baseUrl === DEFAULT_VERCEL_AI_GATEWAY_BASE_URL;
 			if (!shouldRebase) return model;
-			if (model.api === "typesafe" || model.kind === "judge") {
-				return {
-					...model,
-					kind: "judge" as const,
-					baseUrl,
-				};
-			}
-			return model;
+			return {
+				...model,
+				...(model.api === "typesafe" ? { kind: "judge" as const } : {}),
+				baseUrl,
+			};
 		},
 	);
 	const options: ModelManagerOptions<"anthropic-messages" | "typesafe"> = {
