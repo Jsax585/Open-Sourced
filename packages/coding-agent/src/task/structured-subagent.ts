@@ -47,7 +47,7 @@ import {
 } from "./isolation-runner";
 import { generateTaskName, sanitizeAgentId } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
-import { resolveSpawnPolicy } from "./spawn-policy";
+import { isolationUnavailableReason, resolveSpawnPolicy } from "./spawn-policy";
 import { isBundledSeance, prepareSeance, type PreparedSeanceSession } from "./seance";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
 import { type AgentDefinition, canSpawnAtDepth } from "./types";
@@ -70,7 +70,6 @@ import {
 	cfgTaskDisabledAgents,
 	cfgTaskEnableLsp,
 	cfgTaskIsolationApply,
-	cfgTaskIsolationEnabled,
 	cfgTaskIsolationMerge,
 	cfgTaskMaxRecursionDepth,
 } from "./settings";
@@ -273,15 +272,65 @@ function assertPlanControlsAllowed(request: StructuredSubagentRequest, planMode:
 		throw new StructuredSubagentError("preflight", "Eval-defined tools are unavailable in plan mode.");
 	}
 	const isolation = request.isolation;
-	if (
-		isolation &&
-		(Object.hasOwn(isolation, "requested") || Object.hasOwn(isolation, "apply") || Object.hasOwn(isolation, "merge"))
-	) {
+	if (!isolation) return;
+	// Only affirmative controls are prohibited: an explicit `false` (e.g. a
+	// schema-aware caller emitting `isolated: false`) is a no-op requesting
+	// the default non-isolated behavior plan mode already enforces, and must
+	// not fail the call. The no-isolation wire schema keeps rejecting
+	// `isolated: true`, so a genuine request still surfaces this error via
+	// the lenient raw-args fallthrough.
+	const requested = isolation.requested === true;
+	const apply = isolation.apply === true;
+	const merge = isolation.merge !== undefined;
+	if (requested || apply || merge) {
 		throw new StructuredSubagentError(
 			"preflight",
 			"Subagent isolation, apply, and merge controls are unavailable in plan mode.",
 		);
 	}
+}
+
+/**
+ * Reject malformed or gated isolation controls before discovery. Affirmative
+ * `apply`/`merge` are gated like `isolated: true`: the prompts hide all three
+ * when the gate is off, so accepting them alone would be prompt-says-no /
+ * API-says-yes. A literal `false` everywhere stays a schema-aware no-op.
+ */
+function assertIsolationControlsAllowed(request: StructuredSubagentRequest, planMode: boolean): void {
+	const isolation = request.isolation;
+	if (!isolation) return;
+	// Reject malformed affirmative isolation values (e.g. `isolated: "true"`)
+	// that slip through lenient raw-args fallthrough — a non-boolean truthy
+	// value must not silently downgrade to non-isolated.
+	if (isolation.requested !== undefined && isolation.requested !== true && isolation.requested !== false) {
+		throw new StructuredSubagentError(
+			"preflight",
+			`Invalid value for \`isolated\`: expected boolean, got ${typeof isolation.requested} (${JSON.stringify(isolation.requested)}).`,
+		);
+	}
+	const affirmative = isolation.requested === true || isolation.apply === true || isolation.merge !== undefined;
+	if (!affirmative) return;
+	const reason = isolationUnavailableReason(request.session, planMode);
+	if (reason === undefined) return;
+	// Bundled seance rejects isolated execution unconditionally in prepareSeance,
+	// so a gate message suggesting a setting fix ("enable allowNested/enabled")
+	// would mislead: flipping the setting just re-routes the same call to the
+	// seance rejection. Report the seance-specific message for every reason.
+	// (Pre-discovery the agent name is all we have, so a custom shadow agent
+	// literally named "seance" gets this message too — the call still fails
+	// correctly, just with the bundled agent's wording.)
+	if (request.agent?.trim() === SEANCE_AGENT_NAME) {
+		throw new StructuredSubagentError(
+			"preflight",
+			"Seance does not support plan mode, isolated execution, or custom tools.",
+		);
+	}
+	throw new StructuredSubagentError(
+		"preflight",
+		reason === "nested"
+			? "Subagent isolated execution inside an already-isolated agent requires task.isolation.allowNested to be enabled."
+			: "Subagent isolated execution requires task.isolation.enabled; it is currently false.",
+	);
 }
 
 function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentName: string): void {
@@ -356,6 +405,9 @@ export async function resolveEffectiveSubagentPolicy(
 	const planMode = request.session.getPlanModeState?.()?.enabled === true;
 	if (agentName !== SEANCE_AGENT_NAME) assertPlanControlsAllowed(request, planMode);
 	assertDepthAndSpawnAllowed(request, agentName);
+	// Fail fast before discovery: a nested or malformed isolation request must
+	// report the gate — not "Unknown agent" — and skip the discovery cost.
+	assertIsolationControlsAllowed(request, planMode);
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
 	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
@@ -442,14 +494,7 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
-	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
-	if (isIsolated && !isolationEnabled) {
-		throw new StructuredSubagentError(
-			"preflight",
-			"Subagent isolated execution requires task.isolation.enabled; it is currently false.",
-		);
-	}
 	return {
 		discovery,
 		agentName,
@@ -608,6 +653,7 @@ function buildExecutorOptions(
 		detached: request.detached,
 		id,
 		taskDepth: session.taskDepth ?? 0,
+		isIsolated: session.isIsolated === true,
 		invokedAt: request.invokedAt,
 		acquiredAt: request.acquiredAt,
 		modelOverride: policy.modelOverride,

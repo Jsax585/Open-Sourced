@@ -24,7 +24,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { VibeCli } from "@oh-my-pi/pi-tui/tools/vibe";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 
-function makeParentSession(settings: Settings): ToolSession {
+function makeParentSession(settings: Settings, isIsolated = false): ToolSession {
 	return {
 		cwd: "/tmp",
 		settings,
@@ -34,12 +34,20 @@ function makeParentSession(settings: Settings): ToolSession {
 		getSessionFile: () => null,
 		getArtifactsDir: () => null,
 		taskDepth: 0,
+		isIsolated,
 		enableLsp: false,
 	} as unknown as ToolSession;
 }
 
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
-async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: string): Promise<ExecutorOptions> {
+async function spawnAndCaptureOptions(
+	cli: VibeCli,
+	settings: Settings,
+	nameOrIsolated?: string | boolean,
+	isIsolated = false,
+): Promise<ExecutorOptions> {
+	const name = typeof nameOrIsolated === "string" ? nameOrIsolated : undefined;
+	const isolated = typeof nameOrIsolated === "boolean" ? nameOrIsolated : isIsolated;
 	const captured = Promise.withResolvers<ExecutorOptions>();
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 		captured.resolve(options);
@@ -60,7 +68,7 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: s
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, name, prompt: "work" });
+	await registry.spawn(makeParentSession(settings, isolated), { cli, name, prompt: "work" });
 	return captured.promise;
 }
 
@@ -125,6 +133,22 @@ describe("vibe worker spawn options", () => {
 		);
 
 		expect(options.oauthAccountPools).toEqual({ anthropic: ["email:a@example.com|org:org-a"] });
+	});
+
+	it("propagates the parent session's isolation marker to the worker spawn", async () => {
+		// A vibe worker of an isolated parent executes inside the parent's
+		// worktree (cwd), so the worker session must inherit `isIsolated` —
+		// otherwise its own `isolated: true` spawns would bypass the
+		// task.isolation.allowNested gate.
+		const options = await spawnAndCaptureOptions(
+			"good",
+			Settings.isolated({
+				modelRoles: { default: "anthropic/opus", task: "anthropic/sonnet" },
+			}),
+			true,
+		);
+
+		expect(options.isIsolated).toBe(true);
 	});
 
 	it("keeps only [A-Za-z0-9_-] from a custom worker name", async () => {

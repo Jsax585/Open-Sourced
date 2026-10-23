@@ -66,6 +66,7 @@ function session(
 		outputSchema?: unknown;
 		maxDepth?: number;
 		isolationEnabled?: boolean;
+		isIsolated?: boolean;
 		isolationApply?: boolean;
 		modelRoles?: Record<string, string>;
 		agentServiceTierOverrides?: Record<string, string>;
@@ -95,6 +96,7 @@ function session(
 			}),
 		getSessionFile: () => null,
 		getSessionSpawns: () => options.parentSpawns ?? "*",
+		...(options.isIsolated === true ? { isIsolated: true as const } : {}),
 		getSessionAgents: () => options.sessionAgents ?? [],
 		getPlanModeState: () => (options.planMode ? { enabled: true } : undefined),
 	} as unknown as ToolSession;
@@ -351,13 +353,22 @@ describe("structured subagent primitive", () => {
 		expect(policy.enableIrc).toBe(false);
 
 		vi.restoreAllMocks();
-		const discover = vi.spyOn(discoveryModule, "discoverAgents");
+		const discover = vi
+			.spyOn(discoveryModule, "discoverAgents")
+			.mockResolvedValue({ agents: [AGENT], projectAgentsDir: null });
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: session({ planMode: true }), isolation: { requested: true } }),
+			),
+		).rejects.toThrow("isolation, apply, and merge controls are unavailable in plan mode");
+		expect(discover).not.toHaveBeenCalled();
+		// An explicit `false` control is a no-op (requests the default
+		// non-isolated behavior plan mode already enforces) and must pass.
 		await expect(
 			resolveEffectiveSubagentPolicy(
 				request({ session: session({ planMode: true }), isolation: { requested: false } }),
 			),
-		).rejects.toThrow("isolation, apply, and merge controls are unavailable in plan mode");
-
+		).resolves.toBeDefined();
 		const planSession = session({ planMode: true });
 		const customTools = createEvalCustomTools(planSession, [
 			{
@@ -367,10 +378,80 @@ describe("structured subagent primitive", () => {
 				language: "python",
 			},
 		]);
+		const discover2 = vi
+			.spyOn(discoveryModule, "discoverAgents")
+			.mockResolvedValue({ agents: [AGENT], projectAgentsDir: null });
 		await expect(resolveEffectiveSubagentPolicy(request({ session: planSession, customTools }))).rejects.toThrow(
 			"Eval-defined tools are unavailable in plan mode.",
 		);
+		expect(discover2).toHaveBeenCalledTimes(1);
+	});
+	it("fails fast on nested isolation before discovery and gates affirmative apply/merge", async () => {
+		// The nested gate runs before `discoverAgentsShared`: a nested
+		// `isolated: true` with an unknown agent must report the gate, not
+		// "Unknown agent", and skip the discovery cost.
+		const nested = session({ isolationEnabled: true, isIsolated: true });
+		const discover = vi.spyOn(discoveryModule, "discoverAgents");
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, agent: "nope", isolation: { requested: true } })),
+		).rejects.toThrow("task.isolation.allowNested");
 		expect(discover).not.toHaveBeenCalled();
+		vi.restoreAllMocks();
+
+		// Affirmative `apply`/`merge` alone are gated like `isolated: true`: the
+		// prompts hide all three when the gate is off. A literal `false`
+		// everywhere stays a schema-aware no-op.
+		mockDiscovery();
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, isolation: { apply: true } })),
+		).rejects.toThrow("task.isolation.allowNested");
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, isolation: { merge: "patch" } })),
+		).rejects.toThrow("task.isolation.allowNested");
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, isolation: { requested: false, apply: false } })),
+		).resolves.toBeDefined();
+		// The headline silent-downgrade fix: a malformed affirmative value must
+		// reject with its type and value, not downgrade to non-isolated.
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: nested, isolation: { requested: "true" as unknown as boolean } }),
+			),
+		).rejects.toThrow("Invalid value for `isolated`");
+		// Affirmative apply alone on an open-gate non-isolated session resolves:
+		// the gate only closes gated-off sessions.
+		const open = session({ isolationEnabled: true });
+		mockDiscovery();
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: open, isolation: { apply: true } })),
+		).resolves.toBeDefined();
+	});
+	it("reports the seance rejection — not the gate — for seance spawns with affirmative isolation", async () => {
+		// Bundled seance rejects isolated execution unconditionally in
+		// prepareSeance, so the fail-fast gate must not suggest a setting fix:
+		// enabling allowNested/enabled would just re-route the same call to
+		// the seance rejection. Pinned for every gate reason.
+		const nested = session({ isolationEnabled: true, isIsolated: true });
+		const discover = vi.spyOn(discoveryModule, "discoverAgents");
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, agent: "seance", isolation: { requested: true } })),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
+		expect(discover).not.toHaveBeenCalled();
+		vi.restoreAllMocks();
+
+		mockDiscovery();
+		const disabled = session({ isolationEnabled: false });
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: disabled, agent: "seance", isolation: { requested: true } }),
+			),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
+		const planSession = session({ planMode: true });
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: planSession, agent: "seance", isolation: { requested: true } }),
+			),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
 	});
 	it("reloads project task and retry policy before resolving an agent added during the session", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-task-hot-reload-"));

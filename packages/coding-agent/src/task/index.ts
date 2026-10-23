@@ -41,7 +41,7 @@ import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
-import { isScoutSpawnable, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
+import { isIsolationAvailable, isScoutSpawnable, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
 import { isBundledSeance, seanceTaskGuidance, seanceTaskSchemaFields, validateSeanceParams } from "./seance";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
 import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
@@ -75,7 +75,6 @@ import {
 	cfgTaskEnableEffort,
 	cfgTaskEnableLsp,
 	cfgTaskIsolationApply,
-	cfgTaskIsolationEnabled,
 	cfgTaskMaxConcurrency,
 	cfgTaskMaxRecursionDepth,
 	cfgTaskMaxRuntimeMs,
@@ -269,6 +268,16 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 		if (hasTask) {
 			return "Top-level `task` is not part of the batch shape. Put the work in `tasks[]` items.";
 		}
+		if (params.isolated !== undefined && params.isolated !== false) {
+			// The batch shape carries isolation per item. Any top-level value
+			// other than the literal `false` (the schema-aware no-op) is a
+			// shape violation — including malformed affirmative values like
+			// `isolated: "true"` that slip through the lenient raw-args
+			// fallthrough. Rejecting here keeps `spawnParamsFor` from letting
+			// an item's `false` silently downgrade the malformed request
+			// before the nested-isolation preflight ever sees it.
+			return "Top-level `isolated` is not part of the batch shape. Set `isolated` per item in `tasks[]`.";
+		}
 		for (let i = 0; i < tasks.length; i++) {
 			const item = tasks[i];
 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
@@ -370,7 +379,18 @@ function planSpawns(
 	defaultAgent: string,
 	seanceAdvertised: boolean,
 ): SpawnPlan | string {
-	const params = repairTaskParams(rawParams as TaskParams);
+	let params = repairTaskParams(rawParams as TaskParams);
+	if (batchEnabled && Array.isArray(params.tasks) && params.tasks.length > 0 && params.isolated === false) {
+		// The batch shape carries isolation per item; a top-level `false` is the
+		// schema-aware no-op. Drop it here so the final spawn plan matches the
+		// speculative path, which reconstructs prefixes as `{ context, tasks }`
+		// and never sees the flag — otherwise `finalize()`/`adopt()` observe a
+		// canonical mismatch and abort already-started agents. Clone first:
+		// `repairTaskParams` returns its input by reference when nothing needs
+		// repair, and mutating the caller's args would corrupt transcript state.
+		params = { ...params };
+		delete params.isolated;
+	}
 	const error =
 		validateShapeParams(batchEnabled, params) ??
 		validateSpawnParams(params, batchEnabled) ??
@@ -711,7 +731,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 	get parameters(): TaskToolSchemaInstance {
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
-		const isolationEnabled = !planMode && cfgTaskIsolationEnabled.get(this.session.settings);
+		const isolationEnabled = isIsolationAvailable(this.session, planMode);
 		return getTaskSchema({
 			isolationEnabled,
 			batchEnabled: this.#isBatchEnabled(),
@@ -744,11 +764,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			this.#discoveredAgents;
 		const sessionAgents = this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [];
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
-		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
+
 		return renderDescription({
 			agents,
 			sessionAgents,
-			isolationEnabled: !planMode && isolationEnabled,
+			isolationEnabled: isIsolationAvailable(this.session, planMode),
 			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),
 			disabledAgents,
 			batchEnabled: this.#isBatchEnabled(),
