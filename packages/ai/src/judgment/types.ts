@@ -59,6 +59,8 @@ export type Question = ChoiceQuestion | NoulQuestion | ScoreQuestion | BoxQuesti
 /** Questions keyed by caller-chosen ids; answers come back under the same ids. */
 export type Questions = Record<string, Question>;
 
+export type WireQuestions = Record<string, Record<string, unknown>>;
+
 export interface ChoiceAnswer<L extends string = string> {
 	type: "choice";
 	/** Highest-probability option. */
@@ -113,7 +115,7 @@ export type AnswerFor<Q extends Question> =
 				? BoxAnswer
 				: ScoreAnswer;
 
-export interface JudgmentRequest<Q extends Questions = Questions> {
+export interface JudgmentRequest<Q extends Questions | WireQuestions = Questions> {
 	state: JudgmentState;
 	questions: Q;
 	/** Images evaluated alongside the state; never part of the JSON state itself. */

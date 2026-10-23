@@ -23,7 +23,7 @@ import { isRecord, prompt } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { embeddedImageDataUrl } from "../images/shared";
 import predicateTemplate from "./openai-decisions-predicate.md" with { type: "text" };
-import { type Answer, type Question, tokenUsage } from "./types";
+import { type Answer, type JudgmentRequest, type Question, type Questions, tokenUsage } from "./types";
 import { finiteNumber, type JudgmentWire } from "./wire";
 
 type DecisionQuestion =
@@ -107,7 +107,7 @@ export const openaiDecisionsWire: JudgmentWire = {
 	// https://developers.openai.com/api/reference/resources/decisions/methods/create/
 	images: { maxCount: 128 },
 	target: (baseUrl, _model, key) => ({ url: `${baseUrl}/decisions`, token: key }),
-	encode: (request, model) => {
+	encode: (request: JudgmentRequest<Questions>, model) => {
 		const state = typeof request.state === "string" ? request.state : JSON.stringify(request.state);
 		return {
 			model,

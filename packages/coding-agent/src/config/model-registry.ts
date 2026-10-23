@@ -2613,6 +2613,7 @@ export class ModelRegistry {
 	#applyProviderTransportOverride<
 		T extends {
 			api: Api;
+			provider?: string;
 			baseUrl?: string;
 			headers?: Record<string, string>;
 			resolveHeaders?: Model<Api>["resolveHeaders"];
@@ -2638,7 +2639,7 @@ export class ModelRegistry {
 			: entry.resolveHeaders;
 		return {
 			...entry,
-			baseUrl: resolveProviderBaseUrl(entry.api, entry.baseUrl, override),
+			baseUrl: resolveProviderBaseUrl(entry.api, entry.baseUrl, override, entry.provider),
 			headers: changesHeaders || entry.resolveHeaders ? undefined : entry.headers,
 			resolveHeaders,
 			// Preserve the model's existing transport when the override omits one;

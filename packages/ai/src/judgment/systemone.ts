@@ -26,6 +26,7 @@ import {
 	type JudgmentRequest,
 	type Question,
 	type Questions,
+	type WireQuestions,
 	tokenUsage,
 } from "./types";
 import { type DecodedJudgment, finiteNumber, type JudgmentImageAssets, type JudgmentWire } from "./wire";
@@ -98,14 +99,19 @@ function encodeSystemOneImage(image: ImageContent): SystemOneImageAsset {
 	};
 }
 
-type WireQuestion = Exclude<Question, BoxQuestion> | Omit<BoxQuestion, "image">;
+type WireQuestion = Exclude<Question, BoxQuestion> | Omit<BoxQuestion, "image"> | Record<string, unknown>;
 
 /** `questions` as System One takes them: a box question's `image` only names the image its edges measure locally. */
-function wireQuestions(questions: Questions): Record<string, WireQuestion> {
-	const wire: Record<string, WireQuestion> = {};
+function wireQuestions(questions: Questions | WireQuestions): Record<string, WireQuestion> {
+	const wire: Record<string, WireQuestion> = Object.create(null);
 	for (const id in questions) {
 		const question = questions[id];
-		wire[id] = question.type === "box" ? { type: "box", instructions: question.instructions } : question;
+		if (question && typeof question === "object" && question.type === "box") {
+			const { image: _image, ...rest } = question as Record<string, unknown>;
+			wire[id] = rest;
+		} else {
+			wire[id] = question;
+		}
 	}
 	return wire;
 }
