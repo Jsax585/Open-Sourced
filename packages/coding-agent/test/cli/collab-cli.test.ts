@@ -78,7 +78,11 @@ async function createFixture(): Promise<CollabFixture> {
 				{
 					snapshot: () => fixture.snapshot,
 					link: access =>
-						access === "view" ? fixture.viewUrl : fixture.snapshot.access === "control" ? fixture.controlUrl : null,
+						access === "view"
+							? fixture.viewUrl
+							: fixture.snapshot.access === "control"
+								? fixture.controlUrl
+								: null,
 				},
 				{ dir, instanceId: fixture.snapshot.instanceId },
 			);
