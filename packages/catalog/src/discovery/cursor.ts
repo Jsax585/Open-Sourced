@@ -587,7 +587,9 @@ function normalizeRichCursorModels(
 		) {
 			continue;
 		}
-		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds);
+		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds).filter(
+			entry => !uncovered || !entry.variant || !isRichVariantUnsubmittable(details, entry.variant),
+		);
 		if (variants.length === 0) continue;
 		// The bare lane id belongs to Cursor's flagged default configuration, so
 		// seed axis defaults from it before falling back to first-seen values;
@@ -1056,6 +1058,26 @@ function isRichVariantBlocked(details: AvailableModelsResponse_ModelDetails, var
 		if (value?.blockedByAdminAllowlist === true) return true;
 	}
 	return false;
+}
+
+/**
+ * Variants Cursor says not to submit as-is: a confirmation dialogue that blocks
+ * submission, or a boolean parameter value an admin allowlist blocks by default.
+ * omp presents neither, so the usable-list lag fallback never keeps them; a
+ * usable row is the account's entitlement for them.
+ */
+function isRichVariantUnsubmittable(
+	details: AvailableModelsResponse_ModelDetails,
+	variant: RichCursorVariant,
+): boolean {
+	if (variant.confirmationDialogue?.blocksSubmission === true) return true;
+	return variant.parameterValues.some(parameter =>
+		details.parameterDefinitions
+			.find(candidate => candidate.id === parameter.id)
+			?.parameterType?.booleanParameter?.values.some(
+				value => value.value === parameter.value && value.defaultBlockedInAdminAllowlist === true,
+			),
+	);
 }
 
 function normalizeCursorModels(

@@ -16,6 +16,7 @@ import {
 	AvailableModelsResponse_ModelDetailsSchema,
 	AvailableModelsResponse_TooltipDataSchema,
 	AvailableModelsResponse_ModelVariantConfigSchema,
+	AvailableModelsResponse_ConfirmationDialogueSchema,
 	AvailableModelsResponseSchema,
 	DegradationStatus,
 	GetDefaultModelForCliResponseSchema,
@@ -706,6 +707,87 @@ describe("fetchCursorUsableModels", () => {
 			"covered-hidden",
 			"degraded-uncovered",
 			"plain-uncovered",
+		]);
+	});
+
+	it("keeps submission-blocked and default-admin-blocked variants out of the lag fallback only", async () => {
+		const blocksSubmission = create(AvailableModelsResponse_ConfirmationDialogueSchema, {
+			title: "Confirm",
+			blocksSubmission: true,
+		});
+		const effortVariant = (
+			id: string,
+			effort: string,
+			confirmation?: AvailableModelsResponse_ModelDetails["variants"][number]["confirmationDialogue"],
+		) =>
+			create(AvailableModelsResponse_ModelVariantConfigSchema, {
+				legacySlug: id,
+				confirmationDialogue: confirmation,
+				parameterValues: [create(ModelParameterValueSchema, { id: "reasoning", value: effort })],
+			});
+		const model = (name: string, variants: AvailableModelsResponse_ModelDetails["variants"]) =>
+			create(AvailableModelsResponse_ModelDetailsSchema, { name, supportsAgent: true, variants });
+		const fastDefinition = create(ModelParameterDefinitionSchema, {
+			id: "fast",
+			parameterType: create(ModelParameterDefinition_ModelParameterTypeSchema, {
+				booleanParameter: create(ModelParameterDefinition_BooleanParameterDefinitionSchema, {
+					values: [
+						create(ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValueSchema, {
+							value: "false",
+						}),
+						create(ModelParameterDefinition_BooleanParameterDefinition_BooleanParameterValueSchema, {
+							value: "true",
+							defaultBlockedInAdminAllowlist: true,
+						}),
+					],
+				}),
+			}),
+		});
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: ["covered-confirm-high", "covered-confirm-max"].map(modelId =>
+				create(ModelDetailsSchema, { modelId }),
+			),
+		});
+		const available = create(AvailableModelsResponseSchema, {
+			models: [
+				model("uncovered-confirm", [
+					effortVariant("uncovered-confirm-high", "high"),
+					effortVariant("uncovered-confirm-max", "max", blocksSubmission),
+				]),
+				model("covered-confirm", [
+					effortVariant("covered-confirm-high", "high"),
+					effortVariant("covered-confirm-max", "max", blocksSubmission),
+				]),
+				create(AvailableModelsResponse_ModelDetailsSchema, {
+					name: "uncovered-fast",
+					supportsAgent: true,
+					parameterDefinitions: [fastDefinition],
+					variants: [
+						richVariant("uncovered-fast", { fast: "false" }),
+						richVariant("uncovered-fast-fast", { fast: "true" }),
+					],
+				}),
+			],
+		});
+		const variantBaseUrl = await startCursorDiscoveryRpcServer({
+			"/agent.v1.AgentService/GetUsableModels": toBinary(GetUsableModelsResponseSchema, usable),
+			"/aiserver.v1.AiService/AvailableModels": toBinary(AvailableModelsResponseSchema, available),
+		});
+
+		const models = await fetchCursorUsableModels({
+			apiKey: "account-token",
+			baseUrl: variantBaseUrl,
+			timeoutMs: 1_000,
+		});
+		const routes = (id: string) => Object.keys(models?.find(spec => spec.id === id)?.cursorModelRoutes ?? {});
+
+		// Uncovered: the blocking variant is dropped, its sibling stays.
+		expect(routes("uncovered-confirm")).toEqual(["uncovered-confirm-high"]);
+		// Covered: the usable list is the entitlement, so the variant is unchanged.
+		expect(routes("covered-confirm")).toEqual(["covered-confirm-high", "covered-confirm-max"]);
+		// Uncovered: a boolean value the admin allowlist blocks by default gets no lane.
+		expect((models ?? []).map(spec => spec.id).filter(id => id.startsWith("uncovered-fast"))).toEqual([
+			"uncovered-fast",
 		]);
 	});
 
