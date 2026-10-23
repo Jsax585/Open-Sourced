@@ -139,6 +139,10 @@ execution, and bypasses HTTP transient-stream retry and stored-result recovery o
 WebSocket errors. This boundary avoids hidden replay after uncertain execution;
 Codex recovery policy remains independent.
 
+WS frame serialization removes the HTTP/SSE-only `stream` and `stream_options`
+fields after payload hooks run. The shared HTTP builder retains its streaming
+controls, including the obfuscation opt-out; custom payload fields remain intact.
+
 On `connectionBoundNativeHistory` hosts, standard WS always rebuilds history from
 message content rather than replaying connection-owned item IDs or encrypted
 reasoning. Checking only whether a socket is warm would not cover contexts that

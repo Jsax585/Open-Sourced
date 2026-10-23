@@ -331,21 +331,52 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.httpRequests).toHaveLength(1);
 	});
 
-	it("keeps the standard request builder and onPayload semantics", async () => {
-		const fixture = endpoint();
+	it("omits SSE-only WS options while preserving HTTP and payload hooks", async () => {
+		const fixture = endpoint(
+			(socket, body) => {
+				const metadata = body.metadata as { source?: string } | undefined;
+				if (
+					"stream" in body ||
+					"stream_options" in body ||
+					body.custom_gateway_field !== "same" ||
+					metadata?.source !== "hook"
+				) {
+					socket.send(
+						JSON.stringify({
+							type: "error",
+							error: { code: "invalid_parameter", message: "Invalid response.create fields" },
+						}),
+					);
+					return;
+				}
+				send(socket, textEvents("WS accepted", "resp_valid_ws"));
+			},
+			{
+				httpResponse: body => {
+					const streamOptions = body.stream_options as { include_obfuscation?: boolean } | undefined;
+					return body.stream === true && streamOptions?.include_obfuscation === false
+						? undefined
+						: Response.json({ error: { message: "Missing SSE obfuscation options" } }, { status: 400 });
+				},
+			},
+		);
+		const model: Model<"openai-responses"> = {
+			...fixture.model,
+			compat: { ...fixture.model.compat, supportsObfuscationOptOut: true },
+		};
 		const options: OpenAIResponsesOptions = {
 			...fixture.options,
-			statefulResponses: false,
-			temperature: 0.3,
-			maxTokens: 128,
 			extraBody: { custom_gateway_field: "same" },
 			onPayload: payload => ({ ...(payload as object), metadata: { source: "hook" } }),
 		};
-		await streamOpenAIResponses(fixture.model, fixture.context, options).result();
-		await streamOpenAIResponses(fixture.model, fixture.context, { ...options, preferWebsockets: true }).result();
-		const { stream: _stream, ...httpBody } = fixture.httpRequests[0]!;
-		const { type: _type, ...wsBody } = fixture.requests[0]!.body;
-		expect(wsBody).toEqual(httpBody);
+		const http = await streamOpenAIResponses(model, fixture.context, options).result();
+		expect(http.stopReason).toBe("stop");
+		expect(http.content).toContainEqual(expect.objectContaining({ type: "text", text: "HTTP" }));
+		const ws = await streamOpenAIResponses(model, fixture.context, { ...options, preferWebsockets: true }).result();
+		expect(ws.stopReason).toBe("stop");
+		expect(ws.content).toContainEqual(expect.objectContaining({ type: "text", text: "WS accepted" }));
+		expect(fixture.httpRequests).toHaveLength(1);
+		expect(fixture.requests).toHaveLength(1);
 	});
 
 	it("reuses an idle session socket but replays full history even when statefulResponses is true", async () => {

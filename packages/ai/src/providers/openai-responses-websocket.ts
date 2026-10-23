@@ -16,6 +16,11 @@ interface UpgradeInspectableWebSocket extends Bun.WebSocket {
 	once(event: "unexpected-response", listener: (request: unknown, response: IncomingMessage) => void): this;
 }
 
+const InspectableSocket = require("ws") as new (
+	url: string,
+	options: Bun.WebSocketOptions,
+) => UpgradeInspectableWebSocket;
+
 export class OpenAIResponsesWebSocketUpgradeError extends Error {
 	constructor(readonly response: Response) {
 		super(`OpenAI responses WebSocket upgrade rejected (HTTP ${response.status})`);
@@ -70,10 +75,6 @@ export class OpenAIResponsesWebSocketConnection {
 		if (this.captureUpgradeResponse) {
 			// Bun's built-in Node-WS interface exposes rejected upgrade responses;
 			// the DOM interface only reports "Expected 101 status code".
-			const InspectableSocket = require("ws") as new (
-				url: string,
-				options: Bun.WebSocketOptions,
-			) => UpgradeInspectableWebSocket;
 			const inspectableSocket = new InspectableSocket(this.#url, socketOptions);
 			inspectableSocket.once("upgrade", response => {
 				this.handshakeHeaders = toWebSocketHeaders(response.headers);
@@ -157,6 +158,7 @@ export class OpenAIResponsesWebSocketConnection {
 			}
 			const request: Record<string, unknown> = { ...body, type: "response.create" };
 			delete request.stream;
+			delete request.stream_options;
 			delete request.background;
 			this.#socket.send(JSON.stringify(request));
 			for (;;) {
