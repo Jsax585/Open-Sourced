@@ -1104,8 +1104,9 @@ export class CustomEditor extends Editor {
 	 * a turn runs) over the context hairline, the viewing header while a
 	 * subagent is focused, the attachment chips, a `line` row of the
 	 * shell-mode chip and the input, and the `bar`: model chip, effort chip
-	 * (or the effort glyph as the model chip's icon), the generation rate,
-	 * the other status facts, usage, dictation, then send (Stop while a turn runs).
+	 * (or the effort glyph as the model chip's icon), the other status facts,
+	 * the generation rate beside the session cost, dictation, then send
+	 * (Stop while a turn runs).
 	 * Clicks come back as `status.model`, `thinking.cycle`, `dictation.toggle`,
 	 * `submit`, `interrupt` and `focus:<id>` actions.
 	 */
@@ -1156,15 +1157,16 @@ export class CustomEditor extends Editor {
 							compact([
 								controls.model,
 								controls.effort,
+								// The status facts are the bar's flexible space; without them a spacer keeps send at the end.
+								facts?.extras ?? node("row", { grow: 1 }, [], "gap"),
+								// The generation rate sits beside the session cost, so spend and speed read together.
 								rate !== undefined &&
 									node(
 										"rate",
-										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: "Generation rate" },
+										{ value: rate, unit: "t/s", role: "omp.composer.rate", title: "Generation rate" },
 										undefined,
 										"rate",
 									),
-								// The status facts are the bar's flexible space; without them a spacer keeps send at the end.
-								facts?.extras ?? node("row", { grow: 1 }, [], "gap"),
 								facts?.usage,
 								controls.dictation,
 								controls.submit,

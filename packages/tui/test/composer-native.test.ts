@@ -351,7 +351,7 @@ describe("native composer", () => {
 		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.effort")).toBeUndefined();
 	});
 
-	it("docks the tok/s readout right after the effort chip, only while there is a reading", () => {
+	it("docks the tok/s readout beside the session cost, only while there is a reading", () => {
 		let rate: number | undefined = 31.8;
 		const editor = new CustomEditor(getEditorTheme());
 		editor.composerState = () => ({ running: false, thinking: "xhigh", rate });
@@ -360,10 +360,11 @@ describe("native composer", () => {
 			(root.c ?? []).filter(isNode).map(n => (n.p !== undefined && "role" in n.p ? n.p.role : n.key));
 
 		const reading = bar();
-		expect(slots(reading)).toEqual(["omp.composer.effort", "omp.composer.rate", "gap", "omp.composer.send"]);
+		// Without a status line, the flexible spacer keeps the reading right-aligned before send.
+		expect(slots(reading)).toEqual(["omp.composer.effort", "gap", "omp.composer.rate", "omp.composer.send"]);
 		expect(byRole(reading, "omp.composer.rate")?.p).toEqual({
 			value: 31.8,
-			unit: "tok/s",
+			unit: "t/s",
 			role: "omp.composer.rate",
 			title: "Generation rate",
 		});
@@ -455,6 +456,26 @@ describe("native working row", () => {
 		);
 		expect(nodes(row).find(n => n.k === "progress")?.p).toEqual({ value: null });
 		expect(byRole(row, "omp.working.stop")).toBeUndefined();
+	});
+
+	it("docks the objective's fastest reading in the trailer, above the composer", () => {
+		const row = describeWorkingRow(
+			{ label: "Diagnosing", startedAt: 0, interruptKey: "escape", trailer: "(Fast: 1236.0 tok/s)" },
+			cx,
+			10,
+		);
+		expect((row.c ?? []).filter(isNode).map(n => n.key)).toEqual([
+			"spinner",
+			"elapsed",
+			"sep",
+			"label",
+			"fill",
+			"trailer",
+			"stop",
+		]);
+		const trailer = byRole(row, "omp.working.trailer")!;
+		expect(trailer.k).toBe("text");
+		expect(JSON.stringify(trailer.p)).toContain("(Fast: 1236.0 tok/s)");
 	});
 });
 
@@ -551,7 +572,7 @@ describe("native composer without a status strip", () => {
 		});
 		composer.start();
 		try {
-			composer.editor.composerState = () => ({ running: false, thinking: "high" });
+			composer.editor.composerState = () => ({ running: false, thinking: "high", rate: 42.5 });
 			const { dock } = composer.describeSurface();
 			expect(dock).toEqual([composer.editor]);
 			const described = composer.editor.describe(cx);
@@ -572,9 +593,12 @@ describe("native composer without a status strip", () => {
 				"omp.composer.model",
 				"omp.composer.effort",
 				"omp.composer.extras",
+				"omp.composer.rate",
 				"omp.composer.usage",
 				"omp.composer.send",
 			]);
+			// The speed reading sits immediately beside the session cost.
+			expect(byRole(bar, "omp.composer.rate")?.p).toMatchObject({ value: 42.5, unit: "t/s" });
 			const model = byRole(bar, "omp.composer.model")!;
 			expect(model.p).toMatchObject({ actions: { click: "status.model" } });
 			expect(nodes(model).map(n => n.k)).toEqual(["row", "icon", "text", "icon"]);

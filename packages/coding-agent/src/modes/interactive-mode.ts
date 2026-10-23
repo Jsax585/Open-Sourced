@@ -1427,16 +1427,32 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * turns, blank until a run has produced enough tokens to measure. */
 	#tokenRateLabel(): string | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.rate();
+		const rate = this.#liveTokenRate();
 		if (rate === null) return undefined;
 		return theme.fg("dim", `${theme.icon.throughput} ${rate.toFixed(1)} tok/s`);
 	}
-	/** Right-docked suffix of the working row: the tok/s readout, then the band-mode title. */
+	/**
+	 * The speedometer reading: the objective's rolling average — live while it
+	 * streams, held once the objective is done.
+	 */
+	#liveTokenRate(): number | null {
+		const meter = this.tokenRate;
+		return meter.objectiveRate() ?? meter.rate();
+	}
+	/** Right-docked suffix of the working row: the tok/s readout, the objective's
+	 * fastest 1 s window, then the band-mode title. */
 	#workingRowTrailer(): string | undefined {
 		const rate = this.#tokenRateLabel();
+		const fast = this.#fastRateLabel();
 		const title = this.#workingTitleTrailer();
-		if (rate && title) return `${rate}  ${title}`;
-		return rate ?? title;
+		const parts = [rate, fast && theme.fg("dim", fast), title].filter((part): part is string => !!part);
+		return parts.length > 0 ? parts.join("  ") : undefined;
+	}
+	/** The objective's fastest 1 s window, shown above the composer rather than in it. */
+	#fastRateLabel(): string | undefined {
+		if (!cfgComposerTokenRate.get(settings)) return undefined;
+		const rate = this.tokenRate.fastestRate();
+		return rate === null ? undefined : `(Fast: ${rate.toFixed(1)} tok/s)`;
 	}
 	/** Idle stand-in for the working row: the last tok/s reading and the
 	 * band-mode title stay readable between turns, docked where the loader's
@@ -1453,7 +1469,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * loader recreated by a focus switch keeps the real elapsed time.
 	 */
 	#workingStartedAt = 0;
-	#statusHudNative: { children: readonly Component[]; todo: NativeNode | undefined; node: NativeNode } | undefined;
+	#statusHudNative:
+		| { children: readonly Component[]; todo: NativeNode | undefined; fast: string | undefined; node: NativeNode }
+		| undefined;
 	/**
 	 * The todo HUD, rebuilt with its ANSI rows; undefined while hidden. A
 	 * terminal with `checklist` gets the whole plan as a HUD checklist, others
@@ -1480,7 +1498,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Gen tok/s for the native composer bar, one decimal (a steadier `rate` target): live while running, else the last reading. */
 	#nativeTokenRate(): number | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.rate();
+		const rate = this.#liveTokenRate();
 		return rate === null ? undefined : Math.round(rate * 10) / 10;
 	}
 	/** The key that interrupts (the working row's stop control), or undefined when Esc would not cancel. */
@@ -1496,6 +1514,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			startedAt: this.#workingStartedAt,
 			palette: accent ? NATIVE_ACCENT_SHIMMER : undefined,
 			interruptKey: this.keybindings.getKeys("app.interrupt")[0] ?? "escape",
+			trailer: this.#fastRateLabel(),
 		};
 	}
 	/** The stop control's click: the same handler as the interrupt key. */
@@ -1551,14 +1570,19 @@ export class InteractiveMode implements InteractiveModeContext {
 	describeStatusHud(children: readonly Component[], cx: DescribeContext): NativeNode {
 		const hud = this.#todoHudNative;
 		const todo = hud && (cx.supports("checklist") ? hud.checklist : hud.fallback);
+		const fast = this.#fastRateLabel();
 		const memo = this.#statusHudNative;
-		if (memo && memo.todo === todo && sameItems(memo.children, children)) return memo.node;
+		if (memo && memo.todo === todo && memo.fast === fast && sameItems(memo.children, children)) return memo.node;
 		const parts: NativeChild[] = [];
 		if (children.length > 0) parts.push(node("col", { role: "omp.hud.status" }, children.slice(), "status"));
 		if (todo) parts.push(todo);
+		// Between turns the objective's fastest reading stays above the composer.
+		if (parts.length === 0 && fast) {
+			parts.push(node("text", { spans: [span(fast, "muted")], role: "omp.hud.rate-fast" }, undefined, "fast"));
+		}
 		const described =
 			parts.length === 0 ? EMPTY_HUD : row(parts, { role: "omp.hud.activity", align: "center", gap: "sm" });
-		this.#statusHudNative = { children: children.slice(), todo, node: described };
+		this.#statusHudNative = { children: children.slice(), todo, fast, node: described };
 		return described;
 	}
 	unsubscribe?: () => void;
@@ -3992,8 +4016,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * What the TSP composer shows: the draft's shell mode, the effort chip
 	 * (the viewed agent's, like the model chip beside it) or the model chip's
-	 * effort icon, the tok/s readout after it, send vs Stop, and the session
-	 * title the empty composer's placeholder quotes.
+	 * effort icon, the tok/s readout beside the session cost, send vs Stop, and
+	 * the session title the empty composer's placeholder quotes.
 	 */
 	#composerNativeState(): ComposerNativeState {
 		const draft = this.editor.getText().trimStart();

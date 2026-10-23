@@ -116,13 +116,17 @@ describe("InteractiveMode native dock activity line", () => {
 		expect(keys(activity())).toEqual(["status", "todo"]);
 	});
 
-	it("shows tok/s in the composer bar only with the setting on and a reading", () => {
+	it("shows tok/s in the composer bar with a reading, unless the setting is off", () => {
 		const rate = () => nodes(mode.editor.describe(cx)).find(n => role(n) === "omp.composer.rate");
 		session.tokenRate.seed(1_000, 10_000);
+		// On by default: a fresh session shows the reading beside the session cost.
+		expect(rate()?.p).toMatchObject({ value: 100, unit: "t/s" });
+
+		cfgComposerTokenRate.override(settings, false);
 		expect(rate()).toBeUndefined();
 
 		cfgComposerTokenRate.override(settings, true);
-		expect(rate()?.p).toMatchObject({ value: 100, unit: "tok/s" });
+		expect(rate()?.p).toMatchObject({ value: 100, unit: "t/s" });
 
 		session.tokenRate.reset();
 		expect(rate()).toBeUndefined();

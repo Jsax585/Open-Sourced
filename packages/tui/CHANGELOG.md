@@ -7,6 +7,10 @@
 - The tool-approval prompt's answers are a navigable menu on classic terminals — the arrows move the highlight, `Enter` confirms it, and the **Remember** checkbox toggles in place — and stay clickable buttons on Tern's native surface. The answers keep one order everywhere: the remember checkbox, **Approve Directory**, **Approve <tool> for session**, **Approve File**/**Approve**, **Approve Once**, and **Deny**, each with a tooltip naming exactly what its grant covers.
 - Settings action rows can label their control through the new `ui.actionLabel` metadata; **Forget Remembered Approvals** uses it to read **Clear cache**.
 
+### Changed
+
+- The native composer bar places the tok/s generation rate beside the session cost instead of after the effort chip, the default status-line preset carries the same `token_rate` rate (in t/s) beside `cost` in classic terminals, and the objective’s fastest 1 s reading rides in the working row above the composer — the composer itself keeps only the rate.
+
 ### Fixed
 
 - Fixed Enter on an empty composer answering a prompt whose answer menu is not shown: without the menu the key no longer activates an invisible selection.

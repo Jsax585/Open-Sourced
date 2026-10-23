@@ -772,7 +772,7 @@ const tokenRateSegment: StatusLineSegment = {
 
 		const content = formatMetric({
 			leading: theme.icon.throughput || undefined,
-			value: `${tokensPerSecond.toFixed(1)} tok/s`,
+			value: `${tokensPerSecond.toFixed(1)} t/s`,
 		});
 		return { content: theme.fg("statusLineOutput", content ?? ""), visible: true };
 	},
@@ -783,7 +783,7 @@ const tokenRateSegment: StatusLineSegment = {
 		return {
 			spans: [],
 			icon: "throughput",
-			motion: [node("rate", { value: Number(tokensPerSecond.toFixed(1)), unit: "tok/s" }, undefined, "rate")],
+			motion: [node("rate", { value: Number(tokensPerSecond.toFixed(1)), unit: "t/s" }, undefined, "rate")],
 		};
 	},
 };

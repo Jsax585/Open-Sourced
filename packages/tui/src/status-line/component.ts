@@ -98,6 +98,7 @@ const COMPOSER_HOMED_SEGMENTS: Partial<Record<StatusLineSegmentId, true>> = {
 	context_pct: true,
 	context_total: true,
 	cost: true,
+	token_rate: true,
 	path: true,
 	pr: true,
 	session_name: true,
@@ -1956,9 +1957,19 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			return (mainRate ?? 0) + workerRate;
 		}
 
-		// No workers streaming — fall back to the main session's own rate with
-		// its sticky per-assistant-message cache so the badge doesn't flicker
-		// off in the brief gap between stream end and the finalized message.
+		// No workers streaming — the objective's rolling average is the reading:
+		// live while it streams, held once it is done, and null between the reset
+		// a new request performs and its first streamed tokens. Display-only
+		// sessions (no meter) fall back to the last message's average below.
+		const meter = this.session.tokenRate;
+		if (meter?.objectiveRate) {
+			const objective = meter.objectiveRate();
+			return objective !== null && objective > 0 ? objective : null;
+		}
+
+		// Otherwise the main session's own rate, with its sticky per-assistant-
+		// message cache so the badge doesn't flicker off in the brief gap between
+		// stream end and the finalized message.
 		return this.#getMainSessionTokensPerSecond();
 	}
 
