@@ -498,22 +498,6 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			entry => parseSearchPath(splitPathAndSel(entry).path).basePath,
 		);
 	};
-	/**
-	 * `always-ask-cached` keys: every file and folder this grep searches, so a
-	 * folder grant recorded by a `read` covers a search of it and a search of one
-	 * file shares that file's read grant. Roots are split the way `execute` splits
-	 * them (`splitPathAndSel` peels a line-range selector, `parseSearchPath` finds
-	 * the walkable base of a glob) and each costs a single stat; see
-	 * {@link searchApprovalCacheTargets}.
-	 */
-	readonly approvalCacheTargets = (args: unknown): readonly string[] | undefined => {
-		const a = args as { path?: string | string[]; paths?: string | string[] } | null | undefined;
-		return searchApprovalCacheTargets(
-			toPathList(a?.path ?? a?.paths),
-			this.session.cwd,
-			entry => parseSearchPath(splitPathAndSel(entry).path).basePath,
-		);
-	};
 	readonly label = "Grep";
 	readonly loadMode = "discoverable";
 	readonly summary = "Search file contents by regex";
