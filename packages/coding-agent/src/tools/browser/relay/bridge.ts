@@ -115,15 +115,23 @@ class ExtensionReplacedError extends Error {}
 /** A connected extension browser instance; one per browser/profile. */
 interface ExtInstance {
 	instanceId: string;
-	/** Stable short code derived from the instance id; names target ids (`TAB<code>.<tabId>`). */
+	/** Short code derived from the instance id and browser run; names target ids (`TAB<code>.<tabId>`). */
 	code: string;
 	socket: RelaySocket | null;
 	info: { userAgent: string; browserVersion: string; discardedTabsProtocol?: number } | null;
+	/** `Date.now()` when its socket closed; null while connected. */
+	goneSince: number | null;
+	/** Settles at its next hello; created by the first caller that waits for one. */
+	reconnected: PromiseWithResolvers<void> | null;
 }
 
-/** Deterministic per-instance code for target ids: stable across relay restarts. */
-function instanceCode(instanceId: string): string {
-	return createHash("sha256").update(instanceId).digest("base64url").slice(0, 8);
+/**
+ * Deterministic per-instance code for target ids: stable across relay restarts and service-worker restarts, new
+ * after a browser restart (when Chrome reuses tab ids). Older extensions send no browser session.
+ */
+function instanceCode(instanceId: string, browserSession: string): string {
+	const identity = browserSession ? `${instanceId}/${browserSession}` : instanceId;
+	return createHash("sha256").update(identity).digest("base64url").slice(0, 8);
 }
 
 function tabKeyOf(extCode: string, tabId: number): string {
@@ -159,8 +167,11 @@ class TabState {
 	groupId: number;
 	/** Whether `chrome.debugger` is currently attached to this tab. */
 	attached = false;
-	/** Set when attach failed or the user cancelled the debugger bar; cleared on navigation. */
-	banned = false;
+	/**
+	 * Why Chrome refused omp this tab (its attach error, or the user cancelling the debugger bar); while set the
+	 * tab is not adoptable. Cleared on navigation.
+	 */
+	refusal: string | undefined;
 	/** Whether targets for this tab were announced to discovering connections. */
 	announced = false;
 	attaching: Promise<boolean> | null = null;
@@ -233,6 +244,11 @@ const RPC_TIMEOUT_MS = 20_000;
 const LATE_RPC_KEEP_MS = 60_000;
 const CDP_ERROR_METHOD_NOT_FOUND = -32601;
 const CDP_ERROR_SERVER = -32000;
+/**
+ * How long a new tab waits for the browser it belongs in (that of `nearTargetId` or of a tab the client drives) to
+ * reconnect after its socket closed: the extension's longest reconnect backoff (10 s) plus its hello.
+ */
+const AFFINE_RECONNECT_WAIT_MS = 12_000;
 /** Chrome's answer to a command in flight when it ends the debugger attachment. */
 const DETACHED_COMMAND_ERROR = /Detached while handling command/;
 /** How long such a failure waits for the extension to report the detach itself. */
@@ -316,22 +332,43 @@ export class RelayBridge {
 	}
 
 	/**
-	 * The browser a new tab opens in: the one named by `nearTargetId` (a tab the caller drives on
-	 * another connection; omp gives every tab its own), else one holding a tab this connection
-	 * drives, else the one showing the first selected tab (the tab an open without a target used to
-	 * adopt), else the last hello, so a reconnecting extension's hello does not move new tabs to another browser.
+	 * The browser the caller's tabs live in: the one named by `nearTargetId` (a tab the caller drives on another
+	 * connection; omp gives every tab its own), else one holding a tab this connection drives. Offline or not.
 	 */
-	#instanceForNewTab(conn: CdpConnection, nearTargetId: unknown): ExtInstance | undefined {
+	#affineInstance(conn: CdpConnection, nearTargetId: unknown): ExtInstance | undefined {
 		const near = typeof nearTargetId === "string" ? parseTargetId(nearTargetId) : null;
 		if (near) {
 			// The target id names its browser even after the user closed that tab.
 			const code = near.key.slice(0, near.key.indexOf(":"));
 			const inst = [...this.#instances.values()].find(inst => inst.code === code);
-			if (inst?.socket) return inst;
+			if (inst) return inst;
 		}
 		const own = [...conn.claims].map(key => this.#tabs.get(key)).find(tab => tab !== undefined);
-		const ownInst = own && this.#instances.get(own.instanceId);
-		if (ownInst?.socket) return ownInst;
+		return own && this.#instances.get(own.instanceId);
+	}
+
+	/** Wait for an offline browser's hello, up to {@link AFFINE_RECONNECT_WAIT_MS} after its socket closed. */
+	async #awaitReconnect(inst: ExtInstance): Promise<void> {
+		if (inst.socket || inst.goneSince === null) return;
+		const left = inst.goneSince + AFFINE_RECONNECT_WAIT_MS - Date.now();
+		if (left <= 0) return;
+		inst.reconnected ??= Promise.withResolvers<void>();
+		const timeout = Promise.withResolvers<void>();
+		const timer = setTimeout(timeout.resolve, left);
+		try {
+			await Promise.race([inst.reconnected.promise, timeout.promise]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	/**
+	 * The browser a new tab opens in: the caller's ({@link #affineInstance}), else the one showing the first selected
+	 * tab (the tab an open without a target used to adopt), else the last hello, so a reconnecting extension's hello
+	 * does not move new tabs to another browser.
+	 */
+	#instanceForNewTab(affine: ExtInstance | undefined): ExtInstance | undefined {
+		if (affine?.socket) return affine;
 		for (const tab of this.#tabs.values()) {
 			if (!tab.active || tab.discarded || !this.#eligible(tab)) continue;
 			const inst = this.#instances.get(tab.instanceId);
@@ -421,6 +458,7 @@ export class RelayBridge {
 		const inst = this.#instances.get(instanceId);
 		if (!inst || inst.socket !== socket) return;
 		inst.socket = null;
+		inst.goneSince = Date.now();
 		this.#rejectPendingExtensionRpcs(instanceId, new Error("relay extension disconnected"));
 		// Keep the instance's tabs listed (the browser may reconnect), but drop
 		// debugger state: the attachment died with the service worker.
@@ -498,9 +536,10 @@ export class RelayBridge {
 		// Hellos without an instance id (legacy extension builds) share one anon
 		// instance and keep the historical latest-wins replacement semantics.
 		const instanceId = typeof msg.instanceId === "string" && msg.instanceId.length > 0 ? msg.instanceId : "anon";
+		const code = instanceCode(instanceId, typeof msg.browserSession === "string" ? msg.browserSession : "");
 		let inst = this.#instances.get(instanceId);
 		if (!inst) {
-			inst = { instanceId, code: instanceCode(instanceId), socket: null, info: null };
+			inst = { instanceId, code, socket: null, info: null, goneSince: null, reconnected: null };
 			this.#instances.set(instanceId, inst);
 		} else if (inst.socket && inst.socket !== socket) {
 			// Same browser reconnected (service-worker restart): retire the old
@@ -514,7 +553,21 @@ export class RelayBridge {
 			this.#socketInstance.delete(inst.socket);
 			inst.socket.close();
 		}
+		if (inst.code !== code) {
+			// The browser restarted, and Chrome reuses tab ids: retire the previous run's targets, and the closes
+			// queued for them, so an old target id cannot name a tab the user opened since.
+			for (const [key, tab] of this.#tabs) {
+				if (tab.instanceId === instanceId) this.#onTabRemoved(key);
+			}
+			for (const key of this.#closeOnHello.keys()) {
+				if (key.startsWith(`${inst.code}:`)) this.#closeOnHello.delete(key);
+			}
+			inst.code = code;
+		}
 		inst.socket = socket;
+		inst.goneSince = null;
+		inst.reconnected?.resolve();
+		inst.reconnected = null;
 		this.#socketInstance.set(socket, instanceId);
 		inst.info = {
 			userAgent: msg.userAgent,
@@ -565,6 +618,9 @@ export class RelayBridge {
 					if (!ok) this.#onTabDetached(tab.tabKey, "reattach_failed", false);
 				});
 			}
+			// A tab the hello brings that no client was told about, such as one a browser opened before its
+			// extension connected, is announced now: no later change has to happen for Puppeteer to see it.
+			if (!tab.announced && this.#eligible(tab)) this.#announceTab(tab);
 		}
 		this.#syncGrouping();
 		this.#log("extension connected", {
@@ -1009,7 +1065,8 @@ export class RelayBridge {
 					return;
 				}
 				if (!(await this.#ensureAttached(tab))) {
-					this.#replyError(conn, msg, `Cannot attach to tab ${tab.tabKey} (${tab.url})`);
+					const reason = tab.refusal ? `: ${tab.refusal}` : "";
+					this.#replyError(conn, msg, `Cannot attach to tab ${tab.tabKey} (${tab.url})${reason}`);
 					return;
 				}
 				const sessionId = this.#mintSession(conn, parsed.kind, tab);
@@ -1028,9 +1085,13 @@ export class RelayBridge {
 				const url =
 					typeof msg.params?.url === "string" && msg.params.url.length > 0 ? msg.params.url : "about:blank";
 				// `nearTargetId` is the relay's own parameter: open in the browser of that tab.
-				const inst = near
-					? this.#instances.get(near.instanceId)
-					: this.#instanceForNewTab(conn, msg.params?.nearTargetId);
+				const affine = near ? undefined : this.#affineInstance(conn, msg.params?.nearTargetId);
+				// Its extension may be reconnecting: another browser can be another profile, logged in elsewhere.
+				if (affine && !affine.socket) {
+					await this.#awaitReconnect(affine);
+					if (this.#conns.get(conn.id) !== conn) return;
+				}
+				const inst = near ? this.#instances.get(near.instanceId) : this.#instanceForNewTab(affine);
 				if (!inst || !inst.socket) {
 					this.#replyError(conn, msg, "relay extension is not connected");
 					return;
@@ -1057,6 +1118,15 @@ export class RelayBridge {
 				// Creating a tab is an explicit act of driving it.
 				const createdKey = tabKeyOf(inst.code, result.tab.tabId);
 				this.#claimTab(conn, createdKey);
+				// Puppeteer waits for the new page's auto-attach. Answer once it settled: a tab Chrome refuses (an
+				// extension debugger policy refuses every tab) would otherwise hold the open for its whole timeout.
+				const created = this.#tabs.get(createdKey);
+				if (conn.autoAttach && created && !(await this.#ensureAttached(created)) && created.refusal) {
+					const refusal = created.refusal;
+					await this.#closeTab(createdKey, created.tabId, inst).catch(() => undefined);
+					this.#replyError(conn, msg, `Chrome refused to attach to the new tab: ${refusal}`);
+					return;
+				}
 				this.#reply(conn, msg, { targetId: pageTargetIdFromKey(createdKey) });
 				return;
 			}
@@ -1244,7 +1314,7 @@ export class RelayBridge {
 		// another extension's frame (a password manager's inline menu) starts loading in the tab: that tab
 		// stays adoptable and is announced again at once; an attach Chrome refuses still bans it (#ensureAttached).
 		const cancelledByUser = reason === "canceled_by_user";
-		if (cancelledByUser) tab.banned = true;
+		if (cancelledByUser) tab.refusal = "the user cancelled Chrome's debugging bar";
 		// A user cancel releases the tab's omp-group membership; any other detach keeps it.
 		this.#syncTabGrouping(tab);
 		// Relay-private event, ahead of the sessions' detach: a client driving the tab learns that Chrome
@@ -1282,7 +1352,7 @@ export class RelayBridge {
 			tab = new TabState(instanceId, inst.code, snap.tabId, snap);
 			this.#tabs.set(key, tab);
 		} else {
-			if (tab.url !== snap.url) tab.banned = false;
+			if (tab.url !== snap.url) tab.refusal = undefined;
 			// The user dragging a tab out of the omp group is an opt-out; the
 			// relay never fights the user over grouping.
 			if (tab.grouped && tab.ompGroupId !== undefined && snap.groupId !== tab.ompGroupId) {
@@ -1346,9 +1416,9 @@ export class RelayBridge {
 		if (!hasAutoAttach) return;
 		void this.#ensureAttached(tab, { retryAfterDiscard: true }).then(ok => {
 			if (!ok) {
-				// A refused attach banned the tab until its URL changes. Withdraw the announcement too, or the URL change
+				// A refused attach bars the tab until its URL changes. Withdraw the announcement too, or the URL change
 				// finds the tab already announced and neither announces nor attaches it again.
-				if (tab.banned && tab.announced && this.#tabs.get(tab.tabKey) === tab) this.#retractTab(tab);
+				if (tab.refusal && tab.announced && this.#tabs.get(tab.tabKey) === tab) this.#retractTab(tab);
 				return;
 			}
 			if (tab.discarded || !this.#eligible(tab) || this.#tabs.get(tab.tabKey) !== tab) {
@@ -1649,12 +1719,11 @@ export class RelayBridge {
 				return !tab.discarded;
 			})
 			.catch(err => {
-				this.#log("attach failed", {
-					tabKey: tab.tabKey,
-					url: tab.url,
-					error: err instanceof Error ? err.message : String(err),
-				});
-				if (!(err instanceof ExtensionReplacedError) && generation === tab.attachGeneration) tab.banned = true;
+				const error = err instanceof Error ? err.message : String(err);
+				this.#log("attach failed", { tabKey: tab.tabKey, url: tab.url, error });
+				if (!(err instanceof ExtensionReplacedError) && generation === tab.attachGeneration) {
+					tab.refusal = error || "Chrome refused the attach";
+				}
 				return false;
 			})
 			.finally(() => {
@@ -1675,7 +1744,7 @@ export class RelayBridge {
 	}
 
 	#eligible(tab: TabState): boolean {
-		if (tab.banned) return false;
+		if (tab.refusal) return false;
 		const instance = this.#instances.get(tab.instanceId);
 		if (!instance?.socket || instance.info?.discardedTabsProtocol !== DISCARDED_TABS_PROTOCOL_VERSION) return false;
 		if (!tab.url) return true;

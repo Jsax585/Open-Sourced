@@ -38,6 +38,7 @@ import { cursorMcpPrefersReplaceEdit, normalizeCursorReplaceArgs } from "./curso
 import type { MCPResourceReadResult } from "./mcp/types";
 import { mcpServerResourcesAllowed, type McpOwnedToolRef } from "./mcp/resource-scope";
 import { resolveApproval, resolveApprovalFromContext } from "./tools/approval";
+import { getApprovalGrants } from "./tools/approval-cache";
 import {
 	confineToWorkspace,
 	resolveReadPathAsync,
@@ -421,12 +422,14 @@ function allowsDirectFileMutation(options: CursorExecBridgeOptions): boolean {
  * proceed, or the refusal text to answer with.
  */
 function refuseByWritePolicy(options: CursorExecBridgeOptions, toolName: string, pathArg: string): string | null {
-	const { approvalMode, userPolicies } = resolveApprovalFromContext(options.getToolContext?.());
+	const context = options.getToolContext?.();
+	const { approvalMode, userPolicies } = resolveApprovalFromContext(context);
 	const approval = resolveApproval(
 		{ name: toolName, approval: "write" },
 		{ path: pathArg },
 		approvalMode,
 		userPolicies,
+		getApprovalGrants(context?.settings?.getAgentDir(), context?.sessionManager?.getSessionId()),
 	);
 	if (approval.policy === "allow") return null;
 	return approval.policy === "deny"
@@ -1205,12 +1208,14 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		if (preferReplace && this.options.isToolExecutable && !this.options.isToolExecutable("edit")) return false;
 		const tool = preferReplace ? this.options.getEditReplaceTool?.() : resolveFrameTool(this.options, toolName);
 		if (!tool) return false;
-		const { approvalMode, userPolicies } = resolveApprovalFromContext(this.options.getToolContext?.());
+		const context = this.options.getToolContext?.();
+		const { approvalMode, userPolicies } = resolveApprovalFromContext(context);
 		const approval = resolveApproval(
 			tool,
 			preferReplace ? normalizeCursorReplaceArgs(args) : args,
 			approvalMode,
 			userPolicies,
+			getApprovalGrants(context?.settings?.getAgentDir(), context?.sessionManager?.getSessionId()),
 		);
 		return approval.policy === "allow";
 	}
