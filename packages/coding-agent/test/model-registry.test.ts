@@ -2059,8 +2059,8 @@ describe("ModelRegistry", () => {
 			expect(gpt56?.cost.output).toBeGreaterThan(0);
 			expect(gpt56?.cost.longContext).toMatchObject({
 				inputThreshold: 272_000,
-				input: 10,
-				output: 45,
+				input: 8,
+				output: 30,
 			});
 		});
 
@@ -2489,7 +2489,11 @@ describe("ModelRegistry", () => {
 			await registry.refresh("online");
 
 			const disabledProbeUrls = requestedUrls.filter(
-				url => url.includes("127.0.0.1:11434") || url.includes("127.0.0.1:8080") || url.includes("127.0.0.1:1234"),
+				url =>
+					url.includes("127.0.0.1:11434") ||
+					url.includes("127.0.0.1:8080") ||
+					url.includes("127.0.0.1:9931") ||
+					url.includes("127.0.0.1:1234"),
 			);
 			expect(disabledProbeUrls).toEqual([]);
 		});
