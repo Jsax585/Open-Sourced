@@ -17,6 +17,7 @@ import {
 	SUBAGENT_WARNING_EMPTY_MESSAGE,
 	SUBAGENT_WARNING_MISSING_YIELD,
 } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { formatTaskResultSummary } from "@oh-my-pi/pi-coding-agent/task/result-summary";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { YieldTool } from "@oh-my-pi/pi-coding-agent/tools/yield";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -561,6 +562,52 @@ describe("runSubprocess yield reminders", () => {
 		expect(promptOptions[1]?.attribution).toBe("agent");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+	});
+	it("H1 preserves a structured report when reminder replies only refer to it", async () => {
+		const report = "## Review\n\nThe attestation gate has no blocking findings.";
+		const reminderReply = "See the summary above.";
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			const assistant = createAssistantStopMessage(promptIndex === 1 ? report : reminderReply);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-h1" });
+		const expected = `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${report}${reminderReply.repeat(3)}`;
+		const summary = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+
+		expect(prompts).toHaveLength(4);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(expected);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
+		expect(summary).toContain('status="completed"');
+		expect(summary).toContain(`<output>\n${expected}\n</output>`);
+	});
+
+	it("H2 warns when a structured child only says it is writing the report", async () => {
+		const status = "Everything verified; writing the report now.";
+		const reminderReply = "See the summary above.";
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			const assistant = createAssistantStopMessage(promptIndex === 1 ? status : reminderReply);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: "subagent-h2" });
+		const expected = `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${status}${reminderReply.repeat(3)}`;
+
+		expect(prompts).toHaveLength(4);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(expected);
+		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 	});
 
 	it("returns the final message verbatim, with no yield tool or reminders, when unstructured", async () => {

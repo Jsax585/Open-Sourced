@@ -850,8 +850,8 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				stderr = "";
 			}
 		} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
-			exitCode = 0;
-			stderr = "";
+			rawOutput = `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${rawOutput}`;
+			stderr = SUBAGENT_WARNING_MISSING_YIELD;
 		} else if (exitCode === 0) {
 			const hasRawOutput = rawOutput.trim().length > 0;
 			rawOutput = rawOutput ? `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${rawOutput}` : SUBAGENT_WARNING_MISSING_YIELD;
