@@ -187,11 +187,14 @@ function Body({ args, result, host }: ToolRenderProps): ReactNode {
 		let aborted = 0;
 		let failed = 0;
 		for (const res of results) {
-			const { label } = resultStatus(res);
-			if (label === "done") ok++;
-			else if (label === "merge failed") mergeFailed++;
-			else if (label === "aborted") aborted++;
-			else failed++;
+			if (res.aborted === true) {
+				aborted++;
+			} else if (num(res.exitCode) === 0) {
+				if (str(res.error)) mergeFailed++;
+				else ok++;
+			} else {
+				failed++;
+			}
 		}
 		const total = details ? num(details.totalDurationMs) : null;
 		footer = (

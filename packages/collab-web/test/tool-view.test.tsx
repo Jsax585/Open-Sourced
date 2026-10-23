@@ -207,6 +207,8 @@ describe("ToolView task missing-yield provenance", () => {
 			});
 			expect(html).toContain("tv-note--warn");
 			expect(html).toContain(warning);
+			expect(html).toContain("1 succeeded");
+			expect(html).not.toContain("1 failed");
 		}
 	});
 
