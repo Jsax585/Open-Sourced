@@ -664,6 +664,40 @@ describe("fetchCursorUsableModels", () => {
 		expect([...byId.keys()].filter(id => id.startsWith("admin-blocked"))).toEqual([]);
 	});
 
+	it("does not keep uncovered AvailableModels rows the server hides or admin-disables by default", async () => {
+		const row = (name: string, flags: { isHidden?: boolean; defaultDisabledInAdminAllowlist?: boolean }) =>
+			create(AvailableModelsResponse_ModelDetailsSchema, {
+				name,
+				supportsAgent: true,
+				...flags,
+				variants: [richVariant(`${name}-high`, { reasoning: "high" })],
+			});
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: [create(ModelDetailsSchema, { modelId: "covered-hidden-high" })],
+		});
+		const available = create(AvailableModelsResponseSchema, {
+			models: [
+				row("plain-uncovered", {}),
+				row("hidden-uncovered", { isHidden: true }),
+				row("admin-disabled-uncovered", { defaultDisabledInAdminAllowlist: true }),
+				// Covered rows are unaffected by the flags: the usable list decides.
+				row("covered-hidden", { isHidden: true }),
+			],
+		});
+		const flaggedBaseUrl = await startCursorDiscoveryRpcServer({
+			"/agent.v1.AgentService/GetUsableModels": toBinary(GetUsableModelsResponseSchema, usable),
+			"/aiserver.v1.AiService/AvailableModels": toBinary(AvailableModelsResponseSchema, available),
+		});
+
+		const models = await fetchCursorUsableModels({
+			apiKey: "account-token",
+			baseUrl: flaggedBaseUrl,
+			timeoutMs: 1_000,
+		});
+
+		expect((models ?? []).map(model => model.id)).toEqual(["covered-hidden", "plain-uncovered"]);
+	});
+
 	it("publishes no rich models when GetUsableModels decodes to an empty list", async () => {
 		const available = create(AvailableModelsResponseSchema, {
 			models: [
