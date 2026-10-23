@@ -566,9 +566,13 @@ function normalizeRichCursorModels(
 
 		// GetUsableModels lags AvailableModels (new SKUs the IDE already enables):
 		// a model none of whose ids a usable row matches (blocked variants count
-		// as matched) is kept whole; blocked variants are still filtered.
-		const covered = [...collectRichCursorCatalogIds([details])].some(id => usableModelIds?.has(id));
-		const variants = normalizeRichCursorVariants(details, baseId, covered ? usableModelIds : undefined);
+		// as matched) is kept whole; blocked variants are still filtered. An empty
+		// usable list stays authoritative (nothing usable), never "all uncovered".
+		const uncovered =
+			usableModelIds !== undefined &&
+			usableModelIds.size > 0 &&
+			![...collectRichCursorCatalogIds([details])].some(id => usableModelIds.has(id));
+		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds);
 		if (variants.length === 0) continue;
 		// The bare lane id belongs to Cursor's flagged default configuration, so
 		// seed axis defaults from it before falling back to first-seen values;

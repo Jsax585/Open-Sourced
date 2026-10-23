@@ -664,6 +664,33 @@ describe("fetchCursorUsableModels", () => {
 		expect([...byId.keys()].filter(id => id.startsWith("admin-blocked"))).toEqual([]);
 	});
 
+	it("publishes no rich models when GetUsableModels decodes to an empty list", async () => {
+		const available = create(AvailableModelsResponseSchema, {
+			models: [
+				create(AvailableModelsResponse_ModelDetailsSchema, {
+					name: "fixture-model",
+					supportsAgent: true,
+					variants: [richVariant("fixture-model-high", { reasoning: "high" })],
+				}),
+			],
+		});
+		const emptyUsableBaseUrl = await startCursorDiscoveryRpcServer({
+			"/agent.v1.AgentService/GetUsableModels": toBinary(
+				GetUsableModelsResponseSchema,
+				create(GetUsableModelsResponseSchema, { models: [] }),
+			),
+			"/aiserver.v1.AiService/AvailableModels": toBinary(AvailableModelsResponseSchema, available),
+		});
+
+		const models = await fetchCursorUsableModels({
+			apiKey: "account-token",
+			baseUrl: emptyUsableBaseUrl,
+			timeoutMs: 1_000,
+		});
+
+		expect(models).toEqual([]);
+	});
+
 	it("decodes Cursor's length-delimited vendor metadata", () => {
 		const encoded = Uint8Array.from(Buffer.from("0a0766697874757265d202020801", "hex"));
 		const details = fromBinary(AvailableModelsResponse_ModelDetailsSchema, encoded);
