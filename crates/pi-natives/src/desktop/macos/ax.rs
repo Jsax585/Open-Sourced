@@ -969,19 +969,17 @@ impl AxBackend for MacAx {
 	fn window_id(&mut self, h: &AxHandle, windows: &[DesktopWindow]) -> CoreResult<String> {
 		let element = mac_handle(h)?;
 		let pid = element_pid(element)?;
-		let wid = match element_window(element) {
-			Some(window) => window_id(&window).ok_or_else(|| {
+		let wid = if let Some(window) = element_window(element) {
+			window_id(&window).ok_or_else(|| {
 				DesktopError::ax_failed("AX element's native window id is unavailable")
-			})?,
-			None => match listed_window_id(pid, element) {
-				Some(wid) => wid,
-				None => {
-					// A destroyed element has no window either: say so as the
-					// `StaleRef` every element operation gives.
-					copy_held_attribute(element, "AXRole")?;
-					return Err(DesktopError::ax_failed("AX element has no identifiable owning window"));
-				},
-			},
+			})?
+		} else if let Some(wid) = listed_window_id(pid, element) {
+			wid
+		} else {
+			// A destroyed element has no window either: say so as the
+			// `StaleRef` every element operation gives.
+			copy_held_attribute(element, "AXRole")?;
+			return Err(DesktopError::ax_failed("AX element has no identifiable owning window"));
 		};
 		windows
 			.iter()
