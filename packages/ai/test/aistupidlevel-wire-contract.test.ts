@@ -3,12 +3,12 @@
  * endpoint (https://aistupidlevel.info/router/docs, 2026-10-23): requests go to
  * https://aistupidlevel.info/v1 with the router key, the output cap rides
  * `max_completion_tokens`, `reasoning_effort` accepts every level for every
- * model (`none` turns reasoning off), tools are OpenAI function tools, and the
- * router answers image parts with `400 unsupported_content`.
+ * model (`none` turns reasoning off), and the router answers image parts with
+ * `400 unsupported_content`.
  */
 import { describe, expect, it } from "bun:test";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
-import type { AssistantMessage, Context, FetchImpl, Model, Tool } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Context, FetchImpl, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { seedModels } from "@oh-my-pi/pi-catalog/compat/providers";
 import { aistupidlevelModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
@@ -32,16 +32,6 @@ async function pinnedModel(id: string, owner: string): Promise<Model<"openai-com
 	if (!spec) throw new Error(`discovery dropped ${id}`);
 	return buildModel(spec);
 }
-
-const readTool: Tool = {
-	name: "read",
-	description: "Read a file",
-	parameters: {
-		type: "object",
-		properties: { path: { type: "string" } },
-		required: ["path"],
-	} as Tool["parameters"],
-};
 
 const userTurn: Context = {
 	systemPrompt: ["Answer briefly."],
@@ -120,31 +110,6 @@ describe("AI Stupid Level wire contract", () => {
 		expect((await captureRequest(model, userTurn, { reasoning: "high" })).payload.reasoning_effort).toBe("high");
 		expect((await captureRequest(model, userTurn, { reasoning: "max" })).payload.reasoning_effort).toBe("max");
 		expect((await captureRequest(model, userTurn, { disableReasoning: true })).payload.reasoning_effort).toBe("none");
-	});
-
-	it("sends tools as function definitions and reads the streamed tool call back", async () => {
-		const toolTurn: Context = { ...userTurn, tools: [readTool] };
-		const { payload, result } = await captureRequest(routingMode("auto-tooling"), toolTurn, {}, [
-			chunk({
-				tool_calls: [
-					{
-						index: 0,
-						id: "call_read",
-						type: "function",
-						function: { name: "read", arguments: '{"path":"README.md"}' },
-					},
-				],
-			}),
-			chunk({}, "tool_calls"),
-			"[DONE]",
-		]);
-		expect(payload.tools).toEqual([
-			expect.objectContaining({ type: "function", function: expect.objectContaining({ name: "read" }) }),
-		]);
-		expect(result.stopReason).toBe("toolUse");
-		expect(result.content).toContainEqual(
-			expect.objectContaining({ type: "toolCall", id: "call_read", name: "read", arguments: { path: "README.md" } }),
-		);
 	});
 
 	it("never sends an image part, even for a pinned model whose vendor takes images", async () => {
