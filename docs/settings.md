@@ -617,6 +617,7 @@ tools:
 | `tools.artifactTailLines`      | number  | `500`   | Max tail lines kept inline on spill.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `tools.artifactMaxBytes` | number | `16` | MB cap on the artifact file saved for streaming tool output (bash, python, js eval); larger output keeps its beginning (up to 3 MB) and most recent remainder around a truncation notice. `0` = unlimited. |
 | `tools.xdev` | boolean | `true` | Mount discoverable tools under `xd://` device URLs instead of exposing every schema directly. Disabling it exposes enabled tools top-level. |
+| `tools.forceDiscoverable` | array | `[]` | Exact built-in names to mount under `xd://` despite their default load mode. Requires `tools.xdev`; does not enable disabled tools or override explicit tool selections or safety pins. |
 | `tools.xdevDocs` | enum | `catalog` | `inline` includes all mounted docs/schemas, `builtins` inlines built-ins only, `catalog` lists devices with docs fetched on demand. |
 | `tools.xdevInlineDevices` | array | `[]` | Dynamic-device name globs to inline in `builtins` mode; ignored in `catalog` mode. |
 | `async.enabled` | boolean | `true` | Enable async bash commands and background task execution. |
@@ -624,6 +625,16 @@ tools:
 | `async.widgets` | boolean | `true` | Live widgets for running background jobs (charts, bars, status grids derived from the job's output) in the `wait` card, the jobs pill and its hover card, and the jobs sheet. The `widget` model role writes one spec per job; every later update is computed locally without model calls. Off: plain job rows. |
 
 Mounting still follows the session's explicit tool allow-list. A session that permits `read` but omits `write` can receive a device-only write transport; this does not grant filesystem writes.
+
+To keep `task` and `eval` available without their full schemas upfront:
+
+```yaml
+tools:
+  forceDiscoverable: [task, eval]
+  xdevDocs: catalog
+```
+
+The model sees a short catalog entry, reads `xd://<tool>` for docs/schema, and writes JSON arguments there to execute it. `inline` and `builtins` documentation modes still inline built-in schemas. `read`, `write`, `todo`, `ask`, `grep`, `web_search`, `yield`, and the forced-call `think` tool stay top-level for transport or harness compatibility. Explicit `--tools`/SDK `toolNames` selections take precedence; this setting does not change custom or extension tools.
 
 Individual built-in tools and Eval preludes are toggled by their own keys, e.g. `bash.enabled`, `launch.enabled`, `eval.py`, `eval.js`, `glob.enabled`, `grep.enabled`, `fetch.enabled`, `browser.enabled`, `computer.enabled`, `ratchet.enabled` (default `false`; the `ratchet(flow)` eval/hillclimb prelude, which `/ratchet` turns on for the current session only), `archive.enabled` (default `true`; the read-only `archive` eval prelude over prompt history, recent projects, past sessions, and recaps), `astEdit.enabled`, `astGrep.enabled`, `find.enabled` (`auto`/`on`/`off`; `auto` enables `find` only when the `judge` role resolves to a native TypeSafe jev model), and `web_search.enabled`. Image questions use `read <image>?q=<question>` and honor `images.questionTimeoutMs`.
 

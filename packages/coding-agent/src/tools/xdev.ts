@@ -77,14 +77,16 @@ export type XdevDocsMode = "inline" | "builtins" | "catalog";
 
 /**
  * Whether an enabled tool is presented under `xd://` (rather than top-level)
- * while the `xd://` transport is active. Discoverable tools mount unless they
- * are pinned top-level by {@link XDEV_KEEP_TOP_LEVEL} or carry the transport
- * itself ({@link XDEV_TRANSPORT_TOOLS}); essential tools never do. The caller
- * gates this on the transport being active.
+ * while the `xd://` transport is active. Explicit built-in overrides bypass
+ * the default load mode, never the transport or safety pins. The caller gates
+ * transport availability, built-in provenance, and explicit tool selections.
  */
-export function isMountableUnderXdev(tool: { name: string; loadMode?: ToolLoadMode }): boolean {
+export function isMountableUnderXdev(
+	tool: { name: string; loadMode?: ToolLoadMode },
+	forceDiscoverable = false,
+): boolean {
 	if (tool.name in XDEV_TRANSPORT_TOOLS || tool.name in XDEV_KEEP_TOP_LEVEL) return false;
-	return tool.loadMode === "discoverable";
+	return (forceDiscoverable && tool.name !== "think") || tool.loadMode === "discoverable";
 }
 
 /** Dispatch metadata carried on write-tool details for renderer delegation. */
