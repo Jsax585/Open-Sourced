@@ -142,3 +142,97 @@ describe("wait structured output rendering", () => {
 		expect(text).toContain(`full payload at agent://Foo,`);
 	});
 });
+
+describe("running task progress in wait and jobs rows", () => {
+	const pendingRuns: PromiseWithResolvers<AsyncJobRunResult>[] = [];
+
+	beforeEach(() => {
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+	});
+	afterEach(() => {
+		for (const pending of pendingRuns.splice(0)) pending.resolve({ text: "done" });
+		AgentRegistry.resetGlobalForTests();
+		IrcBus.resetGlobalForTests();
+	});
+
+	/** Register a job that stays running, optionally after reporting one task progress record. */
+	async function registerRunningJob(
+		manager: AsyncJobManager,
+		type: "task" | "bash",
+		label: string,
+		progressRecord?: Record<string, unknown>,
+	): Promise<string> {
+		const pending = Promise.withResolvers<AsyncJobRunResult>();
+		pendingRuns.push(pending);
+		const reported = Promise.withResolvers<void>();
+		const jobId = manager.register(
+			type,
+			label,
+			async ({ jobId, reportProgress }) => {
+				if (progressRecord) await reportProgress("running", { progress: [{ ...progressRecord, id: jobId }] });
+				reported.resolve();
+				return pending.promise;
+			},
+			{ ownerId: SELF_ID },
+		);
+		await reported.promise;
+		return jobId;
+	}
+
+	const progress = {
+		requests: 90,
+		cost: 18.4,
+		contextTokens: 160_000,
+		contextWindow: 1_000_000,
+		stage: "implementing   acp\nsurface",
+	};
+
+	function renderText(manager: AsyncJobManager, op: "wait" | "jobs", jobIds: string[]): string {
+		const jobs = jobIds.map(id => manager.getJob(id)!);
+		const result = buildJobResult(makeSession(manager), manager, op, jobs, []);
+		return result.content[0]?.type === "text" ? result.content[0].text : "";
+	}
+
+	test("#given a running task job with progress #when wait renders #then the Still Running row carries duration, requests, cost, context and stage", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const jobId = await registerRunningJob(manager, "task", "AcpSurface", progress);
+
+		const row = renderText(manager, "wait", [jobId])
+			.split("\n")
+			.find(line => line.startsWith(`- \`${jobId}\``));
+
+		expect(row).toMatch(
+			new RegExp(
+				`^- \`${jobId}\` \\[task\\] — AcpSurface — \\S+ · 90 req · \\$18\\.40 · ctx 160K/1M · stage: implementing acp surface$`,
+			),
+		);
+	});
+
+	test("#given the same running task job #when jobs renders #then its row carries the same suffix before the agent pointer", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const jobId = await registerRunningJob(manager, "task", "AcpSurface", progress);
+
+		const row = renderText(manager, "jobs", [jobId])
+			.split("\n")
+			.find(line => line.startsWith(`- \`${jobId}\``));
+
+		expect(row).toMatch(
+			new RegExp(
+				`^- \`${jobId}\` \\[task\\] — running — AcpSurface — \\S+ · 90 req · \\$18\\.40 · ctx 160K/1M · stage: implementing acp surface — agent://${jobId}$`,
+			),
+		);
+	});
+
+	test("#given a running bash job and a running task job without a progress record #when wait renders #then both rows are exactly the id, type and label", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const bashId = await registerRunningJob(manager, "bash", "bun test");
+		const taskId = await registerRunningJob(manager, "task", "Quiet");
+
+		const rows = renderText(manager, "wait", [bashId, taskId])
+			.split("\n")
+			.filter(line => line.startsWith("- `"));
+
+		expect(rows).toEqual([`- \`${bashId}\` [bash] — bun test`, `- \`${taskId}\` [task] — Quiet`]);
+	});
+});
