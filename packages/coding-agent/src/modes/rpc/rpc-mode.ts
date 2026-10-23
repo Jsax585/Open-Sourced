@@ -1677,6 +1677,23 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		goalController.observe(event);
 		promptResults.observe(event);
 		settleWatcher.observe(event);
+		if (event.type === "agent_end") {
+			// ACP parity (fw_sA): apply a deferred persona model switch/restore
+			// queued by a mid-turn /agent before the turn's trailing reports.
+			// Fire-and-forget: the session emit does not await listeners, and
+			// a failed apply keeps the entry owed for the next boundary.
+			session
+				.flushDeferredModelRestore()
+				.then(applied => {
+					if (applied) session.getPersonaRuntime()?.onPendingModelRestoreFlushed();
+				})
+				.catch(error => {
+					logger.warn("Failed to apply deferred persona model restore at turn end", {
+						sessionId: session.sessionId,
+						error: String(error),
+					});
+				});
+		}
 	});
 	await goalController.reconcile();
 	await goalController.settled();

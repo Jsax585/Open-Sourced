@@ -47,6 +47,7 @@ import type { JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { ToolSession } from "../tools";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
+import type { SessionToolPolicy } from "./tool-policy";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { SessionManager } from "./session-manager";
 
@@ -172,9 +173,11 @@ export interface AgentSessionConfig {
 	/**
 	 * Live extension-root policy inherited from the owning session. Subagents use
 	 * this provider so explicit roots, discovery mode, configured roots, and
-	 * provenance survive recursive task discovery.
+	 * provenance survive recursive task discovery. The optional session cwd lets
+	 * multi-workspace hosts (ACP) rebase relative extension spellings per
+	 * client workspace; an omitted argument resolves against the launch cwd.
 	 */
-	extensionRoots?: () => EffectiveExtensionRoots;
+	extensionRoots?: (sessionCwd?: string) => EffectiveExtensionRoots;
 	/**
 	 * Parent-imported extension factories rebound to this session's own
 	 * ExtensionAPI. Forwarded by session forks (e.g. `/tan`) so the child
@@ -193,8 +196,6 @@ export interface AgentSessionConfig {
 	additionalExtensionPaths?: readonly string[];
 	/** Mirror of `disableExtensionDiscovery`; used when no inherited root provider exists. */
 	disableExtensionDiscovery?: boolean;
-	/** Whether the session spawn policy permits the read-only `scout` subagent. Defaults to true. */
-	scoutAllowedBySpawnPolicy?: boolean;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
@@ -402,6 +403,21 @@ export interface AgentSessionConfig {
 	advisorConfigWarnings?: string[];
 	/** Disconnect the MCP manager owned by this session during disposal. */
 	disconnectOwnedMcpManager?: () => Promise<void>;
+	/**
+	 * Session-wide tool policy owning effective-set computation for this session.
+	 *
+	 * Ownership: the AgentSession owns this instance once constructed. It is set
+	 * by sdk.ts (`createAgentSessionScoped`) at construction time; PersonaRuntime
+	 * reads and mutates it via `enterPersona`/`exitPersona`.
+	 */
+	toolPolicy?: SessionToolPolicy;
+	/**
+	 * Host spawn-policy ceiling intersected with the persona-owned
+	 * `AgentSession.setSessionSpawns` override. A string is CLI `--spawns`
+	 * (comma-separated names, `*` = unrestricted); `null` = unrestricted.
+	 * Absent = unrestricted.
+	 */
+	getSessionSpawns?: () => string | string[] | "*" | null;
 	/** System prompt used by automatic session-title generation. */
 	titleSystemPrompt?: string;
 	/**

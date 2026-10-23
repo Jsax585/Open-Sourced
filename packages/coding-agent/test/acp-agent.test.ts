@@ -737,6 +737,35 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("hides plan mode under an active persona but refuses stale selections actionably", async () => {
+		const harness = await createHarness();
+		cfgPlanEnabled.set(Settings.instance, true);
+
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		expect(created.modes?.availableModes.map(mode => mode.id)).toEqual(["default", "plan"]);
+		const session = harness.findSession(created.sessionId)!;
+		// Activate a persona on the fake (the guard reads getToolPolicy only).
+		(session as unknown as { getToolPolicy: () => { isPersonaActive: () => boolean } }).getToolPolicy = () => ({
+			isPersonaActive: () => true,
+		});
+
+		// Plan is hidden from fresh capability surfaces for this session...
+		const reloaded = await harness.agent.loadSession({
+			sessionId: created.sessionId,
+			cwd: harness.cwdA,
+			mcpServers: [],
+		});
+		expect(reloaded.modes?.availableModes.map(mode => mode.id)).toEqual(["default"]);
+		// ...but a stale cached Plan selection gets the actionable refusal,
+		// not the generic unsupported-mode error.
+		await expect(harness.agent.setSessionMode({ sessionId: created.sessionId, modeId: "plan" })).rejects.toThrow(
+			"Exit the agent persona before entering plan mode.",
+		);
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
 	it("plan-proposal handler errors when the plan file is missing", async () => {
 		const harness = await createHarness();
 		cfgPlanEnabled.set(Settings.instance, true);

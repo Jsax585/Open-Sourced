@@ -1446,6 +1446,10 @@ export class EventController {
 	}
 
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
+		// Persona info notices (e.g. the switch activation flash) already surface
+		// through direct showStatus calls with the final text; rendering the event
+		// too would flash a "persona: ..."-prefixed duplicate first.
+		if (event.source === "persona" && event.level === "info") return;
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
 			this.ctx.showError(message);

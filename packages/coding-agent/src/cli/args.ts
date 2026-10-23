@@ -30,6 +30,8 @@ export interface Args {
 	profile?: string;
 	alias?: string;
 	allowHome?: boolean;
+	/** Run the session as a discovered task agent (persona) by name. */
+	agent?: string;
 	provider?: string;
 	model?: string;
 	config?: string[];
@@ -170,6 +172,26 @@ export function validateRestorePrompt(args: Args): void {
  * session. Runs on the extension-aware reparse: an extension flag's value can
  * look like a positional prompt to the startup parse.
  */
+/**
+ * Reject a `--agent` launch that cannot host a persona: an empty name silently
+ * starts a plain session (falsy `parsed.agent`), and `--goal`/`--plan-yolo`
+ * startups refuse persona entry at runtime — fail at parse instead of
+ * launching into a refused state.
+ */
+export function validateAgentLaunch(args: Args): void {
+	if (args.agent !== undefined && args.agent.trim() === "") {
+		throw new CliUsageError("--agent requires a non-empty agent name.");
+	}
+	if (args.agent !== undefined && args.goal !== undefined) {
+		throw new CliUsageError("--agent cannot be combined with --goal; personas and goal mode are mutually exclusive.");
+	}
+	if (args.agent !== undefined && args.planYolo) {
+		throw new CliUsageError(
+			"--agent cannot be combined with --plan-yolo; personas and plan yolo are mutually exclusive.",
+		);
+	}
+}
+
 export function validateGoalStartup(
 	args: Args,
 	goalEnabled: boolean,

@@ -194,6 +194,16 @@ export interface EffectiveSubagentPolicy {
 	applyChanges: boolean;
 	enableLsp: boolean;
 	enableIrc: boolean;
+	/** Whether this run dispatches a restricted child (plan mode, restricted host, or restricted policy). */
+	restrictToolNames: boolean;
+	/**
+	 * Whether the child tool derivation runs restricted. False when no session
+	 * policy exists to bound against (fixtures/foreign sessions): the derivation
+	 * then runs legacy-unrestricted while presentation still sees the restriction.
+	 */
+	derivationRestrictToolNames?: boolean;
+	/** The parent's effective tool grant when restricted; `null` for unrestricted parents. */
+	parentEffectiveGrant: ReadonlySet<string> | null;
 }
 
 /** Settled child execution plus data needed by the frontends' own rendering. */
@@ -450,6 +460,27 @@ export async function resolveEffectiveSubagentPolicy(
 			"Subagent isolated execution requires task.isolation.enabled; it is currently false.",
 		);
 	}
+
+	const toolPolicy = request.session.getToolPolicy?.();
+	// Persona/restriction state lives on the policy, not the legacy shadow
+	// field: launch (--agent) and live /agent switch both mutate the policy,
+	// so this derivation is identical for both paths. Spawn inheritance reads
+	// the BASELINE (registry ∩ cliGrant ∩ default-activity): the persona layer
+	// scopes the main agent's own behavior; it does not cage spawned
+	// descendants — children are bounded by the ORIGINAL main's restriction
+	// state (CLI grant/default-activity) plus their own frontmatter. The
+	// persona's spawns whitelist (getSessionSpawns) still gates WHICH agents
+	// may spawn.
+	const baselineRestricted = toolPolicy?.isBaselineRestricted() ?? false;
+	const restrictToolNames = planMode || request.session.restrictToolNames === true || baselineRestricted;
+	// No policy on the session (fixtures, foreign ToolSessions): fall back to the
+	// session's own restriction bit. Without a grant to bound against, the child
+	// derivation would otherwise intersect against nothing and strip every tool —
+	// so the derivation runs UNRESTRICTED there (legacy behavior), while
+	// presentation (MCP/extension preload gates) still sees the restriction.
+	const parentEffectiveGrant: ReadonlySet<string> | null =
+		restrictToolNames && toolPolicy ? toolPolicy.baselineEffectiveSet() : null;
+	const derivationRestrictToolNames = restrictToolNames && toolPolicy !== undefined;
 	return {
 		discovery,
 		agentName,
@@ -465,6 +496,9 @@ export async function resolveEffectiveSubagentPolicy(
 		structured,
 		schema,
 		planMode,
+		restrictToolNames,
+		derivationRestrictToolNames,
+		parentEffectiveGrant,
 		isIsolated,
 		mergeMode: request.isolation?.merge ?? cfgTaskIsolationMerge.get(request.session.settings),
 		applyChanges:
@@ -587,7 +621,7 @@ function buildExecutorOptions(
 	const preparedSession = policy.preparedSession;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = preparedSession !== undefined || policy.planMode || session.restrictToolNames === true;
+	const restrictToolNames = preparedSession !== undefined || policy.restrictToolNames;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
@@ -630,6 +664,8 @@ function buildExecutorOptions(
 					outputSchemaMode: policy.schema.mode,
 				}),
 		sessionFile: lease.sessionFile,
+		parentEffectiveGrant: policy.parentEffectiveGrant,
+		derivationRestrictToolNames: policy.derivationRestrictToolNames,
 		persistArtifacts: !lease.temporary,
 		artifactsDir: lease.artifactsDir,
 		enableLsp: policy.enableLsp,
