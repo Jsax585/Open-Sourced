@@ -42,6 +42,7 @@
 
 ### Changed
 
+- `orchestrate` requests now commit each verified phase locally when git access is available ([#10967](https://github.com/can1357/oh-my-pi/pull/10967) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 - ACP `session/cancel` now also cancels prompts that are queued or still dispatching, and stops autonomous runs, instead of being ignored when no client turn is streaming ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
 - Idle compaction no longer runs on logged-in OpenAI Codex accounts, whose prompt cache never expires; compacting while idle only threw away a warm cache
 - ACP sessions no longer fail to start when a client-declared MCP server cannot connect; the failure is reported in the session, and an HTTP/SSE server can be repaired with `/mcp reauth` ([#16046](https://github.com/can1357/oh-my-pi/pull/16046) by [@marcintustin](https://github.com/marcintustin))

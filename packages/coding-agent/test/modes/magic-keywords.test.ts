@@ -41,6 +41,22 @@ describe("orchestrate notice", () => {
 		expect(writeOnly).not.toContain("with `edit`");
 	});
 
+	it("does not require commits when task is enabled but bash is unavailable", () => {
+		const restricted = renderOrchestrateNotice({ tools: ["read", "task"] });
+		const gitEnabled = renderOrchestrateNotice({ tools: ["read", "task", "bash"] });
+		expect(restricted).not.toContain("Commit locally after each green phase");
+		expect(restricted).not.toContain("Commit if applicable");
+		expect(restricted).toContain("Record verified progress without requiring a commit");
+		expect(gitEnabled).toContain("Commit locally after each green phase");
+	});
+
+	it("forbids commits while plan mode keeps the working tree read-only", () => {
+		const planning = renderOrchestrateNotice({ tools: ["read", "task", "bash"], planMode: true });
+		expect(planning).not.toContain("Commit locally after each green phase");
+		expect(planning).not.toContain("Commit if applicable");
+		expect(planning).toContain("NEVER create a commit");
+	});
+
 	it("does not name write when only edit is available", () => {
 		const editOnly = renderOrchestrateNotice({ tools: ["read", "edit"] });
 		expect(editOnly).toContain("with `edit`");
