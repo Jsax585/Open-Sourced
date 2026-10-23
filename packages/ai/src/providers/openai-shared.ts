@@ -3188,6 +3188,8 @@ function getOpenAIResponsesTerminalEvent(event: ResponseStreamEvent): OpenAIResp
 export interface ProcessResponsesStreamOptions {
 	onFirstToken?: () => void;
 	onOutputItemDone?: (item: ResponseOutputItem) => void;
+	/** Defaults to true; false keeps non-portable reasoning signatures out of partial and final messages. */
+	retainReasoningSignatures?: boolean;
 	/**
 	 * Called when a terminal `response.completed`, `response.incomplete`, or
 	 * `response.done` event is successfully processed. Only invoked on the
@@ -3690,7 +3692,9 @@ export async function processResponsesStream<TApi extends Api>(
 								| undefined);
 				if (reasoningBlock) {
 					reasoningBlock.thinking = finalizeReasoningThinking(item, reasoningBlock.thinking);
-					reasoningBlock.thinkingSignature = JSON.stringify(item);
+					if (options?.retainReasoningSignatures !== false) {
+						reasoningBlock.thinkingSignature = JSON.stringify(item);
+					}
 					settleReasoningSummary(item, reasoningBlock);
 					if (!output.upstreamModel) output.upstreamModel = servedModelFromOpenRouterReasoning(item);
 					stream.push({

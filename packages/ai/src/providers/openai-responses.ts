@@ -1183,6 +1183,7 @@ const streamOpenAIResponsesOnce = (
 			if (premiumRequestsTotal !== undefined) output.usage.premiumRequests = premiumRequestsTotal;
 			stream.push({ type: "start", partial: output });
 
+			const retainNativeHistory = !(webSocketLease && model.compat.connectionBoundNativeHistory);
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
 			let transientStreamRetryAttempt = 0;
 			while (true) {
@@ -1221,14 +1222,16 @@ const streamOpenAIResponsesOnce = (
 
 				try {
 					await processResponsesStream(observedOpenaiStream, output, attemptStream, model, {
+						retainReasoningSignatures: retainNativeHistory,
 						onFirstToken: () => {
 							if (!firstTokenTime) firstTokenTime = performance.now();
 						},
-						onOutputItemDone: item => {
-							// `processResponsesStream` hands over a private clone already; no
-							// second deep copy needed (reasoning items carry multi-KB blobs).
-							nativeOutputItems.push(item as unknown as Record<string, unknown>);
-						},
+						onOutputItemDone: retainNativeHistory
+							? item => {
+									// The processor hands over a private clone; no second deep copy needed.
+									nativeOutputItems.push(item as unknown as Record<string, unknown>);
+								}
+							: undefined,
 						onCompleted: () => {
 							sawTerminalResponseEvent = true;
 						},
@@ -1418,16 +1421,17 @@ const streamOpenAIResponsesOnce = (
 				}
 			}
 
-			output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
-			const replayableResponseItems = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
-				cloneJsonTree(nativeOutputItems),
-				{ supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal },
-			);
+			if (retainNativeHistory) {
+				output.providerPayload = createOpenAIResponsesHistoryPayload(model.provider, nativeOutputItems);
+			}
+			const replayableResponseItems = retainNativeHistory
+				? sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(cloneJsonTree(nativeOutputItems), {
+						supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
+					})
+				: undefined;
 			if (replayableResponseItems) {
 				if (providerSessionState && providerSessionState.closeCount === closeCountAtStart) {
-					providerSessionState.nativeHistoryReplayWarmed = !(
-						webSocketLease && model.compat.connectionBoundNativeHistory
-					);
+					providerSessionState.nativeHistoryReplayWarmed = true;
 				}
 				if (chainState) {
 					chainState.lastParams = cloneJsonTree(
@@ -1475,11 +1479,6 @@ const streamOpenAIResponsesOnce = (
 				chainState.lastResponseId = undefined;
 				chainState.lastResponseItems = undefined;
 			}
-
-			output.duration = performance.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "done", reason: output.stopReason, message: output });
-			stream.end();
 		} catch (error) {
 			if (chainState) resetOpenAIResponsesChainState(chainState);
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
@@ -1500,13 +1499,27 @@ const streamOpenAIResponsesOnce = (
 			// Some providers via OpenRouter include extra details here.
 			const rawMetadata = readOpenRouterRawMetadata(capturedErrorResponse);
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
-			output.duration = performance.now() - startTime;
-			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
 		} finally {
 			webSocketLease?.release();
 		}
+		if (webSocketLease && model.compat.connectionBoundNativeHistory) {
+			// Neither rebuilt WS requests nor HTTP can reuse socket-owned reasoning.
+			// Strip replay metadata before publishing completed or interrupted turns.
+			for (const block of output.content) {
+				if (block.type === "thinking") {
+					block.thinkingSignature = undefined;
+					block.itemId = undefined;
+				}
+			}
+		}
+		output.duration = performance.now() - startTime;
+		if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+		if (output.stopReason === "error" || output.stopReason === "aborted") {
+			stream.push({ type: "error", reason: output.stopReason, error: output });
+		} else {
+			stream.push({ type: "done", reason: output.stopReason, message: output });
+		}
+		stream.end();
 	})();
 
 	return stream;

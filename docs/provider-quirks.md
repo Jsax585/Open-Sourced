@@ -947,6 +947,9 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/gith
   `model_not_supported` permits one alternate identity before generation. A cached CLI identity
   can switch back to Chat on policy change; explicit identity pins and unrelated errors do not
   negotiate. A rejected alternate clears stale cached identity, without HTTP fallback.
+- **Connection-bound Responses history**: WS outputs preserve visible content and tool calls but
+  discard native replay payloads and reasoning signatures owned by the socket. Later HTTP turns
+  can warm their own native replay without reintroducing foreign WS reasoning.
 - **Dynamic Copilot Headers & Initiator**: `buildCopilotDynamicHeaders` (`packages/ai/src/providers/github-copilot-headers.ts`) injects per-request headers `X-Initiator` (`"user"` vs `"agent"` inferred from message history via `inferCopilotInitiator` or overridden via `getCopilotInitiatorOverride`), `Openai-Intent: conversation-edits`, and `Copilot-Vision-Request: true` when `hasCopilotVisionInput` detects image payloads in user or tool result blocks.
 - **Base URL & Endpoint Resolution**: `resolveGitHubCopilotBaseUrl` (`packages/ai/src/providers/github-copilot-headers.ts`) and `parseGitHubCopilotApiKey` (`packages/catalog/src/wire/github-copilot.ts`) parse custom `enterpriseUrl` and `apiEndpoint` properties embedded in API keys or credentials, defaulting to `https://api.githubcopilot.com` (`PERSONAL_GITHUB_COPILOT_BASE_URL`).
 - **OpenAI & Responses Compat Flags**:

@@ -147,6 +147,13 @@ HTTP native-history warm baseline rather than warming it. The replay predicate
 accepts the request's transport preference so token/output-cap estimates use the
 same rule, including requests waiting for a provider concurrency slot.
 
+These WS outputs do not retain native history payloads or socket-owned reasoning
+signatures. The shared event processor suppresses those signatures before partial
+events reach SDK projectors, not just at completion; raw-event diagnostics remain
+unchanged. Serialized WS turns therefore stay safe after later HTTP warmups, while
+HTTP responses keep their own replay metadata. No provider-wide cold-state latch
+or persisted transport tag is needed.
+
 The coding-agent resolves the session transport hint against the actual request
 model, including advisor and side requests. Codex uses `providers.openaiWebsockets`
 independently. The registry's final model projection fills an unset model preference

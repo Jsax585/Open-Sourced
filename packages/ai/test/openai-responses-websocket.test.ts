@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ServerWebSocket } from "bun";
+import { streamSimple } from "@oh-my-pi/pi-ai";
 import {
 	clearCopilotIntegrationCache,
 	getCachedCopilotIntegrationId,
@@ -52,7 +53,11 @@ function send(socket: ServerWebSocket<{ id: number }>, events: Record<string, un
 
 function endpoint(
 	behavior?: (socket: ServerWebSocket<{ id: number }>, body: Record<string, unknown>, index: number) => void,
-	setup?: { provider?: "github-copilot"; rejectUpgrade?: (request: Request) => Response | undefined },
+	setup?: {
+		provider?: "github-copilot";
+		rejectUpgrade?: (request: Request) => Response | undefined;
+		httpResponse?: (body: Record<string, unknown>) => Response | undefined;
+	},
 ) {
 	if (setup?.provider === "github-copilot") {
 		const previous = Bun.env.COPILOT_INTEGRATION_ID;
@@ -81,7 +86,10 @@ function endpoint(
 				if (server.upgrade(request, { data: { id: ++opened } })) return undefined;
 				return new Response("Upgrade failed", { status: 400 });
 			}
-			httpRequests.push((await request.json()) as Record<string, unknown>);
+			const body = (await request.json()) as Record<string, unknown>;
+			httpRequests.push(body);
+			const rejection = setup?.httpResponse?.(body);
+			if (rejection) return rejection;
 			return new Response(
 				`${textEvents("HTTP", "resp_http")
 					.map(event => `data: ${JSON.stringify(event)}\n\n`)
@@ -456,49 +464,69 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.requests[1]?.body.input).toHaveLength(3);
 	});
 
-	it("rebuilds connection-bound native history after credentials select a fresh socket", async () => {
-		const fixture = endpoint((socket, body, index) => {
-			if (index > 1 && JSON.stringify(body.input).includes("rs_resp_1")) {
-				socket.send(
-					JSON.stringify({
-						type: "error",
-						error: { code: "unauthorized", message: "401 input item does not belong to this connection" },
-					}),
+	it("rebuilds connection-bound history across reconnects and repeated HTTP turns", async () => {
+		const fixture = endpoint(
+			(socket, body, index) => {
+				if (index > 1 && JSON.stringify(body.input).includes("rs_resp_1")) {
+					socket.send(
+						JSON.stringify({
+							type: "error",
+							error: { code: "unauthorized", message: "401 input item does not belong to this connection" },
+						}),
+					);
+					return;
+				}
+				const events = textEvents(`TURN ${index}`, `resp_${index}`);
+				const reasoning = {
+					type: "reasoning",
+					id: `rs_resp_${index}`,
+					summary: [],
+					encrypted_content: `ws-owned-${index}`,
+				};
+				events.splice(
+					events.length - 1,
+					0,
+					{ type: "response.output_item.added", output_index: 1, item: reasoning },
+					{ type: "response.output_item.done", output_index: 1, item: reasoning },
 				);
-				return;
-			}
-			const events = textEvents(`TURN ${index}`, `resp_${index}`);
-			const reasoning = {
-				type: "reasoning",
-				id: `rs_resp_${index}`,
-				summary: [],
-				encrypted_content: `encrypted_${index}`,
-			};
-			events.splice(
-				events.length - 1,
-				0,
-				{ type: "response.output_item.added", output_index: 1, item: reasoning },
-				{ type: "response.output_item.done", output_index: 1, item: reasoning },
-			);
-			send(socket, events);
-		});
-		const model: Model<"openai-responses"> = {
-			...(getBundledModel("github-copilot", "gpt-5.4") as Model<"openai-responses">),
-			baseUrl: fixture.model.baseUrl,
+				send(socket, events);
+			},
+			{
+				provider: "github-copilot",
+				httpResponse: body => {
+					if (/rs_resp_|ws-owned-/.test(JSON.stringify(body.input))) {
+						return Response.json(
+							{ error: { message: "401 input item does not belong to this connection" } },
+							{ status: 401 },
+						);
+					}
+					const events = textEvents("HTTP", "resp_http");
+					const reasoning = { type: "reasoning", id: "rs_http", summary: [], encrypted_content: "http-owned" };
+					events.splice(
+						events.length - 1,
+						0,
+						{ type: "response.output_item.added", output_index: 1, item: reasoning },
+						{ type: "response.output_item.done", output_index: 1, item: reasoning },
+					);
+					return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+						headers: { "content-type": "text/event-stream" },
+					});
+				},
+			},
+		);
+		const model = fixture.model;
+		const options = {
+			apiKey: fixture.options.apiKey,
+			sessionId: fixture.options.sessionId,
+			providerSessionState: fixture.providerSessionState,
+			preferWebsockets: true,
 		};
-		const options = { ...fixture.options, preferWebsockets: true };
-		const first = await streamOpenAIResponses(model, fixture.context, options).result();
+		const first = await streamSimple(model, fixture.context, options).result();
 		expect(first.stopReason).toBe("stop");
-		expect(first.providerPayload).toMatchObject({
-			type: "openaiResponsesHistory",
-			items: expect.arrayContaining([
-				expect.objectContaining({ id: "rs_resp_1", encrypted_content: "encrypted_1" }),
-			]),
-		});
 		const context: Context = {
 			messages: [...fixture.context.messages, first, { role: "user", content: "Continue", timestamp: 2 }],
 		};
-		const second = await streamOpenAIResponses(model, context, { ...options, apiKey: "replacement-key" }).result();
+		const second = await streamSimple(model, context, { ...options, apiKey: "replacement-key" }).result();
 		expect(second.stopReason).toBe("stop");
 		expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "TURN 2" }));
 		expect(JSON.stringify(fixture.requests[1]?.body.input)).not.toContain("rs_resp_1");
@@ -507,17 +535,28 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.httpRequests).toHaveLength(0);
 		expect(openAIResponsesReplaysNativeHistory(model, fixture.providerSessionState, true)).toBe(false);
 		expect(openAIResponsesReplaysNativeHistory(model, fixture.providerSessionState, false)).toBe(false);
-		const http = await streamOpenAIResponses(
-			model,
-			{
-				messages: [...context.messages, second, { role: "user", content: "Use HTTP", timestamp: 3 }],
-			},
-			{ ...options, preferWebsockets: false },
-		).result();
+		const httpContext: Context = {
+			messages: [...context.messages, second, { role: "user", content: "Use HTTP", timestamp: 3 }],
+		};
+		const http = await streamSimple(model, httpContext, { ...options, preferWebsockets: false }).result();
 		expect(http.stopReason).toBe("stop");
-		expect(http.content).toMatchObject([{ type: "text", text: "HTTP" }]);
+		expect(http.content).toContainEqual(expect.objectContaining({ type: "text", text: "HTTP" }));
 		expect(JSON.stringify(fixture.httpRequests[0]?.input)).not.toContain("rs_resp_");
 		expect(openAIResponsesReplaysNativeHistory(model, fixture.providerSessionState, false)).toBe(true);
+		// Resume persisted history too: safety cannot depend on in-memory provenance.
+		const resumed = JSON.parse(
+			JSON.stringify({
+				messages: [...httpContext.messages, http, { role: "user", content: "Continue HTTP", timestamp: 4 }],
+			}),
+		) as Context;
+		const again = await streamSimple(model, resumed, { ...options, preferWebsockets: false }).result();
+		expect(again.stopReason).toBe("stop");
+		const replay = JSON.stringify(fixture.httpRequests[1]?.input);
+		expect(replay).not.toContain("rs_resp_");
+		expect(replay).not.toContain("ws-owned-");
+		expect(replay).toContain("TURN 1");
+		expect(replay).toContain("TURN 2");
+		expect(replay).toContain("http-owned");
 	});
 
 	it("keeps generation and socket reuse intact when the diagnostic observer throws", async () => {
