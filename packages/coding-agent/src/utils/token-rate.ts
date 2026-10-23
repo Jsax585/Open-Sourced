@@ -402,15 +402,14 @@ export class TokenRateMeter {
 	}
 
 	/**
-	 * Read the trailing window — 1 s, or the message's whole span when it is
-	 * shorter — and keep the objective's fastest reading. A request that
-	 * finishes inside the window still measures its own span instead of
-	 * leaving the stat empty.
+	 * Live throughput over the trailing window — 1 s, or the message's span
+	 * when it is shorter — of streamed text. This is what the speedometer shows
+	 * while tokens are arriving; {@link objectiveRate} is the program average.
 	 */
-	#sampleFastest(nowMs: number): void {
-		if (this.#startedAt === null) return;
+	windowRate(nowMs: number = Date.now()): number | null {
+		if (this.#startedAt === null) return null;
 		const windowMs = Math.min(METER_FAST_WINDOW_MS, nowMs - this.#startedAt);
-		if (windowMs < METER_MIN_READING_SPAN_MS) return;
+		if (windowMs < METER_MIN_READING_SPAN_MS) return null;
 		const from = nowMs - windowMs;
 		let tokens = this.#countPending();
 		for (let i = this.#recent.length - 1; i >= 0; i--) {
@@ -418,8 +417,17 @@ export class TokenRateMeter {
 			if (bucket.at <= from) break;
 			tokens += bucket.tokens;
 		}
-		if (tokens <= 0) return;
-		const rate = (tokens * 1000) / windowMs;
+		if (tokens <= 0) return null;
+		return (tokens * 1000) / windowMs;
+	}
+
+	/**
+	 * Keep the fastest window reading — the objective's best 1 s (or the span,
+	 * when a request finishes inside the window) — so it survives the turn.
+	 */
+	#sampleFastest(nowMs: number): void {
+		const rate = this.windowRate(nowMs);
+		if (rate === null) return;
 		if (this.#fastest === null || rate > this.#fastest) this.#fastest = rate;
 	}
 }

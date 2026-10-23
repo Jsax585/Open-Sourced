@@ -1423,36 +1423,37 @@ export class InteractiveMode implements InteractiveModeContext {
 	get tokenRate(): TokenRateMeter {
 		return this.viewSession.tokenRate;
 	}
-	/** Generation tok/s: live while streaming, the last reading between
-	 * turns, blank until a run has produced enough tokens to measure. */
-	#tokenRateLabel(): string | undefined {
+	/**
+	 * The composer's reading: the live 1 s window while tokens arrive (what the
+	 * request is producing now), the objective's rolling average once it is done.
+	 */
+	#composerRate(): { value: number; average: boolean } | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.#liveTokenRate();
-		if (rate === null) return undefined;
-		return theme.fg("dim", `${theme.icon.throughput} ${rate.toFixed(1)} tok/s`);
+		const meter = this.tokenRate;
+		const streaming = this.viewSession.isStreaming;
+		const value = streaming ? (meter.windowRate() ?? meter.objectiveRate()) : meter.objectiveRate();
+		return value === null ? undefined : { value, average: !streaming };
 	}
 	/**
-	 * The speedometer reading: the objective's rolling average — live while it
-	 * streams, held once the objective is done.
+	 * Above the composer: while the request runs, its fastest window so far;
+	 * once done, the objective's average beside that peak.
 	 */
-	#liveTokenRate(): number | null {
-		const meter = this.tokenRate;
-		return meter.objectiveRate() ?? meter.rate();
-	}
-	/** Right-docked suffix of the working row: the tok/s readout, the objective's
-	 * fastest 1 s window, then the band-mode title. */
-	#workingRowTrailer(): string | undefined {
-		const rate = this.#tokenRateLabel();
-		const fast = this.#fastRateLabel();
-		const title = this.#workingTitleTrailer();
-		const parts = [rate, fast && theme.fg("dim", fast), title].filter((part): part is string => !!part);
-		return parts.length > 0 ? parts.join("  ") : undefined;
-	}
-	/** The objective's fastest 1 s window, shown above the composer rather than in it. */
-	#fastRateLabel(): string | undefined {
+	#speedoTrailer(): string | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.tokenRate.fastestRate();
-		return rate === null ? undefined : `(Fast: ${rate.toFixed(1)} tok/s)`;
+		const meter = this.tokenRate;
+		const fast = meter.fastestRate();
+		const average = this.viewSession.isStreaming ? null : meter.objectiveRate();
+		const parts: string[] = [];
+		if (average !== null) parts.push(`Avg: ${average.toFixed(1)} tok/s`);
+		if (fast !== null) parts.push(`(Fast: ${fast.toFixed(1)} tok/s)`);
+		return parts.length > 0 ? parts.join(" ") : undefined;
+	}
+	/** Right-docked suffix of the working row: the speedo trailer, then the band-mode title. */
+	#workingRowTrailer(): string | undefined {
+		const speedo = this.#speedoTrailer();
+		const title = this.#workingTitleTrailer();
+		const parts = [speedo && theme.fg("dim", speedo), title].filter((part): part is string => !!part);
+		return parts.length > 0 ? parts.join("  ") : undefined;
 	}
 	/** Idle stand-in for the working row: the last tok/s reading and the
 	 * band-mode title stay readable between turns, docked where the loader's
@@ -1470,7 +1471,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#workingStartedAt = 0;
 	#statusHudNative:
-		| { children: readonly Component[]; todo: NativeNode | undefined; fast: string | undefined; node: NativeNode }
+		| { children: readonly Component[]; todo: NativeNode | undefined; speedo: string | undefined; node: NativeNode }
 		| undefined;
 	/**
 	 * The todo HUD, rebuilt with its ANSI rows; undefined while hidden. A
@@ -1495,11 +1496,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			? { registry, unsubscribe: registry.subscribe(() => this.ui.requestRender()) }
 			: undefined;
 	}
-	/** Gen tok/s for the native composer bar, one decimal (a steadier `rate` target): live while running, else the last reading. */
-	#nativeTokenRate(): number | undefined {
-		if (!cfgComposerTokenRate.get(settings)) return undefined;
-		const rate = this.#liveTokenRate();
-		return rate === null ? undefined : Math.round(rate * 10) / 10;
+	/** The composer's reading, one decimal (a steadier `rate` target), with its live/average mode. */
+	#nativeTokenRate(): { value: number; average: boolean } | undefined {
+		const rate = this.#composerRate();
+		return rate === undefined ? undefined : { value: Math.round(rate.value * 10) / 10, average: rate.average };
 	}
 	/** The key that interrupts (the working row's stop control), or undefined when Esc would not cancel. */
 	maintenanceInterruptKey(): KeyId | undefined {
@@ -1514,7 +1514,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			startedAt: this.#workingStartedAt,
 			palette: accent ? NATIVE_ACCENT_SHIMMER : undefined,
 			interruptKey: this.keybindings.getKeys("app.interrupt")[0] ?? "escape",
-			trailer: this.#fastRateLabel(),
+			trailer: this.#speedoTrailer(),
 		};
 	}
 	/** The stop control's click: the same handler as the interrupt key. */
@@ -1570,19 +1570,21 @@ export class InteractiveMode implements InteractiveModeContext {
 	describeStatusHud(children: readonly Component[], cx: DescribeContext): NativeNode {
 		const hud = this.#todoHudNative;
 		const todo = hud && (cx.supports("checklist") ? hud.checklist : hud.fallback);
-		const fast = this.#fastRateLabel();
+		const speedo = this.#speedoTrailer();
 		const memo = this.#statusHudNative;
-		if (memo && memo.todo === todo && memo.fast === fast && sameItems(memo.children, children)) return memo.node;
+		if (memo && memo.todo === todo && memo.speedo === speedo && sameItems(memo.children, children)) {
+			return memo.node;
+		}
 		const parts: NativeChild[] = [];
 		if (children.length > 0) parts.push(node("col", { role: "omp.hud.status" }, children.slice(), "status"));
 		if (todo) parts.push(todo);
-		// Between turns the objective's fastest reading stays above the composer.
-		if (parts.length === 0 && fast) {
-			parts.push(node("text", { spans: [span(fast, "muted")], role: "omp.hud.rate-fast" }, undefined, "fast"));
+		// Between turns the objective's average and fastest reading stay above the composer.
+		if (parts.length === 0 && speedo) {
+			parts.push(node("text", { spans: [span(speedo, "muted")], role: "omp.hud.rate-fast" }, undefined, "fast"));
 		}
 		const described =
 			parts.length === 0 ? EMPTY_HUD : row(parts, { role: "omp.hud.activity", align: "center", gap: "sm" });
-		this.#statusHudNative = { children: children.slice(), todo, fast, node: described };
+		this.#statusHudNative = { children: children.slice(), todo, speedo, node: described };
 		return described;
 	}
 	unsubscribe?: () => void;
@@ -4022,6 +4024,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#composerNativeState(): ComposerNativeState {
 		const draft = this.editor.getText().trimStart();
 		const dictation = this.#sttController?.state ?? "idle";
+		const speedo = this.#nativeTokenRate();
 		return {
 			shell: this.isBashMode
 				? { kind: "bash", excluded: draft.startsWith("!!") }
@@ -4030,7 +4033,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					: undefined,
 			thinking: thinkingLevelWord(this.viewSession),
 			thinkingInModel: cfgStatusLineCompactThinkingLevel.get(settings),
-			rate: this.#nativeTokenRate(),
+			rate: speedo?.value,
+			rateAvg: speedo?.average,
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
 			dictation:
 				cfgSttEnabled.get(settings) || this.#dictationStarting || dictation !== "idle"

@@ -351,10 +351,11 @@ describe("native composer", () => {
 		expect(byRole(composer({ running: false }).describe(cx), "omp.composer.effort")).toBeUndefined();
 	});
 
-	it("docks the tok/s readout beside the session cost, only while there is a reading", () => {
+	it("shows the live window in tok/s while running and Ø… t/s once done", () => {
 		let rate: number | undefined = 31.8;
+		let rateAvg = false;
 		const editor = new CustomEditor(getEditorTheme());
-		editor.composerState = () => ({ running: false, thinking: "xhigh", rate });
+		editor.composerState = () => ({ running: false, thinking: "xhigh", rate, rateAvg });
 		const bar = () => byRole(editor.describe(cx), "omp.composer.bar")!;
 		const slots = (root: NativeNode) =>
 			(root.c ?? []).filter(isNode).map(n => (n.p !== undefined && "role" in n.p ? n.p.role : n.key));
@@ -364,7 +365,7 @@ describe("native composer", () => {
 		expect(slots(reading)).toEqual(["omp.composer.effort", "gap", "omp.composer.rate", "omp.composer.send"]);
 		expect(byRole(reading, "omp.composer.rate")?.p).toEqual({
 			value: 31.8,
-			unit: "t/s",
+			unit: "tok/s",
 			role: "omp.composer.rate",
 			title: "Generation rate",
 		});
@@ -374,6 +375,13 @@ describe("native composer", () => {
 		const ticked = bar();
 		expect(byRole(ticked, "omp.composer.rate")?.p).toMatchObject({ value: 32.4 });
 		expect(byRole(ticked, "omp.composer.effort")).toBe(byRole(reading, "omp.composer.effort"));
+
+		// Done: the objective's average, marked with Ø, in t/s.
+		rateAvg = true;
+		rate = 69.5;
+		const done = byRole(bar(), "omp.composer.rate")!;
+		expect(done.k).toBe("text");
+		expect(JSON.stringify(done.p)).toContain("Ø69.5 t/s");
 
 		rate = undefined;
 		expect(slots(bar())).toEqual(["omp.composer.effort", "gap", "omp.composer.send"]);
@@ -598,7 +606,7 @@ describe("native composer without a status strip", () => {
 				"omp.composer.send",
 			]);
 			// The speed reading sits immediately beside the session cost.
-			expect(byRole(bar, "omp.composer.rate")?.p).toMatchObject({ value: 42.5, unit: "t/s" });
+			expect(byRole(bar, "omp.composer.rate")?.p).toMatchObject({ value: 42.5, unit: "tok/s" });
 			const model = byRole(bar, "omp.composer.model")!;
 			expect(model.p).toMatchObject({ actions: { click: "status.model" } });
 			expect(nodes(model).map(n => n.k)).toEqual(["row", "icon", "text", "icon"]);

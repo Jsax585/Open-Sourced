@@ -14,7 +14,7 @@
 
 ### Changed
 
-- The composer's generation-rate readout (`composer.tokenRate`) is on by default and sits beside the session cost, which shows the objective's rolling average in t/s — live while it streams, held once the objective is done, and reset by the next request; the default status line shows the same rate next to the cost in classic terminals, with the objective's fastest 1 s reading on the working row above the composer.
+- The composer's generation-rate readout (`composer.tokenRate`) is on by default and sits beside the session cost, which shows the live 1 s window in tok/s while the request runs, then the objective's rolling average as Ø… t/s once it is done (reset by the next request); the default status line shows the same rate next to the cost in classic terminals, with the working row above the composer carrying the fastest window while it runs and `Avg: … tok/s (Fast: … tok/s)` once the objective is done.
 - Grants are keyed by the capability they authorized, and cover that tier and the lower ones: approving a write also clears reads of that target, while a read approval never lets a write or an exec call through — folder grants included. Grants recorded before this keying are dropped once (they prompt again) instead of being read as broader than they were.
 - A directory read offers its own directory, never the parent that holds every sibling: `read ~/Desktop` answers with `Approve Directory: ~/Desktop`, where it used to grant all of `~`.
 - Folder grants cover the folder's own entries and stop there: approving `~/Desktop` no longer covers `~/Desktop/TestFolder`, which — and anything inside it — asks for its own approval, for reads, writes, edits, searches, and folder-scoped commands alike.

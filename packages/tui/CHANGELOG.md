@@ -9,7 +9,7 @@
 
 ### Changed
 
-- The native composer bar places the tok/s generation rate beside the session cost instead of after the effort chip, the default status-line preset carries the same `token_rate` rate (in t/s) beside `cost` in classic terminals, and the objective’s fastest 1 s reading rides in the working row above the composer — the composer itself keeps only the rate.
+- The native composer bar places the tok/s generation rate beside the session cost instead of after the effort chip, the default status-line preset carries the same `token_rate` beside `cost` in classic terminals (live 1 s window in tok/s, then Ø… t/s), and the objective’s fastest 1 s reading rides in the working row above the composer — the composer itself keeps only the rate.
 
 ### Fixed
 

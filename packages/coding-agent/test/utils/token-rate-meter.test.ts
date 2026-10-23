@@ -233,3 +233,21 @@ describe("TokenRateMeter objective reset", () => {
 		expect(meter.objectiveRate(61_000)).toBeCloseTo(50, 0);
 	});
 });
+
+describe("TokenRateMeter window rate", () => {
+	it("reports the trailing 1 s, not the running average", () => {
+		const meter = new TokenRateMeter(words);
+		meter.begin(0);
+		stream(meter, 0, 4_000, 10); // 100 tok/s for 4 s
+		expect(meter.windowRate(4_000)).toBeCloseTo(100, 0);
+		expect(meter.objectiveRate(4_000)).toBeCloseTo(100, 0);
+
+		stream(meter, 4_000, 6_000, 1); // 10 tok/s: the window follows at once
+		expect(meter.windowRate(6_000)).toBeCloseTo(10, 0);
+		// The average still carries the whole run.
+		expect(meter.objectiveRate(6_000)!).toBeGreaterThan(40);
+
+		meter.end(250, 6_000);
+		expect(meter.windowRate(6_000)).toBeNull();
+	});
+});

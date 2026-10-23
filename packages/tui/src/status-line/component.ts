@@ -1963,7 +1963,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		// sessions (no meter) fall back to the last message's average below.
 		const meter = this.session.tokenRate;
 		if (meter?.objectiveRate) {
-			const objective = meter.objectiveRate();
+			// While tokens arrive the segment shows the live 1 s window; once the
+			// objective is done it holds the rolling average (Ø, marked by the
+			// context's `tokensPerSecondIsAverage`).
+			const live = this.session.isStreaming ? (meter.windowRate?.() ?? null) : null;
+			const objective = live ?? meter.objectiveRate();
 			return objective !== null && objective > 0 ? objective : null;
 		}
 
@@ -2564,6 +2568,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const usageStats = {
 			...aggregateUsageStats,
 			tokensPerSecond: this.#getTokensPerSecond(),
+			tokensPerSecondIsAverage: !this.session.isStreaming,
 		};
 
 		let contextWindow = state.model?.contextWindow ?? this.session.model?.contextWindow ?? 0;
