@@ -114,7 +114,9 @@ describe("discarded entry branch replication", () => {
 			let current: CollabFrame[] = [];
 			const first = Promise.withResolvers<void>();
 			const second = Promise.withResolvers<void>();
+			const live = Promise.withResolvers<CollabFrame & { t: "entry" }>();
 			socket.onFrame = frame => {
+				if (frame.t === "entry") live.resolve(frame);
 				if (frame.t === "welcome") current = [];
 				if (frame.t !== "snapshot-chunk") return;
 				current.push(frame);
@@ -135,6 +137,11 @@ describe("discarded entry branch replication", () => {
 			);
 			expect(snapshotIds[0]).toEqual([rootId, hiddenId, activeId]);
 			expect(snapshotIds[1]).toEqual([rootId, activeId]);
+
+			// The omitted archive record is the host leaf; the next turn must hang off a row guests have.
+			const nextId = manager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
+			const nextFrame = await live.promise;
+			expect(nextFrame.entry).toMatchObject({ id: nextId, parentId: activeId });
 		} finally {
 			socket?.close();
 			await host.stop("test done");

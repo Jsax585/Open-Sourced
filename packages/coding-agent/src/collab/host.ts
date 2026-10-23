@@ -122,16 +122,24 @@ function isWireSessionEntry(entry: StoredSessionEntry): entry is StoredSessionEn
 	return entry.type in WIRE_SESSION_ENTRY_TYPES;
 }
 
+/** Whether guests receive this entry: wire types, except archives of local-only targets. */
+function isReplicatedEntry(entry: StoredSessionEntry, lookup: (id: string) => StoredSessionEntry | undefined): boolean {
+	if (!isWireSessionEntry(entry)) return false;
+	if (entry.type !== "archive") return true;
+	const target = lookup(entry.targetId);
+	return target !== undefined && isWireSessionEntry(target);
+}
+
 /**
  * The nearest ancestor guests receive. Local-only entries never reach
  * them, so a wire entry below one would dangle on the replica and cut archive
- * traversal (and the branch) at the gap; it hangs off the first wire ancestor instead.
+ * traversal (and the branch) at the gap; it hangs off the first replicated ancestor instead.
  */
 function wireParentId(parentId: string | null, lookup: (id: string) => StoredSessionEntry | undefined): string | null {
 	const seen = new Set<string>();
 	while (parentId !== null && !seen.has(parentId)) {
 		const parent = lookup(parentId);
-		if (!parent || isWireSessionEntry(parent)) return parentId;
+		if (!parent || isReplicatedEntry(parent, lookup)) return parentId;
 		seen.add(parentId);
 		parentId = parent.parentId;
 	}
