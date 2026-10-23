@@ -39,7 +39,12 @@ function makeParentSession(settings: Settings): ToolSession {
 }
 
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
-async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: string): Promise<ExecutorOptions> {
+async function spawnAndCaptureOptions(
+	cli: VibeCli,
+	settings: Settings,
+	name?: string,
+	session?: ToolSession,
+): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 		captured.resolve(options);
@@ -60,7 +65,7 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: s
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, name, prompt: "work" });
+	await registry.spawn(session ?? makeParentSession(settings), { cli, name, prompt: "work" });
 	return captured.promise;
 }
 
@@ -109,6 +114,33 @@ describe("vibe worker spawn options", () => {
 
 		expect(options.modelOverride).toEqual(["openai-codex/sol"]);
 		expect(options.modelRole).toBeUndefined();
+	});
+
+	it("hands the worker the parent session's skill list through the visibility resolver", async () => {
+		// The bundled vibe workers set no visibility frontmatter, so the child
+		// receives every skill as a copy: listing intact, never the parent's
+		// object identities, and no autoloads.
+		const parentSkills = [
+			{ name: "alpha", description: "a", filePath: "/skills/alpha/SKILL.md", baseDir: "/skills", source: "user" },
+			{
+				name: "secret",
+				description: "s",
+				filePath: "/skills/secret/SKILL.md",
+				baseDir: "/skills",
+				source: "user",
+				hide: true,
+			},
+		];
+		const session = makeParentSession(
+			Settings.isolated({ modelRoles: { default: "anthropic/opus", task: "anthropic/sonnet" } }),
+		);
+		session.skills = parentSkills;
+		const options = await spawnAndCaptureOptions("good", session.settings, undefined, session);
+
+		expect(options.skills?.map(s => s.name)).toEqual(["alpha", "secret"]);
+		expect(options.skills?.filter(s => s.hide !== true).map(s => s.name)).toEqual(["alpha"]);
+		for (const [i, s] of options.skills!.entries()) expect(s).not.toBe(parentSkills[i]);
+		expect(options.autoloadSkills).toEqual([]);
 	});
 
 	it("restricts the first spawn to the worker agent's account pool, as revival does", async () => {
