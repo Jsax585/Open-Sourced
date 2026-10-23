@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { resolveModels, runTinyModelsCommand } from "@oh-my-pi/pi-coding-agent/cli/tiny-models-cli";
-import { TINY_LOCAL_MODELS, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { TINY_LOCAL_MODELS } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 
 afterEach(() => {
@@ -18,25 +18,25 @@ describe("tiny-models download model resolution", () => {
 		const all = resolveModels("all", false);
 		for (const key of unsupported) expect(all).not.toContain(key);
 
-		// Usable = loadable AND not a judge model: judges are opt-in
+		// Usable = loadable AND not the judge key: julia-1 is opt-in
 		// (role-scoped download on first judge use), not bulk prefetch —
 		// excluded from `all` by design, still explicitly resolvable.
+		// Hardcoded (not via isTinyJudgeLocalModelKey): a broken predicate
+		// must not silently re-add the ~577MB weights to bulk prefetch.
 		const usable = TINY_LOCAL_MODELS.filter(
-			spec =>
-				(!("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason) && !isTinyJudgeLocalModelKey(spec.key),
+			spec => (!("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason) && spec.key !== "julia-1",
 		).map(spec => spec.key);
+		expect(TINY_LOCAL_MODELS.some(spec => spec.key === "julia-1")).toBe(true);
 		for (const key of usable) expect(all).toContain(key);
-		for (const spec of TINY_LOCAL_MODELS.filter(spec => isTinyJudgeLocalModelKey(spec.key))) {
-			expect(all).not.toContain(spec.key);
-			expect(resolveModels(spec.key, false)).toEqual([spec.key]);
-		}
+		expect(all).not.toContain("julia-1");
+		expect(resolveModels("julia-1", false)).toEqual(["julia-1"]);
 	});
 
 	it("includes ONNX-blocked models in `all` when the MLX backend is active", () => {
-		// Judge models stay excluded even under MLX (no mlxRepo — judge forces ONNX).
-		expect(resolveModels("all", true)).toEqual(
-			TINY_LOCAL_MODELS.filter(spec => !isTinyJudgeLocalModelKey(spec.key)).map(spec => spec.key),
-		);
+		// julia-1 stays excluded even under MLX (no mlxRepo — judge forces ONNX).
+		const all = resolveModels("all", true);
+		expect(all).toEqual(TINY_LOCAL_MODELS.filter(spec => spec.key !== "julia-1").map(spec => spec.key));
+		expect(all).not.toContain("julia-1");
 	});
 
 	it("still resolves an explicitly requested unsupported model (only `all` is filtered)", () => {

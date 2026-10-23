@@ -36,13 +36,14 @@ function downloadJudgeFile(
 }
 
 /**
- * Ensure Julia-1 weights + tokenizer live in `getTinyModelsCacheDir()/julia-1/`,
- * skipping files whose local size already matches the remote one. Returns the
- * dir for `AutoTokenizer.from_pretrained` and `InferenceSession.create`.
+ * Ensure Julia-1 weights + tokenizer live in
+ * `getTinyModelsCacheDir()/<modelKey>/<revision-12>/`, skipping files whose
+ * local size already matches the remote one. Returns the dir for
+ * `AutoTokenizer.from_pretrained` and `InferenceSession.create`.
  *
  * Trust assumption: files are verified by size (`content-length`) only, never
  * by hash — a corrupt or poisoned cache persists and silently shifts verdicts.
- * Re-download after deleting the `julia-1/` cache dir if verdicts look wrong;
+ * Re-download after deleting the `<modelKey>/` cache dir if verdicts look wrong;
  * hash-pinned verification is future work.
  */
 export async function ensureJuliaJudgeFiles(

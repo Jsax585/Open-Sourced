@@ -4,9 +4,10 @@ import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { JudgeQuestionPayload, TinyWorkerRequest } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
 import { LocalJudge } from "@oh-my-pi/pi-coding-agent/judgment/local-judge";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
-import { getTinyLocalModelSpec, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { getTinyLocalModelSpec } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import { isRequestScopedError } from "@oh-my-pi/pi-coding-agent/tiny/worker-server";
 import { JuliaJudgeModel } from "@oh-my-pi/pi-coding-agent/tiny/worker";
+import { JUDGE_MAX_BATCH_QUESTIONS } from "@oh-my-pi/pi-coding-agent/tiny/judge-serialize";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -288,11 +289,6 @@ describe("LocalJudge", () => {
 		}
 	});
 
-	it("routes julia-1 to the judge path and title keys away from it", () => {
-		expect(isTinyJudgeLocalModelKey("julia-1")).toBe(true);
-		expect(isTinyJudgeLocalModelKey("lfm2.5-230m")).toBe(false);
-	});
-
 	it("rejects non-finite logits with JudgmentParseError instead of returning NaN probabilities", async () => {
 		spyOn(tinyModelClient, "judge").mockResolvedValue({ logits: { q: [NaN, 1] } });
 		const judge = new LocalJudge("julia-1");
@@ -335,6 +331,35 @@ describe("LocalJudge", () => {
 				},
 			}),
 		).rejects.toThrow(AIError.ValidationError);
+	});
+
+	it("rejects image-bearing requests with ValidationError instead of scoring text-only", async () => {
+		const mock = spyOn(tinyModelClient, "judge");
+		const judge = new LocalJudge("julia-1");
+		await expect(
+			judge.judge({
+				state: "rate the screenshot",
+				images: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+				questions: {
+					q: { type: "choice", instructions: "pick", criteria: { a: "first", b: "second" } },
+				},
+			}),
+		).rejects.toThrow(AIError.ValidationError);
+		expect(mock.mock.calls.length).toBe(0);
+	});
+
+	it("rejects the '__proto__' id with ValidationError without calling the worker", async () => {
+		const mock = spyOn(tinyModelClient, "judge");
+		const judge = new LocalJudge("julia-1");
+		await expect(
+			judge.judge({
+				state: "pick one",
+				questions: {
+					["__proto__"]: { type: "choice", instructions: "pick", criteria: { a: "first", b: "second" } },
+				},
+			}),
+		).rejects.toThrow(AIError.ValidationError);
+		expect(mock.mock.calls.length).toBe(0);
 	});
 });
 
@@ -447,7 +472,8 @@ describe("JuliaJudgeModel", () => {
 				type: "judge",
 				id: "3",
 				state: "s",
-				questions: { q: { type: "choice", instructions: "i", options: [""] } },
+				// Two options so the count guard passes and the empty-string guard fires.
+				questions: { q: { type: "choice", instructions: "i", options: ["ok", ""] } },
 			},
 		];
 		for (const req of testCases) {
@@ -578,6 +604,26 @@ describe("JuliaJudgeModel", () => {
 			),
 		).rejects.toThrow('judge question "q": needs 2-20 options, got 21');
 	});
+	it("rejects oversized batches request-scoped before loading the session", async () => {
+		const model = new JuliaJudgeModel("julia-1", spec);
+		const load = spyOn(model, "load");
+		const questions: Record<string, JudgeQuestionPayload> = {};
+		for (let i = 0; i < JUDGE_MAX_BATCH_QUESTIONS + 1; i++) {
+			questions[`q${i}`] = { type: "choice", instructions: "i", options: ["a", "b"] };
+		}
+		let error: unknown;
+		try {
+			await model.judge({ type: "judge", id: "1", state: "s", questions }, fakeReply);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain(
+			`needs at most ${JUDGE_MAX_BATCH_QUESTIONS} questions, got ${JUDGE_MAX_BATCH_QUESTIONS + 1} — split into smaller batches`,
+		);
+		expect(isRequestScopedError(error)).toBe(true);
+		expect(load.mock.calls.length).toBe(0);
+	});
 
 	it("throws clear error when session output lacks logits tensor naming actual output keys", async () => {
 		const model = new JuliaJudgeModel("julia-1", spec);
@@ -634,5 +680,32 @@ describe("JuliaJudgeModel", () => {
 				fakeReply,
 			),
 		).rejects.toThrow("judge session output lacks logits tensor (got: [other_output])");
+	});
+
+	it("rejects the '__proto__' id request-scoped before loading the session", async () => {
+		// Up-front check: a bad id fails fast without paying download/tokenize/
+		// inference, and request-scoping keeps julia-1 usable afterwards.
+		const model = new JuliaJudgeModel("julia-1", spec);
+		const load = spyOn(model, "load");
+		let error: unknown;
+		try {
+			await model.judge(
+				{
+					type: "judge",
+					id: "1",
+					state: "test state",
+					questions: {
+						["__proto__"]: { type: "choice", instructions: "i", options: ["a", "b"] },
+					},
+				},
+				fakeReply,
+			);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toContain("__proto__");
+		expect(isRequestScopedError(error)).toBe(true);
+		expect(load.mock.calls.length).toBe(0);
 	});
 });

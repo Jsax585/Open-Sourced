@@ -34,7 +34,13 @@ import {
 	tinyModelDeviceLoadOrder,
 } from "./device";
 import { resolveTinyModelDtypeOverride, type TinyModelDtype } from "./dtype";
-import { fillJudgeBatch, packJudgeBatch, serializeJudgeRow, sliceJudgeLogits } from "./judge-serialize";
+import {
+	fillJudgeBatch,
+	JUDGE_MAX_BATCH_QUESTIONS,
+	packJudgeBatch,
+	serializeJudgeRow,
+	sliceJudgeLogits,
+} from "./judge-serialize";
 import { ensureJuliaJudgeFiles } from "./judge-weights";
 import {
 	getTinyLocalModelSpec,
@@ -306,9 +312,25 @@ export class JuliaJudgeModel {
 		const names = Object.keys(request.questions);
 		// Empty batch would build zero-dim ORT tensors that session.run rejects.
 		if (names.length === 0) return {};
+		// Batch tensors are (questions × 8192) int64 (~4 MB per tensor at the
+		// cap): reject oversized batches before allocating or loading — split
+		// into batches of at most JUDGE_MAX_BATCH_QUESTIONS (natives split via
+		// judgment-questions-max; LocalJudge chunking is future work).
+		if (names.length > JUDGE_MAX_BATCH_QUESTIONS) {
+			throw requestScopedError(
+				`judge request: needs at most ${JUDGE_MAX_BATCH_QUESTIONS} questions, got ${names.length} — split into smaller batches`,
+			);
+		}
+		// Fail fast on unusable ids before load: sliceJudgeLogits re-checks, but
+		// a bad id must never pay a download/tokenize/inference cycle first.
+		for (const name of names) {
+			if (name === "__proto__") {
+				throw requestScopedError("judge question id '__proto__' is not allowed");
+			}
+		}
 		// Validate server-side: the client caps choice/score at 2-20 options, but
-		// the worker is reachable over the socket — 0 options divides by zero in
-		// serializeJudgeRow, 100+ options blows up batch memory.
+		// the worker is reachable over the socket — 0 options builds zero-dim
+		// marker tensors that session.run rejects, 100+ options blows up batch memory.
 		for (const name of names) {
 			const question = request.questions[name];
 			if (!question) {

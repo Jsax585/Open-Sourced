@@ -51,6 +51,12 @@ const JUDGE_DEFAULT_HEAD_LENGTH = 256;
 // Matches Python `sequence(max_length=8192)`; the 1024 in index.js is the WebGPU-demo cap, not the model contract.
 const JUDGE_DEFAULT_MAX_LENGTH = 8192;
 /**
+ * Max questions per judge batch: feed tensors are (questions × 8192) int64
+ * (~4 MB per sequence tensor at the cap), so a local caller chunks oversized
+ * requests like natives do under `judgment-questions-max`.
+ */
+export const JUDGE_MAX_BATCH_QUESTIONS = 64;
+/**
  * Serialize one judge row to token ids with per-option marker positions.
  * Never throws on budget: overfull heads trim options, overfull states truncate.
  */

@@ -9,6 +9,7 @@ import {
 	type UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import * as settingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	buildLocalInferenceMessages,
@@ -475,8 +476,31 @@ describe("judge worker device independence", () => {
 		expect(chatWithDevice.tag).toMatch(/\|onnx\|webgpu\|fp16$/);
 	});
 
-	it("uses fixed 'judge' env key for judge models across device flips", () => {
-		expect(modelEnvKey("julia-1")).toBe("judge");
+	it("keeps the judge env key stable across device flips that move chat keys", () => {
+		// The judge key feeds #failedModels: stability means a fatal judge error
+		// stays failed (no silent un-fail) and a healthy judge worker is never
+		// dropped as stale when the user flips providers.tinyModelDevice.
+		// Local restore: this describe has no afterEach(vi.restoreAllMocks),
+		// so a leaked spy would poison every later test in the file.
+		const spy = vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		const device = process.env.PI_TINY_DEVICE;
+		const dtype = process.env.PI_TINY_DTYPE;
+		try {
+			process.env.PI_TINY_DEVICE = "cpu";
+			process.env.PI_TINY_DTYPE = "q8";
+			expect(modelEnvKey("julia-1")).toBe("judge");
+			const chatBefore = modelEnvKey("lfm2.5-230m");
+			process.env.PI_TINY_DEVICE = "webgpu";
+			process.env.PI_TINY_DTYPE = "fp16";
+			expect(modelEnvKey("julia-1")).toBe("judge");
+			expect(modelEnvKey("lfm2.5-230m")).not.toBe(chatBefore);
+		} finally {
+			spy.mockRestore();
+			if (device === undefined) delete process.env.PI_TINY_DEVICE;
+			else process.env.PI_TINY_DEVICE = device;
+			if (dtype === undefined) delete process.env.PI_TINY_DTYPE;
+			else process.env.PI_TINY_DTYPE = dtype;
+		}
 	});
 });
 

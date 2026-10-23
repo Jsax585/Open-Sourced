@@ -45,12 +45,12 @@ function toPayload(id: string, question: Question): JudgeQuestionPayload {
 			if (labels.length < 2 || labels.length > 20)
 				throw new JudgmentParseError(id, "", `choice needs 2-20 options, got ${labels.length}`);
 			const options = labels.map((label, index) => {
-				if (typeof label !== "string" || label.trim().length === 0) {
+				if (label.trim().length === 0) {
 					throw new JudgmentParseError(id, "", `empty choice option at index ${index}`);
 				}
 				const rubric = question.criteria[label];
 				const option = rubric ? `${label}: ${rubric}` : label;
-				if (typeof option !== "string" || option.trim().length === 0) {
+				if (option.trim().length === 0) {
 					throw new JudgmentParseError(id, "", `empty choice option at index ${index}`);
 				}
 				return option;
@@ -167,8 +167,18 @@ export class LocalJudge implements Judge {
 	): Promise<JudgmentResult<Q>> {
 		const ids = Object.keys(request.questions);
 		if (ids.length === 0) throw new Error("judgment request has no questions");
+		if (request.images?.length) {
+			throw new AIError.ValidationError(`Local judgment backend ${this.label} does not support image inputs`);
+		}
 		const questions: Record<string, JudgeQuestionPayload> = {};
-		for (const id of ids) questions[id] = toPayload(id, request.questions[id]);
+		// Plain-object accumulators swallow "__proto__" via the prototype setter;
+		// reject up-front so the id can neither vanish nor poison the worker.
+		for (const id of ids) {
+			if (id === "__proto__") {
+				throw new AIError.ValidationError(`judgment "${id}": question id is not allowed`);
+			}
+			questions[id] = toPayload(id, request.questions[id]);
+		}
 		const state = renderJudgeStateValue(request.state);
 		const { logits, error } = await tinyModelClient.judge(this.#modelId, state, questions, {
 			signal: options.signal,
