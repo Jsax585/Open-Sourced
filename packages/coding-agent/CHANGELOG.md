@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `task.isolation.allowNested` (default `false`) to reject nested isolated subagent spawns; inside an isolated session the `task` tool and eval `agent()` constrain `isolated` to `false`, and an explicit `isolated: true` fails preflight with a clear error. Set it to `true` to restore nested isolation ([#3760](https://github.com/can1357/oh-my-pi/issues/3760)).
+- Added `task.isolation.allowNested` (default `false`) to reject nested isolated subagent spawns; inside an isolated session the `task` tool hides `isolated` from its prompt and constrains it to `false` in its schema, eval `agent()` drops `isolated`/`apply`/`merge` from its signature, and an explicit affirmative control fails preflight with a clear error. Set it to `true` to restore nested isolation ([#3760](https://github.com/can1357/oh-my-pi/issues/3760)).
 
 ### Changed
 

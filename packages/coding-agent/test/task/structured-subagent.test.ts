@@ -426,6 +426,33 @@ describe("structured subagent primitive", () => {
 			resolveEffectiveSubagentPolicy(request({ session: open, isolation: { apply: true } })),
 		).resolves.toBeDefined();
 	});
+	it("reports the seance rejection — not the gate — for seance spawns with affirmative isolation", async () => {
+		// Bundled seance rejects isolated execution unconditionally in
+		// prepareSeance, so the fail-fast gate must not suggest a setting fix:
+		// enabling allowNested/enabled would just re-route the same call to
+		// the seance rejection. Pinned for every gate reason.
+		const nested = session({ isolationEnabled: true, isIsolated: true });
+		const discover = vi.spyOn(discoveryModule, "discoverAgents");
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: nested, agent: "seance", isolation: { requested: true } })),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
+		expect(discover).not.toHaveBeenCalled();
+		vi.restoreAllMocks();
+
+		mockDiscovery();
+		const disabled = session({ isolationEnabled: false });
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: disabled, agent: "seance", isolation: { requested: true } }),
+			),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
+		const planSession = session({ planMode: true });
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({ session: planSession, agent: "seance", isolation: { requested: true } }),
+			),
+		).rejects.toThrow("Seance does not support plan mode, isolated execution, or custom tools.");
+	});
 	it("reloads project task and retry policy before resolving an agent added during the session", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-task-hot-reload-"));
 		const projectDir = path.join(root, "project");

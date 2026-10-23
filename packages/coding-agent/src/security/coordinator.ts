@@ -740,7 +740,7 @@ export class SecurityCoordinator {
 const COORDINATORS = new Map<string, SecurityCoordinator>();
 
 export function getSecurityCoordinator(host: SecurityCoordinatorHost): SecurityCoordinator {
-	const key = `${path.resolve(host.cwd)}\u0000${host.sessionId ?? "sessionless"}\u0000${host.isIsolated === true}`;
+	const key = `${path.resolve(host.cwd)}\u0000${host.sessionId ?? "sessionless"}`;
 	const existing = COORDINATORS.get(key);
 	if (existing) return existing;
 	const coordinator = new SecurityCoordinator(host);

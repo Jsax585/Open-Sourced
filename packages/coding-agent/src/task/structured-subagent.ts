@@ -312,12 +312,14 @@ function assertIsolationControlsAllowed(request: StructuredSubagentRequest, plan
 	if (!affirmative) return;
 	const reason = isolationUnavailableReason(request.session, planMode);
 	if (reason === undefined) return;
-	// Note: "plan-mode" normally never reaches this throw — bundled seance
-	// skips assertPlanControlsAllowed, so a bundled-seance spawn with
-	// affirmative isolation in plan mode lands here instead of prepareSeance's
-	// "does not support plan mode" error; report the seance-specific message
-	// for that path.
-	if (reason === "plan-mode" && request.agent?.trim() === SEANCE_AGENT_NAME) {
+	// Bundled seance rejects isolated execution unconditionally in prepareSeance,
+	// so a gate message suggesting a setting fix ("enable allowNested/enabled")
+	// would mislead: flipping the setting just re-routes the same call to the
+	// seance rejection. Report the seance-specific message for every reason.
+	// (Pre-discovery the agent name is all we have, so a custom shadow agent
+	// literally named "seance" gets this message too — the call still fails
+	// correctly, just with the bundled agent's wording.)
+	if (request.agent?.trim() === SEANCE_AGENT_NAME) {
 		throw new StructuredSubagentError(
 			"preflight",
 			"Seance does not support plan mode, isolated execution, or custom tools.",
