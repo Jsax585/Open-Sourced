@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added interactive Brave API-key login through `/login brave` ([#10971](https://github.com/can1357/oh-my-pi/pull/10971) by [@LJC-god](https://github.com/LJC-god)).
 - Added `PI_ANTHROPIC_API_VERSION=2026-10-21` to send Anthropic API version 2026-10-21 to the official Anthropic API; sampling parameters are omitted under that version, which rejects them ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ### Fixed
