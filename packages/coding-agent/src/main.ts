@@ -78,7 +78,11 @@ import {
 	scheduleMarketplaceAutoUpdate,
 	type MarketplaceAutoUpdateOptions,
 } from "./extensibility/plugins/marketplace-auto-update";
-import { registerDaemonProjectPresence } from "./launch/presence";
+import {
+	type DaemonProjectPresence,
+	type DaemonProjectPresenceSession,
+	registerDaemonProjectPresence,
+} from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import type { PrintModeOptions } from "./modes/print-mode";
@@ -1763,6 +1767,8 @@ interface RunRootCommandDependencies {
 	createForeignSessionStore?: (source: ForeignSessionSource) => ForeignSessionStore;
 	settings?: Settings;
 	forceSetupWizard?: boolean;
+	registerDaemonProjectPresence?: typeof registerDaemonProjectPresence;
+	runInteractiveMode?: typeof runInteractiveMode;
 }
 const DEFAULT_RUN_ROOT_DEPENDENCIES: RunRootCommandDependencies = {};
 
@@ -2256,11 +2262,24 @@ export async function runRootCommand(
 		await pluginPreloadPromise;
 		// Pure file I/O: overlap it with session-option building, but land it before
 		// extensions load or the session can start project daemons.
-		const daemonPresencePromise =
-			deps === DEFAULT_RUN_ROOT_DEPENDENCIES
-				? logger.time("registerDaemonProjectPresence", registerDaemonProjectPresence, cwd)
+		let daemonPresencePromise: Promise<DaemonProjectPresence> | undefined;
+		const registerPresence =
+			deps.registerDaemonProjectPresence ??
+			(deps === DEFAULT_RUN_ROOT_DEPENDENCIES ? registerDaemonProjectPresence : undefined);
+		if (registerPresence) {
+			const presenceSessionId = mode === "acp" ? undefined : sessionManager?.getSessionId();
+			const initialSession: DaemonProjectPresenceSession | undefined = presenceSessionId
+				? { sessionId: presenceSessionId, title: sessionManager?.getSessionName() }
 				: undefined;
-		daemonPresencePromise?.catch(() => {});
+			daemonPresencePromise = logger.time(
+				"registerDaemonProjectPresence",
+				registerPresence,
+				cwd,
+				undefined,
+				initialSession,
+			);
+			daemonPresencePromise.catch(() => {});
+		}
 
 		const sessionOptions = await logger.time(
 			"buildSessionOptions",
@@ -2307,7 +2326,7 @@ export async function runRootCommand(
 				return model !== undefined && getModelPricingStatus(model) !== "unknown";
 			});
 		}
-		await daemonPresencePromise;
+		const daemonPresence = await daemonPresencePromise;
 
 		// Handle CLI --api-key as runtime override (not persisted)
 		if (parsedArgs.apiKey) {
@@ -2524,6 +2543,26 @@ export async function runRootCommand(
 			});
 			if (!isInteractive) session.validateRetryFallbackChains();
 
+			if (daemonPresence) {
+				const syncPresence = (): void => {
+					const sessionId = session.sessionManager.getSessionId();
+					const title = session.sessionManager.getSessionName();
+					void daemonPresence?.update({ sessionId, title }).catch(error => {
+						logger.warn("Failed to update daemon project presence", { error: String(error) });
+					});
+				};
+				await daemonPresence
+					.update({
+						sessionId: session.sessionManager.getSessionId(),
+						title: session.sessionManager.getSessionName(),
+					})
+					.catch(error => {
+						logger.warn("Failed to update daemon project presence", { error: String(error) });
+					});
+				session.registerSessionChangeCallback(syncPresence);
+				session.sessionManager.onSessionNameChanged(syncPresence);
+			}
+
 			const sessionToolNames = session.getAllToolNames();
 			try {
 				validateToolNames(initialArgs.tools, sessionToolNames);
@@ -2701,7 +2740,8 @@ export async function runRootCommand(
 				try {
 					stopStartupWatchdog();
 					logger.endTiming();
-					await runInteractiveMode(
+					const runInteractiveModeImpl = deps.runInteractiveMode ?? runInteractiveMode;
+					await runInteractiveModeImpl(
 						session,
 						VERSION,
 						startupChangelog,
