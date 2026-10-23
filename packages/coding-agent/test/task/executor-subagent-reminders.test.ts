@@ -609,6 +609,26 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.output).toBe(expected);
 		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_YIELD);
 	});
+	it.each([
+		["line cap", "finding\n".repeat(5001)],
+		["byte cap", "x".repeat(500_001)],
+	])("keeps the missing-yield warning in a %s result", async (_kind, report) => {
+		const session = createMockSession(({ promptIndex, emit, state }) => {
+			const assistant = createAssistantStopMessage(promptIndex === 1 ? report : "See the summary above.");
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+		});
+
+		mockCreateAgentSession(session);
+
+		const result = await runSubprocess({ ...baseOptions, id: `subagent-${_kind}` });
+		const summary = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.truncated).toBe(true);
+		expect(result.output.startsWith(SUBAGENT_WARNING_MISSING_YIELD)).toBe(true);
+		expect(summary).toContain(SUBAGENT_WARNING_MISSING_YIELD);
+	});
 
 	it("returns the final message verbatim, with no yield tool or reminders, when unstructured", async () => {
 		const report = "## Summary\nAuth lives in `src/auth.ts:10-40`.";
