@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `task.standardContextOnly` (off by default) to keep task/eval/workpool subagents on standard context tiers while the main session can use extended context; workers and their descendants retain the policy across follow-ups and revival (by [@Mike-Zhuang](https://github.com/Mike-Zhuang))
+- Added `task.standardContextOnly` (off by default) to keep task/eval/workpool subagents on standard context tiers while the main session can use extended context; workers and their descendants retain the policy across follow-ups and revival ([#16828](https://github.com/can1357/oh-my-pi/pull/16828) by [@Mike-Zhuang](https://github.com/Mike-Zhuang))
 
 ### Fixed
 
