@@ -4679,6 +4679,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								},
 								disableModelFallback: cfgTaskPerCallModelFallbacks.get(settings) === "off",
 								disableContextPromotion: true,
+								// Walk the worker's own chain first: a model-keyed or wildcard chain that covers
+								// its model would otherwise outrank it and strand it on refused entries.
+								pinnedRetryFallbackRole: subagentRetryFallbackRole(id),
 							}
 						: {}),
 					thinkingLevelCeiling: spawnEffortCeiling,

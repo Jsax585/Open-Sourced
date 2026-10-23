@@ -291,6 +291,7 @@ export function createPersistedSubagentReviverFactory(
 								thinkingLevelCeiling: cfgTaskMaxEffort.get(ctx.settings),
 								disableModelFallback: cfgTaskPerCallModelFallbacks.get(ctx.settings) === "off",
 								disableContextPromotion: true,
+								pinnedRetryFallbackRole: subagentRetryFallbackRole(ref.id),
 								assertDispatchModel: (model: Model) => {
 									assertPerCallDispatchModel(
 										model,

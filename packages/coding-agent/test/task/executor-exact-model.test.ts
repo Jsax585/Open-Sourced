@@ -340,4 +340,84 @@ describe("per-call exact selection after background discovery", () => {
 			}
 		},
 	);
+
+	it.each(["mock/failing", "mock/*"])(
+		"walks the worker's own chain before a refused %s chain covering its model",
+		async shadowKey => {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-executor-chain-shadow-"));
+			const authStorage = await AuthStorage.create(":memory:");
+			const sourceId = `executor-chain-shadow-${shadowKey}`;
+			const agentId = `ChainShadow${shadowKey === "mock/*" ? "Wildcard" : "Model"}`;
+			try {
+				authStorage.keys.setRuntime("mock", "test-key");
+				registerMockApi(sourceId);
+				const failing = createMockModel({
+					id: "failing",
+					handler: () => ({ throw: "overloaded_error: provider returned error 503" }),
+				});
+				const blocked = createMockModel({ id: "blocked", handler: () => ({ content: ["Blocked answer."] }) });
+				const backup = createMockModel({ id: "backup", handler: () => ({ content: ["Backup answer."] }) });
+				const models = [failing, blocked, backup];
+				const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+				const find = modelRegistry.find.bind(modelRegistry);
+				vi.spyOn(modelRegistry, "find").mockImplementation(
+					(provider, id) =>
+						models.find(model => model.provider === provider && model.id === id) ?? find(provider, id),
+				);
+				vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
+				vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+					agents: [
+						{ name: "worker", description: "test", systemPrompt: "test", source: "bundled", tools: ["read"] },
+					],
+					projectAgentsDir: null,
+				});
+				const settings = Settings.isolated({
+					"task.maxRecursionDepth": 2,
+					"task.perCallModel": "on",
+					"task.perCallModelFallbacks": "runtime",
+					"task.perCallModelAllow": ["@review", "mock/backup"],
+					"task.isolation.enabled": false,
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					"retry.maxRetries": 1,
+					modelRoles: { review: "mock/failing" },
+					// A model-keyed or wildcard chain outranks the role chain for the worker's model.
+					"retry.fallbackChains": { review: ["mock/backup"], [shadowKey]: ["mock/blocked"] },
+				});
+				const session = {
+					cwd,
+					hasUI: false,
+					settings,
+					authStorage,
+					modelRegistry,
+					restrictToolNames: true,
+					enableMCP: false,
+					enableLsp: false,
+					enableIrc: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					getSessionAgents: () => [],
+				} as unknown as ToolSession;
+				const execution = await runStructuredSubagent({
+					session,
+					invocationKind: "task",
+					assignment: "Answer the question.",
+					agent: "worker",
+					perCallModel: "@review",
+					structured: false,
+					identity: { id: agentId },
+					keepAlive: false,
+				});
+				expect(execution.result.exitCode).toBe(0);
+				expect(execution.result.output).toBe("Backup answer.");
+				expect(blocked.calls).toHaveLength(0);
+			} finally {
+				await AgentRegistry.global().get(agentId)?.session?.dispose();
+				AgentRegistry.global().unregister(agentId);
+				unregisterCustomApis(sourceId);
+				authStorage.close();
+				await fs.rm(cwd, { recursive: true, force: true });
+			}
+		},
+	);
 });

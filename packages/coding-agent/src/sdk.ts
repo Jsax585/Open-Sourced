@@ -620,6 +620,8 @@ export interface CreateAgentSessionOptions {
 	disableModelFallback?: boolean;
 	/** Never promote to a larger-context model (implied by {@link disableModelFallback}). Per-call `model` subagents set it. */
 	disableContextPromotion?: boolean;
+	/** Chain key every fallback walk consults first; per-call `model` subagents pin their own `subagent:<id>` chain. */
+	pinnedRetryFallbackRole?: string;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -4783,6 +4785,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
 			disableModelFallback: options.disableModelFallback,
 			disableContextPromotion: options.disableContextPromotion,
+			pinnedRetryFallbackRole: options.pinnedRetryFallbackRole,
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,
