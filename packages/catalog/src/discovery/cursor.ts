@@ -587,9 +587,7 @@ function normalizeRichCursorModels(
 		) {
 			continue;
 		}
-		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds).filter(
-			entry => !uncovered || !entry.variant || !isRichVariantUnsubmittable(details, entry.variant),
-		);
+		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds, uncovered);
 		if (variants.length === 0) continue;
 		// The bare lane id belongs to Cursor's flagged default configuration, so
 		// seed axis defaults from it before falling back to first-seen values;
@@ -650,6 +648,7 @@ function normalizeRichCursorVariants(
 	details: AvailableModelsResponse_ModelDetails,
 	baseId: string,
 	usableModelIds: ReadonlySet<string> | undefined,
+	skipUnsubmittable = false,
 ): NormalizedRichVariant[] {
 	if (details.variants.length === 0) {
 		const candidates = [baseId, ...details.legacySlugs, ...details.idAliases];
@@ -661,6 +660,7 @@ function normalizeRichCursorVariants(
 	const seenRoutes = new Set<string>();
 	for (const [index, variant] of details.variants.entries()) {
 		if (isRichVariantBlocked(details, variant)) continue;
+		if (skipUnsubmittable && isRichVariantUnsubmittable(details, variant)) continue;
 		const parameters = variant.parameterValues
 			.map(parameter => ({ id: parameter.id.trim(), value: parameter.value.trim() }))
 			.filter(parameter => parameter.id.length > 0);

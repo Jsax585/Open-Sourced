@@ -758,6 +758,10 @@ describe("fetchCursorUsableModels", () => {
 					effortVariant("covered-confirm-high", "high"),
 					effortVariant("covered-confirm-max", "max", blocksSubmission),
 				]),
+				model("uncovered-dup", [
+					effortVariant("uncovered-dup-blocked", "high", blocksSubmission),
+					effortVariant("uncovered-dup-high", "high"),
+				]),
 				create(AvailableModelsResponse_ModelDetailsSchema, {
 					name: "uncovered-fast",
 					supportsAgent: true,
@@ -785,6 +789,9 @@ describe("fetchCursorUsableModels", () => {
 		expect(routes("uncovered-confirm")).toEqual(["uncovered-confirm-high"]);
 		// Covered: the usable list is the entitlement, so the variant is unchanged.
 		expect(routes("covered-confirm")).toEqual(["covered-confirm-high", "covered-confirm-max"]);
+		// Uncovered: a blocked variant listed first must not shadow an allowed one
+		// with the same route signature.
+		expect(routes("uncovered-dup")).toEqual(["uncovered-dup-high"]);
 		// Uncovered: a boolean value the admin allowlist blocks by default gets no lane.
 		expect((models ?? []).map(spec => spec.id).filter(id => id.startsWith("uncovered-fast"))).toEqual([
 			"uncovered-fast",
