@@ -307,6 +307,25 @@ describe("parseAgentFields", () => {
 		]);
 	});
 
+	test("treats comma-only visibility strings as silent blanks", () => {
+		// A string with only commas/whitespace carries no patterns — like an
+		// empty string it reads as absent without the wrong-type warning.
+		const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			for (const blank of [",,", " , , ", " ,"]) {
+				expect(parseAgentFields({ name: "worker", description: "desc", skills: blank })?.skills).toBeUndefined();
+				expect(
+					parseAgentFields({ name: "worker", description: "desc", hideSkills: blank })?.hideSkills,
+				).toBeUndefined();
+				expect(
+					parseAgentFields({ name: "worker", description: "desc", unhideSkills: blank })?.unhideSkills,
+				).toBeUndefined();
+			}
+			expect(warnSpy).not.toHaveBeenCalled();
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
 	test("treats wrong-typed visibility values as absent", () => {
 		// Numbers, objects, and arrays without strings are never meaningful
 		// glob lists; they read as absent (unrestricted) with a warning.

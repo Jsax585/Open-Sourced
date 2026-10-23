@@ -200,13 +200,13 @@ export function resolveAgentSkills(
 	const allowlist = agent.skills;
 	const deny = agent.hideSkills;
 	const unhide = agent.unhideSkills;
-	const compile = (patterns: string[] | undefined): Array<{ glob: Bun.Glob; pattern: string }> | undefined => {
+	const compile = (patterns: string[] | undefined): Bun.Glob[] | undefined => {
 		if (!patterns?.length) return undefined;
 		const warned = new Set<string>();
-		const compiled: Array<{ glob: Bun.Glob; pattern: string }> = [];
+		const compiled: Bun.Glob[] = [];
 		for (const pattern of patterns) {
 			try {
-				compiled.push({ glob: new Bun.Glob(pattern), pattern });
+				compiled.push(new Bun.Glob(pattern));
 			} catch {
 				if (!warned.has(pattern)) {
 					warned.add(pattern);
@@ -223,8 +223,8 @@ export function resolveAgentSkills(
 	// collapses empty arrays to `undefined`, so track presence separately.
 	const allowGlobs = compile(allowlist);
 	const allowlistPresent = allowlist !== undefined;
-	const matches = (globs: Array<{ glob: Bun.Glob; pattern: string }> | undefined, name: string): boolean =>
-		globs?.some(({ glob }) => glob.match(name)) ?? false;
+	const matches = (globs: Bun.Glob[] | undefined, name: string): boolean =>
+		globs?.some(glob => glob.match(name)) ?? false;
 	return sessionSkills.map(skill => {
 		// `unhideSkills` overrides presentation hides (`SKILL.md` `hide: true`)
 		// only. A `disableModelInvocation: true` opt-out is never listable via

@@ -39,7 +39,12 @@ function makeParentSession(settings: Settings): ToolSession {
 }
 
 /** Spawn one worker and capture the ExecutorOptions the vibe path hands the executor. */
-async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: string): Promise<ExecutorOptions> {
+async function spawnAndCaptureOptions(
+	cli: VibeCli,
+	settings: Settings,
+	name?: string,
+	session?: ToolSession,
+): Promise<ExecutorOptions> {
 	const captured = Promise.withResolvers<ExecutorOptions>();
 	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 		captured.resolve(options);
@@ -60,7 +65,7 @@ async function spawnAndCaptureOptions(cli: VibeCli, settings: Settings, name?: s
 	});
 
 	const registry = VibeSessionRegistry.global();
-	await registry.spawn(makeParentSession(settings), { cli, name, prompt: "work" });
+	await registry.spawn(session ?? makeParentSession(settings), { cli, name, prompt: "work" });
 	return captured.promise;
 }
 
@@ -114,9 +119,7 @@ describe("vibe worker spawn options", () => {
 	it("hands the worker the parent session's skill list through the visibility resolver", async () => {
 		// The bundled vibe workers set no visibility frontmatter, so the child
 		// receives every skill as a copy: listing intact, never the parent's
-		// object identities, and no autoloads. Pins the `#buildSpawnOptions`
-		// wiring (`resolveAgentSkills` / `resolveAgentAutoloadSkills`) as
-		// reachable behavior rather than dead consistency lines.
+		// object identities, and no autoloads.
 		const parentSkills = [
 			{ name: "alpha", description: "a", filePath: "/skills/alpha/SKILL.md", baseDir: "/skills", source: "user" },
 			{
@@ -128,32 +131,11 @@ describe("vibe worker spawn options", () => {
 				hide: true,
 			},
 		];
-		const captured = Promise.withResolvers<ExecutorOptions>();
-		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
-			captured.resolve(options);
-			return {
-				index: 0,
-				id: options.id,
-				agent: options.agent.name,
-				agentSource: "bundled",
-				task: options.task,
-				exitCode: 0,
-				output: "done",
-				stderr: "",
-				truncated: false,
-				durationMs: 1,
-				tokens: 0,
-				requests: 0,
-			} as SingleResult;
-		});
-
 		const session = makeParentSession(
 			Settings.isolated({ modelRoles: { default: "anthropic/opus", task: "anthropic/sonnet" } }),
 		);
 		session.skills = parentSkills;
-		const registry = VibeSessionRegistry.global();
-		await registry.spawn(session, { cli: "good", prompt: "work" });
-		const options = await captured.promise;
+		const options = await spawnAndCaptureOptions("good", session.settings, undefined, session);
 
 		expect(options.skills?.map(s => s.name)).toEqual(["alpha", "secret"]);
 		expect(options.skills?.filter(s => s.hide !== true).map(s => s.name)).toEqual(["alpha"]);

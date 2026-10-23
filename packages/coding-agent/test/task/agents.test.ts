@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { resolveAgentSkills } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { resolveAgentAutoloadSkills, resolveAgentSkills } from "@oh-my-pi/pi-coding-agent/task/agents";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { prompt } from "@oh-my-pi/pi-utils";
 import agentFrontmatterTemplate from "../../src/prompts/agents/frontmatter.md" with { type: "text" };
@@ -161,6 +161,22 @@ describe("resolveAgentSkills", () => {
 		expect(listed(resolveAgentSkills(child, agent({ unhideSkills: ["alpha"] })))).toEqual(["alpha", "beta", "gamma"]);
 		// Grandchild hideSkills re-hides a parent-unhidden skill.
 		expect(listed(resolveAgentSkills(child, agent({ hideSkills: ["beta"] })))).toEqual(["gamma"]);
+	});
+});
+
+describe("resolveAgentAutoloadSkills", () => {
+	test("loads any named skill by name, ignoring listing filters and opt-outs", () => {
+		// Name lookup only: neither a source `hide` nor a model-invocation
+		// opt-out blocks preloading, and unknown names are skipped.
+		const skills = [skill("alpha"), skill("secret", true), { ...skill("revoked"), modelInvocationDisabled: true }];
+		const resolved = resolveAgentAutoloadSkills(skills, ["secret", "revoked", "missing", "alpha"]);
+		expect(resolved.map(s => s.name)).toEqual(["secret", "revoked", "alpha"]);
+		for (const s of resolved) expect(skills).not.toContain(s);
+	});
+
+	test("returns an empty list when no autoload names are given", () => {
+		expect(resolveAgentAutoloadSkills([skill("alpha")], undefined)).toEqual([]);
+		expect(resolveAgentAutoloadSkills([skill("alpha")], [])).toEqual([]);
 	});
 });
 

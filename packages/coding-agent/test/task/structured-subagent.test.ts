@@ -738,10 +738,10 @@ describe("structured subagent primitive", () => {
 	});
 
 	it("preloads an autoloadSkills entry that visibility hides from the listing", async () => {
-		// `autoloadSkills` exists to inject a skill's content up front, so it must
-		// resolve against the full list: resolving against the visibility-filtered
-		// list would silently stop preloading a skill the agent explicitly asked
-		// for, which is the one case where hiding it from the listing is expected.
+		// Regression: autoload must resolve against the full list — resolving
+		// against the visibility-filtered list would silently stop preloading a
+		// skill the agent explicitly asked for, which is the one case where
+		// hiding it from the listing is expected.
 		const skills = [
 			{ name: "alpha", description: "a", filePath: "/skills/alpha/SKILL.md", baseDir: "/skills", source: "user" },
 			{ name: "secret", description: "s", filePath: "/skills/secret/SKILL.md", baseDir: "/skills", source: "user" },
@@ -762,9 +762,9 @@ describe("structured subagent primitive", () => {
 	});
 
 	it("preloads any named skill via autoloadSkills, even a model-invocation opt-out", async () => {
-		// `autoloadSkills` is the agent author's explicit choice — not a model
-		// invocation — so it resolves against the full list and preloads any
-		// named skill, including one the `<skills>` listing hides.
+		// Regression: `autoloadSkills` is the agent author's explicit choice
+		// (not a model invocation), so name lookup must not consult the
+		// listing filter — a `disableModelInvocation` opt-out still preloads.
 		const skills = [
 			{ name: "alpha", description: "a", filePath: "/skills/alpha/SKILL.md", baseDir: "/skills", source: "user" },
 			{
