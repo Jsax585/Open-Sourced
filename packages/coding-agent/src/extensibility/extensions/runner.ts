@@ -1542,8 +1542,12 @@ export class ExtensionRunner {
 								handlerSignal,
 								event.type === "tool_call" ? budget : undefined,
 							);
+							// Live delegation handlers must inherit the 750 ms budget, not only the
+							// session signal: a late Jev response must never cancel a fallback turn.
+							const handlerEvent =
+								event.type === "live_delegation" ? ({ ...event, signal: handlerSignal } as TEvent) : event;
 							result = await this.#toolRegistrationScope.run(registrationScope, () =>
-								handler(event, handlerContext),
+								handler(handlerEvent, handlerContext),
 							);
 						} catch (error) {
 							handlerFailure = { error };
