@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +10,11 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { SEANCE_SLASH_COMMAND } from "@oh-my-pi/pi-coding-agent/slash-commands/seance";
+import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import * as seanceResolver from "@oh-my-pi/pi-coding-agent/task/seance";
+import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
 import { cfgBashEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import {
@@ -36,6 +41,7 @@ describe("settings-gated tools in a live session", () => {
 
 	afterEach(async () => {
 		for (const session of sessions.splice(0)) await session.dispose().catch(() => {});
+		vi.restoreAllMocks();
 	});
 
 	afterAll(() => {
@@ -162,5 +168,30 @@ describe("settings-gated tools in a live session", () => {
 		await settle(session);
 		expect(session.getActiveToolNames()).toContain("task");
 		expect(session.getMountedXdevToolNames()).not.toContain("task");
+	});
+
+	it("runs /seance with a deferred task but refuses a disabled registered task", async () => {
+		const session = await startSession(Settings.isolated({ "tools.forceDiscoverable": ["task"] }));
+		const seanceAgent = getBundledAgent("seance")!;
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [seanceAgent], projectAgentsDir: null });
+		vi.spyOn(seanceResolver, "resolveSeanceSource").mockResolvedValue({
+			file: "/saved/session.jsonl",
+			id: "saved",
+			modelSelectors: [],
+		});
+		const execute = vi.spyOn(session.getToolByName("task")!, "execute").mockResolvedValue({
+			content: [],
+			details: { projectAgentsDir: null, results: [{ id: "consultation", exitCode: 0 }], totalDurationMs: 0 },
+		});
+		const ctx = createInteractiveModeContext({ session, sessionManager: session.sessionManager });
+		const command = { name: "seance", args: "/saved/session.jsonl --model openai/requested", text: "/seance" };
+		expect(session.getActiveToolNames()).not.toContain("task");
+		await SEANCE_SLASH_COMMAND.handleTui!(command, { ctx });
+		expect(ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining("consultation"));
+
+		await session.setActiveToolsByName(session.getEnabledToolNames().filter(name => name !== "task"));
+		await SEANCE_SLASH_COMMAND.handleTui!(command, { ctx });
+		expect(ctx.showError).toHaveBeenCalledWith(expect.stringContaining("not available"));
+		expect(execute).toHaveBeenCalledTimes(1);
 	});
 });

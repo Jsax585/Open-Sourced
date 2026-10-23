@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `tools.forceDiscoverable` to keep selected built-ins available through `xd://` without exposing their full schemas upfront; existing defaults and safety pins are unchanged ([#12393](https://github.com/can1357/oh-my-pi/issues/12393), [#16874](https://github.com/can1357/oh-my-pi/pull/16874) by [@ultravioletcatastrophe](https://github.com/ultravioletcatastrophe))
+- Added `tools.forceDiscoverable` to defer selected built-in schemas while preserving `/seance`, todo updates, and memory output; defaults and safety pins are unchanged ([#12393](https://github.com/can1357/oh-my-pi/issues/12393), [#16874](https://github.com/can1357/oh-my-pi/pull/16874) by [@ultravioletcatastrophe](https://github.com/ultravioletcatastrophe))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
