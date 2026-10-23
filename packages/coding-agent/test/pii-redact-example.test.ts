@@ -89,6 +89,41 @@ describe("pii-redact example helpers", () => {
 		expect(redactStructuredPayload({ record }, PLACEHOLDER)).toEqual({ record: { email: PLACEHOLDER } });
 	});
 
+	it("redacts repeated/cyclic structured references without changing binary values or input", () => {
+		const shared = { email: "alice@example.org", phone: "555-123-4567" };
+		const bytes = new Uint8Array([1, 2, 3]);
+		type Payload = {
+			input: typeof shared;
+			history: typeof shared;
+			bytes: Uint8Array;
+			self?: Payload;
+		};
+		const payload: Payload = { input: shared, history: shared, bytes };
+		payload.self = payload;
+		const redacted = redactStructuredPayload(payload, PLACEHOLDER) as Payload;
+		expect(redacted.input).toBe(redacted.history);
+		expect(redacted.input).toEqual({ email: PLACEHOLDER, phone: PLACEHOLDER });
+		expect(redacted.self).toBe(redacted);
+		expect(redacted.bytes).toBe(bytes);
+		expect(shared.email).toBe("alice@example.org");
+		expect(shared.phone).toBe("555-123-4567");
+	});
+
+	it("preserves sparse and self-referential arrays while redacting text", () => {
+		const sparse: string[] = new Array(3);
+		sparse[1] = "alice@example.org";
+		const mapped = redactStructuredPayload(sparse, PLACEHOLDER) as string[];
+		expect(mapped).toHaveLength(3);
+		expect(0 in mapped).toBe(false);
+		expect(mapped[1]).toBe(PLACEHOLDER);
+		expect(2 in mapped).toBe(false);
+		const cyclic: unknown[] = [];
+		cyclic.push(cyclic, "123-45-6789");
+		const result = redactStructuredPayload(cyclic, PLACEHOLDER) as unknown[];
+		expect(result[0]).toBe(result);
+		expect(result[1]).toBe(PLACEHOLDER);
+	});
+
 	it("redactText falls back to regex when PAW exec throws", async () => {
 		const previous = process.env.PAW_PII_CMD;
 		process.env.PAW_PII_CMD = "missing-paw-binary-that-does-not-exist";
