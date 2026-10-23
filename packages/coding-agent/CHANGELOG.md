@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `omp gc --sessions [archive|delete]` to merge duplicate and forked session files back into one conversation, then archive (default) or delete sessions nobody answered; dry-run unless `--apply` ([#12630](https://github.com/can1357/oh-my-pi/pull/12630) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
+- `omp gc` session passes now skip sessions another process holds open or locked, naming the holder ([#12630](https://github.com/can1357/oh-my-pi/pull/12630) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 

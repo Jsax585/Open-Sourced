@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `Flags.string({ optionalValue })`: a bare `--flag` takes the stated value ([#12630](https://github.com/can1357/oh-my-pi/pull/12630) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 ## [18.12.6] - 2026-10-21
 
 ### Added
