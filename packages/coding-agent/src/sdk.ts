@@ -331,6 +331,7 @@ import {
 	cfgSecurityEnabled,
 	cfgSpeechgenEnabled,
 	cfgToolsAbortOnFabricatedResult,
+	cfgToolsForceDiscoverable,
 	cfgToolsIntentTracing,
 	cfgToolsMaxTimeout,
 	cfgToolsXdev,
@@ -4294,10 +4295,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (toolSession.xdev) {
 			const topLevelToolNames: string[] = [];
 			const mountedNames: string[] = [];
+			const forceDiscoverable = cfgToolsForceDiscoverable.get(settings);
 			for (const name of initialToolNames) {
 				const tool = toolRegistry.get(name);
 				const explicitlyRequested = presentationPinnedToolNames?.has(name) === true;
-				if (tool && xdevReadAvailable && xdevWriteAvailable && !explicitlyRequested && isMountableUnderXdev(tool))
+				if (
+					tool &&
+					xdevReadAvailable &&
+					xdevWriteAvailable &&
+					!explicitlyRequested &&
+					isMountableUnderXdev(tool, builtInRegistryToolNames.has(name) && forceDiscoverable.includes(name))
+				)
 					mountedNames.push(name);
 				else topLevelToolNames.push(name);
 			}

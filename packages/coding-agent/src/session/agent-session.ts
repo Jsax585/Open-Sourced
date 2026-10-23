@@ -818,11 +818,20 @@ function ephemeralMaxTokensRejection(model: Model): string | undefined {
 
 /** True for transcript messages that create, use, or report on eval runtime state. */
 function isEvalActivity(message: AgentMessage): boolean {
-	if (message.role === "pythonExecution" || (message.role === "toolResult" && message.toolName === "eval")) {
-		return true;
+	if (message.role === "pythonExecution") return true;
+	if (message.role === "toolResult") {
+		const dispatch = writeDeviceDispatch(message.toolName, message);
+		return message.toolName === "eval" || (dispatch?.mode === "execute" && dispatch.tool === "eval");
 	}
 	return (
-		message.role === "assistant" && message.content.some(block => block.type === "toolCall" && block.name === "eval")
+		message.role === "assistant" &&
+		message.content.some(
+			block =>
+				block.type === "toolCall" &&
+				(block.name === "eval" ||
+					(block.name === "write" &&
+						(block.arguments.path === "xd://eval" || block.arguments.file_path === "xd://eval"))),
+		)
 	);
 }
 
@@ -1911,6 +1920,7 @@ export class AgentSession implements SettingsScope {
 			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
 			getActiveToolNames: () => this.getActiveToolNames(),
 			getEnabledToolNames: () => this.getEnabledToolNames(),
+			getMountedXdevToolNames: () => this.getMountedXdevToolNames(),
 			toolRegistry: () => this.#tools.registry,
 			planModeEnabled: () => this.#planModeState?.enabled === true,
 			prewalkWillHandoff: () => this.#prewalk.willHandoff,
