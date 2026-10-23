@@ -176,6 +176,46 @@ describe("pii-redact example extension events", () => {
 		expect(replaced?.content).toEqual([{ type: "text", text: `Permission denied for ${PLACEHOLDER}` }]);
 	});
 
+	it("scrubs persisted tool details while preserving binary metadata", async () => {
+		const runner = await loadExampleRunner();
+		const binary = new Uint8Array([1, 2, 3]);
+		const details = {
+			customInput: "reply to alice@example.org",
+			fields: [{ note: "call 555-123-4567", ssn: "123-45-6789" }],
+			binary,
+		};
+		const replaced = await runner.emitToolResult({
+			type: "tool_result",
+			toolName: "Ask",
+			toolCallId: "ask1",
+			input: {},
+			content: [{ type: "text", text: "saved" }],
+			details,
+			isError: false,
+		} as never);
+		const redacted = replaced?.details as typeof details;
+		expect(redacted.customInput).toBe(`reply to ${PLACEHOLDER}`);
+		expect(redacted.fields).toEqual([{ note: `call ${PLACEHOLDER}`, ssn: PLACEHOLDER }]);
+		expect(redacted.binary).toBe(binary);
+		expect(details.customInput).toBe("reply to alice@example.org");
+		expect(details.fields[0]?.note).toBe("call 555-123-4567");
+	});
+
+	it("does not change tool details when example redaction is disabled", async () => {
+		process.env.PAW_PII_DISABLE = "1";
+		const runner = await loadExampleRunner();
+		const replaced = await runner.emitToolResult({
+			type: "tool_result",
+			toolName: "Ask",
+			toolCallId: "ask-disabled",
+			input: {},
+			content: [{ type: "text", text: "visible a@b.co" }],
+			details: { customInput: "alice@example.org" },
+			isError: false,
+		} as never);
+		expect(replaced).toBeUndefined();
+	});
+
 	it("keeps text/image/text order on context rewrite", async () => {
 		const runner = await loadExampleRunner();
 		const messages = await runner.emitContext([

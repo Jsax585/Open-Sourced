@@ -148,8 +148,10 @@ export default function piiRedactExtension(pi: ExtensionAPI) {
 		if (!enabled) return;
 		// Error results are model-visible and persisted; scrub them too.
 		const redacted = await redactToolResultContent(pi, event.content, placeholder);
-		if (redacted === event.content) return;
-		return { content: redacted };
+		// Tool metadata is persisted alongside content (e.g. Ask customInput/note).
+		// Redact its text leaves too, preserving binary and other native values.
+		const details = redactStructuredPayload(event.details, placeholder);
+		return { content: redacted, details };
 	});
 
 	pi.on("context", async event => {
