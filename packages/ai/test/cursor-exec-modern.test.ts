@@ -19,6 +19,9 @@ import {
 	ComputerUseArgsSchema,
 	ConnectScmArgsSchema,
 	DeleteArgsSchema,
+	DiagnosticsArgsSchema,
+	LsArgsSchema,
+	WriteArgsSchema,
 	ConnectScmErrorSchema,
 	ConnectScmGithubRepositorySchema,
 	ConnectScmGithubSchema,
@@ -67,7 +70,7 @@ import {
 	ToolCallSchema,
 	WebFetchAllowlistPrecheckArgsSchema,
 } from "@oh-my-pi/pi-catalog/discovery/cursor-proto";
-import { create, fromBinary, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
+import { create, encodeJsonValue, fromBinary, type JsonValue, toBinary } from "@oh-my-pi/pi-catalog/discovery/protobuf";
 
 /**
  * Drive one `ExecServerMessage` through the real dispatcher and decode every
@@ -89,10 +92,22 @@ async function dispatchExec(
 		output?: AssistantMessage;
 		state?: BlockState;
 	} = {},
-): Promise<{ frames: AgentClientMessage[]; output: AssistantMessage; results: ToolResultMessage[] }> {
+): Promise<{
+	frames: AgentClientMessage[];
+	output: AssistantMessage;
+	results: ToolResultMessage[];
+	stream: AssistantMessageEventStream;
+	handoffs: number;
+}> {
 	const output = options.output ?? cursorAssistantMessage();
 	const stream = new AssistantMessageEventStream();
 	const state = options.state ?? newBlockState();
+	let handoffs = 0;
+	if (options.externalToolExecutor)
+		state.onExternalToolHandoff = () => {
+			handoffs++;
+			output.stopReason = "toolUse";
+		};
 	const written: Buffer[] = [];
 	const h2Request = {
 		write: (chunk: Buffer) => {
@@ -118,10 +133,10 @@ async function dispatchExec(
 		options.requestContextTools ?? [],
 		options.requestContextRules,
 		undefined,
-		options.externalToolExecutor,
+		{ externalToolExecutor: options.externalToolExecutor },
 	);
 
-	return { frames: written.map(decodeClientFrame), output, results };
+	return { frames: written.map(decodeClientFrame), output, results, stream, handoffs };
 }
 
 /** Strip the 5-byte Connect envelope (flags + big-endian length) and decode. */
@@ -2195,118 +2210,345 @@ describe("Cursor MCP frame: approval-only probes", () => {
 	});
 });
 
-describe("Cursor MCP frame: external executor handoff", () => {
+function externalTool(name: string, properties: Record<string, JsonValue>): McpToolDefinition {
+	return create(McpToolDefinitionSchema, {
+		name: `pi-agent-${name}`,
+		toolName: name,
+		providerIdentifier: "pi-agent",
+		inputSchema: encodeJsonValue({ type: "object", properties, required: Object.keys(properties) }),
+	});
+}
+
+const readTool = externalTool("read", { path: { type: "string" } });
+const writeTool = externalTool("write", { path: { type: "string" }, content: { type: "string" } });
+
+describe("Cursor external exec contracts", () => {
 	function mcpCall() {
 		return buildExecMessage({
 			case: "mcpArgs",
 			value: create(McpArgsSchema, {
-				name: "send_message",
-				toolName: "send_message",
-				toolCallId: "call-external-1",
-				providerIdentifier: "external-client",
+				name: "pi-agent-read",
+				toolCallId: "call-external",
+				providerIdentifier: "pi-agent",
+				args: { path: encodeJsonValue('"README.md"') },
 			}),
 		});
 	}
 
-	it("acknowledges a client-owned tool without claiming it is missing", async () => {
-		const { frames, results } = await dispatchExec(mcpCall(), { externalToolExecutor: true });
+	it("hands an advertised MCP call to its original client name, without a fabricated result", async () => {
+		const output = cursorAssistantMessage();
+		const state = newBlockState();
+		const preview = new AssistantMessageEventStream();
+		processInteractionUpdate(
+			{
+				message: {
+					case: "toolCallStarted",
+					value: {
+						callId: "mcp-preview",
+						toolCall: { tool: { case: "mcpToolCall", value: { args: mcpCall().message.value } } },
+					},
+				},
+			},
+			output,
+			preview,
+			state,
+			{ sawTokenDelta: false },
+			{ externalToolExecutor: true },
+		);
+		const { frames, results, stream, handoffs } = await dispatchExec(mcpCall(), {
+			output,
+			state,
+			externalToolExecutor: true,
+			requestContextTools: [readTool],
+		});
+		expect(preview.queue).toEqual([]);
+		expect(frames).toEqual([]);
+		expect(results).toEqual([]);
+		expect(handoffs).toBe(1);
+		expect(output.content).toMatchObject([{ type: "toolCall", name: "read", arguments: { path: "README.md" } }]);
+		expect((output.content[0] as ToolCallState)[kCursorExecResolved]).toBeUndefined();
+		expect(stream.queue.map(event => event.type)).toEqual(["toolcall_start", "toolcall_delta", "toolcall_end"]);
+		expect(stream.queue[1]).toMatchObject({ delta: '{"path":"README.md"}' });
+	});
+
+	it("closes a redispatched unresolved MCP exec without duplicating the client call", async () => {
+		const first = await dispatchExec(mcpCall(), { externalToolExecutor: true, requestContextTools: [readTool] });
+		const second = await dispatchExec(mcpCall(), {
+			externalToolExecutor: true,
+			requestContextTools: [readTool],
+			output: first.output,
+		});
+		expect(second.handoffs).toBe(1);
+		expect(second.frames).toEqual([]);
+		expect(second.output.content).toHaveLength(1);
+		expect(second.stream.queue).toEqual([]);
+	});
+
+	it("answers a redispatched resolved MCP exec instead of leaving the server waiting", async () => {
+		const first = await dispatchExec(mcpCall(), { execHandlers: { mcp: async () => toolResult("ran") } });
+		const second = await dispatchExec(mcpCall(), {
+			externalToolExecutor: true,
+			requestContextTools: [readTool],
+			output: first.output,
+		});
+		expect(second.handoffs).toBe(0);
+		expect(soleResult(second.frames).case).toBe("mcpResult");
+		expect(second.output.content).toHaveLength(1);
+	});
+
+	it("rejects an unadvertised MCP tool without leaking it to the client", async () => {
+		const { frames, output, handoffs } = await dispatchExec(mcpCall(), { externalToolExecutor: true });
+		expect(handoffs).toBe(0);
+		expect(output.content).toEqual([]);
 		const answer = soleResult(frames);
 		if (answer.case !== "mcpResult") throw new Error(`got ${answer.case}`);
-		expect(answer.value.result.case).toBe("success");
-		if (answer.value.result.case !== "success") throw new Error(`got ${answer.value.result.case}`);
-		const content = answer.value.result.value.content[0]?.content;
-		expect(content?.case).toBe("text");
-		if (content?.case !== "text") throw new Error(`got ${content?.case}`);
-		expect(content.value.text).toContain("handed off to the external client");
-		expect(content.value.text).toContain("Do not retry");
-		expect(results).toEqual([]);
+		expect(answer.value.result.case).toBe("toolNotFound");
 	});
 
-	it("emits one client-owned tool call across the streamed handoff sequence", async () => {
-		const toolCall = fromBinary(
-			ToolCallSchema,
-			toBinary(
-				ToolCallSchema,
-				create(ToolCallSchema, {
-					tool: {
-						case: "mcpToolCall",
-						value: {
-							args: create(McpArgsSchema, {
-								name: "send_message",
-								toolName: "send_message",
-								toolCallId: "call-external-1",
-								providerIdentifier: "external-client",
-							}),
-						},
-					},
-				}),
-			),
-		);
-		const output = cursorAssistantMessage();
-		const stream = new AssistantMessageEventStream();
-		const state = newBlockState();
-		const usage = { sawTokenDelta: false };
-		const written: Buffer[] = [];
-		const h2Request = {
-			write: (chunk: Buffer) => {
-				written.push(chunk);
-				return true;
-			},
-		} as unknown as Parameters<typeof handleServerMessage>[5];
-
-		processInteractionUpdate(
-			{ message: { case: "toolCallStarted", value: { callId: "handoff-envelope", toolCall } } },
-			output,
-			stream,
-			state,
-			usage,
-		);
-		await handleServerMessage(
-			create(AgentServerMessageSchema, {
-				message: { case: "execServerMessage", value: mcpCall() },
-			}),
-			output,
-			stream,
-			state,
-			new Map(),
-			h2Request,
-			undefined,
-			undefined,
-			usage,
-			[],
-			[],
-			undefined,
-			true,
-		);
-		processInteractionUpdate(
-			{ message: { case: "toolCallCompleted", value: { callId: "handoff-envelope", toolCall } } },
-			output,
-			stream,
-			state,
-			usage,
-		);
-
-		expect(output.content.filter(block => block.type === "toolCall")).toHaveLength(1);
-		expect(stream.queue.map(event => event.type)).toEqual(["toolcall_start", "toolcall_end"]);
-		const answer = soleResult(written.map(decodeClientFrame));
-		if (answer.case !== "mcpResult") throw new Error(`got ${answer.case}`);
-		expect(answer.value.result.case).toBe("success");
-	});
-
-	it("keeps the local no-handler path available to the outer agent loop", async () => {
+	it("keeps the local no-handler rejection", async () => {
 		const { frames } = await dispatchExec(mcpCall());
 		const answer = soleResult(frames);
 		if (answer.case !== "mcpResult") throw new Error(`got ${answer.case}`);
 		expect(answer.value.result.case).toBe("toolNotFound");
 	});
 
-	it("still rejects a present handler that returns no result", async () => {
+	it("still rejects a present MCP handler that returns no result", async () => {
 		const execHandlers: CursorExecHandlers = {};
 		Reflect.set(execHandlers, "mcp", async () => undefined);
-		const { frames } = await dispatchExec(mcpCall(), { execHandlers, externalToolExecutor: true });
+		const { frames, handoffs } = await dispatchExec(mcpCall(), {
+			execHandlers,
+			externalToolExecutor: true,
+			requestContextTools: [readTool],
+		});
+		expect(handoffs).toBe(0);
 		const answer = soleResult(frames);
 		if (answer.case !== "mcpResult") throw new Error(`got ${answer.case}`);
 		expect(answer.value.result.case).toBe("toolNotFound");
+	});
+
+	it.each([
+		{ label: "path-only", tool: readTool, expected: { path: "README.md:raw:12+4" } },
+		{
+			label: "range arguments",
+			tool: externalTool("read", {
+				path: { type: "string" },
+				offset: { type: "integer" },
+				limit: { type: "integer" },
+			}),
+			expected: { path: "README.md", offset: 12, limit: 4 },
+		},
+	])("preserves the requested line window for $label readers", async ({ tool, expected }) => {
+		const { output, frames, handoffs } = await dispatchExec(
+			buildExecMessage({
+				case: "readArgs",
+				value: create(ReadArgsSchema, { path: "README.md", offset: 12, limit: 4, toolCallId: "read-range" }),
+			}),
+			{ externalToolExecutor: true, requestContextTools: [tool] },
+		);
+		expect(handoffs).toBe(1);
+		expect(frames).toEqual([]);
+		expect(output.content).toMatchObject([{ name: "read", arguments: expected }]);
+		expect((output.content[0] as ToolCallState)[kCursorExecResolved]).toBeUndefined();
+	});
+
+	it.each([{ offset: -3 }, { limit: 0 }])("rejects an unrepresentable path-only read window %j", async range => {
+		const { frames, output, handoffs } = await dispatchExec(
+			buildExecMessage({
+				case: "readArgs",
+				value: create(ReadArgsSchema, { path: "README.md", toolCallId: "read-range", ...range }),
+			}),
+			{ externalToolExecutor: true, requestContextTools: [readTool] },
+		);
+		expect(handoffs).toBe(0);
+		expect((output.content[0] as ToolCallState)[kCursorExecResolved]).toBe(true);
+		const answer = soleResult(frames);
+		if (answer.case !== "readResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("rejected");
+	});
+
+	it("rejects an edit-owned materialization read instead of returning a runnable read", async () => {
+		const state = newBlockState();
+		const output = cursorAssistantMessage();
+		const preview = new AssistantMessageEventStream();
+		processInteractionUpdate(
+			{
+				message: {
+					case: "toolCallStarted",
+					value: {
+						callId: "edit-envelope",
+						toolCall: {
+							toolCallId: "edit-read",
+							tool: {
+								case: "editToolCall",
+								value: { args: { path: "README.md", streamContent: "replacement fragment" } },
+							},
+						},
+					},
+				},
+			},
+			output,
+			preview,
+			state,
+			{ sawTokenDelta: false },
+			{ externalToolExecutor: true },
+		);
+		const { frames, handoffs } = await dispatchExec(
+			buildExecMessage({
+				case: "readArgs",
+				value: create(ReadArgsSchema, { path: "README.md", toolCallId: "edit-read" }),
+			}),
+			{ state, output, externalToolExecutor: true, requestContextTools: [readTool] },
+		);
+		expect(preview.queue).toEqual([]);
+		expect(handoffs).toBe(0);
+		expect(output.content).toEqual([]);
+		const answer = soleResult(frames);
+		if (answer.case !== "readResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("rejected");
+	});
+
+	it.each(["", "text must not override bytes"])(
+		"rejects byte-backed writes even when fileText is %j",
+		async fileText => {
+			const { frames, output, handoffs } = await dispatchExec(
+				buildExecMessage({
+					case: "writeArgs",
+					value: create(WriteArgsSchema, {
+						path: "image.bin",
+						fileText,
+						fileBytes: new Uint8Array([255, 0, 128]),
+						toolCallId: "write-bytes",
+					}),
+				}),
+				{ externalToolExecutor: true, requestContextTools: [writeTool] },
+			);
+			expect(handoffs).toBe(0);
+			expect((output.content[0] as ToolCallState)[kCursorExecResolved]).toBe(true);
+			const answer = soleResult(frames);
+			if (answer.case !== "writeResult") throw new Error(`got ${answer.case}`);
+			expect(answer.value.result.case).toBe("rejected");
+		},
+	);
+
+	it("hands an intentional empty text write to the client", async () => {
+		const { output, frames, handoffs } = await dispatchExec(
+			buildExecMessage({
+				case: "writeArgs",
+				value: create(WriteArgsSchema, { path: "empty.txt", fileText: "", toolCallId: "write-empty" }),
+			}),
+			{ externalToolExecutor: true, requestContextTools: [writeTool] },
+		);
+		expect(handoffs).toBe(1);
+		expect(frames).toEqual([]);
+		expect(output.content).toMatchObject([{ name: "write", arguments: { path: "empty.txt", content: "" } }]);
+	});
+
+	it("preserves bytes and native execution when a local writer exists", async () => {
+		const bytes = new Uint8Array([255, 0, 128]);
+		let received: Uint8Array | undefined;
+		const { frames, handoffs, output } = await dispatchExec(
+			buildExecMessage({
+				case: "writeArgs",
+				value: create(WriteArgsSchema, {
+					path: "image.bin",
+					fileText: "ignored",
+					fileBytes: bytes,
+					toolCallId: "write-local",
+				}),
+			}),
+			{
+				externalToolExecutor: true,
+				requestContextTools: [writeTool],
+				execHandlers: {
+					write: async args => {
+						received = args.fileBytes;
+						return toolResult("written");
+					},
+				},
+			},
+		);
+		expect(received).toEqual(bytes);
+		expect(handoffs).toBe(0);
+		expect((output.content[0] as ToolCallState)[kCursorExecResolved]).toBe(true);
+		const answer = soleResult(frames);
+		if (answer.case !== "writeResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("success");
+	});
+
+	it.each([
+		{ case: "readArgs", value: create(ReadArgsSchema, { path: "README.md" }) },
+		{ case: "deleteArgs", value: create(DeleteArgsSchema, { path: "README.md" }) },
+		{ case: "diagnosticsArgs", value: create(DiagnosticsArgsSchema, { path: "README.md" }) },
+	] satisfies ExecServerMessage["message"][])(
+		"rejects unadvertised $case without a runnable client call",
+		async message => {
+			const { frames, output, handoffs } = await dispatchExec(buildExecMessage(message), {
+				externalToolExecutor: true,
+			});
+			expect(handoffs).toBe(0);
+			expect(frames).toHaveLength(1);
+			expect(
+				output.content.every(block => block.type === "toolCall" && (block as ToolCallState)[kCursorExecResolved]),
+			).toBe(true);
+		},
+	);
+
+	it("rejects a declared lsp tool whose schema does not support diagnostics", async () => {
+		const { handoffs, frames } = await dispatchExec(
+			buildExecMessage({
+				case: "diagnosticsArgs",
+				value: create(DiagnosticsArgsSchema, { path: "README.md" }),
+			}),
+			{
+				externalToolExecutor: true,
+				requestContextTools: [
+					externalTool("lsp", {
+						action: { type: "string", enum: ["hover"] },
+						file: { type: "string" },
+					}),
+				],
+			},
+		);
+		expect(handoffs).toBe(0);
+		const answer = soleResult(frames);
+		if (answer.case !== "diagnosticsResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("rejected");
+	});
+
+	it("does not assume a client file reader can list directories", async () => {
+		const { frames, handoffs } = await dispatchExec(
+			buildExecMessage({ case: "lsArgs", value: create(LsArgsSchema, { path: "." }) }),
+			{
+				externalToolExecutor: true,
+				requestContextTools: [readTool],
+			},
+		);
+		expect(handoffs).toBe(0);
+		const answer = soleResult(frames);
+		if (answer.case !== "lsResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("rejected");
+	});
+
+	it("rejects OMP-only grep options even if the client's JSON schema allows extra properties", async () => {
+		const { frames, handoffs } = await dispatchExec(
+			buildExecMessage({
+				case: "grepArgs",
+				value: create(GrepArgsSchema, {
+					path: ".",
+					pattern: "needle",
+					caseInsensitive: true,
+					offset: 5,
+				}),
+			}),
+			{
+				externalToolExecutor: true,
+				requestContextTools: [externalTool("grep", { pattern: { type: "string" }, path: { type: "string" } })],
+			},
+		);
+		expect(handoffs).toBe(0);
+		const answer = soleResult(frames);
+		if (answer.case !== "grepResult") throw new Error(`got ${answer.case}`);
+		expect(answer.value.result.case).toBe("error");
 	});
 });
 

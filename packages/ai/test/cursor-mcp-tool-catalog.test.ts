@@ -92,7 +92,7 @@ describe("cursor buildMcpToolDefinitions", () => {
 
 		for (const definitions of [
 			buildMcpToolDefinitions([composedTool]),
-			buildMcpToolDefinitions([composedTool], false),
+			buildMcpToolDefinitions([composedTool], { requiresCursorToolSchemaProjection: false }),
 		]) {
 			const advertised = decodeJsonValue(definitions[0].inputSchema);
 
@@ -122,7 +122,7 @@ describe("cursor buildMcpToolDefinitions", () => {
 		const wireSchema = toolWireSchema(composedTool);
 		const originalWireSchema = structuredClone(wireSchema);
 
-		const [definition] = buildMcpToolDefinitions([composedTool], true);
+		const [definition] = buildMcpToolDefinitions([composedTool], { requiresCursorToolSchemaProjection: true });
 		const advertised = decodeJsonValue(definition.inputSchema);
 
 		// Cursor rejects the request outright if any composition keyword survives

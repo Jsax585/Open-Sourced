@@ -1,1 +1,0 @@
-{{jsonStringify catalog}}
