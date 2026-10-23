@@ -1414,7 +1414,7 @@ describe("task execution model and structured contracts", () => {
 					batchEnabled ? { context: "Report using the selected model.", tasks: [item] } : item,
 				);
 				if (parsed instanceof type.errors) throw new Error(parsed.summary);
-				const settled = await tool.execute("tc-model-override", parsed as TaskParams);
+				const settled = await tool.execute("tc-model-override", parsed);
 				expect(settled.details?.results[0]).toMatchObject({
 					exitCode: 0,
 					resolvedModelIdentity: expected,
