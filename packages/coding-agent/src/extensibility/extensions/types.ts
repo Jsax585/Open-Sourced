@@ -882,7 +882,7 @@ export type ToolShellEnvironmentHook = (context: ToolShellEnvironmentContext) =>
  * Tool definition for registerTool().
  */
 export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown> {
-	/** Tool name (used in LLM tool calls) */
+	/** Tool name (used in LLM tool calls). `yield`, `goal`, and `think` are reserved protocol tools and rejected at registration. */
 	name: string;
 	/** Human-readable label for UI */
 	label: string;

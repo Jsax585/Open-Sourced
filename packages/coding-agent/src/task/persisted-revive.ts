@@ -8,6 +8,7 @@ import { resolveAgentAdvisorRolePattern } from "../config/model-resolver";
 import { formatModelRoleAlias } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { MCPManager } from "../mcp/manager";
+import { resolveMCPToolAlias } from "../mcp/tool-bridge";
 import { initializeExtensions } from "../modes/runtime-init";
 import type { PersistedSubagentReviverFactory } from "../registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -21,6 +22,8 @@ import {
 	type PersistedSessionInit,
 	SessionManager,
 } from "../session/session-manager";
+import { hasGlobChars } from "../tools/name-patterns";
+import { ToolScope } from "../tools/tool-scope";
 import type { EventBus } from "../utils/event-bus";
 import {
 	attachIrcWakeTurnMonitor,
@@ -262,7 +265,9 @@ export function createPersistedSubagentReviverFactory(
 					oauthAccountPools,
 					expectedAgentRef: expectedRef,
 					taskDepth,
-					toolNames: revivedToolNames,
+					toolNames: init.declaredTools ?? revivedToolNames,
+					enforceToolAllowlist: init.enforceToolAllowlist || undefined,
+					disallowedTools: init.disallowedTools,
 					outputSchema: init.outputSchema,
 					outputSchemaMode: init.outputSchemaMode,
 					restrictToolNames: restrictToolNames || undefined,
@@ -295,11 +300,61 @@ export function createPersistedSubagentReviverFactory(
 				throw error;
 			}
 			mcpFollower?.bind(session);
-			// Clamp the active set to the persisted list: createAgentSession's
+			// Clamp the active set to the persisted scope: createAgentSession's
 			// `alwaysInclude` can re-add non-defaultInactive extension/custom tools
 			// the original run didn't carry. Unknown/missing names are ignored.
+			// Enforced revivals clamp to the declarative allowlist — the enabled
+			// snapshot predates tools that registered late originally and would
+			// drop one that is available again at revival time with no later
+			// registration event to re-activate it.
+			// Two paths for determining the clamped declared scope:
+			// 1. Enforced allowlist (`init.enforceToolAllowlist === true`): the revived
+			//    session's own scope IS the declaration (session creation configured it
+			//    with full owner metadata, case folding, and server-wildcard support).
+			//    Filtering by `session.isToolScopedIn(name)` reproduces the exact grant directly,
+			//    ensuring capped or hyphenated MCP tools are kept without raw matcher drops.
+			// 2. Non-enforced host list / enabled snapshot: filter with a declaration
+			//    `ToolScope` so owner metadata and alias resolution apply, expanding
+			//    globs against the live registry without passing raw patterns to
+			//    `setActiveToolsByName`.
+			// Declared patterns expand against the live registry, but expansion alone
+			// is not the original activation policy: a `tools: ["*"]` child would
+			// regain `defaultInactive`/hidden tools it never carried, and the
+			// parent-owned `todo` the live spawn strips (`executor.ts`,
+			// `isParentOwnedTool`) outside prewalk. Both are pinned to the
+			// declaration's literal names and the persisted enabled snapshot.
+			const snapshot = new Set(revivedToolNames);
+			const declaredPatterns = init.declaredTools ?? revivedToolNames;
+			const literalDeclarations = new Set(declaredPatterns.filter(pattern => !hasGlobChars(pattern)));
+			const revivalActivatable = (name: string): boolean => {
+				const tool = session.getToolByName(name) as { defaultInactive?: boolean; hidden?: boolean } | undefined;
+				if ((tool?.defaultInactive === true || tool?.hidden === true) && !literalDeclarations.has(name)) {
+					return false;
+				}
+				return name !== "todo" || snapshot.has(name);
+			};
+			let declaredScope: string[];
+			if (init.enforceToolAllowlist === true) {
+				declaredScope = session
+					.getAllToolNames()
+					.filter(name => session.isToolScopedIn(name) && revivalActivatable(name));
+			} else {
+				const revivalScope = new ToolScope({ allowedToolNames: declaredPatterns }).setAliasResolver(
+					entry =>
+						resolveMCPToolAlias(entry, candidate =>
+							session.getToolByName(candidate) ? { name: candidate } : undefined,
+						)?.name,
+				);
+				declaredScope = session.getAllToolNames().filter(name => {
+					if (!session.isToolScopedIn(name) || !revivalActivatable(name)) return false;
+					const owner = (session.getToolByName(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+					return revivalScope.isExplicitlyAllowed(name, typeof owner === "string" ? owner : undefined);
+				});
+			}
+			const reviveScope =
+				structured && !declaredScope.includes("yield") ? [...declaredScope, "yield"] : declaredScope;
 			await session.setActiveToolsByName(
-				restoredSeance ? revivedToolNames : [...revivedToolNames, ...session.getMountedXdevToolNames()],
+				restoredSeance ? reviveScope : [...reviveScope, ...session.getMountedXdevToolNames()],
 			);
 			// The yield tool's schema carries the last batch's items; the replayed prefix must match it.
 			if (init.workPoolYieldItems) await session.setWorkPoolYieldItems(init.workPoolYieldItems);

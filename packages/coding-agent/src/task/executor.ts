@@ -87,6 +87,8 @@ import {
 	type TaskEffort,
 } from "@oh-my-pi/pi-tui/thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
+import { expandDisallowedTools, expandExecToolAlias, isToolDisallowed } from "../tools/builtin-names";
+import { ToolScope } from "../tools/tool-scope";
 import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
@@ -4242,24 +4244,48 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// Add tools if specified. Unstructured runs never get `yield`, even when
 	// the frontmatter lists it.
 	let toolNames: string[] | undefined;
-	if (agent.tools) {
+	if (Array.isArray(agent.tools)) {
 		toolNames = structured ? agent.tools : agent.tools.filter(name => name !== "yield");
-		// Auto-include task tool if spawns defined but task not in tools
-		if (agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
+		// Auto-include task tool if spawns defined but task not in tools —
+		// unless the agent disallows it, matching isReadOnlyAgent's classifier:
+		// re-adding an explicitly-disallowed `task` would widen the effective
+		// grant past the declared scope.
+		if (
+			agent.spawns !== undefined &&
+			!toolNames.includes("task") &&
+			!atMaxDepth &&
+			!(agent.disallowedTools?.length && isToolDisallowed("task", agent.disallowedTools))
+		) {
 			toolNames = [...toolNames, "task"];
 		}
 	}
+	// A declared `tools:` list is a hard allowlist for custom/extension/MCP tools
+	// too (not just built-ins) — an explicit empty list enforces down to the
+	// protocol tools; `disallowedTools:` removes matching names after.
+	const enforceToolAllowlist = Array.isArray(agent.tools);
+	const rawDisallowed = agent.disallowedTools ?? [];
+	const expandedDisallowed = expandDisallowedTools(rawDisallowed);
+	const disallowedTools = expandedDisallowed.length ? expandedDisallowed : undefined;
 
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	if (toolNames?.includes("exec")) {
-		const backends = resolveEvalBackends({ settings } as ToolSession);
-		const expanded = toolNames.filter(name => name !== "exec");
-		if (backends.python || backends.js) expanded.push("eval");
-		expanded.push("bash");
-		toolNames = Array.from(new Set(expanded));
+	const evalBackends = resolveEvalBackends({ settings } as ToolSession);
+	if (toolNames) {
+		toolNames = expandExecToolAlias(toolNames, expandedDisallowed, evalBackends);
 	}
+	// `tools:` entries are globs now (`*`, `mcp__db_*`, `{read,write}`), so the
+	// membership tests below (wait auto-add, IRC enablement, eval preflight,
+	// persisted write) must judge the GRANT, not literal list membership: a
+	// glob-granted builtin behaves exactly like a literally-named one. The
+	// child session's own scope re-judges with owner metadata at startup; this
+	// owner-blind probe only answers "does the declaration grant this builtin".
+	const declarationScope =
+		toolNames === undefined
+			? undefined
+			: new ToolScope({ allowedToolNames: toolNames, disallowedTools: expandedDisallowed });
+	const declarationGrants = (name: string): boolean =>
+		declarationScope?.isScopedIn(name) ?? !isToolDisallowed(name, expandedDisallowed);
 	// Agents that can start background work (`task`, `bash`) need `wait` to block on it;
 	// without it they `sleep`. Runs after `exec` expansion and the max-depth `task` strip.
 	// `createTools` still drops it when no wake source (async/IRC/services) is enabled.
@@ -4267,8 +4293,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (
 		toolNames &&
 		!options.restrictToolNames &&
-		!toolNames.includes("wait") &&
-		(toolNames.includes("task") || toolNames.includes("bash"))
+		!declarationGrants("wait") &&
+		(declarationGrants("task") || declarationGrants("bash"))
 	) {
 		toolNames = [...toolNames, "wait"];
 	}
@@ -4277,7 +4303,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		!preparedSession &&
 		options.enableIrc !== false &&
 		isIrcEnabled(subagentSettings, childDepth) &&
-		(toolNames === undefined || toolNames.includes("write"));
+		(toolNames === undefined || declarationGrants("write"));
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
@@ -4290,7 +4316,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
+	const skipPythonPreflight = !declarationGrants("eval");
 
 	const completionProbe = isCompletionProbeEnabled(settings, parentDepth);
 	const monitor = createSubagentRunMonitor({
@@ -4635,6 +4661,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					// Subagents are short-lived; never schedule background warm requests.
 					cacheWarming: false,
 					toolNames,
+					enforceToolAllowlist: enforceToolAllowlist || undefined,
+					disallowedTools,
 					outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					restrictToolNames,
@@ -4828,7 +4856,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// replayed as an explicit grant during cold revival, so persist write
 			// only when the original agent contract granted it.
 			const persistedSubagentTools =
-				toolNames !== undefined && !toolNames.includes("write")
+				toolNames !== undefined && !declarationGrants("write")
 					? enabledSubagentTools.filter(name => name !== "write")
 					: enabledSubagentTools;
 
@@ -4843,14 +4871,28 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// Deferred model resolution installs this role inside createAgentSession,
 				// so read it back from the settings both install paths write.
 				retryFallback: getRetryFallbackRole(subagentSettings, subagentRetryFallbackRole(id)),
-				readOnly: isReadOnlyAgent(agent),
 				spawns: spawnsEnv,
-				readSummarize: agent.readSummarize,
+				// Persist the resolved advisor opt-in for cold revival: `"on"` = the
+				// advisor-role model (no explicit pattern), otherwise the expanded
+				// pattern the original spawn stamped onto `modelRoles.advisor`.
+				// Absent = unadvised (the createSubagentSettings default).
 				advisor: advisorSelection ? (advisorRolePattern ?? "on") : undefined,
+				readSummarize: agent.readSummarize,
+				readOnly: isReadOnlyAgent(agent, evalBackends),
 				compactionThreshold: options.compactionThresholdOverride,
 				outputSchema,
 				outputSchemaMode: options.outputSchemaMode,
 				restrictToolNames: restrictToolNames || undefined,
+				enforceToolAllowlist: enforceToolAllowlist || undefined,
+				disallowedTools,
+				// The declarative allowlist minus parent-owned tools, not the enabled
+				// snapshot: tools that register after this snapshot (late extensions,
+				// MCP reconnects) must stay allowed for cold revival, while a
+				// parent-owned tool the live spawn stripped (`todo` outside prewalk)
+				// must not regain a capability the original generation lacked.
+				declaredTools: enforceToolAllowlist
+					? (toolNames ?? []).filter(name => !isParentOwnedTool(name))
+					: undefined,
 				// Isolated runs are never revivable (worktree merged + cleaned):
 				// stamp the contract so cold revival leaves them transcript-only
 				// even when the workspace was retained for recovery.

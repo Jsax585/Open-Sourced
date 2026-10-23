@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Subagents that declare `tools:` now receive exactly that list: custom, extension, and MCP proxy tools not named in it are excluded from the active set and the `xd://` catalog instead of being force-included. This includes the bundled `scout`/`reviewer`/`security-reviewer`/`seance` agents (they declare `tools:`), which no longer inherit MCP/extension/custom tools, and session-managed builtins (`manage_skill`, `learn`, `context_notes`, `new_context`) plus the `checkpoint`/`rewind` sister are no longer force-added to declared lists. The scope also gates MCP server instructions, MCP resource listing/reads, and Cursor-provider frame execution for scoped subagents. Extension and custom tools may no longer register under the reserved protocol names `yield`, `goal`, or `think` ([#8599](https://github.com/can1357/oh-my-pi/issues/8599)).
+
 ### Added
 
+- Added the `disallowedTools:` frontmatter field for agent definitions: it removes tools by exact name or `Bun.Glob` pattern (`*`, `?`, `[...]`, `{a,b}`), including bare `*` deny-all; `tools:` entries accept the same globs, so `tools: ["mcp__db_*"]` grants a whole server ([#8599](https://github.com/can1357/oh-my-pi/issues/8599)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 

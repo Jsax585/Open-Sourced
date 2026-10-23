@@ -272,7 +272,10 @@ export interface AgentDefinition {
 	name: string;
 	description: string;
 	systemPrompt: string;
+	/** Declared allowlist: exact tool names or Bun.Glob patterns (`*`, `?`, `[...]`, `{a,b}`); a declared list is a hard grant for custom/extension/MCP tools. Undefined = inherit. */
 	tools?: string[];
+	/** Exact names or Bun.Glob patterns (`*`, `?`, `[...]`, `{a,b}`; bare `*`/`**` = deny-all), removed after the allowlist. Hidden protocol tools are immune. */
+	disallowedTools?: string[];
 	spawns?: string[] | "*";
 	model?: string[];
 	thinkingLevel?: ConfiguredThinkingLevel;

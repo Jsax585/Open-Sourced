@@ -13,6 +13,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import { createMCPToolName, resolveMCPToolAlias } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
+import { ToolScope } from "@oh-my-pi/pi-coding-agent/tools/tool-scope";
 import { RpcSubagentRegistry } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
 import type { RpcSubagentFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -96,7 +98,14 @@ interface LastAssistantStop {
 	content?: Array<{ type: string; text?: string }>;
 }
 
-function createRevivedSession(activeToolNames: string[][], extensionRunner?: unknown): RevivedSessionHandle {
+function createRevivedSession(
+	activeToolNames: string[][],
+	extensionRunner?: unknown,
+	registeredToolNamesOrOptions?:
+		| readonly (string | { name: string; mcpServerName?: string })[]
+		| CreateAgentSessionOptions,
+	sessionOptions?: CreateAgentSessionOptions,
+): RevivedSessionHandle {
 	let observer: IrcWakeObserver | undefined;
 	let lastAssistant:
 		| {
@@ -109,9 +118,42 @@ function createRevivedSession(activeToolNames: string[][], extensionRunner?: unk
 		  }
 		| undefined;
 	const trackedReplies: Promise<void>[] = [];
+	const registeredToolNames = Array.isArray(registeredToolNamesOrOptions) ? registeredToolNamesOrOptions : undefined;
+	const options = (sessionOptions ??
+		(registeredToolNamesOrOptions && !Array.isArray(registeredToolNamesOrOptions)
+			? registeredToolNamesOrOptions
+			: undefined)) as CreateAgentSessionOptions | undefined;
+	const registeredEntries = (registeredToolNames ?? options?.toolNames ?? []).map(entry =>
+		typeof entry === "string" ? { name: entry } : entry,
+	);
+	const registered = registeredEntries.map(e => e.name);
+	const toolScope = new ToolScope({
+		allowedToolNames:
+			options?.enforceToolAllowlist === true
+				? (options.toolNames ?? (registeredToolNames ? [...registered] : undefined))
+				: undefined,
+		disallowedTools: options?.disallowedTools,
+	});
+	toolScope.setAliasResolver(
+		entry =>
+			resolveMCPToolAlias(entry, candidate => (registered.includes(candidate) ? { name: candidate } : undefined))
+				?.name,
+	);
 	const session = {
 		...createSessionDefaults(),
 		getMountedXdevToolNames: () => [],
+		// The revival clamp canonicalizes declared MCP spellings against the live
+		// registry, so the stub answers the same lookup the real session does.
+		getToolByName: (name: string) => {
+			const entry = registeredEntries.find(e => e.name === name);
+			return entry ? (entry as unknown as AgentTool) : undefined;
+		},
+		getAllToolNames: () => [...registered],
+		isToolScopedIn: (name: string, mcpServerName?: string) => {
+			const owner =
+				mcpServerName ?? (session.getToolByName(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
+			return toolScope.isScopedIn(name, typeof owner === "string" ? owner : undefined);
+		},
 		setActiveToolsByName: async (names: string[]) => {
 			activeToolNames.push(names);
 		},
@@ -153,6 +195,8 @@ async function createPersistedSession(
 	advisor?: string,
 	contract?: {
 		tools?: string[];
+		declaredTools?: string[];
+		enforceToolAllowlist?: boolean;
 		readOnly?: boolean;
 		agent?: string;
 		isolated?: boolean;
@@ -167,6 +211,8 @@ async function createPersistedSession(
 		systemPrompt: ["persisted prompt"],
 		task: "persisted task",
 		tools: contract?.tools ?? ["read", "yield"],
+		declaredTools: contract?.declaredTools,
+		enforceToolAllowlist: contract?.enforceToolAllowlist,
 		restrictToolNames,
 		modelRole,
 		resolvedModel: modelRole ? "anthropic/claude-sonnet-4-5" : undefined,
@@ -257,7 +303,10 @@ describe("persisted subagent revival", () => {
 		const emit = vi.fn(async () => undefined);
 		const extensionRunner = { initialize, onError, emit };
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
-			async () => ({ session: createRevivedSession([], extensionRunner).session }) as CreateAgentSessionResult,
+			async options =>
+				({
+					session: createRevivedSession([], extensionRunner, undefined, options).session,
+				}) as CreateAgentSessionResult,
 		);
 
 		const ref = createRef(sessionFile);
@@ -402,8 +451,8 @@ describe("persisted subagent revival", () => {
 			return realAttach(session, options);
 		});
 		let handle: RevivedSessionHandle | undefined;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
-			handle = createRevivedSession([]);
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			handle = createRevivedSession([], undefined, undefined, options);
 			return { session: handle.session } as CreateAgentSessionResult;
 		});
 
@@ -444,7 +493,9 @@ describe("persisted subagent revival", () => {
 			if (options?.preloadedCustomToolPaths === undefined) attemptedDiscovery.push("custom:read");
 			if (options?.mcpManager !== undefined || options?.customTools !== undefined)
 				attemptedDiscovery.push("mcp:read");
-			return { session: createRevivedSession(activeToolNames).session } as CreateAgentSessionResult;
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
 		});
 
 		const ref = createRef(sessionFile);
@@ -476,7 +527,9 @@ describe("persisted subagent revival", () => {
 		let capturedOptions: CreateAgentSessionOptions | undefined;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			capturedOptions = options;
-			return { session: createRevivedSession(activeToolNames).session } as CreateAgentSessionResult;
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
 		});
 
 		const ref = createRef(sessionFile);
@@ -486,6 +539,41 @@ describe("persisted subagent revival", () => {
 
 		expect(capturedOptions?.toolNames).toEqual(["read", "yield"]);
 		expect(activeToolNames).toEqual([["read", "yield"]]);
+	});
+
+	it("re-expands a glob scope without reviving stripped or default-inactive tools", async () => {
+		const cwd = makeTempDir("@pi-glob-revive-");
+		const sessionFile = await createPersistedSession(cwd, true, undefined, undefined, {
+			// The live spawn stripped the parent-owned `todo`, so it is absent here.
+			tools: ["read", "yield"],
+			declaredTools: ["*"],
+		});
+		const activeToolNames: string[][] = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			return {
+				session: createRevivedSession(
+					activeToolNames,
+					undefined,
+					[
+						{ name: "read" },
+						{ name: "yield" },
+						{ name: "todo" },
+						{ name: "default_active_ext" },
+						{ name: "default_inactive_ext", defaultInactive: true },
+					] as unknown as CreateAgentSessionOptions["toolNames"],
+					options,
+				).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		// `*` reaches default-active registrations, but must not resurrect the
+		// parent-owned `todo` or enable a default-inactive tool it never carried.
+		expect(activeToolNames).toEqual([["read", "yield", "default_active_ext"]]);
 	});
 
 	it("preserves explicitly writable cold-revival contracts", async () => {
@@ -498,7 +586,9 @@ describe("persisted subagent revival", () => {
 		let capturedOptions: CreateAgentSessionOptions | undefined;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			capturedOptions = options;
-			return { session: createRevivedSession(activeToolNames).session } as CreateAgentSessionResult;
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
 		});
 
 		const ref = createRef(sessionFile);
@@ -518,7 +608,9 @@ describe("persisted subagent revival", () => {
 		let capturedOptions: CreateAgentSessionOptions | undefined;
 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
 			capturedOptions = options;
-			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+			return {
+				session: createRevivedSession([], undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
 		});
 
 		const ref = createRef(sessionFile);
@@ -806,8 +898,8 @@ describe("persisted subagent revival", () => {
 		const sessionFile = await createPersistedSession(cwd);
 		MCPManager.setInstance(fakeMcpManager(() => []));
 		let handle: RevivedSessionHandle | undefined;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
-			handle = createRevivedSession([]);
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			handle = createRevivedSession([], undefined, undefined, options);
 			return { session: handle.session } as CreateAgentSessionResult;
 		});
 		const eventBus = new EventBus();
@@ -867,8 +959,8 @@ describe("persisted subagent revival", () => {
 		const sessionFile = await createPersistedSession(cwd);
 		MCPManager.setInstance(fakeMcpManager(() => []));
 		let handle: RevivedSessionHandle | undefined;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
-			handle = createRevivedSession([]);
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			handle = createRevivedSession([], undefined, undefined, options);
 			return { session: handle.session } as CreateAgentSessionResult;
 		});
 
@@ -920,8 +1012,8 @@ describe("persisted subagent revival", () => {
 			const sessionFile = await createPersistedSession(cwd);
 			MCPManager.setInstance(fakeMcpManager(() => []));
 			let handle: RevivedSessionHandle | undefined;
-			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
-				handle = createRevivedSession([]);
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				handle = createRevivedSession([], undefined, undefined, options);
 				return { session: handle.session } as CreateAgentSessionResult;
 			});
 			const ref = createRef(sessionFile);
@@ -1764,5 +1856,537 @@ describe("buildWakeRelayBody", () => {
 			await expect(reviver(ref)).rejects.toThrow(/no persisted session contract/);
 			expect(await Bun.file(sessionFile).text()).toBe(withoutInit);
 		});
+	});
+});
+
+describe("persisted allowlist revival", () => {
+	it("canonicalizes a persisted Claude-style MCP allowlist entry during revival", async () => {
+		// A ported Claude Code agent declares `mcp__seedpatch-client__bank`; session
+		// creation resolves it to the minted key, but `declaredTools` persists the
+		// original spelling. Clamping to the raw persisted name drops the very tool
+		// the declaration named, so the revived agent comes back without it.
+		const cwd = makeTempDir("@pi-alias-revive-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		const registered = createMCPToolName("seedpatch-client", "bank");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			tools: ["read", registered, "yield"],
+			declaredTools: ["read", "mcp__seedpatch-client__bank", "yield"],
+			enforceToolAllowlist: true,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			return {
+				session: createRevivedSession(activeToolNames, undefined, ["read", "yield", registered], options).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(activeToolNames.at(-1)).toContain(registered);
+		for (const names of activeToolNames) expect(names).not.toContain("mcp__seedpatch-client__bank");
+	});
+
+	it("revives an enforced allowlist from the declared tool list, not the enabled snapshot", async () => {
+		const cwd = makeTempDir("@pi-declared-revive-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			// Effective snapshot taken before a late `session_start` registration:
+			// the declared `late_tool` is missing from the enabled set.
+			tools: ["read", "yield"],
+			declaredTools: ["read", "late_tool", "yield"],
+			enforceToolAllowlist: true,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		let capturedOptions: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			capturedOptions = options;
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(capturedOptions?.enforceToolAllowlist).toBe(true);
+		expect(capturedOptions?.toolNames).toEqual(["read", "late_tool", "yield"]);
+		// The post-create clamp must scope to the declaration, not the stale
+		// snapshot — a declared tool that is available again at revival time (no
+		// later registration event) stays active.
+		expect(activeToolNames).toEqual([["read", "late_tool", "yield"]]);
+	});
+
+	it("does not re-admit session-managed builtins under an enforced allowlist", async () => {
+		// Under an enforced `tools:` allowlist the declared list is exact:
+		// session creation no longer force-adds session-managed builtins, so
+		// the revival clamp reproduces the declaration instead of unioning
+		// them back — matching what a fresh spawn carries.
+		const cwd = makeTempDir("@pi-managed-revive-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			tools: ["read", "yield"],
+			declaredTools: ["read", "yield"],
+			enforceToolAllowlist: true,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			return {
+				session: createRevivedSession(
+					activeToolNames,
+					undefined,
+					["read", "yield", "manage_skill", "learn"],
+					options,
+				).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(activeToolNames).toEqual([["read", "yield"]]);
+	});
+
+	it("does not re-add the checkpoint/rewind sister under an enforced allowlist", async () => {
+		// `tools: [checkpoint]` stays exact under an enforced allowlist (no
+		// construction-time widening), so the revival clamp reproduces the
+		// declaration: clamping to it reproduces the exact grant, so the revived
+		// agent carries the same scope as a fresh spawn.
+		const cwd = makeTempDir("@pi-sibling-revive-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			tools: ["checkpoint", "rewind", "yield"],
+			declaredTools: ["checkpoint", "yield"],
+			enforceToolAllowlist: true,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(activeToolNames).toEqual([["checkpoint", "yield"]]);
+	});
+
+	it("restores disallowedTools through cold revival and re-enforces them", async () => {
+		// A revive that drops the deny list silently widens the child: the
+		// persisted `disallowedTools` must reach session creation and the clamp.
+		const cwd = makeTempDir("@pi-disallow-revive-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			tools: ["read", "write", "yield"],
+			declaredTools: ["read", "write", "yield"],
+			enforceToolAllowlist: true,
+			disallowedTools: ["write"],
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		let capturedOptions: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			capturedOptions = options;
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(capturedOptions?.disallowedTools).toEqual(["write"]);
+		expect(activeToolNames).toEqual([["read", "yield"]]);
+	});
+
+	it("keeps yield active after revive clamp when structured snapshot has yield and declaredTools omits it", async () => {
+		const cwd = makeTempDir("@pi-revive-yield-");
+		const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+		const sessionFile = manager.getSessionFile();
+		if (!sessionFile) throw new Error("Expected a persisted session file");
+		manager.appendSessionInit({
+			systemPrompt: ["persisted prompt"],
+			task: "persisted task",
+			tools: ["read", "yield"],
+			declaredTools: ["read"],
+			enforceToolAllowlist: true,
+		});
+		manager.appendMessage({
+			role: "assistant",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			content: [{ type: "text", text: "persisted" }],
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			api: "anthropic-messages",
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await manager.close();
+		MCPManager.setInstance(fakeMcpManager(() => []));
+
+		const activeToolNames: string[][] = [];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			return {
+				session: createRevivedSession(activeToolNames, undefined, undefined, options).session,
+			} as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(activeToolNames).toHaveLength(1);
+		expect(activeToolNames[0]).toContain("yield");
+		expect(activeToolNames[0]).toContain("read");
+	});
+
+	it("expands glob declaredTools against registry and filters to scoped-in names", async () => {
+		const registryToolNames = ["read", "mcp__db_1_query", "mcp__db_2_query", "bash"] as const;
+
+		// Prefix pattern: declaredTools: ["read", "mcp__db_*"]
+		{
+			const cwd = makeTempDir("@pi-revive-glob-mcp-");
+			const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			manager.appendSessionInit({
+				systemPrompt: ["persisted prompt"],
+				task: "persisted task",
+				tools: ["read", "mcp__db_1_query", "mcp__db_2_query"],
+				declaredTools: ["read", "mcp__db_*"],
+				enforceToolAllowlist: true,
+			});
+			manager.appendMessage({
+				role: "assistant",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				content: [{ type: "text", text: "persisted" }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				api: "anthropic-messages",
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			await manager.close();
+			MCPManager.setInstance(fakeMcpManager(() => []));
+
+			const activeToolNames: string[][] = [];
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				return {
+					session: createRevivedSession(activeToolNames, undefined, registryToolNames, options).session,
+				} as CreateAgentSessionResult;
+			});
+
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd)(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+
+			expect(activeToolNames).toEqual([["read", "mcp__db_1_query", "mcp__db_2_query"]]);
+		}
+
+		// Blanket wildcard: declaredTools: ["*"]
+		{
+			const cwd = makeTempDir("@pi-revive-glob-all-");
+			const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			manager.appendSessionInit({
+				systemPrompt: ["persisted prompt"],
+				task: "persisted task",
+				tools: ["read", "mcp__db_1_query", "mcp__db_2_query", "bash"],
+				declaredTools: ["*"],
+				enforceToolAllowlist: true,
+			});
+			manager.appendMessage({
+				role: "assistant",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				content: [{ type: "text", text: "persisted" }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				api: "anthropic-messages",
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			await manager.close();
+			MCPManager.setInstance(fakeMcpManager(() => []));
+
+			const activeToolNames: string[][] = [];
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				return {
+					session: createRevivedSession(activeToolNames, undefined, registryToolNames, options).session,
+				} as CreateAgentSessionResult;
+			});
+
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd)(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+
+			expect(activeToolNames).toEqual([["read", "mcp__db_1_query", "mcp__db_2_query", "bash"]]);
+		}
+
+		// Enforced revival with declaredTools: ["mcp__long_server_*"] keeps capped minted tools
+		{
+			const cwd = makeTempDir("@pi-revive-enforced-long-server-");
+			const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			const cappedToolName = "mcp__very_long_server_name_that_exceeds_limits_and_gets_hash_123456";
+			manager.appendSessionInit({
+				systemPrompt: ["persisted prompt"],
+				task: "persisted task",
+				tools: [cappedToolName],
+				declaredTools: ["mcp__very_long_server_name_that_exceeds_limits_*"],
+				enforceToolAllowlist: true,
+			});
+			manager.appendMessage({
+				role: "assistant",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				content: [{ type: "text", text: "persisted" }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				api: "anthropic-messages",
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			await manager.close();
+			MCPManager.setInstance(fakeMcpManager(() => []));
+
+			const activeToolNames: string[][] = [];
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				return {
+					session: createRevivedSession(
+						activeToolNames,
+						undefined,
+						[{ name: cappedToolName, mcpServerName: "very_long_server_name_that_exceeds_limits" }],
+						options,
+					).session,
+				} as CreateAgentSessionResult;
+			});
+
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd)(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+
+			expect(activeToolNames).toEqual([[cappedToolName]]);
+		}
+
+		// Non-enforced revival with declaredTools: ["read", "mcp__db_*"] keeps both read and db tools without passing patterns
+		{
+			const cwd = makeTempDir("@pi-revive-non-enforced-db-");
+			const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session file");
+			manager.appendSessionInit({
+				systemPrompt: ["persisted prompt"],
+				task: "persisted task",
+				tools: ["read", "mcp__db_1_query", "mcp__db_2_query"],
+				declaredTools: ["read", "mcp__db_*"],
+				enforceToolAllowlist: false,
+			});
+			manager.appendMessage({
+				role: "assistant",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				content: [{ type: "text", text: "persisted" }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				api: "anthropic-messages",
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			await manager.close();
+			MCPManager.setInstance(fakeMcpManager(() => []));
+
+			const activeToolNames: string[][] = [];
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				return {
+					session: createRevivedSession(
+						activeToolNames,
+						undefined,
+						[
+							{ name: "read" },
+							{ name: "mcp__db_1_query", mcpServerName: "db" },
+							{ name: "mcp__db_2_query", mcpServerName: "db" },
+						],
+						options,
+					).session,
+				} as CreateAgentSessionResult;
+			});
+
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd)(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+
+			expect(activeToolNames).toEqual([["read", "mcp__db_1_query", "mcp__db_2_query"]]);
+			expect(activeToolNames[0]).not.toContain("mcp__db_*");
+		}
 	});
 });

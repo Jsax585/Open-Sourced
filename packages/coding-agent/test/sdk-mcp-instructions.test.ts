@@ -17,6 +17,8 @@ import {
 	BOUNDED_GUIDANCE_MODE,
 	BOUNDED_GUIDANCE_TOOL_COUNT,
 	CONTEXT_MODE_NO_INSTRUCTIONS_MODE,
+	RESOURCE_ONLY_INSTRUCTIONS,
+	RESOURCE_ONLY_MODE,
 	OVERSIZED_SCHEMA_MODE,
 	SERVER_INSTRUCTIONS,
 	TOOL_RESULT,
@@ -573,6 +575,235 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 		}
 	}, 20_000);
 
+	it("drops server instructions when disallowedTools removes every tool of the connected server", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			disallowedTools: ["mcp__*"],
+		});
+		try {
+			// The scope gate keeps the connected fixture tool out of the active
+			// set, but it still lands in the registry when deferred discovery
+			// completes — the first observable proof that the server connected.
+			const deadline = Date.now() + 12_000;
+			while (session.getToolByName(MCP_TOOL_NAME) === undefined && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(session.getToolByName(MCP_TOOL_NAME)).toBeDefined();
+			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
+
+			// `refreshBaseSystemPrompt` is serialized FIFO on the same mutation
+			// queue as the discovery-triggered `refreshMCPTools`, so awaiting it
+			// proves the post-connection rebuild that would have appended the
+			// server's instructions has already committed. Regression: the
+			// server-controlled text landed in the prompt despite every tool of
+			// the server being scoped out (`disallowedTools: [mcp__*]`).
+			await session.refreshBaseSystemPrompt();
+			const prompt = session.systemPrompt.join("\n");
+			expect(prompt).not.toContain(SERVER_INSTRUCTIONS);
+			expect(prompt).not.toContain("## MCP Server Instructions");
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
+
+	it("drops server instructions when disallowedTools is a bare deny-all wildcard", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			disallowedTools: ["*"],
+		});
+		try {
+			const deadline = Date.now() + 12_000;
+			while (session.getToolByName(MCP_TOOL_NAME) === undefined && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(session.getToolByName(MCP_TOOL_NAME)).toBeDefined();
+			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
+
+			// Bare `*` removes every MCP tool, so it targets MCP access just like
+			// `mcp__*` — the server-controlled text must not land in a prompt whose
+			// tool surface cannot act on it (regression: the ownership filter only
+			// matched `mcp__`-prefixed patterns, keeping every server's text).
+			await session.refreshBaseSystemPrompt();
+			const prompt = session.systemPrompt.join("\n");
+			expect(prompt).not.toContain(SERVER_INSTRUCTIONS);
+			expect(prompt).not.toContain("## MCP Server Instructions");
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
+
+	it("drops server instructions when a non-mcp__ glob deny strips the server's only tool", async () => {
+		// `*do_thing*` carries no `mcp__` text, so an instructions filter gated
+		// on MCP-targeting patterns skips it — while the resource gate (which
+		// always applies) denies the server's resources. The prompt must not
+		// carry guidance for tools the session cannot call.
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			disallowedTools: ["*do_thing*"],
+		});
+		try {
+			const deadline = Date.now() + 12_000;
+			while (session.getToolByName(MCP_TOOL_NAME) === undefined && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(session.getToolByName(MCP_TOOL_NAME)).toBeDefined();
+			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
+
+			await session.refreshBaseSystemPrompt();
+			const prompt = session.systemPrompt.join("\n");
+			expect(prompt).not.toContain(SERVER_INSTRUCTIONS);
+			expect(prompt).not.toContain("## MCP Server Instructions");
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
+
+	it("drops server instructions when an enforced allowlist names none of the server's tools", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			enforceToolAllowlist: true,
+			toolNames: ["read", "yield"],
+		});
+		try {
+			const deadline = Date.now() + 12_000;
+			while (session.getToolByName(MCP_TOOL_NAME) === undefined && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(session.getToolByName(MCP_TOOL_NAME)).toBeDefined();
+			expect(session.getActiveToolNames()).toEqual(["read", "yield"]);
+
+			await session.refreshBaseSystemPrompt();
+			const prompt = session.systemPrompt.join("\n");
+			expect(prompt).not.toContain(SERVER_INSTRUCTIONS);
+			expect(prompt).not.toContain("## MCP Server Instructions");
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
+	it("keeps a resource-only server's instructions when the scope does not target it", async () => {
+		// A resource-only server (advertises resources, no tools) has no
+		// registry tool to gate on. `disallowedTools: [mcp__instr_*]` targets
+		// the tool-owning `instr` server, so its instructions must drop — but
+		// the unrelated resource-only `notes` server must keep its own
+		// instructions: the scope does not name it, and stripping them would
+		// remove server-controlled guidance the session can still act on.
+		fs.writeFileSync(
+			path.join(tempDir, ".mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					instr: { type: "stdio", command: process.execPath, args: [FIXTURE_PATH] },
+					notes: {
+						type: "stdio",
+						command: process.execPath,
+						args: [FIXTURE_PATH, RESOURCE_ONLY_MODE],
+					},
+				},
+			}),
+		);
+		const { session, mcpManager } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({}),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableLsp: false,
+			skipPythonPreflight: true,
+			enableMCP: true,
+			hasUI: true,
+			disallowedTools: ["mcp__instr_*"],
+		});
+		try {
+			// The scope gate keeps the connected fixture tool out of the active
+			// set, but it still lands in the registry when deferred discovery
+			// completes — the first observable proof that the server connected.
+			const deadline = Date.now() + 12_000;
+			while (session.getToolByName(MCP_TOOL_NAME) === undefined && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(session.getToolByName(MCP_TOOL_NAME)).toBeDefined();
+			expect(session.getActiveToolNames()).not.toContain(MCP_TOOL_NAME);
+			// The resource-only `notes` server connects on its own schedule;
+			// wait for it so the rebuild below sees its instructions.
+			while (!(mcpManager?.getConnectedServers().includes("notes") ?? false) && Date.now() < deadline) {
+				await Bun.sleep(10);
+			}
+			expect(mcpManager?.getConnectedServers()).toContain("notes");
+
+			// `refreshBaseSystemPrompt` is serialized FIFO on the same mutation
+			// queue as the discovery-triggered `refreshMCPTools`, so awaiting it
+			// proves the post-connection rebuild has committed. The scoped-out
+			// `instr` server's text must be gone; the resource-only `notes`
+			// server's text must survive.
+			await session.refreshBaseSystemPrompt();
+			const prompt = session.systemPrompt.join("\n");
+			expect(prompt).not.toContain(SERVER_INSTRUCTIONS);
+			expect(prompt).toContain(RESOURCE_ONLY_INSTRUCTIONS);
+		} finally {
+			await session.dispose();
+		}
+	}, 20_000);
 	// Regression for #15705: remote servers connect late or reconnect, so
 	// connection order varies within and across sessions. The section must not
 	// follow it, or every reorder rewrites the provider prompt cache.
@@ -614,5 +845,73 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 		expect(lateAlpha.indexOf("### alpha\n")).toBeGreaterThan(-1);
 		expect(lateAlpha.indexOf("### alpha\n")).toBeLessThan(lateAlpha.indexOf("### zeta\n"));
 		expect(await renderSection(["alpha", "zeta"])).toBe(lateAlpha);
+	}, 30_000);
+
+	it("retains instructions of a deduplication-loser server when the shared tool is scoped in", async () => {
+		const config: MCPStdioServerConfig = { type: "stdio", command: process.execPath, args: [FIXTURE_PATH] };
+		const manager = new MCPManager(tempDir, null, async () => ({ configs: {}, sources: {}, exaApiKeys: [] }));
+		try {
+			await manager.connectServers({ "foo.bar": config, foo_bar: config }, {}, undefined, 0);
+			const { session } = await createAgentSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				modelRegistry,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({}),
+				model: getBundledModel("openai", "gpt-4o-mini"),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableLsp: false,
+				skipPythonPreflight: true,
+				enableMCP: true,
+				mcpManager: manager,
+				disallowedTools: ["mcp__other_*"],
+			});
+			try {
+				await session.refreshMCPTools(manager.getTools());
+				const prompt = session.systemPrompt.join("\n");
+				expect(prompt).toContain("### foo.bar\n");
+				expect(prompt).toContain("### foo_bar\n");
+			} finally {
+				await session.dispose();
+			}
+			try {
+				// Also verify when an enforced allowlist explicitly grants the shared tool name
+				const { session: allowlistSession } = await createAgentSession({
+					cwd: tempDir,
+					agentDir: tempDir,
+					modelRegistry,
+					sessionManager: SessionManager.inMemory(),
+					settings: Settings.isolated({}),
+					model: getBundledModel("openai", "gpt-4o-mini"),
+					disableExtensionDiscovery: true,
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableLsp: false,
+					skipPythonPreflight: true,
+					enableMCP: true,
+					mcpManager: manager,
+					enforceToolAllowlist: true,
+					toolNames: ["read", "mcp__foo_bar_do_thing"],
+				});
+				try {
+					await allowlistSession.refreshMCPTools(manager.getTools());
+					const allowlistPrompt = allowlistSession.systemPrompt.join("\n");
+					expect(allowlistPrompt).toContain("### foo.bar\n");
+					expect(allowlistPrompt).toContain("### foo_bar\n");
+				} finally {
+					await allowlistSession.dispose();
+				}
+			} finally {
+				// outer try block closes below
+			}
+		} finally {
+			await manager.disconnectAll();
+		}
 	}, 30_000);
 });

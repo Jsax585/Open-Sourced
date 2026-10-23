@@ -27,7 +27,9 @@ import evalPreludeNoticePrompt from "../prompts/system/eval-prelude-notice.md" w
 import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md" with { type: "text" };
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
-import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
+import { mcpServerResourcesAllowed } from "../mcp/resource-scope";
+import { ToolScope } from "../tools/tool-scope";
+import { isMCPToolName, normalizeToolNames, withoutSiblingTools } from "../tools/builtin-names";
 import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
 import { getApprovalGrants } from "../tools/approval-cache";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
@@ -144,8 +146,12 @@ interface SessionToolsOptions {
 	createThinkTool?: () => Promise<AgentTool | null>;
 	builtInToolNames?: Iterable<string>;
 	presentationPinnedToolNames?: ReadonlySet<string>;
+	/** Subagent tool scope; every active-set mutation preserves it. Absent = unrestricted. */
+	toolScope?: ToolScope;
 	/** MCP tool names whose current registry entries came from the manager snapshot. */
 	mcpManagerToolNames?: Iterable<string>;
+	/** Live manager tool records (carry raw mcpServerName) for dual-source resource gating. */
+	mcpManagerTools?: () => Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>;
 	ensureWriteRegistered?: () => Promise<boolean>;
 	isDeviceOnlyWrite?: () => boolean;
 	setDeviceOnlyWrite?: (enabled: boolean) => void;
@@ -343,6 +349,7 @@ export class SessionTools {
 	#builtInToolNames: Set<string>;
 	#rpcHostToolNames = new Set<string>();
 	#mcpManagerToolNames = new Set<string>();
+	#mcpManagerTools: (() => Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>) | undefined;
 	#extensionMcpTools = new Map<string, AgentTool>();
 	#xdev: XdevState | undefined;
 	#pendingToolRosterDelta: { added: Set<string>; removed: Set<string> } | undefined;
@@ -382,6 +389,8 @@ export class SessionTools {
 	#announcedMountsSeeded = false;
 	#presentationPinnedToolNames: ReadonlySet<string> | undefined;
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
+	/** Enforced subagent scope (`tools:` allowlist + `disallowedTools:`) applied to every active-set mutation. */
+	#toolScope: ToolScope;
 	#baseSystemPrompt: string[];
 	/**
 	 * Per-turn system prompt returned by a `before_agent_start` extension hook
@@ -471,6 +480,7 @@ export class SessionTools {
 		this.#createThinkTool = options.createThinkTool;
 		this.#builtInToolNames = new Set(options.builtInToolNames ?? []);
 		this.#mcpManagerToolNames = new Set(options.mcpManagerToolNames ?? []);
+		this.#mcpManagerTools = options.mcpManagerTools;
 		if (options.mcpManagerToolNames === undefined) {
 			for (const name of this.#toolRegistry.keys()) {
 				if (isMCPToolName(name)) this.#mcpManagerToolNames.add(name);
@@ -482,6 +492,7 @@ export class SessionTools {
 			}
 		}
 		this.#presentationPinnedToolNames = options.presentationPinnedToolNames;
+		this.#toolScope = options.toolScope ?? new ToolScope({});
 		this.#ensureWriteRegistered = options.ensureWriteRegistered;
 		this.#isDeviceOnlyWrite = options.isDeviceOnlyWrite;
 		this.#deviceOnlyWriteTransportAvailable = this.#isDeviceOnlyWrite?.() === true;
@@ -659,9 +670,16 @@ export class SessionTools {
 		return [...(this.#xdev?.mountedNames ?? [])];
 	}
 
-	/** Whether the edit tool is registered. */
+	/**
+	 * Whether the edit tool is effectively granted: registered AND scoped into
+	 * the active set. `disallowedTools:` (or an enforced `tools:` allowlist)
+	 * keeps the registry entry but removes it from every active-set mutation,
+	 * so hashline anchors must be suppressed for the subagent (the
+	 * `resolveFileDisplayMode` contract). No-op for unrestricted sessions:
+	 * `isToolScopedIn` admits everything then.
+	 */
 	get hasEditTool(): boolean {
-		return this.#toolRegistry.has("edit");
+		return this.#toolRegistry.has("edit") && this.isToolScopedIn("edit");
 	}
 
 	/**
@@ -1166,9 +1184,69 @@ export class SessionTools {
 		);
 	}
 
+	/**
+	 * Per-server resource gate for `read mcp://…`, which resolves through the
+	 * process-global protocol router and therefore cannot consult a session
+	 * itself. Uses the same shared decision as the Cursor adapter: a server that
+	 * owns at least one scoped-in tool is readable, and a resource-only server
+	 * survives unless the scope targets it by name.
+	 */
+	isMCPServerResourceAllowed(serverName: string): boolean {
+		// Dual-source: the registry alone misreads a dedup loser (its server owns
+		// no registry tool) as resource-only. The manager list keeps the loser's
+		// ownership visible so an exact disallow of the shared name strips both
+		// servers' resources.
+		const sources: Iterable<{ readonly name?: string; readonly mcpServerName?: unknown }>[] = [
+			this.#toolRegistry.values(),
+			this.#mcpManagerTools?.() ?? [],
+		];
+		return mcpServerResourcesAllowed(
+			sources,
+			(name, owner) => this.isToolScopedIn(name, owner),
+			server => !this.#toolScope.enforced && !this.#toolScope.deniesServer(server),
+			serverName,
+		);
+	}
+
+	/**
+	 * Whether a tool survives this session's tool scope (allowlist + disallow patterns).
+	 *
+	 * When `mcpServerName` is provided, it overrides the registry lookup. This
+	 * allows callers judging candidate or deduplicated MCP tools (such as dedup
+	 * losers that are absent from the registry) to evaluate disallow patterns
+	 * against the tool's actual owning server. Alias resolution lives in `ToolScope`.
+	 */
+	isToolScopedIn(name: string, mcpServerName?: string): boolean {
+		return this.#toolScope.isScopedIn(name, mcpServerName ?? this.#ownerOf(name));
+	}
+
+	/**
+	 * Scope invariant for runtime mutations: a tool the startup scoping removed
+	 * (unlisted under an enforced `tools:` allowlist, or matched by
+	 * `disallowedTools:`) can never re-enter the active set through
+	 * {@link setActiveToolsByName}, extension hooks, or internal toggles.
+	 */
+	#scopeActiveToolSelection(toolNames: string[]): string[] {
+		if (!this.#toolScope.restricted) return toolNames;
+		// Scope first, then pair: an enforced half-pair (`tools: [checkpoint]`,
+		// whose sister `rewind` is unlisted but NOT denied) survives startup,
+		// so runtime mutations must keep it too. Pairing on `!isScopedIn`
+		// would drop it — the sister reads as "not scoped in" — breaking
+		// live/revive parity on every cold-revive clamp and MCP refresh.
+		const scoped = toolNames.filter(name => this.isToolScopedIn(name));
+		return withoutSiblingTools(scoped, name => this.#toolScope.isDenied(name, this.#ownerOf(name)));
+	}
+
+	#ownerOf(name: string): string | undefined {
+		const registryServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)
+			?.mcpServerName;
+		return typeof registryServerName === "string" ? registryServerName : undefined;
+	}
+
 	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {
 		signal?.throwIfAborted();
 		toolNames = normalizeToolNames(toolNames);
+		toolNames = this.#scopeActiveToolSelection(toolNames);
 		let builtInWriteAvailable = this.#builtInToolNames.has("write");
 		const fullWriteSelected =
 			toolNames.includes("write") &&
@@ -1199,9 +1277,13 @@ export class SessionTools {
 			const tool = this.#toolRegistry.get(name);
 			return tool ? [{ name, tool }] : [];
 		});
-		const xdevReadAvailable = this.#builtInToolNames.has("read") && selectedTools.some(({ name }) => name === "read");
+		const xdevReadAvailable =
+			this.#builtInToolNames.has("read") &&
+			this.isToolScopedIn("read") &&
+			selectedTools.some(({ name }) => name === "read");
 		const xdevWriteAvailable =
 			builtInWriteAvailable &&
+			this.isToolScopedIn("write") &&
 			(selectedTools.some(({ name }) => name === "write") || this.#deviceOnlyWriteTransportAvailable);
 		const isPresentationPinned = (name: string): boolean =>
 			this.#presentationPinnedToolNames?.has(name) === true || this.#runtimeSelectedToolNames?.has(name) === true;
@@ -1232,7 +1314,7 @@ export class SessionTools {
 		}
 		if (transportNeeded && builtInWriteAvailable) {
 			const write = this.#toolRegistry.get("write");
-			if (write && !validToolNames.includes("write")) {
+			if (write && !validToolNames.includes("write") && this.isToolScopedIn("write")) {
 				tools.push(this.#wrapToolForAcpPermission(write));
 				validToolNames.push("write");
 			}
@@ -1256,11 +1338,12 @@ export class SessionTools {
 		const restoreDormantDeviceOnlyWrite =
 			!validToolNames.includes("write") &&
 			this.#deviceOnlyWriteTransportAvailable &&
+			this.isToolScopedIn("write") &&
 			this.#isDeviceOnlyWrite?.() !== true &&
 			this.#setDeviceOnlyWrite !== undefined;
 		const deactivateDeviceOnlyWrite =
-			!validToolNames.includes("write") &&
-			!this.#deviceOnlyWriteTransportAvailable &&
+			(!validToolNames.includes("write") || !this.isToolScopedIn("write")) &&
+			(!this.#deviceOnlyWriteTransportAvailable || !this.isToolScopedIn("write")) &&
 			this.#isDeviceOnlyWrite?.() === true &&
 			this.#setDeviceOnlyWrite !== undefined;
 		const previousMounted = new Set(this.#xdev?.mountedNames ?? []);

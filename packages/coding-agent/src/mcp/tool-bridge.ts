@@ -28,6 +28,7 @@ import { formatApprovalArguments } from "../tools/approval";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
 import { callTool } from "./client";
+import { sanitizeNamePart } from "./name-sanitize";
 import { formatMCPToolFailure, MCPTransportError } from "./errors";
 import { describeMCPCall, describeMCPResult, renderMCPCall, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
 import type {
@@ -454,33 +455,15 @@ async function reconnectWithAbort(
 }
 
 /**
- * Create a unique tool name for an MCP tool.
- *
- * Prefixes with server name to avoid conflicts. If the tool name already
- * starts with the server name (e.g., server "puppeteer" with tool
- * "puppeteer_screenshot"), strips the redundant prefix to produce
- * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
- */
-function sanitizeMCPToolNamePart(value: string, fallback: string, keepDigits: boolean): string {
-	const sanitized = value
-		.toLowerCase()
-		.replace(keepDigits ? /[^a-z0-9_]+/g : /[^a-z_]+/g, "_")
-		.replace(/_+/g, "_")
-		.replace(/^_+|_+$/g, "");
-
-	return sanitized.length > 0 ? sanitized : fallback;
-}
-
-/**
  * Shared mint pipeline. `keepDigits` selects the sanitizer variant: the
  * current mint keeps `0-9`, the legacy variant strips them exactly as the
- * pre-fix `sanitizeMCPToolNamePart` did. Both halves route through this one
+ * pre-fix `sanitizeNamePart` did. Both halves route through this one
  * function so the two mints can only ever differ by that character class —
  * if the prefix-strip or cap rules change, the legacy alias changes with them.
  */
 function mintMCPToolName(serverName: string, toolName: string, keepDigits: boolean): string {
-	const sanitizedServerName = sanitizeMCPToolNamePart(serverName, "server", keepDigits);
-	const sanitizedToolName = sanitizeMCPToolNamePart(toolName, "tool", keepDigits);
+	const sanitizedServerName = sanitizeNamePart(serverName, "server", { keepDigits });
+	const sanitizedToolName = sanitizeNamePart(toolName, "tool", { keepDigits });
 
 	// Strip redundant server name prefix from tool name if present
 	const prefixWithUnderscore = `${sanitizedServerName}_`;
@@ -530,6 +513,14 @@ function capMCPToolNameLength(name: string): string {
 	return `${name.slice(0, keep)}_${hash}`;
 }
 
+/**
+ * Create a unique tool name for an MCP tool.
+ *
+ * Prefixes with server name to avoid conflicts. If the tool name already
+ * starts with the server name (e.g., server "puppeteer" with tool
+ * "puppeteer_screenshot"), strips the redundant prefix to produce
+ * "mcp__puppeteer_screenshot" instead of "mcp__puppeteer_puppeteer_screenshot".
+ */
 export function createMCPToolName(serverName: string, toolName: string): string {
 	return mintMCPToolName(serverName, toolName, true);
 }
@@ -569,7 +560,7 @@ export function createMCPToolName(serverName: string, toolName: string): string 
  *
  * This is normalization, not fuzzy matching: every candidate is derived from
  * the emitted name by the same rules that minted the registry, never selected
- * from siblings. `sanitizeMCPToolNamePart` is idempotent and registry keys are
+ * from siblings. `sanitizeNamePart` is idempotent and registry keys are
  * already in its output form, so an already-registered name yields no
  * candidates at all and stays on the exact-match path. Callers try each
  * candidate as an exact lookup and keep failing when none is registered.
@@ -598,7 +589,7 @@ export function canonicalMCPToolNameCandidates(name: string): string[] {
 	}
 	// The whole-suffix candidate has no boundary, so there is no minted fallback
 	// shape to reproduce: a suffix that sanitizes away is a dead end.
-	const sanitizedSuffix = sanitizeMCPToolNamePart(suffix, "", true);
+	const sanitizedSuffix = sanitizeNamePart(suffix, "", { keepDigits: true });
 	if (sanitizedSuffix.length > 0) {
 		add(capMCPToolNameLength(`${MCP_TOOL_NAME_PREFIX}${sanitizedSuffix}`));
 	}
