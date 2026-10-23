@@ -5546,8 +5546,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			// j2x: a failed persona switch discarded the primary snapshot but
 			// left the stash behind — the still-active source mode restores
-			// from it.
-			const previousPresentation = this.#planModePreviousToolPresentation ?? this.#personaSwitchRollbackPlan;
+			// from it. Persona-active gate (R3-4 parity with
+			// #clearTransientModeState): under a live persona the stash holds
+			// the SOURCE snapshot the pre-switch hook deliberately discarded.
+			const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
+			const previousPresentation =
+				this.#planModePreviousToolPresentation ?? (personaActive ? undefined : this.#personaSwitchRollbackPlan);
 			if (previousPresentation) {
 				await this.session.restoreNonMCPToolPresentation(
 					previousPresentation.enabled,
@@ -5669,7 +5673,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}): Promise<void> {
 		// j2x: a failed persona switch discarded the primary snapshot but left
 		// the stash behind — the still-active source mode restores from it.
-		const previousTools = this.#goalModePreviousTools ?? this.#personaSwitchRollbackGoal;
+		// Persona-active gate (R3-4 parity with #clearTransientModeState).
+		const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
+		const previousTools =
+			this.#goalModePreviousTools ?? (personaActive ? undefined : this.#personaSwitchRollbackGoal);
 		if (this.goalModeEnabled && previousTools) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
