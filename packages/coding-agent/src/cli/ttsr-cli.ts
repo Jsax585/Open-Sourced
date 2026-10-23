@@ -34,6 +34,7 @@ import { Settings } from "../config/settings";
 import { cfgTtsr, type TtsrSettings } from "../export/ttsr-settings";
 import { initializeWithSettings, loadCapability } from "../discovery";
 import { buildRuleFromMarkdown, createSourceMeta } from "../discovery/helpers";
+import { ensureGrammar } from "../utils/grammars";
 import type { TtsrManager } from "../export/ttsr";
 
 export type TtsrAction = "test" | "list" | "scan";
@@ -211,6 +212,7 @@ async function astMatches(rule: Rule, snippet: string, lang: string): Promise<As
 	for (const condition of rule.astCondition ?? []) {
 		const { patterns, ruleConfigs } = serializeAstConditions([condition]);
 		try {
+			await ensureGrammar({ lang });
 			const result = await astMatch({
 				patterns,
 				ruleConfigs,
@@ -739,6 +741,7 @@ async function scanRulePlanMatchesContent(
 		} else {
 			try {
 				const { patterns, ruleConfigs } = serializeAstConditions(plan.astConditions);
+				await ensureGrammar({ lang });
 				const result = await astMatch({
 					patterns,
 					ruleConfigs,
@@ -781,6 +784,7 @@ async function scanAnyAstConditionMatches(
 	}
 	try {
 		const { patterns, ruleConfigs } = serializeAstConditions(conditions);
+		await ensureGrammar({ lang });
 		const result = await astMatch({
 			patterns,
 			ruleConfigs,
