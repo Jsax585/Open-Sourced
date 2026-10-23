@@ -2267,7 +2267,7 @@ export async function runRootCommand(
 			deps.registerDaemonProjectPresence ??
 			(deps === DEFAULT_RUN_ROOT_DEPENDENCIES ? registerDaemonProjectPresence : undefined);
 		if (registerPresence) {
-			const presenceSessionId = sessionManager?.getSessionId();
+			const presenceSessionId = mode === "acp" ? undefined : sessionManager?.getSessionId();
 			const initialSession: DaemonProjectPresenceSession | undefined = presenceSessionId
 				? { sessionId: presenceSessionId, title: sessionManager?.getSessionName() }
 				: undefined;
@@ -2551,10 +2551,14 @@ export async function runRootCommand(
 						logger.warn("Failed to update daemon project presence", { error: String(error) });
 					});
 				};
-				await daemonPresence.update({
-					sessionId: session.sessionManager.getSessionId(),
-					title: session.sessionManager.getSessionName(),
-				});
+				await daemonPresence
+					.update({
+						sessionId: session.sessionManager.getSessionId(),
+						title: session.sessionManager.getSessionName(),
+					})
+					.catch(error => {
+						logger.warn("Failed to update daemon project presence", { error: String(error) });
+					});
 				session.registerSessionChangeCallback(syncPresence);
 				session.sessionManager.onSessionNameChanged(syncPresence);
 			}

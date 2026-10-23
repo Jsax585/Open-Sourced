@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils/dirs";
+import { getAgentDir, getProjectDir, setAgentDir, setProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import { parseArgs } from "../../src/cli/args";
 import { Settings } from "../../src/config/settings";
 import { hasLiveDaemonProjectPresence, registerDaemonProjectPresence } from "../../src/launch/presence";
@@ -140,12 +140,12 @@ describe("daemon presence session identity field", () => {
 		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
 		const originalIsTTY = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-		const previousAgentDir = process.env.PI_AGENT_DIR;
+		const originalAgentDir = getAgentDir();
 		const parsed = parseArgs([]);
 		parsed.cwd = projectDir;
 		// Leave parsed.sessionDir undefined so createSessionManager returns undefined,
 		// exercising the default launch path where the session is created by the SDK.
-		process.env.PI_AGENT_DIR = path.join(projectDir, "agent");
+		setAgentDir(path.join(projectDir, "agent"));
 		parsed.noExtensions = true;
 		parsed.noSkills = true;
 		parsed.noRules = true;
@@ -194,8 +194,7 @@ describe("daemon presence session identity field", () => {
 			});
 		} finally {
 			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
-			if (previousAgentDir === undefined) delete process.env.PI_AGENT_DIR;
-			else process.env.PI_AGENT_DIR = previousAgentDir;
+			setAgentDir(originalAgentDir);
 			authStorage.close();
 		}
 
