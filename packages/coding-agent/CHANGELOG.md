@@ -4,6 +4,7 @@
 
 ### Added
 
+- Cache-expired auto-shake: before a provider request whose reusable prompt prefix is calculated to have outlived the model's catalog-declared prompt-cache lifetime (`prompt-cache` KDL axis / `model.promptCache`), the session shakes eligible history first, so the rewrite lands when the next request pays a cold cache write anyway. Runs before every request (first prompt request, tool-loop requests, queued steer/follow-up resumes, first request after resume) and in subagent sessions; gated by the new `compaction.shakeOnCacheExpiry` setting (default on), independent of `compaction.idleEnabled`, `compaction.idleThresholdTokens`, and `compaction.methodOrder`. Models without a declared lifetime are never shaken by this path ([#13965](https://github.com/can1357/oh-my-pi/pull/13965) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 

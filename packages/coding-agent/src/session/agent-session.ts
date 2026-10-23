@@ -1086,6 +1086,7 @@ export class AgentSession implements SettingsScope {
 	#modeExitDrainSuppressionDepth = 0;
 	#usagePreflightReadyForNextModelCall = false;
 	#usagePreflightReadyModel: Model | undefined;
+	#detachCacheExpiryBeforeModelCall: (() => void) | undefined;
 	#detachUsageBeforeQueueDequeue: (() => void) | undefined;
 	#detachUsageBeforeModelCall: (() => void) | undefined;
 	/** Claude account lane (`cred:<id>`/`key:<hash>`) that served the latest Anthropic request. */
@@ -1961,7 +1962,12 @@ export class AgentSession implements SettingsScope {
 		this.#cacheWarmer = config.cacheWarmer;
 		if (config.cacheWarmer) {
 			const warmer = config.cacheWarmer;
-			warmer.onWarmed = (message, extensionOverride) => this.#recordCacheWarmUsage(message, extensionOverride);
+			warmer.onWarmed = (message, extensionOverride) => {
+				this.#recordCacheWarmUsage(message, extensionOverride);
+				// A successful warm re-armed the provider TTL; the cache-expired shake
+				// must not treat the still-warm prefix as cold.
+				this.#maintenance.noteCacheWarmed(message);
+			};
 			warmer.onRefreshStart = refresh => void this.#emitSessionEvent({ type: "cache_warming_start", ...refresh });
 			warmer.onRefreshEnd = refresh => void this.#emitSessionEvent({ type: "cache_warming_end", ...refresh });
 			this.subscribeRunState(state => {
@@ -2015,6 +2021,15 @@ export class AgentSession implements SettingsScope {
 			initialRetryFallback: config.initialRetryFallback,
 			deferFallbackChainValidation: this.#fallbackChainValidationDeferred,
 			unexpectedStopJudgeTimeoutMs: config.unexpectedStopJudgeTimeoutMs,
+		});
+		// Cold-cache shake runs before every provider request (first prompt
+		// request, each tool-loop request, queued steer/follow-up resumes) and in
+		// every session — subagents construct an AgentSession too, so they get
+		// the same hook. Installed ahead of the usage preflight so the preflight
+		// measures the reduced context.
+		this.#detachCacheExpiryBeforeModelCall = this.agent.addBeforeModelCallHook(async (signal, context) => {
+			await this.#maintenance.runCacheExpiredShakeBeforeProviderRequest(context.messages, signal);
+			signal?.throwIfAborted();
 		});
 		this.#detachUsageBeforeQueueDequeue = this.agent.addBeforeQueuedMessageDequeueHook(async signal => {
 			if (
@@ -2489,6 +2504,7 @@ export class AgentSession implements SettingsScope {
 			thinkingLevel: () => this.thinkingLevel,
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
+			settleInFlightMessagePersistence: () => this.settleInFlightMessagePersistence(),
 			isGeneratingHandoff: () => this.isGeneratingHandoff,
 			promptGeneration: () => this.#promptGeneration,
 			sessionId: () => this.sessionId,
@@ -5885,6 +5901,8 @@ export class AgentSession implements SettingsScope {
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
+		this.#detachCacheExpiryBeforeModelCall?.();
+		this.#detachCacheExpiryBeforeModelCall = undefined;
 		this.#detachUsageBeforeQueueDequeue?.();
 		this.#detachUsageBeforeQueueDequeue = undefined;
 		this.#detachUsageBeforeModelCall?.();

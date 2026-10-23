@@ -4,6 +4,7 @@
 
 ### Added
 
+- Declared the OpenAI in-memory prompt-cache lifetime (`prompt-cache { short 300 }`, 30 minutes for the Daybreak aliases with explicit 30m breakpoints) so cache-aware session maintenance can use it ([#13965](https://github.com/can1357/oh-my-pi/pull/13965) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 
 ### Changed
