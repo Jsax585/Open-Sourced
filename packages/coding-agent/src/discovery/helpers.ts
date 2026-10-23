@@ -259,12 +259,14 @@ export function parseMCPToolFilterEntry(serverName: string, value: unknown): str
 	return filtered.length > 0 ? filtered : undefined;
 }
 
+/** Server-config field names holding tool-filter lists (kept literal during env expansion). */
+export const FILTER_KEYS: ReadonlySet<string> = new Set(["enabledTools", "disabledTools"]);
+
 /**
  * Parse both per-server tool filters in one step, for spreading into an
  * `MCPServer` object: `...parseMCPToolFilters(name, config)`. Undefined
  * members are omitted, so the spread adds only configured filters.
  */
-export const FILTER_KEYS: ReadonlySet<string> = new Set(["enabledTools", "disabledTools"]);
 export function parseMCPToolFilters(
 	serverName: string,
 	config: { enabledTools?: unknown; disabledTools?: unknown },

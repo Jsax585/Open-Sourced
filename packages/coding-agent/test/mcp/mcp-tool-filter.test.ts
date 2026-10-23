@@ -45,7 +45,9 @@ test("a leading bang stays literal and unbalanced-brace names stay addressable",
 });
 
 test("glob metacharacters: star and brace alternation", () => {
-	// Star wildcard crosses slashes because tool names are opaque strings
+	// A single `*` does not cross `/` in Bun.Glob: `admin/*` matches the raw
+	// name through its literal slash, while `*` reaches `admin/delete` only
+	// via the sanitized-spelling fallback (`admin_delete`).
 	expect(run(NAMES, ["send_*"]).allowed).toEqual(["send_message"]);
 	expect(run(NAMES, ["admin/*"]).allowed).toEqual(["admin/delete"]);
 	expect(run(NAMES, ["*"]).allowed).toEqual(NAMES);

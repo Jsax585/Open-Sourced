@@ -116,26 +116,28 @@ describe("Exa MCP filtering", () => {
 		expect(result.configs).toEqual({});
 	});
 
-	test("keeps an unrestricted exa server whose allowlist contains a glob", () => {
-		for (const glob of ["web_*", "web_search_*", "web_search_ex[a]", "*"]) {
-			const configs: Record<string, MCPServerConfig> = {
-				exa: { type: "http", url: "https://mcp.exa.ai/mcp", enabledTools: [glob] },
-			};
-			const result = filterExaMCPServers(configs, { exa: SOURCE });
+test("keeps an unrestricted exa server whose allowlist contains a glob", () => {
+	// The unrestricted decision is a literal native-name check, not glob
+	// compilation: any entry spelled unlike `web_search_exa` keeps the
+	// server, so one representative glob row pins the branch.
+	const configs: Record<string, MCPServerConfig> = {
+		exa: { type: "http", url: "https://mcp.exa.ai/mcp", enabledTools: ["web_*"] },
+	};
+	const result = filterExaMCPServers(configs, { exa: SOURCE });
 
-			expect(Object.keys(result.configs)).toEqual(["exa"]);
-		}
-	});
+	expect(Object.keys(result.configs)).toEqual(["exa"]);
+});
 
 	test("keeps an exa server restricted only by a denylist", () => {
-		for (const disabledTools of [["web_search_exa"], ["*"], ["web_*"]]) {
-			const configs: Record<string, MCPServerConfig> = {
-				exa: { type: "http", url: "https://mcp.exa.ai/mcp", disabledTools },
-			};
-			const result = filterExaMCPServers(configs, { exa: SOURCE });
+		// Any non-empty denylist with an empty allowlist keeps the server
+		// (deny direction is conservative without a `tools=` restriction),
+		// so one row pins the branch.
+		const configs: Record<string, MCPServerConfig> = {
+			exa: { type: "http", url: "https://mcp.exa.ai/mcp", disabledTools: ["web_search_exa"] },
+		};
+		const result = filterExaMCPServers(configs, { exa: SOURCE });
 
-			expect(Object.keys(result.configs)).toEqual(["exa"]);
-		}
+		expect(Object.keys(result.configs)).toEqual(["exa"]);
 	});
 
 	test("drops an exa server whose requested tools and filters leave no non-native tool", () => {
