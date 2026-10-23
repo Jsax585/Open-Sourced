@@ -235,4 +235,49 @@ describe("running task progress in wait and jobs rows", () => {
 
 		expect(rows).toEqual([`- \`${bashId}\` [bash] — bun test`, `- \`${taskId}\` [task] — Quiet`]);
 	});
+
+	test("#given a batch job whose job id collided #when wait renders #then its row shows its own agent's progress, not the batch's first record", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		// A running job already holds `Beta`, so the batch's Beta job is registered as `Beta-2`
+		// while its agent id (and its progress record's id) stays `Beta`.
+		const holder = Promise.withResolvers<AsyncJobRunResult>();
+		pendingRuns.push(holder);
+		manager.register("task", "holder", async () => holder.promise, { ownerId: SELF_ID, id: "Beta" });
+		const pending = Promise.withResolvers<AsyncJobRunResult>();
+		pendingRuns.push(pending);
+		const reported = Promise.withResolvers<void>();
+		const batch = [
+			{ id: "Alpha", requests: 7, stage: "alpha stage" },
+			{ id: "Beta", requests: 42, stage: "beta stage" },
+		];
+		const jobId = manager.register(
+			"task",
+			"Beta",
+			async ({ reportProgress }) => {
+				await reportProgress("running", { progress: batch });
+				reported.resolve();
+				return pending.promise;
+			},
+			{ ownerId: SELF_ID, id: "Beta", agentId: "Beta" },
+		);
+		await reported.promise;
+		expect(jobId).toBe("Beta-2");
+
+		const row = renderText(manager, "wait", [jobId])
+			.split("\n")
+			.find(line => line.startsWith(`- \`${jobId}\``));
+
+		expect(row).toMatch(/ — \S+ · 42 req · stage: beta stage$/);
+	});
+
+	test("#given a running task whose cost is below one cent #when wait renders #then the cost reads <$0.01, not $0.00", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const jobId = await registerRunningJob(manager, "task", "Cheap", { requests: 2, cost: 0.0031 });
+
+		const row = renderText(manager, "wait", [jobId])
+			.split("\n")
+			.find(line => line.startsWith(`- \`${jobId}\``));
+
+		expect(row).toMatch(/ — \S+ · 2 req · <\$0\.01$/);
+	});
 });

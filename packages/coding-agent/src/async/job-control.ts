@@ -182,12 +182,15 @@ export function snapshotJobs(
 		if (latest.type === "task") {
 			const progressValue = latest.latestDetails?.progress;
 			if (Array.isArray(progressValue)) {
+				// A batch job's progress lists every spawn of the call, keyed by agent id.
+				// A collided job id is suffixed (`Foo-2`) while its agent id stays `Foo`.
+				const agentId = current?.agentId ?? latest.id;
 				let progressRecord: Record<string, unknown> | undefined;
 				for (const item of progressValue) {
 					if (!item || typeof item !== "object") continue;
 					const candidate = item as Record<string, unknown>;
 					if (!progressRecord) progressRecord = candidate;
-					if (candidate.id === latest.id) {
+					if (candidate.id === agentId) {
 						progressRecord = candidate;
 						break;
 					}
@@ -275,7 +278,7 @@ export function runningTaskProgressSuffix(job: JobSnapshot, options: { duration:
 	if (job.type !== "task" || job.status !== "running") return "";
 	const parts: string[] = [];
 	if (job.requests !== undefined && job.requests > 0) parts.push(`${job.requests} req`);
-	if (job.cost !== undefined && job.cost > 0) parts.push(`$${job.cost.toFixed(2)}`);
+	if (job.cost !== undefined && job.cost > 0) parts.push(job.cost < 0.005 ? "<$0.01" : `$${job.cost.toFixed(2)}`);
 	if (job.contextTokens !== undefined && job.contextTokens > 0) {
 		parts.push(
 			job.contextWindow !== undefined && job.contextWindow > 0
