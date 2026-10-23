@@ -434,7 +434,7 @@ export class BtwController {
 			this.#activeRequest?.component.close();
 			this.#clearCompletedState();
 			const leafId = this.#sessionManager.getLeafId();
-			const { record, history, conversationKey } = beginBtwTurn(trimmedQuestion, leafId, previous);
+			const { record, history, conversationKey } = beginBtwTurn(trimmedQuestion, leafId, previous, images);
 			const request: BtwRequest = {
 				component: new BtwPanelComponent({
 					question: trimmedQuestion,

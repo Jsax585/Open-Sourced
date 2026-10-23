@@ -29,6 +29,15 @@ export function restoreDetachedDraft(
 	editor.setCollapsedText([restoredText, currentText].filter(part => part.trim()).join("\n\n"));
 }
 
+/** A text-only command gives a draft with images back instead of running without them; returns whether it refused. */
+export function refuseImages(command: ParsedSlashCommand, runtime: TuiSlashCommandRuntime): boolean {
+	const images = runtime.input?.images;
+	if (!images?.length) return false;
+	restoreDetachedDraft(runtime.ctx.editor, command.text, images, runtime.input?.imageLinks);
+	runtime.ctx.showWarning(`/${command.name} takes text only; remove the images to run it`);
+	return true;
+}
+
 /**
  * Run a command that takes its whole draft, images included. An unsent draft gets
  * its attachments back, and with `restoreText` its text too; a `run` that throws on

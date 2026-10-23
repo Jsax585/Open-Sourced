@@ -18,9 +18,21 @@ export interface BtwTurnStart {
 }
 
 /** Start a new topic, or append a follow-up turn to `previous`. */
-export function beginBtwTurn(question: string, leafId: string | null, previous?: BtwHistoryRecord): BtwTurnStart {
+export function beginBtwTurn(
+	question: string,
+	leafId: string | null,
+	previous?: BtwHistoryRecord,
+	images?: ImageContent[],
+): BtwTurnStart {
 	const now = Date.now();
-	const turn: BtwHistoryTurn = { question, answer: "", status: "running", createdAt: now, updatedAt: now };
+	const turn: BtwHistoryTurn = {
+		question,
+		...(images?.length ? { images } : {}),
+		answer: "",
+		status: "running",
+		createdAt: now,
+		updatedAt: now,
+	};
 	const record: BtwHistoryRecord = previous
 		? { ...previous, followUps: [...(previous.followUps ?? []), turn] }
 		: { ...turn, id: Snowflake.next(), leafId };
@@ -48,7 +60,7 @@ export function runBtwTurn(
 	session: Pick<AgentSession, "model" | "runEphemeralTurn">,
 	args: {
 		question: string;
-		/** Images attached to this question; earlier turns replay as text. */
+		/** Images attached to this question; earlier turns replay their own. */
 		images?: ImageContent[];
 		history?: readonly BtwHistoryTurn[];
 		conversationKey: string;
@@ -62,7 +74,10 @@ export function runBtwTurn(
 	for (const turn of args.history ?? []) {
 		history.push({
 			role: "user",
-			content: [{ type: "text", text: prompt.render(btwUserPrompt, { question: turn.question }) }],
+			content: [
+				{ type: "text", text: prompt.render(btwUserPrompt, { question: turn.question }) },
+				...(turn.images ?? []),
+			],
 			attribution: "agent",
 			timestamp: turn.createdAt,
 		});

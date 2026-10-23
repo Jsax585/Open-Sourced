@@ -565,6 +565,28 @@ describe("interactive native input ingress", () => {
 		},
 	);
 
+	it.each([
+		["omfg", "handleOmfgCommand"],
+		["handoff", "handleHandoffCommand"],
+		["cleanse", "handleCleanseCommand"],
+	] as const)("Enter /%s with an image keeps the draft and does not run", async (command, handler) => {
+		const h = await createHarness(() => {});
+		const showWarning = vi.fn();
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		Object.assign(h.ctx, { showWarning });
+		const run = vi.fn(async () => {});
+		h.ctx[handler] = run;
+		h.draftWithImage(`/${command} look at this [Image #1]`);
+
+		await h.pressSubmit(ENTER);
+
+		expect(run).not.toHaveBeenCalled();
+		expect(showWarning).toHaveBeenCalledWith(`/${command} takes text only; remove the images to run it`);
+		expect(h.editor.getExpandedText()).toBe(`/${command} look at this [Image #1]`);
+		expect(h.editor.pendingImages).toEqual([originalImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
+	});
+
 	it("Enter /tan renumbers an image pasted while its input hook runs", async () => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
