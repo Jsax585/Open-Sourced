@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { isEnoent, isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { BunFile } from "bun";
 import { isPermissionDeniedError, writeFileWithFallback } from "../tools/file-write-fallback";
+import { throwIfAborted } from "../tools/tool-errors";
 import {
 	beginPendingDiskWrite,
 	endPendingDiskWrite,
@@ -471,6 +472,7 @@ async function runLspWritethrough(
 					formatContent(dst, content, cwd, customLinterServers, operationSignal),
 					minVersionsPromise,
 				]);
+				throwIfAborted(operationSignal);
 				finalContent = formattedContent.content;
 				minVersions = capturedVersions;
 				if (formattedContent.failed) {
@@ -505,6 +507,7 @@ async function runLspWritethrough(
 				// 2. Format in-memory via LSP
 				if (enableFormat) {
 					const formatted = await formatContent(dst, content, cwd, lspServers, operationSignal);
+					throwIfAborted(operationSignal);
 					finalContent = formatted.content;
 					if (formatted.failed) {
 						formatter = FileFormatResult.FAILED;
@@ -538,19 +541,6 @@ async function runLspWritethrough(
 		if (timedOut) {
 			formatter = undefined;
 			diagnostics = undefined;
-			// Schedule background diagnostic fetch if caller wants deferred results
-			if (deferred && !deferred.signal.aborted && enableDiagnostics) {
-				void scheduleDeferredDiagnosticsFetch({
-					dst,
-					cwd,
-					servers,
-					minVersions,
-					expectedDocumentVersions,
-					waitMs: options.deferredWaitMs,
-					signal: deferred.signal,
-					callback: deferred.onDeferredDiagnostics,
-				});
-			}
 		}
 		await commitWrite();
 		// The write above committed even though the operation budget elapsed:
@@ -559,6 +549,19 @@ async function runLspWritethrough(
 		await notifyWriteCommitted();
 	} finally {
 		endPendingDiskWrite(dst);
+	}
+
+	if (!synced && timedOut && deferred && !deferred.signal.aborted && enableDiagnostics) {
+		void scheduleDeferredDiagnosticsFetch({
+			dst,
+			cwd,
+			servers,
+			minVersions,
+			expectedDocumentVersions,
+			waitMs: options.deferredWaitMs,
+			signal: deferred.signal,
+			callback: deferred.onDeferredDiagnostics,
+		});
 	}
 
 	if (synced && enableDiagnostics) {

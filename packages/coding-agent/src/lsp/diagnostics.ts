@@ -1,10 +1,18 @@
-import { type FileDiagnosticsResult } from "@oh-my-pi/pi-tui/tools/lsp";
+import {
+	getOrCreateClient,
+	hasPendingFileOperation,
+	LspRequestTimeoutError,
+	reconcileFileFromDisk,
+	sendRequest,
+	supportsDocumentDiagnostics,
+	waitForPendingFileOperation,
+	waitForProjectLoaded,
+} from "./client";
 import * as fs from "node:fs";
 import path from "node:path";
 import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { throwIfAborted } from "../tools/tool-errors";
-import { getOrCreateClient, sendRequest, supportsDocumentDiagnostics, waitForProjectLoaded } from "./client";
 import { getLinterClient } from "./clients";
 import { hasRootMarkerAncestor } from "./config";
 import { applyTextEditsToString } from "./edits";
@@ -20,6 +28,7 @@ import type {
 	ServerConfig,
 	TextEdit,
 } from "./types";
+import type { FileDiagnosticsResult } from "@oh-my-pi/pi-tui/tools/lsp";
 import {
 	fileToUri,
 	formatDiagnostic,
@@ -220,6 +229,20 @@ interface PullDiagnosticsOutcome {
 	failed?: unknown;
 }
 
+/** A diagnostics request completed without an authoritative current report. */
+export class DiagnosticsTimeoutError extends Error {
+	readonly uri: string;
+	readonly timeoutMs: number;
+	override readonly cause?: unknown;
+	constructor(uri: string, timeoutMs: number, cause?: unknown) {
+		super(`Timed out waiting for diagnostics for ${uri} after ${timeoutMs}ms`, { cause });
+		this.name = "DiagnosticsTimeoutError";
+		this.uri = uri;
+		this.timeoutMs = timeoutMs;
+		this.cause = cause;
+	}
+}
+
 function requestDocumentDiagnostics(
 	client: LspClient,
 	uri: string,
@@ -240,6 +263,200 @@ function requestDocumentDiagnostics(
 			}
 			return { failed: err };
 		});
+}
+interface TypeScriptServerDiagnostic {
+	start?: number;
+	length?: number;
+	startLocation?: { line: number; offset: number };
+	endLocation?: { line: number; offset: number };
+	end?: { line: number; offset: number };
+	text?: string;
+	message?: string;
+	code?: number | string;
+	category?: number | string;
+	source?: string;
+	reportsUnnecessary?: boolean;
+	reportsDeprecated?: boolean;
+	relatedInformation?: Array<{
+		span?: {
+			start?: { line: number; offset: number };
+			end?: { line: number; offset: number };
+			file?: string;
+		};
+		startLocation?: { line: number; offset: number };
+		endLocation?: { line: number; offset: number };
+		file?: string;
+		message?: string;
+	}>;
+}
+
+function typeScriptSeverity(category: number | string | undefined): 1 | 2 | 3 | 4 | undefined {
+	if (category === "error" || category === 1 || category === "message" || category === 3) return 1;
+	if (category === "warning" || category === 0) return 2;
+	if (category === "suggestion" || category === 2) return 4;
+	return undefined;
+}
+
+function typeScriptPosition(position: { line: number; offset: number }): Position | undefined {
+	if (!Number.isFinite(position.line) || !Number.isFinite(position.offset)) return undefined;
+	return { line: Math.max(0, position.line - 1), character: Math.max(0, position.offset - 1) };
+}
+
+function mapTypeScriptDiagnostics(body: unknown): Diagnostic[] | undefined {
+	if (!Array.isArray(body)) return undefined;
+	const mapped: Diagnostic[] = [];
+	for (const item of body) {
+		if (!item || typeof item !== "object") return undefined;
+		const diagnostic = item as TypeScriptServerDiagnostic;
+		const message = diagnostic.text ?? diagnostic.message;
+		if (typeof message !== "string" || !diagnostic.startLocation || !diagnostic.endLocation) return undefined;
+		const start = typeScriptPosition(diagnostic.startLocation);
+		const end = typeScriptPosition(diagnostic.endLocation);
+		if (!start || !end) return undefined;
+		const relatedInformation = diagnostic.relatedInformation?.flatMap(info => {
+			const span = info.span;
+			const file = span?.file ?? info.file;
+			const startLocation = span?.start ?? info.startLocation;
+			const endLocation = span?.end ?? info.endLocation;
+			if (!file || typeof info.message !== "string" || !startLocation || !endLocation) return [];
+			const relatedStart = typeScriptPosition(startLocation);
+			const relatedEnd = typeScriptPosition(endLocation);
+			return relatedStart && relatedEnd
+				? [
+						{
+							location: { uri: fileToUri(file), range: { start: relatedStart, end: relatedEnd } },
+							message: info.message,
+						},
+					]
+				: [];
+		});
+		mapped.push({
+			range: { start, end },
+			message,
+			code: diagnostic.code,
+			severity: typeScriptSeverity(diagnostic.category),
+			source: diagnostic.source ?? "typescript",
+			tags: [...(diagnostic.reportsUnnecessary ? [1] : []), ...(diagnostic.reportsDeprecated ? [2] : [])],
+			...(relatedInformation && relatedInformation.length > 0 ? { relatedInformation } : {}),
+		});
+	}
+	return mapped;
+}
+
+export async function requestTypeScriptDiagnostics(
+	client: LspClient,
+	filePath: string,
+	signal: AbortSignal | undefined,
+	timeoutMs: number,
+	expectedDocumentVersion?: number,
+): Promise<Diagnostic[]> {
+	const uri = fileToUri(filePath);
+	const deadline = Date.now() + timeoutMs;
+	const commands = ["semanticDiagnosticsSync", "syntacticDiagnosticsSync", "suggestionDiagnosticsSync"] as const;
+
+	while (true) {
+		const remainingBeforeWait = deadline - Date.now();
+		if (remainingBeforeWait <= 0) throw new DiagnosticsTimeoutError(uri, timeoutMs);
+		if (hasPendingFileOperation(client, filePath)) {
+			const waitSignal = AbortSignal.timeout(Math.max(1, remainingBeforeWait));
+			const combinedWaitSignal = signal ? AbortSignal.any([signal, waitSignal]) : waitSignal;
+			try {
+				await waitForPendingFileOperation(client, filePath, combinedWaitSignal);
+			} catch (error) {
+				if (signal?.aborted) throw error;
+				if (waitSignal.aborted) throw new DiagnosticsTimeoutError(uri, timeoutMs, error);
+				throw error;
+			}
+		} else {
+			throwIfAborted(signal);
+		}
+		const attemptVersion = client.openFiles.get(uri)?.version;
+		if (
+			expectedDocumentVersion !== undefined &&
+			attemptVersion !== undefined &&
+			attemptVersion < expectedDocumentVersion
+		) {
+			throw new Error("TypeScript diagnostics became stale during document refresh");
+		}
+		const diagnostics: Diagnostic[] = [];
+		let superseded = false;
+		for (const command of commands) {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw new DiagnosticsTimeoutError(uri, timeoutMs);
+			let response: unknown;
+			try {
+				response = await sendRequest(
+					client,
+					"workspace/executeCommand",
+					{
+						command: "typescript.tsserverRequest",
+						arguments: [
+							command,
+							{ file: filePath, includeLinePosition: true },
+							{ executionTarget: 0, expectsResult: true, isAsync: false, lowPriority: false },
+						],
+					},
+					signal,
+					remaining,
+				);
+			} catch (error) {
+				if (signal?.aborted) throw error;
+				if (error instanceof LspRequestTimeoutError) {
+					throw new DiagnosticsTimeoutError(uri, timeoutMs, error);
+				}
+				throw error;
+			}
+			const body = (response as { body?: unknown } | null)?.body;
+			const mapped = mapTypeScriptDiagnostics(body);
+			if (mapped === undefined)
+				throw new Error(`TypeScript diagnostics pull returned malformed diagnostic body: ${JSON.stringify(body)}`);
+			if (hasPendingFileOperation(client, filePath) || client.openFiles.get(uri)?.version !== attemptVersion) {
+				superseded = true;
+				break;
+			}
+			diagnostics.push(...mapped);
+		}
+		if (superseded) {
+			continue;
+		}
+		const configuredDiagnostics = client.config.settings?.diagnostics;
+		const ignoredCodes = new Set<number>(
+			configuredDiagnostics &&
+				typeof configuredDiagnostics === "object" &&
+				"ignoredCodes" in configuredDiagnostics &&
+				Array.isArray(configuredDiagnostics.ignoredCodes)
+				? configuredDiagnostics.ignoredCodes.filter((code): code is number => typeof code === "number")
+				: [],
+		);
+		if (ignoredCodes.size > 0) {
+			for (let index = diagnostics.length - 1; index >= 0; index--) {
+				if (typeof diagnostics[index].code === "number" && ignoredCodes.has(diagnostics[index].code as number))
+					diagnostics.splice(index, 1);
+			}
+		}
+		const versionAfter = client.openFiles.get(uri)?.version;
+		if (hasPendingFileOperation(client, filePath) || versionAfter !== attemptVersion) {
+			continue;
+		}
+		const seen = new Set<string>();
+		const currentDiagnostics = diagnostics.filter(diagnostic => {
+			const key = `${diagnostic.range.start.line}:${diagnostic.range.start.character}:${diagnostic.range.end.line}:${diagnostic.range.end.character}:${diagnostic.message}:${diagnostic.code ?? ""}`;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+		if (versionAfter !== undefined) {
+			client.diagnostics.set(uri, { diagnostics: currentDiagnostics, version: versionAfter });
+			client.diagnosticsVersion += 1;
+		}
+		return currentDiagnostics;
+	}
+}
+export function supportsTypeScriptDiagnosticsPull(client: LspClient): boolean {
+	const provider = client.serverCapabilities?.executeCommandProvider;
+	if (!provider || typeof provider !== "object") return false;
+	const commands = (provider as { commands?: unknown }).commands;
+	return Array.isArray(commands) && commands.includes("typescript.tsserverRequest");
 }
 
 function isProvisionalColdPublish(
@@ -267,14 +484,33 @@ export async function waitForDiagnostics(
 	let pullAttempted = false;
 	let pullResultPromise: Promise<PullDiagnosticsOutcome> | undefined;
 	let pulled: Diagnostic[] | undefined;
+	let pulledFromTypeScript = false;
 	let pullFailure: unknown;
 	let settledRef: PublishedDiagnostics | undefined;
 	let settledAt = 0;
 	while (Date.now() < deadline) {
 		throwIfAborted(signal);
-		if (!pullAttempted && supportsDocumentDiagnostics(client)) {
+		if (!pullAttempted) {
 			pullAttempted = true;
-			pullResultPromise = requestDocumentDiagnostics(client, uri, signal, Math.max(1, deadline - Date.now()));
+			if (supportsTypeScriptDiagnosticsPull(client)) {
+				pulledFromTypeScript = true;
+				const remaining = deadline - Date.now();
+				if (remaining <= 0) throw new DiagnosticsTimeoutError(uri, timeoutMs);
+				pullResultPromise = requestTypeScriptDiagnostics(
+					client,
+					uriToFile(uri),
+					signal,
+					remaining,
+					expectedDocumentVersion,
+				).then(
+					diagnostics => ({ diagnostics }),
+					failed => ({ failed }),
+				);
+			} else if (supportsDocumentDiagnostics(client)) {
+				const remaining = deadline - Date.now();
+				if (remaining <= 0) throw new DiagnosticsTimeoutError(uri, timeoutMs);
+				pullResultPromise = requestDocumentDiagnostics(client, uri, signal, remaining);
+			}
 		}
 
 		const versionOk = minVersion === undefined || client.diagnosticsVersion > minVersion;
@@ -341,18 +577,18 @@ export async function waitForDiagnostics(
 	}
 	throwIfAborted(signal);
 	if (pulled === undefined) {
-		// A failed pull (timeout/RPC error) leaves the file's state unknown; never
-		// let it collapse into a clean empty result the caller renders as "OK".
 		if (pullFailure !== undefined) {
 			throw pullFailure instanceof Error ? pullFailure : new Error(String(pullFailure));
 		}
-		return [];
+		throw new DiagnosticsTimeoutError(uri, timeoutMs);
 	}
-	client.diagnostics.set(uri, {
-		diagnostics: pulled,
-		version: expectedDocumentVersion ?? client.openFiles.get(uri)?.version ?? null,
-	});
-	client.diagnosticsVersion += 1;
+	if (!pulledFromTypeScript || !client.openFiles.has(uri)) {
+		client.diagnostics.set(uri, {
+			diagnostics: pulled,
+			version: expectedDocumentVersion ?? client.openFiles.get(uri)?.version ?? null,
+		});
+		client.diagnosticsVersion += 1;
+	}
 	return pulled;
 }
 
@@ -464,9 +700,24 @@ export async function getDiagnosticsForFile(
 				// Default: use LSP
 				const client = await getOrCreateClient(serverConfig, cwd, undefined, boundSignal);
 				throwIfAborted(boundSignal);
-				if (isProjectAwareLspServer(serverConfig)) {
+				const usesTypeScriptPull = supportsTypeScriptDiagnosticsPull(client);
+				if (!usesTypeScriptPull && isProjectAwareLspServer(serverConfig)) {
 					await waitForProjectLoaded(client, boundSignal);
 					throwIfAborted(boundSignal);
+				}
+				if (usesTypeScriptPull) {
+					const expectedDocumentVersion = expectedDocumentVersions?.get(serverName);
+					if (expectedDocumentVersion === undefined) {
+						await reconcileFileFromDisk(client, absolutePath, boundSignal);
+					}
+					const diagnostics = await requestTypeScriptDiagnostics(
+						client,
+						absolutePath,
+						boundSignal,
+						waitBudgetMs,
+						expectedDocumentVersion,
+					);
+					return { serverName, serverConfig, diagnostics };
 				}
 				// Content already synced + didSave sent, wait for fresh diagnostics
 				const minVersion = minVersions?.get(serverName);
@@ -618,6 +869,7 @@ export async function formatContent(
 			// Apply edits in-memory and return
 			return { content: applyTextEditsToString(content, edits), failed: false, unsupported: false };
 		} catch {
+			throwIfAborted(signal);
 			// A formatter was available but the request failed;
 			// record the failure and try the next server
 			hadFailure = true;

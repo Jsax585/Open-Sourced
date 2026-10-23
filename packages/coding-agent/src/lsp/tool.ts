@@ -23,7 +23,6 @@ import {
 	getActiveClients,
 	getOrCreateClient,
 	isRustAnalyzerClient,
-	type LspServerStatus,
 	reconcileFileFromDisk,
 	reconcileIdleChecker,
 	reconcileOpenFilesFromDisk,
@@ -32,11 +31,13 @@ import {
 	sendRequest,
 	shutdownStaleClients,
 	waitForProjectLoaded,
+	type LspServerStatus,
 } from "./client";
 import { getLinterClient } from "./clients";
 import { configCache, getConfig, getServersForFile } from "./config";
 import {
 	BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS,
+	DiagnosticsTimeoutError,
 	formatLocationWithContext,
 	hasRustWorkspaceAncestor,
 	isOnlyQueriedDeclaration,
@@ -46,6 +47,8 @@ import {
 	REFERENCE_CONTEXT_LIMIT,
 	REFERENCES_RETRY_COUNT,
 	REFERENCES_RETRY_DELAY_MS,
+	requestTypeScriptDiagnostics,
+	supportsTypeScriptDiagnosticsPull,
 	SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS,
 	WORKSPACE_SYMBOL_LIMIT,
 	waitForDiagnostics,
@@ -225,6 +228,10 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		const timeoutSec = budget.call;
 		const waitMs = budget.wait * 1000;
 		const timeoutSignal = AbortSignal.timeout(timeoutSec * 1000);
+		// Bun 1.3.14 may defer AbortSignal.timeout when it is only observed through AbortSignal.any.
+		// Keep a direct listener so project-load and request waits honor the call deadline.
+		timeoutSignal.addEventListener("abort", () => {}, { once: true });
+		const deadline = Date.now() + timeoutSec * 1000;
 		const callerSignal = signal;
 		signal = callerSignal ? AbortSignal.any([callerSignal, timeoutSignal]) : timeoutSignal;
 		throwIfAborted(signal);
@@ -280,204 +287,293 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		}
 
 		// Diagnostics can be batch or single-file - queries all applicable servers
-		if (action === "diagnostics") {
-			if (file === "*") {
-				// `*` => run workspace diagnostics across all configured servers
-				const result = await runWorkspaceDiagnostics(this.session.cwd, signal);
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Workspace diagnostics (${result.projectType.description}):\n${result.output}`,
-						},
-					],
-					details: { action, success: true, request: params },
-				};
-			}
-
-			if (!file) {
-				return {
-					content: [
-						{
-							type: "text",
-							text: "Error: file parameter required. Use `*` for workspace-wide diagnostics or a path/glob for specific files.",
-						},
-					],
-					details: { action, success: false, request: params },
-				};
-			}
-
-			let truncatedGlobTargets = false;
-			const resolvedTargets = await resolveDiagnosticTargets(file, this.session.cwd, MAX_GLOB_DIAGNOSTIC_TARGETS);
-			const targets = resolvedTargets.matches;
-			truncatedGlobTargets = resolvedTargets.truncated;
-
-			if (targets.length === 0) {
-				return {
-					content: [{ type: "text", text: `No files matched pattern: ${file}` }],
-					details: { action, success: true, request: params },
-				};
-			}
-
-			const detailed = targets.length > 1 || truncatedGlobTargets;
-			const results: string[] = [];
-			const allServerNames = new Set<string>();
-			let totalServerAttempts = 0;
-			let totalServerSuccesses = 0;
-			if (truncatedGlobTargets) {
-				results.push(
-					`${theme.status.warning} Pattern matched more than ${MAX_GLOB_DIAGNOSTIC_TARGETS} files; showing first ${MAX_GLOB_DIAGNOSTIC_TARGETS}. Narrow the glob or use workspace diagnostics.`,
-				);
-			}
-
-			for (const target of targets) {
-				throwIfAborted(signal);
-				const resolved = resolveToCwd(target, this.session.cwd);
-				const servers = getServersForFile(config, resolved);
-				if (servers.length === 0) {
-					results.push(`${theme.status.error} ${target}: No language server found`);
-					continue;
+		try {
+			if (action === "diagnostics") {
+				if (file === "*") {
+					// `*` => run workspace diagnostics across all configured servers
+					const result = await runWorkspaceDiagnostics(this.session.cwd, signal);
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Workspace diagnostics (${result.projectType.description}):\n${result.output}`,
+							},
+						],
+						details: { action, success: true, request: params },
+					};
 				}
 
-				const uri = fileToUri(resolved);
-				const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
-				const allDiagnostics: Diagnostic[] = [];
-				const failedServers: string[] = [];
-				let succeededServers = 0;
+				if (!file) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Error: file parameter required. Use `*` for workspace-wide diagnostics or a path/glob for specific files.",
+							},
+						],
+						details: { action, success: false, request: params },
+					};
+				}
 
-				// Query all applicable servers for this file
-				for (const [serverName, serverConfig] of servers) {
-					allServerNames.add(serverName);
-					totalServerAttempts++;
-					try {
-						throwIfAborted(signal);
-						if (serverConfig.createClient) {
-							const linterClient = getLinterClient(serverName, serverConfig, this.session.cwd);
-							const diagnostics = await linterClient.lint(resolved, signal);
+				let truncatedGlobTargets = false;
+				const resolvedTargets = await resolveDiagnosticTargets(file, this.session.cwd, MAX_GLOB_DIAGNOSTIC_TARGETS);
+				const targets = resolvedTargets.matches;
+				truncatedGlobTargets = resolvedTargets.truncated;
+
+				if (targets.length === 0) {
+					return {
+						content: [{ type: "text", text: `No files matched pattern: ${file}` }],
+						details: { action, success: true, request: params },
+					};
+				}
+
+				const detailed = targets.length > 1 || truncatedGlobTargets;
+				const results: string[] = [];
+				const allServerNames = new Set<string>();
+				let totalServerAttempts = 0;
+				let totalServerSuccesses = 0;
+				if (truncatedGlobTargets) {
+					results.push(
+						`${theme.status.warning} Pattern matched more than ${MAX_GLOB_DIAGNOSTIC_TARGETS} files; showing first ${MAX_GLOB_DIAGNOSTIC_TARGETS}. Narrow the glob or use workspace diagnostics.`,
+					);
+				}
+
+				for (const target of targets) {
+					throwIfAborted(callerSignal);
+					const resolved = resolveToCwd(target, this.session.cwd);
+					const servers = getServersForFile(config, resolved);
+					if (servers.length === 0) {
+						results.push(`${theme.status.error} ${target}: No language server found`);
+						continue;
+					}
+
+					const uri = fileToUri(resolved);
+					const relPath = formatPathRelativeToCwd(resolved, this.session.cwd);
+					const allDiagnostics: Diagnostic[] = [];
+					const failedServers: string[] = [];
+					const timedOutServers: string[] = [];
+					let timedOutWaitMs: number | undefined;
+					let succeededServers = 0;
+
+					// Query all applicable servers for this file
+					for (const [serverName, serverConfig] of servers) {
+						allServerNames.add(serverName);
+						totalServerAttempts++;
+						const startupIsPrimary = totalServerSuccesses === 0;
+						const markBudgetExhausted = () => {
+							timedOutServers.push(serverName);
+							timedOutWaitMs ??= 0;
+							failedServers.push(serverName);
+						};
+						const budgetExhausted = () =>
+							deadline - Date.now() - 100 <= 0 || (timeoutSignal.aborted && !callerSignal?.aborted);
+						if (budgetExhausted()) {
+							if (callerSignal?.aborted) throwIfAborted(callerSignal);
+							markBudgetExhausted();
+							continue;
+						}
+						try {
+							throwIfAborted(signal);
+							if (serverConfig.createClient) {
+								const linterClient = getLinterClient(serverName, serverConfig, this.session.cwd);
+								const diagnostics = await linterClient.lint(resolved, signal);
+								allDiagnostics.push(...diagnostics);
+								succeededServers++;
+								totalServerSuccesses++;
+								continue;
+							}
+							const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
+							const minVersion = client.diagnosticsVersion;
+							const usesTypeScriptPull = supportsTypeScriptDiagnosticsPull(client);
+							if (budgetExhausted()) {
+								if (callerSignal?.aborted) throwIfAborted(callerSignal);
+								if (startupIsPrimary) {
+									throw new ToolError(`LSP server startup exceeded the ${timeoutSec}s call timeout.`);
+								}
+								markBudgetExhausted();
+								continue;
+							}
+							if (!usesTypeScriptPull && isProjectAwareLspServer(serverConfig)) {
+								await waitForProjectLoaded(client, signal);
+								if (budgetExhausted()) {
+									if (callerSignal?.aborted) throwIfAborted(callerSignal);
+									if (startupIsPrimary) {
+										throw new ToolError(`LSP server startup exceeded the ${timeoutSec}s call timeout.`);
+									}
+									markBudgetExhausted();
+									continue;
+								}
+								throwIfAborted(signal);
+							}
+							await refreshFile(client, resolved, signal);
+							const expectedDocumentVersion = client.openFiles.get(uri)?.version;
+							if (usesTypeScriptPull) {
+								const remaining = deadline - Date.now() - 100;
+								if (remaining <= 0) {
+									if (startupIsPrimary) {
+										throw new ToolError(`LSP server startup exceeded the ${timeoutSec}s call timeout.`);
+									}
+									markBudgetExhausted();
+									continue;
+								}
+								const diagnostics = await requestTypeScriptDiagnostics(
+									client,
+									resolved,
+									signal,
+									Math.min(waitMs, remaining),
+									expectedDocumentVersion,
+								);
+								allDiagnostics.push(...diagnostics);
+								succeededServers++;
+								totalServerSuccesses++;
+								continue;
+							}
+							// Project-aware servers (Roslyn, tsserver, …) compute pull diagnostics
+							// on demand; their first response routinely overruns the 3s single-file
+							// budget, which would otherwise surface as a false "OK". An explicit
+							// diagnostics request can afford to wait: `lsp.requestTimeout`, or the
+							// call's `timeout`, bounded by the tool timeout.
+							const waitCapMs = detailed
+								? BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS
+								: isProjectAwareLspServer(serverConfig)
+									? waitMs
+									: SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS;
+							const remaining = deadline - Date.now() - 100;
+							if (remaining <= 0) {
+								if (startupIsPrimary) {
+									throw new ToolError(`LSP server startup exceeded the ${timeoutSec}s call timeout.`);
+								}
+								markBudgetExhausted();
+								continue;
+							}
+							const diagnostics = await waitForDiagnostics(client, uri, {
+								timeoutMs: Math.min(waitCapMs, remaining),
+								signal,
+								minVersion,
+								expectedDocumentVersion,
+							});
 							allDiagnostics.push(...diagnostics);
 							succeededServers++;
 							totalServerSuccesses++;
-							continue;
+						} catch (err) {
+							if (callerSignal?.aborted) throwIfAborted(callerSignal);
+							if (timeoutSignal.aborted && !startupIsPrimary) {
+								markBudgetExhausted();
+								continue;
+							}
+							if (err instanceof ToolAbortError || signal?.aborted) throw err;
+							if (err instanceof ToolError && startupIsPrimary) throw err;
+							if (err instanceof DiagnosticsTimeoutError) {
+								timedOutServers.push(serverName);
+								timedOutWaitMs ??= err.timeoutMs;
+							}
+							failedServers.push(serverName);
+							logger.debug("LSP diagnostics server failed", {
+								server: serverName,
+								file: relPath,
+								error: err instanceof Error ? err.message : String(err),
+							});
 						}
-						const client = await getOrCreateClient(serverConfig, this.session.cwd, undefined, signal);
-						if (isProjectAwareLspServer(serverConfig)) {
-							await waitForProjectLoaded(client, signal);
-							throwIfAborted(signal);
-						}
-						const minVersion = client.diagnosticsVersion;
-						await refreshFile(client, resolved, signal);
-						const expectedDocumentVersion = client.openFiles.get(uri)?.version;
-						// Project-aware servers (Roslyn, tsserver, …) compute pull diagnostics
-						// on demand; their first response routinely overruns the 3s single-file
-						// budget, which would otherwise surface as a false "OK". An explicit
-						// diagnostics request can afford to wait: `lsp.requestTimeout`, or the
-						// call's `timeout`, bounded by the tool timeout.
-						const waitCapMs = detailed
-							? BATCH_DIAGNOSTICS_WAIT_TIMEOUT_MS
-							: isProjectAwareLspServer(serverConfig)
-								? waitMs
-								: SINGLE_DIAGNOSTICS_WAIT_TIMEOUT_MS;
-						const diagnostics = await waitForDiagnostics(client, uri, {
-							timeoutMs: Math.min(waitCapMs, timeoutSec * 1000),
-							signal,
-							minVersion,
-							expectedDocumentVersion,
-						});
-						allDiagnostics.push(...diagnostics);
-						succeededServers++;
-						totalServerSuccesses++;
-					} catch (err) {
-						if (err instanceof ToolAbortError || signal?.aborted) {
-							throw err;
-						}
-						// Server failed; record it so a total failure is not reported as clean.
-						failedServers.push(serverName);
-						logger.debug("LSP diagnostics server failed", {
-							server: serverName,
-							file: relPath,
-							error: err instanceof Error ? err.message : String(err),
-						});
 					}
-				}
 
-				// Deduplicate diagnostics
-				const seen = new Set<string>();
-				const uniqueDiagnostics: Diagnostic[] = [];
-				for (const d of allDiagnostics) {
-					const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
-					if (!seen.has(key)) {
-						seen.add(key);
-						uniqueDiagnostics.push(d);
+					if (!detailed && targets.length === 1 && succeededServers === 0 && timedOutWaitMs !== undefined) {
+						throw new ToolError(
+							`LSP diagnostics timed out after ${timedOutWaitMs}ms. The server may still be indexing; try again or pass timeout=<larger>.`,
+						);
 					}
-				}
 
-				sortDiagnostics(uniqueDiagnostics);
+					// Deduplicate diagnostics
+					const seen = new Set<string>();
+					const uniqueDiagnostics: Diagnostic[] = [];
+					for (const d of allDiagnostics) {
+						const key = `${d.range.start.line}:${d.range.start.character}:${d.range.end.line}:${d.range.end.character}:${d.message}`;
+						if (!seen.has(key)) {
+							seen.add(key);
+							uniqueDiagnostics.push(d);
+						}
+					}
 
-				if (!detailed && targets.length === 1) {
-					if (succeededServers === 0) {
+					sortDiagnostics(uniqueDiagnostics);
+
+					if (!detailed && targets.length === 1) {
+						if (succeededServers === 0) {
+							return {
+								content: [
+									{
+										type: "text",
+										text: `${theme.status.error} ${relPath}: all language servers failed (${failedServers.join(", ")})`,
+									},
+								],
+								details: { action, serverName: Array.from(allServerNames).join(", "), success: false },
+							};
+						}
+
+						if (uniqueDiagnostics.length === 0) {
+							const text =
+								failedServers.length > 0
+									? `OK\n${theme.status.warning} some servers failed: ${failedServers.join(", ")}${timedOutServers.length > 0 ? ` (timed out: ${timedOutServers.join(", ")})` : ""}`
+									: "OK";
+							return {
+								content: [{ type: "text", text }],
+								details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
+							};
+						}
+
+						const summary = formatDiagnosticsSummary(uniqueDiagnostics);
+						const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
+						let output = `${summary}:\n${formatGroupedDiagnosticMessages(formatted)}`;
+						if (failedServers.length > 0) {
+							output += `\n${theme.status.warning} some servers failed: ${failedServers.join(", ")}${timedOutServers.length > 0 ? ` (timed out: ${timedOutServers.join(", ")})` : ""}`;
+						}
 						return {
-							content: [
-								{
-									type: "text",
-									text: `${theme.status.error} ${relPath}: all language servers failed (${failedServers.join(", ")})`,
-								},
-							],
-							details: { action, serverName: Array.from(allServerNames).join(", "), success: false },
-						};
-					}
-
-					if (uniqueDiagnostics.length === 0) {
-						const text =
-							failedServers.length > 0
-								? `OK\n${theme.status.warning} some servers failed: ${failedServers.join(", ")}`
-								: "OK";
-						return {
-							content: [{ type: "text", text }],
+							content: [{ type: "text", text: output }],
 							details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
 						};
 					}
 
-					const summary = formatDiagnosticsSummary(uniqueDiagnostics);
-					const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
-					let output = `${summary}:\n${formatGroupedDiagnosticMessages(formatted)}`;
-					if (failedServers.length > 0) {
-						output += `\n${theme.status.warning} some servers failed: ${failedServers.join(", ")}`;
-					}
-					return {
-						content: [{ type: "text", text: output }],
-						details: { action, serverName: Array.from(allServerNames).join(", "), success: true },
-					};
-				}
-
-				if (uniqueDiagnostics.length === 0) {
-					if (succeededServers === 0) {
-						results.push(
-							`${theme.status.error} ${relPath}: all language servers failed (${failedServers.join(", ")})`,
-						);
+					if (uniqueDiagnostics.length === 0) {
+						if (succeededServers === 0) {
+							results.push(
+								`${theme.status.error} ${relPath}: all language servers failed (${failedServers.join(", ")})`,
+							);
+						} else {
+							results.push(`${theme.status.success} ${relPath}: no issues`);
+							if (failedServers.length > 0) {
+								results.push(
+									`${theme.status.warning} ${relPath}: some servers failed (${failedServers.join(", ")})${timedOutServers.length > 0 ? ` (timed out: ${timedOutServers.join(", ")})` : ""}`,
+								);
+							}
+						}
 					} else {
-						results.push(`${theme.status.success} ${relPath}: no issues`);
+						const summary = formatDiagnosticsSummary(uniqueDiagnostics);
+						results.push(`${theme.status.error} ${relPath}: ${summary}`);
+						const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
+						results.push(formatGroupedDiagnosticMessages(formatted));
 						if (failedServers.length > 0) {
 							results.push(
-								`${theme.status.warning} ${relPath}: some servers failed (${failedServers.join(", ")})`,
+								`${theme.status.warning} ${relPath}: some servers failed (${failedServers.join(", ")})${timedOutServers.length > 0 ? ` (timed out: ${timedOutServers.join(", ")})` : ""}`,
 							);
 						}
 					}
-				} else {
-					const summary = formatDiagnosticsSummary(uniqueDiagnostics);
-					results.push(`${theme.status.error} ${relPath}: ${summary}`);
-					const formatted = uniqueDiagnostics.map(d => formatDiagnostic(d, relPath));
-					results.push(formatGroupedDiagnosticMessages(formatted));
-					if (failedServers.length > 0) {
-						results.push(`${theme.status.warning} ${relPath}: some servers failed (${failedServers.join(", ")})`);
-					}
 				}
-			}
 
-			const allServersFailed = totalServerAttempts > 0 && totalServerSuccesses === 0;
-			return {
-				content: [{ type: "text", text: results.join("\n") }],
-				details: { action, serverName: Array.from(allServerNames).join(", "), success: !allServersFailed },
-			};
+				const allServersFailed = totalServerAttempts > 0 && totalServerSuccesses === 0;
+				return {
+					content: [{ type: "text", text: results.join("\n") }],
+					details: { action, serverName: Array.from(allServerNames).join(", "), success: !allServersFailed },
+				};
+			}
+		} catch (err) {
+			if (err instanceof ToolError) throw err;
+			if (err instanceof ToolAbortError || signal?.aborted) {
+				if (timeoutSignal.aborted && !callerSignal?.aborted) {
+					throw new ToolError(
+						`LSP diagnostics timed out after ${timeoutSec}s. The server may still be indexing; try again or pass timeout=<larger>.`,
+					);
+				}
+				throw new ToolAbortError();
+			}
+			throw err;
 		}
 
 		if (action === "rename_file") {

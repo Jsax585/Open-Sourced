@@ -11,6 +11,7 @@ import { restoreEnvValue } from "../helpers/settings-test-state";
 import { createLspWritethrough, LspTool } from "@oh-my-pi/pi-coding-agent/lsp";
 import * as lspClient from "@oh-my-pi/pi-coding-agent/lsp/client";
 import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
+import * as lspUtils from "@oh-my-pi/pi-coding-agent/lsp/utils";
 import {
 	configCache,
 	getConfig,
@@ -18,14 +19,18 @@ import {
 	type LspConfig,
 	loadConfig,
 } from "@oh-my-pi/pi-coding-agent/lsp/config";
-import { waitForDiagnostics } from "@oh-my-pi/pi-coding-agent/lsp/diagnostics";
+import {
+	DiagnosticsTimeoutError,
+	requestTypeScriptDiagnostics,
+	waitForDiagnostics,
+} from "@oh-my-pi/pi-coding-agent/lsp/diagnostics";
 import {
 	applyTextEditsToString,
 	applyWorkspaceEdit,
 	type ExecutedWorkspaceChange,
 	sortAndValidateTextEdits,
 } from "@oh-my-pi/pi-coding-agent/lsp/edits";
-import { renderCall, renderResult } from "@oh-my-pi/pi-tui/tools/lsp";
+import { type FileDiagnosticsResult, renderCall, renderResult } from "@oh-my-pi/pi-tui/tools/lsp";
 import {
 	type CodeAction,
 	type CreateFile,
@@ -2336,6 +2341,149 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("reports a bounded diagnostics timeout instead of returning clean", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-diagnostics-timeout-");
+		try {
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "export const target = 1;\n");
+			installFakeLsp((message, server) => {
+				if (message.method === "initialize") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+				} else if (message.method === "shutdown") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					server.exit(0);
+				}
+			});
+			const serverConfig: ServerConfig = { command: "silent-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { silent: serverConfig },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["silent", serverConfig]]);
+			const tool = new LspTool(makeLspSession(tempDir.path()));
+			await expect(
+				tool.execute("diagnostics-timeout", { action: "diagnostics", file: targetFile, timeout: 1 }),
+			).rejects.toThrow(/LSP server startup exceeded the 5s call timeout/);
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	}, 10_000);
+
+	it("reports diagnostics timeout when project loads without publishing", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-diagnostics-no-publish-");
+		try {
+			await initTheme();
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "export const target = 1;\n");
+			installFakeLsp((message, server) => {
+				if (message.method === "initialize") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+					server.send({
+						jsonrpc: "2.0",
+						method: "$/progress",
+						params: { token: "workspace", value: { kind: "begin" } },
+					});
+					server.send({
+						jsonrpc: "2.0",
+						method: "$/progress",
+						params: { token: "workspace", value: { kind: "end" } },
+					});
+				} else if (message.method === "shutdown") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					server.exit(0);
+				}
+			});
+			const serverConfig: ServerConfig = { command: "silent-lsp", fileTypes: ["ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { silent: serverConfig },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["silent", serverConfig]]);
+			const tool = new LspTool(makeLspSession(tempDir.path()));
+			await expect(
+				tool.execute("diagnostics-no-publish", { action: "diagnostics", file: targetFile, timeout: 1 }),
+			).rejects.toThrow(/LSP diagnostics timed out after \d+ms/);
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	}, 10_000);
+	it("preserves fast TypeScript diagnostics near the call deadline", async () => {
+		const cases = [
+			{ startupDelayMs: 4_850, expectedError: false },
+			{ startupDelayMs: 4_920, expectedError: true },
+		] as const;
+		for (const { startupDelayMs, expectedError } of cases) {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-near-deadline-");
+			vi.useFakeTimers();
+			try {
+				await initTheme();
+				const targetFile = path.join(tempDir.path(), "target.ts");
+				await Bun.write(targetFile, "export const value: string = 42;\n");
+				installFakeLsp(async (message, server) => {
+					if (message.method === "initialize") {
+						vi.advanceTimersByTime(startupDelayMs);
+						await Promise.resolve();
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								body: [
+									{
+										message: "Type mismatch",
+										startLocation: { line: 1, offset: 14 },
+										endLocation: { line: 1, offset: 19 },
+										category: "error",
+										code: 2322,
+									},
+								],
+							},
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const serverConfig: ServerConfig = {
+					command: "typescript-language-server",
+					fileTypes: ["ts"],
+					rootMarkers: [],
+				};
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: serverConfig },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", serverConfig]]);
+				const outcome = new LspTool(makeLspSession(tempDir.path())).execute("near-deadline", {
+					action: "diagnostics",
+					file: targetFile,
+					timeout: 1,
+				});
+				if (expectedError) {
+					await expect(outcome).rejects.toThrow(/LSP server startup exceeded the 5s call timeout/);
+				} else {
+					expect(textResult(await outcome)).toContain("Type mismatch");
+				}
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				vi.useRealTimers();
+				tempDir.removeSync();
+			}
+		}
+	}, 15_000);
 	it("reports failure when every workspace-symbol server fails (#8387)", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-workspace-symbol-all-fail-");
 		try {
@@ -2363,6 +2511,337 @@ describe("lsp regressions", () => {
 			expect(output).not.toContain('No symbols matching "Target"');
 		} finally {
 			vi.restoreAllMocks();
+			tempDir.removeSync();
+		}
+	});
+	it("preserves diagnostics when a co-server times out", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-partial-timeout-");
+		try {
+			await initTheme();
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "export const value: string = 42;\n");
+			installFakeLsp((message, server) => {
+				if (message.method === "initialize") {
+					server.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+					});
+				} else if (message.method === "workspace/executeCommand") {
+					server.send({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: {
+							body: [
+								{
+									message: "Type mismatch",
+									startLocation: { line: 1, offset: 14 },
+									endLocation: { line: 1, offset: 19 },
+									category: "error",
+									code: 2322,
+								},
+							],
+						},
+					});
+				} else if (message.method === "shutdown") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					server.exit(0);
+				}
+			});
+			const slowConfig: ServerConfig = { command: "slow-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			const typescriptConfig: ServerConfig = {
+				command: "typescript-language-server",
+				fileTypes: [".ts"],
+				rootMarkers: [],
+			};
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { typescript: typescriptConfig, slow: slowConfig },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([
+				["slow", slowConfig],
+				["typescript", typescriptConfig],
+			]);
+			const client = await lspClient.getOrCreateClient(typescriptConfig, tempDir.path());
+			vi.spyOn(lspClient, "getOrCreateClient").mockImplementation(async config => {
+				if (config.command === "slow-lsp") throw new DiagnosticsTimeoutError("slow", 100);
+				return client;
+			});
+			// The timeout server is injected through the normal per-server failure path; TS diagnostics must survive it.
+			const result = await new LspTool(makeLspSession(tempDir.path())).execute("partial-timeout", {
+				action: "diagnostics",
+				file: targetFile,
+				timeout: 5,
+			});
+			expect(textResult(result)).toContain("Type mismatch");
+			expect(textResult(result)).toContain("some servers failed");
+			expect(textResult(result)).toContain("timed out: slow");
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+	it("keeps earlier glob diagnostics after the call budget is exhausted", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-budget-glob-");
+		vi.useFakeTimers();
+		try {
+			await initTheme();
+			const files = Array.from({ length: 3 }, (_, index) => path.join(tempDir.path(), `f${index}.ts`));
+			await Promise.all(files.map(file => Bun.write(file, "const value: string = 42;\n")));
+			const config: ServerConfig = { command: "slow-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: { slow: config }, idleTimeoutMs: undefined });
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["slow", config]]);
+			// Bun.Glob.scan yields directory-entry order; pin it so the budget lands on f1.
+			vi.spyOn(lspUtils, "resolveDiagnosticTargets").mockResolvedValue({
+				matches: ["f0.ts", "f1.ts", "f2.ts"],
+				truncated: false,
+			});
+			let targetIndex = 0;
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue({
+				name: "slow",
+				config,
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				serverCapabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+			} as unknown as LspClient);
+			vi.spyOn(lspClient, "refreshFile").mockImplementation(async () => {
+				if (targetIndex++ === 1) vi.advanceTimersByTime(4_950);
+			});
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+				body: [
+					{
+						message: "A error",
+						startLocation: { line: 1, offset: 1 },
+						endLocation: { line: 1, offset: 2 },
+						category: "error",
+						code: 7001,
+					},
+				],
+			});
+			const result = await new LspTool(makeLspSession(tempDir.path())).execute("budget-glob", {
+				action: "diagnostics",
+				file: "*.ts",
+				timeout: 5,
+			});
+			const output = textResult(result);
+			expect(output).toContain("f0.ts: 1 error(s)");
+			expect(output).toContain("all language servers failed (slow)");
+			expect(output).toContain("f1.ts");
+			expect(output).toContain("f2.ts");
+		} finally {
+			vi.restoreAllMocks();
+			vi.useRealTimers();
+			tempDir.removeSync();
+		}
+	});
+
+	it("keeps late co-server diagnostics when the next server misses the budget", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-budget-coserver-");
+		vi.useFakeTimers();
+		try {
+			await initTheme();
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "const value: string = 42;\n");
+			const first: ServerConfig = { command: "late-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			const second: ServerConfig = { command: "other-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { late: first, other: second },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([
+				["late", first],
+				["other", second],
+			]);
+			vi.spyOn(lspClient, "getOrCreateClient").mockImplementation(async config => {
+				if (config.command === "other-lsp") {
+					vi.advanceTimersByTime(4_950);
+					return { name: "other", config, diagnosticsVersion: 0, openFiles: new Map() } as unknown as LspClient;
+				}
+				return {
+					name: "late",
+					config,
+					diagnosticsVersion: 0,
+					openFiles: new Map(),
+					serverCapabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+				} as unknown as LspClient;
+			});
+			vi.spyOn(lspClient, "refreshFile").mockImplementation(async () => {});
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+				body: [
+					{
+						message: "A error",
+						startLocation: { line: 1, offset: 1 },
+						endLocation: { line: 1, offset: 2 },
+						category: "error",
+						code: 7001,
+					},
+				],
+			});
+			const result = await new LspTool(makeLspSession(tempDir.path())).execute("budget-coserver", {
+				action: "diagnostics",
+				file: targetFile,
+				timeout: 5,
+			});
+			const output = textResult(result);
+			expect(output).toContain("A error");
+			expect(output).toContain("timed out: other");
+		} finally {
+			vi.restoreAllMocks();
+			vi.useRealTimers();
+			tempDir.removeSync();
+		}
+	});
+
+	it("keeps earlier diagnostics when a later server hits the hard deadline", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-hard-deadline-");
+		try {
+			await initTheme();
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "const value: string = 42;\n");
+			const first: ServerConfig = { command: "instant-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			const second: ServerConfig = { command: "blocked-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { instant: first, blocked: second },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([
+				["instant", first],
+				["blocked", second],
+			]);
+			vi.spyOn(lspClient, "getOrCreateClient").mockImplementation(async (config, _cwd, _timeout, signal) => {
+				if (config.command === "blocked-lsp") {
+					const blocked = Promise.withResolvers<void>();
+					signal?.addEventListener("abort", () => blocked.reject(new ToolAbortError()), { once: true });
+					await blocked.promise;
+				}
+				return {
+					name: config.command,
+					config,
+					diagnosticsVersion: 0,
+					openFiles: new Map(),
+					serverCapabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+				} as unknown as LspClient;
+			});
+			vi.spyOn(lspClient, "refreshFile").mockImplementation(async () => {});
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+				body: [
+					{
+						message: "A error",
+						startLocation: { line: 1, offset: 1 },
+						endLocation: { line: 1, offset: 2 },
+						category: "error",
+						code: 7001,
+					},
+				],
+			});
+			const result = await new LspTool(makeLspSession(tempDir.path())).execute("hard-deadline", {
+				action: "diagnostics",
+				file: targetFile,
+				timeout: 5,
+			});
+			const output = textResult(result);
+			expect(output).toContain("A error");
+			expect(output).toContain("timed out: blocked");
+			expect(result.details?.success).toBe(true);
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	}, 10_000);
+	it("keeps prior glob diagnostics when a later target reaches the hard deadline", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-hard-deadline-glob-");
+		try {
+			await initTheme();
+			const files = ["f0.ts", "f1.ts", "f2.ts"].map(name => path.join(tempDir.path(), name));
+			await Promise.all(files.map(file => Bun.write(file, "const value: string = 42;\n")));
+			const config: ServerConfig = { command: "glob", fileTypes: [".ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: { glob: config }, idleTimeoutMs: undefined });
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["glob", config]]);
+			// Bun.Glob.scan yields directory-entry order; pin it so the deadline lands on f1.
+			vi.spyOn(lspUtils, "resolveDiagnosticTargets").mockResolvedValue({
+				matches: ["f0.ts", "f1.ts", "f2.ts"],
+				truncated: false,
+			});
+			vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue({
+				name: "glob",
+				config,
+				diagnosticsVersion: 0,
+				openFiles: new Map(),
+				serverCapabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } },
+			} as unknown as LspClient);
+			vi.spyOn(lspClient, "refreshFile").mockImplementation(async (_client, filePath, signal) => {
+				if (path.basename(filePath) !== "f1.ts") return;
+				const blocked = Promise.withResolvers<void>();
+				signal?.addEventListener("abort", () => blocked.reject(new ToolAbortError()), { once: true });
+				await blocked.promise;
+			});
+			vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+				body: [
+					{
+						message: "A error",
+						startLocation: { line: 1, offset: 1 },
+						endLocation: { line: 1, offset: 2 },
+						category: "error",
+						code: 7001,
+					},
+				],
+			});
+			const result = await new LspTool(makeLspSession(tempDir.path())).execute("hard-deadline-glob", {
+				action: "diagnostics",
+				file: "*.ts",
+				timeout: 5,
+			});
+			const output = textResult(result);
+			expect(output).toContain("f0.ts: 1 error(s)");
+			expect(output).toContain("f1.ts: all language servers failed (glob)");
+			expect(output).toContain("f2.ts: all language servers failed (glob)");
+			expect(result.details?.success).toBe(true);
+		} finally {
+			vi.restoreAllMocks();
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	}, 10_000);
+
+	it("keeps startup timeout primary after an earlier server failure", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-startup-primary-");
+		vi.useFakeTimers();
+		try {
+			await initTheme();
+			const targetFile = path.join(tempDir.path(), "target.ts");
+			await Bun.write(targetFile, "export const target = 1;\n");
+			const bad: ServerConfig = { command: "bad-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			const main: ServerConfig = { command: "main-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+				servers: { bad, main },
+				idleTimeoutMs: undefined,
+			});
+			vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([
+				["bad", bad],
+				["main", main],
+			]);
+			vi.spyOn(lspClient, "getOrCreateClient").mockImplementation(async config => {
+				if (config.command === "bad-lsp") throw new Error("spawn failed");
+				return { name: "main", config, diagnosticsVersion: 0, openFiles: new Map() } as unknown as LspClient;
+			});
+			vi.spyOn(lspClient, "waitForProjectLoaded").mockImplementation(async () => {
+				vi.advanceTimersByTime(4_950);
+			});
+			vi.spyOn(lspClient, "refreshFile").mockImplementation(async () => {});
+			await expect(
+				new LspTool(makeLspSession(tempDir.path())).execute("startup-primary", {
+					action: "diagnostics",
+					file: targetFile,
+					timeout: 5,
+				}),
+			).rejects.toThrow("LSP server startup exceeded the 5s call timeout.");
+		} finally {
+			vi.restoreAllMocks();
+			vi.useRealTimers();
+			await lspClient.shutdownAll();
 			tempDir.removeSync();
 		}
 	});
@@ -5200,6 +5679,631 @@ describe("lsp regressions", () => {
 
 				expect(textResult(result)).toContain("Reloaded fake-lsp");
 				expect(await waitForDiagnostics(client, sourceUri, { timeoutMs: 1_000, settleMs: 0 })).toEqual([]);
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("uses TypeScript pull diagnostics when pushes suppress unchanged clean results", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-empty-publish-");
+			try {
+				await initTheme();
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				const siblingPath = path.join(tempDir.path(), "a.ts");
+				const sourceUri = fileToUri(sourcePath);
+				await Bun.write(sourcePath, "export const value: string = 'ok';\n");
+				await Bun.write(siblingPath, "export const sibling = 1;\n");
+				let published = false;
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "begin" } },
+						});
+						server.send({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: { token: "workspace", value: { kind: "end" } },
+						});
+					} else if (message.method === "textDocument/didOpen" || message.method === "textDocument/didChange") {
+						if (!published) {
+							published = true;
+							server.send({
+								jsonrpc: "2.0",
+								method: "textDocument/publishDiagnostics",
+								params: { uri: sourceUri, diagnostics: [] },
+							});
+						}
+					} else if (message.method === "workspace/executeCommand") {
+						const text = fs.readFileSync(sourcePath, "utf8");
+						const diagnostics = text.includes("= 42")
+							? [
+									{
+										message: "Type mismatch",
+										startLocation: { line: 1, offset: 14 },
+										endLocation: { line: 1, offset: 19 },
+										category: "error",
+										code: 2322,
+									},
+								]
+							: [];
+						server.send({ jsonrpc: "2.0", id: message.id, result: { body: diagnostics } });
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const tool = new LspTool(makeLspSession(tempDir.path()));
+				const startedAt = Date.now();
+				const baseline = await tool.execute("diagnostics-baseline", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				const unchanged = await tool.execute("diagnostics-unchanged", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				await Bun.write(sourcePath, "export const value: string = 42;\n");
+				const injected = await tool.execute("diagnostics-injected", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				await Bun.write(sourcePath, "export const value: string = 'ok';\n");
+				const reverted = await tool.execute("diagnostics-reverted", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				const reloaded = await tool.execute("diagnostics-reload", { action: "reload", file: "*", timeout: 5 });
+				const reloadClean = await tool.execute("diagnostics-reload-clean", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				const glob = await tool.execute("diagnostics-glob", { action: "diagnostics", file: "*.ts", timeout: 5 });
+				expect(textResult(baseline)).toBe("OK");
+				expect(textResult(unchanged)).toBe("OK");
+				expect(textResult(injected)).toContain("Type mismatch");
+				expect(textResult(reverted)).toBe("OK");
+				expect(textResult(reloaded)).toContain("Reloaded");
+				expect(textResult(reloadClean)).toBe("OK");
+				expect(textResult(glob)).toContain("a.ts: no issues");
+				expect(textResult(glob)).toContain("target.ts: no issues");
+				expect(Date.now() - startedAt).toBeLessThan(2_000);
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		}, 15_000);
+		it("maps TypeScript pull errors and rejects malformed bodies", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-pull-shape-");
+			try {
+				await initTheme();
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "export const value: string = 42;\n");
+				let malformed = false;
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: malformed
+								? { body: { bad: true } }
+								: {
+										body: [
+											{
+												message: "Type mismatch",
+												startLocation: { line: 1, offset: 14 },
+												endLocation: { line: 1, offset: 19 },
+												category: "error",
+												code: 2322,
+											},
+										],
+									},
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const client = await lspClient.getOrCreateClient(config, tempDir.path());
+				await lspClient.ensureFileOpen(client, sourcePath);
+				const mapped = await requestTypeScriptDiagnostics(client, sourcePath, undefined, 1_000);
+				expect(mapped[0]?.range).toEqual({ start: { line: 0, character: 13 }, end: { line: 0, character: 18 } });
+				expect(mapped[0]?.severity).toBe(1);
+				const tool = new LspTool(makeLspSession(tempDir.path()));
+				const result = await tool.execute("diagnostics-pull-shape", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				expect(textResult(result)).toContain("Type mismatch");
+				malformed = true;
+				const failed = await tool.execute("diagnostics-pull-malformed", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				expect(textResult(failed)).toContain("all language servers failed");
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("retains TypeScript pull diagnostics for code actions", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-pull-code-actions-");
+			try {
+				await initTheme();
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "const value: string = 42;\n");
+				let contextDiagnostics: Diagnostic[] = [];
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								capabilities: {
+									executeCommandProvider: { commands: ["typescript.tsserverRequest"] },
+									codeActionProvider: true,
+								},
+							},
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								body: [
+									{
+										message: "Type mismatch",
+										startLocation: { line: 1, offset: 14 },
+										endLocation: { line: 1, offset: 19 },
+										category: "error",
+										code: 2322,
+									},
+								],
+							},
+						});
+					} else if (message.method === "textDocument/codeAction") {
+						const params = message.params;
+						if (typeof params === "object" && params !== null && "context" in params) {
+							const context = params.context;
+							if (
+								typeof context === "object" &&
+								context !== null &&
+								"diagnostics" in context &&
+								Array.isArray(context.diagnostics)
+							) {
+								contextDiagnostics = context.diagnostics;
+							}
+						}
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: [{ title: "Fix type mismatch", kind: "quickfix" }],
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const client = await lspClient.getOrCreateClient(config, tempDir.path());
+				await lspClient.ensureFileOpen(client, sourcePath);
+				const diagnostics = await requestTypeScriptDiagnostics(client, sourcePath, undefined, 1_000);
+				expect(diagnostics).toHaveLength(1);
+				const result = await new LspTool(makeLspSession(tempDir.path())).execute("pull-code-actions", {
+					action: "code_actions",
+					file: sourcePath,
+					line: 1,
+				});
+				expect(textResult(result)).toContain("Fix type mismatch");
+				expect(contextDiagnostics).toEqual(diagnostics);
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("maps tsserver message categories to error severity", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-message-severity-");
+			try {
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "const value = 1;\n");
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								body: [
+									{
+										message: "Informational diagnostic",
+										startLocation: { line: 1, offset: 1 },
+										endLocation: { line: 1, offset: 6 },
+										category: "message",
+										code: 7000,
+									},
+								],
+							},
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const result = await new LspTool(makeLspSession(tempDir.path())).execute("message-severity", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				expect(textResult(result)).toContain("[error]");
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("filters ignored TypeScript pull diagnostic codes", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-ignored-codes-");
+			try {
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "export const value: string = 42;\n");
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								body: [
+									{
+										message: "ignored",
+										startLocation: { line: 1, offset: 1 },
+										endLocation: { line: 1, offset: 2 },
+										category: "error",
+										code: 2322,
+									},
+								],
+							},
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = {
+					command: "typescript-language-server",
+					fileTypes: [".ts"],
+					rootMarkers: [],
+					settings: { diagnostics: { ignoredCodes: [2322] } },
+				};
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const result = await new LspTool(makeLspSession(tempDir.path())).execute("ignored-code", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				expect(textResult(result)).toBe("OK");
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("retries a TypeScript diagnostics pull superseded by a concurrent refresh", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-concurrent-pulls-");
+			try {
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "export const value: number = 1;\n");
+				let syncedText = "";
+				let holdNextSemanticPull = false;
+				let waitForSecondRefreshSave = false;
+				const firstPullInFlight = Promise.withResolvers<void>();
+				const firstPullGate = Promise.withResolvers<void>();
+				const secondRefreshSaved = Promise.withResolvers<void>();
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: { executeCommandProvider: { commands: ["typescript.tsserverRequest"] } } },
+						});
+					} else if (message.method === "textDocument/didOpen") {
+						const text = (message.params as { textDocument?: { text?: string } } | undefined)?.textDocument?.text;
+						if (typeof text === "string") syncedText = text;
+					} else if (message.method === "textDocument/didChange") {
+						const changes = (message.params as { contentChanges?: Array<{ text?: string }> } | undefined)
+							?.contentChanges;
+						const text = Array.isArray(changes) ? changes[0]?.text : undefined;
+						if (typeof text === "string") syncedText = text;
+					} else if (message.method === "textDocument/didSave") {
+						if (waitForSecondRefreshSave) {
+							waitForSecondRefreshSave = false;
+							secondRefreshSaved.resolve();
+						}
+					} else if (message.method === "workspace/executeCommand") {
+						const args = (message.params as { arguments?: unknown[] } | undefined)?.arguments;
+						const command = Array.isArray(args) ? args[0] : undefined;
+						const snapshotText = syncedText;
+						const sendDiagnosticResult = () => {
+							server.send({
+								jsonrpc: "2.0",
+								id: message.id,
+								result: {
+									body:
+										command === "semanticDiagnosticsSync" && snapshotText.includes("42")
+											? [
+													{
+														message: "Type mismatch",
+														startLocation: { line: 1, offset: 14 },
+														endLocation: { line: 1, offset: 19 },
+														category: "error",
+														code: 2322,
+													},
+												]
+											: [],
+								},
+							});
+						};
+						if (command === "semanticDiagnosticsSync" && holdNextSemanticPull) {
+							holdNextSemanticPull = false;
+							firstPullInFlight.resolve();
+							void firstPullGate.promise.then(sendDiagnosticResult);
+						} else {
+							queueMicrotask(sendDiagnosticResult);
+						}
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const tool = new LspTool(makeLspSession(tempDir.path()));
+				await tool.execute("warmup-diag", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				holdNextSemanticPull = true;
+				const firstPromise = tool.execute("concurrent-diag-1", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				await firstPullInFlight.promise;
+				await Bun.write(sourcePath, "export const value: string = 42;\n");
+				waitForSecondRefreshSave = true;
+				const secondPromise = tool.execute("concurrent-diag-2", {
+					action: "diagnostics",
+					file: sourcePath,
+					timeout: 5,
+				});
+				await secondRefreshSaved.promise;
+				firstPullGate.resolve();
+				const [first, second] = await Promise.all([firstPromise, secondPromise]);
+				expect(textResult(first)).toContain("Type mismatch");
+				expect(textResult(second)).toContain("Type mismatch");
+			} finally {
+				vi.restoreAllMocks();
+				await lspClient.shutdownAll();
+				tempDir.removeSync();
+			}
+		});
+		it("commits timed-out writes and reconciles before deferred TypeScript pull", async () => {
+			const tempDir = TempDir.createSync("@omp-lsp-typescript-deferred-timeout-");
+			const originalAbortTimeout = AbortSignal.timeout;
+			let operationTimeout = new AbortController();
+			try {
+				const sourcePath = path.join(tempDir.path(), "target.ts");
+				await Bun.write(sourcePath, "export const value = 1;\n");
+				let syncedText = "";
+				let abortDuringFormatting = false;
+				installFakeLsp((message, server) => {
+					if (message.method === "initialize") {
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								capabilities: {
+									executeCommandProvider: { commands: ["typescript.tsserverRequest"] },
+									documentFormattingProvider: true,
+								},
+							},
+						});
+					} else if (message.method === "textDocument/didOpen") {
+						const text = (message.params as { textDocument?: { text?: string } } | undefined)?.textDocument?.text;
+						if (typeof text === "string") syncedText = text;
+					} else if (message.method === "textDocument/didChange") {
+						const changes = (message.params as { contentChanges?: Array<{ text?: string }> } | undefined)
+							?.contentChanges;
+						const text = Array.isArray(changes) ? changes[0]?.text : undefined;
+						if (typeof text === "string") syncedText = text;
+					} else if (message.method === "textDocument/formatting") {
+						if (abortDuringFormatting) {
+							setImmediate(() => operationTimeout.abort());
+							return;
+						}
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: [
+								{
+									range: {
+										start: { line: 0, character: 0 },
+										end: { line: 1, character: 0 },
+									},
+									newText: "export const value: string = 42;\n",
+								},
+							],
+						});
+					} else if (message.method === "workspace/executeCommand") {
+						const args = (message.params as { arguments?: unknown[] } | undefined)?.arguments;
+						const command = Array.isArray(args) ? args[0] : undefined;
+						const diskText = fs.existsSync(sourcePath) ? fs.readFileSync(sourcePath, "utf8") : "";
+						const hasCommittedAndSyncedError =
+							command === "semanticDiagnosticsSync" && diskText.includes("42") && syncedText.includes("42");
+						server.send({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: {
+								body: hasCommittedAndSyncedError
+									? [
+											{
+												message: "Type mismatch",
+												startLocation: { line: 1, offset: 14 },
+												endLocation: { line: 1, offset: 19 },
+												category: "error",
+												code: 2322,
+											},
+										]
+									: [],
+							},
+						});
+					} else if (message.method === "shutdown") {
+						server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					} else if (message.method === "exit") {
+						server.exit(0);
+					}
+				});
+				const config: ServerConfig = { command: "typescript-language-server", fileTypes: [".ts"], rootMarkers: [] };
+				vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+					servers: { typescript: config },
+					idleTimeoutMs: undefined,
+				});
+				vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["typescript", config]]);
+				const client = await lspClient.getOrCreateClient(config, tempDir.path());
+				await lspClient.ensureFileOpen(client, sourcePath);
+				const originalSyncContent = lspClient.syncContent;
+				vi.spyOn(lspClient, "syncContent").mockImplementation(async (targetClient, filePath, content, signal) => {
+					if (content.includes("42")) {
+						operationTimeout.abort();
+						signal?.throwIfAborted();
+					}
+					await originalSyncContent(targetClient, filePath, content, signal);
+				});
+				vi.spyOn(AbortSignal, "timeout").mockImplementation(ms =>
+					ms === 5_000 && !operationTimeout.signal.aborted ? operationTimeout.signal : originalAbortTimeout(ms),
+				);
+				const awaitWithDeadline = <T>(promise: Promise<T>): Promise<T> => {
+					const deadline = Promise.withResolvers<never>();
+					originalAbortTimeout(2_000).addEventListener(
+						"abort",
+						() => deadline.reject(new Error("Timed out waiting for deferred diagnostics")),
+						{ once: true },
+					);
+					return Promise.race([promise, deadline.promise]);
+				};
+				const writethrough = createLspWritethrough(tempDir.path(), {
+					enableFormat: true,
+					enableDiagnostics: true,
+				});
+				abortDuringFormatting = true;
+				const formatTimedOutDeferred = Promise.withResolvers<FileDiagnosticsResult>();
+				const formatTimedOutInline = await writethrough(
+					sourcePath,
+					"export const value = 1;\n",
+					undefined,
+					undefined,
+					undefined,
+					() => ({
+						onDeferredDiagnostics: result => formatTimedOutDeferred.resolve(result),
+						signal: new AbortController().signal,
+						finalize: () => {},
+					}),
+				);
+				expect(formatTimedOutInline.diagnostics).toBeUndefined();
+				const formatLateResult = await awaitWithDeadline(formatTimedOutDeferred.promise);
+				expect(formatLateResult.errored).toBe(false);
+				expect(formatLateResult.messages).toEqual([]);
+
+				abortDuringFormatting = false;
+				operationTimeout = new AbortController();
+				const deferred = Promise.withResolvers<FileDiagnosticsResult>();
+				const inline = await writethrough(
+					sourcePath,
+					"export const value = 1;\n",
+					undefined,
+					undefined,
+					undefined,
+					() => ({
+						onDeferredDiagnostics: result => deferred.resolve(result),
+						signal: new AbortController().signal,
+						finalize: () => {},
+					}),
+				);
+				expect(inline.diagnostics).toBeUndefined();
+				const lateResult = await awaitWithDeadline(deferred.promise);
+				expect(lateResult.errored).toBe(true);
+				expect(lateResult.messages.some(message => message.includes("Type mismatch"))).toBe(true);
 			} finally {
 				vi.restoreAllMocks();
 				await lspClient.shutdownAll();

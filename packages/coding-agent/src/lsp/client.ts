@@ -1269,69 +1269,108 @@ export function endPendingDiskWrite(filePath: string): void {
 }
 
 /**
+ * Serialize per-file LSP document mutations (open, reconcile, sync, refresh)
+ * for a given client and file path.
+ */
+async function withFileOperationLock<T>(
+	client: LspClient,
+	filePath: string,
+	signal: AbortSignal | undefined,
+	fn: () => Promise<T>,
+): Promise<T> {
+	throwIfAborted(signal);
+	const uri = fileToUri(filePath);
+	const lockKey = `${client.name}:${uri}`;
+
+	while (true) {
+		const existingLock = fileOperationLocks.get(lockKey);
+		if (!existingLock) break;
+		await untilAborted(signal, () => existingLock);
+	}
+
+	const { promise: lockPromise, resolve: releaseLock } = Promise.withResolvers<void>();
+	fileOperationLocks.set(lockKey, lockPromise);
+	try {
+		throwIfAborted(signal);
+		return await fn();
+	} finally {
+		if (fileOperationLocks.get(lockKey) === lockPromise) {
+			fileOperationLocks.delete(lockKey);
+		}
+		releaseLock();
+	}
+}
+
+export function hasPendingFileOperation(client: LspClient, filePath: string): boolean {
+	const uri = fileToUri(filePath);
+	return fileOperationLocks.has(`${client.name}:${uri}`);
+}
+
+export async function waitForPendingFileOperation(
+	client: LspClient,
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	throwIfAborted(signal);
+	const uri = fileToUri(filePath);
+	const lockKey = `${client.name}:${uri}`;
+	while (true) {
+		const existingLock = fileOperationLocks.get(lockKey);
+		if (!existingLock) return;
+		await untilAborted(signal, () => existingLock);
+	}
+}
+
+async function ensureFileOpenUnlocked(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
+	const uri = fileToUri(filePath);
+	if (client.openFiles.has(uri)) {
+		return;
+	}
+
+	let content: string;
+	try {
+		content = await readTextFromDisk(filePath);
+		throwIfAborted(signal);
+	} catch (err) {
+		if (isEnoent(err)) return;
+		throw err;
+	}
+	const languageId = client.config.languageId ?? detectLanguageId(filePath);
+	throwIfAborted(signal);
+
+	await sendNotification(
+		client,
+		"textDocument/didOpen",
+		{
+			textDocument: {
+				uri,
+				languageId,
+				version: 1,
+				text: content,
+			},
+		},
+		signal,
+	);
+	client.openFiles.set(uri, { version: 1, languageId, syncedHash: documentSignature(content) });
+	client.lastActivity = Date.now();
+}
+
+/**
  * Ensure a file is opened in the LSP client.
  * Sends didOpen notification if the file is not already tracked.
  */
 export async function ensureFileOpen(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
 	throwIfAborted(signal);
 	const uri = fileToUri(filePath);
-	const lockKey = `${client.name}:${uri}`;
 
 	// Check if file is already open
 	if (client.openFiles.has(uri)) {
 		return;
 	}
 
-	// Check if another operation is already opening this file
-	const existingLock = fileOperationLocks.get(lockKey);
-	if (existingLock) {
-		await untilAborted(signal, () => existingLock);
-		return;
-	}
-
-	// Lock and open file
-	const openPromise = (async () => {
-		throwIfAborted(signal);
-		// Double-check after acquiring lock
-		if (client.openFiles.has(uri)) {
-			return;
-		}
-
-		let content: string;
-		try {
-			content = await readTextFromDisk(filePath);
-			throwIfAborted(signal);
-		} catch (err) {
-			if (isEnoent(err)) return;
-			throw err;
-		}
-		const languageId = client.config.languageId ?? detectLanguageId(filePath);
-		throwIfAborted(signal);
-
-		await sendNotification(
-			client,
-			"textDocument/didOpen",
-			{
-				textDocument: {
-					uri,
-					languageId,
-					version: 1,
-					text: content,
-				},
-			},
-			signal,
-		);
-
-		client.openFiles.set(uri, { version: 1, languageId, syncedHash: documentSignature(content) });
-		client.lastActivity = Date.now();
-	})();
-
-	fileOperationLocks.set(lockKey, openPromise);
-	try {
-		await openPromise;
-	} finally {
-		fileOperationLocks.delete(lockKey);
-	}
+	await withFileOperationLock(client, filePath, signal, async () => {
+		await ensureFileOpenUnlocked(client, filePath, signal);
+	});
 }
 
 /**
@@ -1358,11 +1397,6 @@ export async function reconcileFileFromDisk(
 ): Promise<boolean> {
 	throwIfAborted(signal);
 	const uri = fileToUri(filePath);
-	if (!client.openFiles.has(uri)) {
-		await ensureFileOpen(client, filePath, signal);
-		return false;
-	}
-
 	// An in-flight OMP write has already synced newer (possibly formatted) text to
 	// the server ahead of committing it to disk; the on-disk file is the stale side,
 	// so reconciling from it would clobber the overlay. Leave it to the write.
@@ -1370,35 +1404,35 @@ export async function reconcileFileFromDisk(
 		return false;
 	}
 
-	const lockKey = `${client.name}:${uri}`;
-	const existingLock = fileOperationLocks.get(lockKey);
-	if (existingLock) {
-		await untilAborted(signal, () => existingLock);
+	if (!client.openFiles.has(uri)) {
+		await withFileOperationLock(client, filePath, signal, async () => {
+			if (pendingDiskWrites.has(uri)) return;
+			await ensureFileOpenUnlocked(client, filePath, signal);
+		});
+		return false;
 	}
 
-	let didChange = false;
-	const reconcilePromise = (async () => {
-		throwIfAborted(signal);
+	return await withFileOperationLock(client, filePath, signal, async () => {
+		if (pendingDiskWrites.has(uri)) return false;
 		const info = client.openFiles.get(uri);
 		if (!info) {
-			await ensureFileOpen(client, filePath, signal);
-			return;
+			await ensureFileOpenUnlocked(client, filePath, signal);
+			return false;
 		}
-
 		let content: string;
 		try {
 			content = await readTextFromDisk(filePath);
 			throwIfAborted(signal);
 		} catch (err) {
-			if (isEnoent(err)) return;
+			if (isEnoent(err)) return false;
 			throw err;
 		}
 
 		// Re-check after the (awaited) disk read: a write may have started and
 		// synced its overlay in the meantime, making this disk snapshot stale.
-		if (pendingDiskWrites.has(uri)) return;
+		if (pendingDiskWrites.has(uri)) return false;
 		const signature = documentSignature(content);
-		if (signature === info.syncedHash) return;
+		if (signature === info.syncedHash) return false;
 
 		// Drop cached diagnostics computed against the stale document before the
 		// server recomputes them for the reconciled content.
@@ -1416,16 +1450,8 @@ export async function reconcileFileFromDisk(
 		);
 		info.syncedHash = signature;
 		client.lastActivity = Date.now();
-		didChange = true;
-	})();
-
-	fileOperationLocks.set(lockKey, reconcilePromise);
-	try {
-		await reconcilePromise;
-	} finally {
-		fileOperationLocks.delete(lockKey);
-	}
-	return didChange;
+		return true;
+	});
 }
 
 /**
@@ -1480,15 +1506,7 @@ export async function syncContent(
 	signal?: AbortSignal,
 ): Promise<void> {
 	const uri = fileToUri(filePath);
-	const lockKey = `${client.name}:${uri}`;
-	throwIfAborted(signal);
-
-	const existingLock = fileOperationLocks.get(lockKey);
-	if (existingLock) {
-		await untilAborted(signal, () => existingLock);
-	}
-
-	const syncPromise = (async () => {
+	await withFileOperationLock(client, filePath, signal, async () => {
 		// Clear stale diagnostics before syncing new content
 		client.diagnostics.delete(uri);
 
@@ -1529,14 +1547,7 @@ export async function syncContent(
 		);
 		info.syncedHash = documentSignature(content);
 		client.lastActivity = Date.now();
-	})();
-
-	fileOperationLocks.set(lockKey, syncPromise);
-	try {
-		await syncPromise;
-	} finally {
-		fileOperationLocks.delete(lockKey);
-	}
+	});
 }
 
 /**
@@ -1632,33 +1643,17 @@ export async function notifyWorkspaceWatchedFiles(
 	}
 }
 
-/**
- * Refresh a file in the LSP client.
- * Increments version, sends didChange and didSave notifications.
- */
+/** Refresh a file in the LSP client. Increments version, sends didChange and didSave notifications. */
 export async function refreshFile(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
-	throwIfAborted(signal);
 	const uri = fileToUri(filePath);
-	const lockKey = `${client.name}:${uri}`;
-
-	const existingLock = fileOperationLocks.get(lockKey);
-	if (existingLock) {
-		await untilAborted(signal, () => existingLock);
-	}
-
-	const refreshPromise = (async () => {
-		throwIfAborted(signal);
-		// Drop cached diagnostics for this URI before asking the server to recompute.
-		// Otherwise an unrelated publishDiagnostics notification can advance the global
-		// diagnostics version and cause waiters to accept stale unversioned diagnostics.
+	await withFileOperationLock(client, filePath, signal, async () => {
 		client.diagnostics.delete(uri);
 		const info = client.openFiles.get(uri);
 
 		if (!info) {
-			await ensureFileOpen(client, filePath, signal);
+			await ensureFileOpenUnlocked(client, filePath, signal);
 			return;
 		}
-
 		let content: string;
 		try {
 			content = await readTextFromDisk(filePath);
@@ -1667,6 +1662,7 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 			if (isEnoent(err)) return;
 			throw err;
 		}
+		const signature = documentSignature(content);
 		const version = ++info.version;
 		throwIfAborted(signal);
 
@@ -1688,16 +1684,9 @@ export async function refreshFile(client: LspClient, filePath: string, signal?: 
 			signal,
 		);
 
-		info.syncedHash = documentSignature(content);
+		info.syncedHash = signature;
 		client.lastActivity = Date.now();
-	})();
-
-	fileOperationLocks.set(lockKey, refreshPromise);
-	try {
-		await refreshPromise;
-	} finally {
-		fileOperationLocks.delete(lockKey);
-	}
+	});
 }
 
 async function waitForExit(client: LspClient, timeoutMs: number): Promise<boolean> {
@@ -1767,6 +1756,15 @@ export async function shutdownClient(key: string): Promise<boolean> {
 
 /** Default timeout for LSP requests when no abort signal is provided (30 seconds) */
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+export class LspRequestTimeoutError extends Error {
+	constructor(
+		readonly method: string,
+		readonly timeoutMs: number,
+	) {
+		super(`LSP request ${method} timed out after ${timeoutMs}ms`);
+		this.name = "LspRequestTimeoutError";
+	}
+}
 
 /**
  * Send an LSP request and wait for response.
@@ -1828,7 +1826,7 @@ export async function sendRequest(
 			if (client.pendingRequests.has(id)) {
 				client.pendingRequests.delete(id);
 				void sendNotification(client, "$/cancelRequest", { id }).catch(() => {});
-				const err = new Error(`LSP request ${method} timed out after ${effectiveTimeoutMs}ms`);
+				const err = new LspRequestTimeoutError(method, effectiveTimeoutMs);
 				cleanup();
 				reject(err);
 			}
