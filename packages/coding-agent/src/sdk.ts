@@ -4184,9 +4184,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// while the prompt kept guidance for tools the session cannot
 				// call. An unrelated deny matches no owned tool, so every server
 				// keeps its instructions — identical outcome, one code path.
-				const scopeTargetsMcp = toolScope.restricted;
+				const scopeRestricted = toolScope.restricted;
 				let scopedInServerNames: Set<string> | undefined;
-				if (scopeTargetsMcp) {
+				if (scopeRestricted) {
 					scopedInServerNames = new Set();
 					// xd://-mounted MCP tools leave `toolNames` (presentation moves to
 					// `mountedNames`) while staying in the canonical `tools` map, so the

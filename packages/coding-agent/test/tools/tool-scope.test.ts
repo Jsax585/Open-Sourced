@@ -325,6 +325,19 @@ describe("ToolScope", () => {
 		expect(denyScope.deniesServer("foo")).toBe(true);
 		expect(denyScope.deniesServer("foo_bar")).toBe(false);
 	});
+	test("bare 3+-star denies blanket tools and servers like * and **", () => {
+		// `***` strips every tool through glob matching, so the blanket and
+		// server predicates must recognize the star run — otherwise tools go
+		// while resource-only servers keep listable resources and instructions.
+		const scope = new ToolScope({ disallowedTools: ["***"] });
+		expect(scope.isDenied("read")).toBe(true);
+		expect(scope.deniesAllTools).toBe(true);
+		expect(scope.deniesServer("any")).toBe(true);
+		const mcpScope = new ToolScope({ disallowedTools: ["mcp__***"] });
+		expect(mcpScope.isDenied("mcp__db_q")).toBe(true);
+		expect(mcpScope.deniesServer("db")).toBe(true);
+		expect(mcpScope.deniesAllTools).toBe(false);
+	});
 
 	test("deny-side alias resolution requires the declared owning server", () => {
 		// `mcp__foo__bar_query` (Claude spelling: server `foo`, tool `bar_query`)

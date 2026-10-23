@@ -67,14 +67,24 @@ export function expandBraceAlternatives(pattern: string): string[] {
 	return [pattern];
 }
 
+/** A bare star run (`*`, `**`, `***`, …) matches every name, whatever its spelling. */
+export function isBlanketPattern(pattern: string): boolean {
+	return /^\*+$/.test(pattern);
+}
+
+/** A bare `mcp__` star run (`mcp__*`, `mcp__**`, …) matches every MCP tool. */
+export function isMcpBlanketPattern(pattern: string): boolean {
+	return /^mcp__\*+$/.test(pattern);
+}
+
 /** Compile a declarative name list once; matching is sync and allocation-light. */
 export function compileNamePatterns(patterns: Iterable<string>): NamePatternSet {
 	const declared = Array.from(new Set(patterns));
 	const entries = Array.from(new Set(declared.flatMap(expandBraceAlternatives)));
-	const blanket = entries.includes("*") || entries.includes("**");
+	const blanket = entries.some(isBlanketPattern);
 	const compiled: { pattern: string; glob?: Bun.Glob }[] = [];
 	for (const pattern of entries) {
-		if (pattern === "*" || pattern === "**") continue;
+		if (isBlanketPattern(pattern)) continue;
 		compiled.push({
 			pattern,
 			glob: hasGlobChars(pattern) ? new Bun.Glob(pattern.startsWith("!") ? `\\${pattern}` : pattern) : undefined,

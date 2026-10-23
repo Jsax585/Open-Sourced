@@ -4316,7 +4316,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const skipPythonPreflight = toolNames === undefined ? false : !declarationGrants("eval");
+	const skipPythonPreflight = !declarationGrants("eval");
 
 	const completionProbe = isCompletionProbeEnabled(settings, parentDepth);
 	const monitor = createSubagentRunMonitor({

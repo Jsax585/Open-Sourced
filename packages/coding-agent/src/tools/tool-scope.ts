@@ -7,7 +7,7 @@ import {
 	mcpWildcardServerSegment,
 	normalizeToolNames,
 } from "./builtin-names";
-import { compileNamePatterns, hasGlobChars, type NamePatternSet } from "./name-patterns";
+import { compileNamePatterns, hasGlobChars, isMcpBlanketPattern, type NamePatternSet } from "./name-patterns";
 
 /**
  * Declaration inputs for constructing a {@link ToolScope}.
@@ -269,7 +269,7 @@ export class ToolScope {
 	/** Whether a whole MCP server is denied by name (`*`, `mcp__*`, or `mcp__<server>_*`). */
 	deniesServer(serverName: string): boolean {
 		if (this.#deny.blanket) return true;
-		if (this.#deny.entries.includes("mcp__*") || this.#deny.entries.includes("mcp__**")) return true;
+		if (this.#deny.entries.some(isMcpBlanketPattern)) return true;
 		const ownerSegment = sanitizeNamePart(serverName, "server");
 		for (const entry of this.#denyServerEntries) {
 			if (isWholeServerPattern(entry.pattern, entry.segment) && entry.segmentGlob.match(ownerSegment)) {

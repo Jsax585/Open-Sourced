@@ -1,5 +1,6 @@
 import type { EvalBackendsAllowance } from "../tools/eval-backends";
 import { expandDisallowedTools, expandExecToolAlias, isMCPToolName, isToolDisallowed } from "../tools/builtin-names";
+import { isBlanketPattern, isMcpBlanketPattern } from "../tools/name-patterns";
 import type { AgentDefinition } from "./types";
 
 // Built-in tools whose approval tier is "read" (see tool classes' `approval`).
@@ -46,7 +47,7 @@ export function isReadOnlyAgent(agent: AgentDefinition, evalBackends?: EvalBacke
 	// agent is read-only (it cannot mutate anything). The inherited-tools case
 	// (no disallows, no allowlist) stays non-read-only: unknown inherited tools
 	// keep the fail-safe false.
-	if (patterns.some(pattern => pattern === "*" || pattern === "**")) return true;
+	if (patterns.some(isBlanketPattern)) return true;
 	// No explicit allowlist means full inheritance: the child may inherit
 	// mutating tools, so it is never read-only (fail-safe).
 	if (agent.tools === undefined) return false;
@@ -74,9 +75,7 @@ export function isReadOnlyAgent(agent: AgentDefinition, evalBackends?: EvalBacke
 		// `mcp__<server>_*` pattern is undecidable without `mcpServerName`
 		// (see above) and must not strip the tool here.
 		if (patterns.includes(tool)) return true;
-		return patterns.some(
-			pattern => pattern === "*" || pattern === "**" || pattern === "mcp__*" || pattern === "mcp__**",
-		);
+		return patterns.some(pattern => isBlanketPattern(pattern) || isMcpBlanketPattern(pattern));
 	};
 	const effective = expandExecToolAlias(agent.tools, patterns, evalBackends ?? { python: true, js: true }).filter(
 		tool => !deniedWithoutOwner(tool),
