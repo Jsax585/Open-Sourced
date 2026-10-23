@@ -1,6 +1,6 @@
 import * as http2 from "node:http2";
 import { type } from "@oh-my-pi/omptype";
-import { slugify } from "@oh-my-pi/pi-utils";
+import { logger, slugify } from "@oh-my-pi/pi-utils";
 import { collapseVariants, type EffortVariantFamily, reviewedVariantFamilyId } from "../compat/collapse";
 import { compareRevision, parseRevision } from "../compat/revision";
 import { resolveCatalogAxes, resolveModelPolicy } from "../compat/resolve";
@@ -153,7 +153,10 @@ export async function fetchCursorUsableModels(
 			? []
 			: normalizeCursorModels(parsedUsable.models, options.baseUrl, references);
 	const usableModelIds = usable === null ? undefined : new Set(legacyModels.map(model => model.id));
-	if (!available || available.models.length === 0) return legacyModels;
+	if (!available || available.models.length === 0) {
+		if (!available) logger.warn("Cursor AvailableModels unavailable; using GetUsableModels only");
+		return legacyModels;
+	}
 	const richModels = normalizeRichCursorModels(
 		available.models,
 		usableModelIds,
@@ -561,7 +564,11 @@ function normalizeRichCursorModels(
 		// retention-required model would expose a route every invocation rejects.
 		if (details.requiresDataRetention === true) continue;
 
-		const variants = normalizeRichCursorVariants(details, baseId, usableModelIds);
+		// GetUsableModels lags AvailableModels (new SKUs the IDE already enables):
+		// a model none of whose ids a usable row matches (blocked variants count
+		// as matched) is kept whole; blocked variants are still filtered.
+		const covered = [...collectRichCursorCatalogIds([details])].some(id => usableModelIds?.has(id));
+		const variants = normalizeRichCursorVariants(details, baseId, covered ? usableModelIds : undefined);
 		if (variants.length === 0) continue;
 		// The bare lane id belongs to Cursor's flagged default configuration, so
 		// seed axis defaults from it before falling back to first-seen values;

@@ -8,6 +8,7 @@ import { buildModel } from "../src/build";
 // Import from source, not the package specifier: the workspace `node_modules`
 // copy resolves to the primary checkout, not this worktree.
 import { fetchCursorUsableModels } from "../src/discovery/cursor";
+import { Effort } from "../src/effort";
 import {
 	type AvailableModelsRequest,
 	type AvailableModelsResponse_ModelDetails,
@@ -606,6 +607,63 @@ describe("fetchCursorUsableModels", () => {
 			expect(calculateUncachedInputCost(argon.cost, 1_000_000, argonSwitch)).toBeCloseTo(4 * multiplier, 10);
 		}
 	});
+	it("keeps AvailableModels models the usable list lacks, still honouring per-variant entitlement", async () => {
+		const glm = (name: string, efforts: string[], blocked: string[] = []) =>
+			create(AvailableModelsResponse_ModelDetailsSchema, {
+				name,
+				supportsAgent: true,
+				parameterDefinitions: [
+					create(ModelParameterDefinitionSchema, {
+						id: "reasoning",
+						parameterType: create(ModelParameterDefinition_ModelParameterTypeSchema, {
+							enumParameter: create(ModelParameterDefinition_EnumParameterDefinitionSchema, {
+								values: efforts.map(value =>
+									create(ModelParameterDefinition_EnumParameterDefinition_EnumParameterValueSchema, {
+										value,
+										blockedByAdminAllowlist: blocked.includes(value),
+									}),
+								),
+							}),
+						}),
+					}),
+				],
+				variants: efforts.map(effort =>
+					richVariant(`${name}-${effort}`, { reasoning: effort }, { isDefaultNonMaxConfig: effort === "high" }),
+				),
+			});
+		const usable = create(GetUsableModelsResponseSchema, {
+			models: ["glm-5.2-high", "glm-5.2-max", "admin-blocked-xhigh"].map(modelId =>
+				create(ModelDetailsSchema, { modelId }),
+			),
+		});
+		const available = create(AvailableModelsResponseSchema, {
+			models: [
+				// Usable-covered: only its entitled variants (not `low`) are routed.
+				glm("glm-5.2", ["low", "high", "max"]),
+				// No usable row covers it: kept whole from AvailableModels.
+				glm("glm-5p3-flash", ["low", "high", "max"]),
+				// Usable covers only the admin-blocked variant: still covered, so
+				// the unentitled `low` must not be published.
+				glm("admin-blocked", ["low", "xhigh"], ["xhigh"]),
+			],
+		});
+		const mergedBaseUrl = await startCursorDiscoveryRpcServer({
+			"/agent.v1.AgentService/GetUsableModels": toBinary(GetUsableModelsResponseSchema, usable),
+			"/aiserver.v1.AiService/AvailableModels": toBinary(AvailableModelsResponseSchema, available),
+		});
+
+		const models = await fetchCursorUsableModels({
+			apiKey: "account-token",
+			baseUrl: mergedBaseUrl,
+			timeoutMs: 1_000,
+		});
+		const byId = new Map((models ?? []).map(model => [model.id, model]));
+
+		expect(byId.get("glm-5p3-flash")?.thinking?.efforts).toEqual([Effort.Low, Effort.High, Effort.Max]);
+		expect(byId.get("glm-5.2")?.thinking?.efforts).toEqual([Effort.High, Effort.Max]);
+		expect([...byId.keys()].filter(id => id.startsWith("admin-blocked"))).toEqual([]);
+	});
+
 	it("decodes Cursor's length-delimited vendor metadata", () => {
 		const encoded = Uint8Array.from(Buffer.from("0a0766697874757265d202020801", "hex"));
 		const details = fromBinary(AvailableModelsResponse_ModelDetailsSchema, encoded);
