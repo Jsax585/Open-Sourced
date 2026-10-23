@@ -114,7 +114,7 @@ export interface SessionToolsHost {
 	memoryBackendSession(): MemoryBackendStartOptions["session"];
 	clearInheritedProviderPromptCacheKey(): void;
 	/**
-	 * Host spawn-policy fallback consulted by AgentSession.getSessionSpawns.
+	 * Host spawn-policy ceiling intersected by AgentSession.getSessionSpawns.
 	 * A string is CLI `--spawns` (comma-separated names, `*` = unrestricted);
 	 * `null` = unrestricted.
 	 */
@@ -128,8 +128,6 @@ export interface SessionToolsHost {
 	evalPreludes(): readonly EvalPreludeDefinition[];
 	/** Live user-tagged model agents; candidates for the next base rebuild's advertised snapshot. */
 	sessionAgents(): readonly AgentDefinition[];
-	/** Publishes the current Codex Code Mode tool exposure snapshot for turn metadata; undefined clears it. */
-	setCodeModeNamespacesInfo?(info: unknown): void;
 	/**
 	 * Policy seam for every presentation mutation ({@link SessionTools.setActiveToolsByName},
 	 * {@link SessionTools.setActiveToolPresentation}, MCP/RPC refreshes, late extension

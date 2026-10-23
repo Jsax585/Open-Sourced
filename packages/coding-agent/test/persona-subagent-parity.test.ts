@@ -14,7 +14,7 @@ import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
  * Spawn-inheritance semantics (PR 11004): the persona layer scopes the main
  * agent's own behavior; it does NOT cage spawned descendants. Children are
  * bounded by the ORIGINAL main's BASELINE restriction state (registry ∩
- * cliGrant ∩ sessionToggles — persona excluded) intersected with their own
+ * cliGrant ∩ default-activity — persona excluded) intersected with their own
  * frontmatter. The cap is identical whether the parent reached that state via
  * launch `--agent` or a live `/agent` switch — both funnel through
  * SessionToolPolicy, so parity is structural. The assertions here go through
@@ -79,8 +79,9 @@ function makePersonaSpawnsSession(policy: SessionToolPolicy | undefined): {
 		hasUI: false,
 		settings: Settings.isolated({ "task.maxRecursionDepth": 2 }),
 		getSessionFile: () => null,
-		// Mirrors AgentSession.getSessionSpawns: the persona-owned override wins
-		// when set; otherwise the host config (CLI --spawns) applies.
+		// Mirrors AgentSession.getSessionSpawns with an unrestricted host: the
+		// persona-owned override narrows the host ceiling (here `*`, so it
+		// passes through); otherwise the host config (CLI --spawns) applies.
 		getSessionSpawns: () => personaSpawns ?? "*",
 		setSessionSpawns,
 		getToolPolicy: () => policy,
@@ -353,7 +354,7 @@ describe("subagent spawn inheritance parity", () => {
 	});
 
 	it("cliGrant narrowing counts as baseline restriction and caps the child", () => {
-		// The baseline layer is registry ∩ cliGrant ∩ sessionToggles; a persona
+		// The baseline layer is registry ∩ cliGrant ∩ default-activity; a persona
 		// (even a widening one) must not lift the CLI grant for descendants.
 		const policy = new SessionToolPolicy({
 			toolNames: ["read"],

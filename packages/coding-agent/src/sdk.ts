@@ -2515,6 +2515,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// host getter) — a truthy test here would flip it to `"*"` and the
 			// pre-construction prompt build would advertise unrestricted spawning.
 			getSessionSpawns: () => session?.getSessionSpawns() ?? (options.spawns !== undefined ? options.spawns : "*"),
+			// Live scout availability through AgentSession so description
+			// renderers see persona narrowing without re-deriving it per tool.
+			isScoutSpawnable: () =>
+				session?.isScoutSpawnable() ?? isScoutSpawnable(cfgTaskDisabledAgents.get(settings), options.spawns ?? "*"),
 			getToolPolicy: () => toolPolicy,
 			getSessionAgents: () => session?.getSessionAgents() ?? [],
 			advertisedSessionAgents: () => session?.getAdvertisedSessionAgents() ?? [],
@@ -4954,10 +4958,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agentId: resolvedAgentId,
 			agentKind,
 			providerSessionId: options.providerSessionId,
-			// Host spawn-policy fallback for AgentSession.getSessionSpawns (persona
-			// override wins when set). `""` is a DELIBERATE deny-all
-			// (persisted-revive passes `init.spawns ?? ""` so legacy revived
-			// subagents cannot re-spawn); only null/undefined mean unrestricted.
+			// Host spawn-policy ceiling for AgentSession.getSessionSpawns (the
+			// persona override narrows this, never widens). `""` is a DELIBERATE
+			// deny-all (persisted-revive passes `init.spawns ?? ""` so legacy
+			// revived subagents cannot re-spawn); only null/undefined mean unrestricted.
 			getSessionSpawns: () => options.spawns ?? null,
 			accountPoolScope,
 			providerPromptCacheKeySource,

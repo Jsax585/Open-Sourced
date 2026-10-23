@@ -24,7 +24,7 @@ import { describeLoopCondition } from "../modes/loop-condition";
 import { describeLoopLimitRuntime } from "../modes/loop-limit";
 import type { InteractiveModeContext } from "../modes/types";
 import type { AgentSession } from "../session/agent-session";
-import { createDefaultPersonaModelHooks } from "../session/persona-model-hooks";
+import { createHeadlessPersonaModelHooks } from "../session/persona-model-hooks";
 import { appendPersonaJournalEntry, clearPersonaJournalEntry } from "../session/persisted-persona";
 import { discoverAgents, getAgent } from "../task";
 import type { PersonaExplicitOverrides } from "../session/tool-policy";
@@ -1074,7 +1074,9 @@ async function handleAgentCommandNoName(runtime: SlashCommandRuntime): Promise<S
 		const blocker = personaModeBlocker(session);
 		if (blocker) return usage(blocker, runtime);
 		try {
-			await session.getPersonaRuntime()?.exit(createDefaultPersonaModelHooks(session));
+			await session
+				.getPersonaRuntime()
+				?.exit(createHeadlessPersonaModelHooks(session, text => runtime.output(text)));
 			clearPersonaJournalEntry(session);
 			// Exit reverts the model/thinking/toolset to the pre-persona baseline;
 			// ACP and text-mode clients must see the reverted configuration.
@@ -1112,7 +1114,11 @@ async function handleAgentCommandSwitch(name: string, runtime: SlashCommandRunti
 	const cliGrant = session.getToolPolicy()?.cliGrant ?? null;
 	const explicitOverrides: PersonaExplicitOverrides = cliGrant ? { tools: [...cliGrant] } : {};
 	try {
-		await personaRuntime.enter(agent, explicitOverrides, createDefaultPersonaModelHooks(session));
+		await personaRuntime.enter(
+			agent,
+			explicitOverrides,
+			createHeadlessPersonaModelHooks(session, text => runtime.output(text)),
+		);
 	} catch (error) {
 		return usage(`Persona switch failed: ${errorMessage(error)}`, runtime);
 	}

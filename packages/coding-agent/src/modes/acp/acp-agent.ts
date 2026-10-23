@@ -45,7 +45,6 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-utils/acp";
 import { disableProvider, enableProvider } from "../../capability";
-import { resolveModelOverride } from "../../config/model-resolver";
 import { Settings } from "../../config/settings";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import {
@@ -75,14 +74,14 @@ import {
 	readPersistedAgentPersona,
 	PERSONA_TRANSPARENT_MODES,
 } from "../../session/persisted-persona";
-import { createDefaultPersonaModelHooks, type PersonaModelApplyHooks } from "../../session/persona-model-hooks";
+import { createHeadlessPersonaModelHooks, type PersonaModelApplyHooks } from "../../session/persona-model-hooks";
 import type { UsageStatistics } from "../../session/session-entries";
 import type { SessionInfo as StoredSessionInfo } from "../../session/session-listing";
 import { SessionManager } from "../../session/session-manager";
 import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands, toAcpAvailableCommands } from "../../slash-commands/available-commands";
 import { DEFAULT_STT_MODEL_KEY, STT_MODELS } from "../../stt/models";
-import { type ConfiguredThinkingLevel, AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { AUTO_THINKING, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { DiscoveredAgent, PersonaExplicitOverrides } from "../../session/tool-policy";
 import { refreshAgentDiscovery } from "../../task";
 import { OTHER_OPTION } from "../../tools/ask";
@@ -145,9 +144,6 @@ const ACP_CANCEL_CLEANUP_TIMEOUT_MS = 5_000;
 const ACP_ASYNC_DELIVERY_DRAIN_TIMEOUT_MS = 250;
 const ACP_ASYNC_DELIVERY_DRAIN_MAX_PASSES = 3;
 
-const PERSONA_DEFERRED_NOTICE_TEMPLATE =
-	'Agent "{name}" model switch deferred: mid-turn. Its tools and prompt apply now; the model stays until the turn ends.';
-const PERSONA_RESTORE_DEFERRED_NOTICE_TEMPLATE = "Agent persona cleared: model restore deferred until the turn ends.";
 const PERSONA_GONE_NOTICE_TEMPLATE = 'Agent persona "{name}" is no longer available; session resumed without it.';
 
 /**
@@ -160,78 +156,7 @@ export function createAcpPersonaModelHooks(
 	session: AgentSession,
 	emitNotice: (text: string) => void | Promise<void>,
 ): PersonaModelApplyHooks {
-	const defaultHooks = createDefaultPersonaModelHooks(session);
-	// fw_sA: one session-level deferred slot is flushed at `agent_end`
-	// (#handlePromptEvent). Snapshot the queue as it stands BEFORE this
-	// transaction touches it so a rollback restores the prior owner's entry
-	// instead of deleting it (TUI #pendingModelSwitch parity).
-	const priorPending = session.getDeferredModelRestore?.();
-	// Model/thinking resolution mirrors the TUI's queue channel: the default
-	// hooks resolve the agent's pattern synchronously; a pattern-carried
-	// `:level` suffix rides the same value the non-deferred apply would set.
-	const resolveQueuedSelection = (
-		agent: DiscoveredAgent,
-	): { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined => {
-		if (!agent.model || agent.model.length === 0) {
-			// Thinking-only persona: the flush forwards both halves to
-			// setModelTemporary, which applies a thinking-only change without
-			// touching the model (fo80k).
-			if (agent.thinkingLevel === undefined) return undefined;
-			const current = session.model;
-			return current ? { model: current, thinkingLevel: agent.thinkingLevel } : undefined;
-		}
-		const resolved = resolveModelOverride(agent.model, session.modelRegistry, session.settings);
-		if (!resolved.model) return undefined;
-		const queuedThinking =
-			agent.thinkingLevel ?? (resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined);
-		return { model: resolved.model, thinkingLevel: queuedThinking };
-	};
-	return {
-		...defaultHooks,
-		shouldDeferModelSwitch: () => session.isStreaming,
-		deferModelSwitchWhileStreaming: agent => {
-			// Chained switches (A active, mid-turn enter of modeled B): the
-			// runtime already queued A's pre-persona restore through the exit
-			// channel. B's selection must REPLACE it — leaving A's restore queued
-			// would apply the pre-A model at agent_end while B runs (and B's
-			// model would never land). The notice keeps promising what the queue
-			// now delivers.
-			// j2w merge: a thinking-only selection carries the LIVE model (A's
-			// persona model), so it must keep an already-queued entry's model and
-			// only take over the thinking level — replacing wholesale would swap
-			// A's owed baseline restore for A's persona model.
-			const selection = resolveQueuedSelection(agent);
-			if (selection) {
-				const thinkingOnly = !agent.model || agent.model.length === 0;
-				const prior = thinkingOnly ? session.getDeferredModelRestore?.() : undefined;
-				session.queueDeferredModelRestore?.(
-					prior?.model ?? selection.model,
-					selection.thinkingLevel ?? prior?.thinkingLevel,
-				);
-			}
-			void emitNotice(PERSONA_DEFERRED_NOTICE_TEMPLATE.replace("{name}", agent.name));
-		},
-		deferModelRestoreWhileStreaming: baseline => {
-			// Mid-turn persona exit: queue the pre-persona restore on the
-			// session; `agent_end` applies it, so the advertised turn-end
-			// restore actually lands. A thinking-only persona (or an
-			// unresolvable baseline model) leaves baseline.model undefined —
-			// fall back to the live model (TUI parity) so the thinking-level
-			// half still restores instead of stranding the persona level.
-			const model = baseline.model ?? session.model;
-			if (!model) return;
-			session.queueDeferredModelRestore?.(model, baseline.thinkingLevel);
-			void emitNotice(PERSONA_RESTORE_DEFERRED_NOTICE_TEMPLATE);
-		},
-		// Rollback safety: undo THIS transaction's queue mutation by restoring
-		// the transaction-start entry (not blanket-clearing): a failed chained
-		// switch rolls the runtime back to A, whose own owed switch (or an
-		// earlier successful exit's restore) must survive.
-		onPersonaSwitchFailed: () => {
-			if (priorPending) session.queueDeferredModelRestore?.(priorPending.model, priorPending.thinkingLevel);
-			else session.clearDeferredModelRestore?.();
-		},
-	};
+	return createHeadlessPersonaModelHooks(session, emitNotice);
 }
 
 /**
@@ -2553,14 +2478,16 @@ export class AcpAgent implements Agent {
 				description: "Standard ACP headless mode",
 			},
 		];
-		if (cfgPlanEnabled.get(session.settings)) {
+		// A persona-active session refuses Plan entry (#applyModeChange mirrors
+		// the TUI guard), so don't advertise it: the client would offer a mode
+		// that errors on selection.
+		if (cfgPlanEnabled.get(session.settings) && !session.getToolPolicy?.()?.isPersonaActive()) {
 			modes.push({
 				id: ACP_PLAN_MODE_ID,
 				name: "Plan",
 				description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
 			});
 		}
-		void session;
 		return modes;
 	}
 

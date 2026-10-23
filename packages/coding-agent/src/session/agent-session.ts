@@ -2919,24 +2919,34 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * Effective session spawn policy. The persona-owned override wins when set;
-	 * otherwise the host config getter (CLI `--spawns`) applies.
+	 * Effective session spawn policy. The persona-owned override narrows the
+	 * host config getter (CLI `--spawns`) — it never widens past it, mirroring
+	 * the `--tools` ceiling the enter path serializes into `explicit.tools`.
+	 * A host deny-all (`""`) therefore survives any persona, including one
+	 * declaring `spawns: "*"` (legacy revived subagents stay spawnless).
 	 */
 	getSessionSpawns(): string[] | "*" | null {
-		if (this.#sessionSpawns !== null) return this.#sessionSpawns;
 		const hostSpawns = this.#toolsHost.getSessionSpawns();
-		if (hostSpawns === null || hostSpawns === "*") return hostSpawns ?? "*";
-		if (Array.isArray(hostSpawns)) return hostSpawns;
-		return hostSpawns
-			.split(",")
-			.map(s => s.trim())
-			.filter(Boolean);
+		const host =
+			hostSpawns === null || hostSpawns === "*"
+				? (hostSpawns ?? "*")
+				: Array.isArray(hostSpawns)
+					? hostSpawns
+					: hostSpawns
+							.split(",")
+							.map(s => s.trim())
+							.filter(Boolean);
+		if (this.#sessionSpawns === null) return host;
+		if (this.#sessionSpawns === "*") return host;
+		if (host === "*" || host === null) return this.#sessionSpawns;
+		const allowed = new Set(host);
+		return this.#sessionSpawns.filter(name => allowed.has(name));
 	}
 
 	/**
 	 * Single source of truth for scout availability: `task.disabledAgents`
 	 * ∩ the LIVE persona-aware spawn policy ({@link getSessionSpawns} — the
-	 * persona-owned override wins when set, else the host CLI `--spawns`).
+	 * persona-owned override narrows the host CLI `--spawns`, never widens).
 	 * Every prompt/advisory surface reads THIS, never a construction-time
 	 * `options.spawns` snapshot.
 	 */
@@ -10997,7 +11007,7 @@ export class AgentSession implements SettingsScope {
 				// reports the fresh session unrestricted while the model cannot
 				// actually call anything outside the stale set. Repopulate the
 				// presentation from the policy's now-unbounded effective set
-				// (registry ∩ sessionToggles — no persona, no ceiling).
+				// (registry ∩ default-activity — no persona, no ceiling).
 				this.toolPolicy.clearCliGrantFromJournal();
 				const restored = this.toolPolicy.effectiveSet();
 				await this.setActiveToolPresentation(

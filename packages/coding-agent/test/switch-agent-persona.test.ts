@@ -119,7 +119,7 @@ describe("/agent slash command", () => {
 
 		const result = await executeAcpBuiltinSlashCommand("/agent", slashRuntime);
 
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output.some(line => line.includes("Exit plan mode"))).toBe(true);
 		// Persona untouched; no `none` clear marker ever reached the journal.
 		expect(policy.isPersonaActive()).toBe(true);
@@ -145,7 +145,7 @@ describe("/agent slash command", () => {
 
 		const result = await executeAcpBuiltinSlashCommand("/agent persona-a", slashRuntime);
 
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("no persona runtime");
 	});
 });

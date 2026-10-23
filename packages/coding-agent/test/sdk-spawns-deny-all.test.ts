@@ -57,3 +57,76 @@ describe("createAgentSession empty-string spawns deny-all", () => {
 		}
 	});
 });
+
+describe("AgentSession persona spawn intersect", () => {
+	it("a persona spawns:* never widens past a host deny-all", async () => {
+		const tempDir = `pi-spawns-intersect-${Snowflake.next()}`;
+		fs.mkdirSync(tempDir, { recursive: true });
+		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry: new ModelRegistry(auth),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			spawns: "",
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+		try {
+			expect(session.getSessionSpawns()).toEqual([]);
+			// A persona declaring `spawns: "*"` narrows the host ceiling —
+			// the deny-all survives.
+			session.setSessionSpawns("*");
+			expect(session.getSessionSpawns()).toEqual([]);
+			session.setSessionSpawns(["scout"]);
+			expect(session.getSessionSpawns()).toEqual([]);
+			// Clearing the override returns to the host value.
+			session.setSessionSpawns(null);
+			expect(session.getSessionSpawns()).toEqual([]);
+		} finally {
+			await session.dispose();
+			auth.close();
+			removeSyncWithRetries(tempDir);
+		}
+	});
+
+	it("a persona spawn list narrows (not replaces) a host allowlist", async () => {
+		const tempDir = `pi-spawns-narrow-${Snowflake.next()}`;
+		fs.mkdirSync(tempDir, { recursive: true });
+		const auth = await AuthStorage.create(path.join(tempDir, "auth.db"));
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRegistry: new ModelRegistry(auth),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			spawns: "scout,worker",
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+		});
+		try {
+			expect(session.getSessionSpawns()).toEqual(["scout", "worker"]);
+			session.setSessionSpawns(["scout", "other"]);
+			expect(session.getSessionSpawns()).toEqual(["scout"]);
+			session.setSessionSpawns("*");
+			expect(session.getSessionSpawns()).toEqual(["scout", "worker"]);
+		} finally {
+			await session.dispose();
+			auth.close();
+			removeSyncWithRetries(tempDir);
+		}
+	});
+});

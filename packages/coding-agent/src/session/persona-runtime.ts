@@ -339,7 +339,7 @@ export class PersonaRuntime {
 		this.session.setSessionSpawns(snapshotSpawns(agent.spawns ?? null));
 		this.session.applyPersonaAppendPrompt(agent.systemPrompt);
 		if (deferModel) {
-			hooks.deferModelSwitchWhileStreaming?.(agent);
+			await hooks.deferModelSwitchWhileStreaming?.(agent);
 		} else {
 			await hooks.apply(agent, explicit);
 		}

@@ -84,7 +84,7 @@ import { CollabController } from "../collab/controller";
 import type { CollabHost } from "../collab/host";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { formatModelString, type ResolvedModelRoleValue, resolveModelOverride } from "../config/model-resolver";
+import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings } from "../config/settings";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -156,7 +156,11 @@ import {
 	readPersistedAgentPersona,
 	reconcileSessionPersona,
 } from "../session/persisted-persona";
-import { createDefaultPersonaModelHooks, type PersonaModelApplyHooks } from "../session/persona-model-hooks";
+import {
+	createDefaultPersonaModelHooks,
+	resolveWithDiscoveryRetry,
+	type PersonaModelApplyHooks,
+} from "../session/persona-model-hooks";
 import type { PersonaExplicitOverrides } from "../session/tool-policy";
 import { resolveMarkdownLinkHrefs } from "../internal-urls/hyperlink-targets";
 import type { ResolveContext } from "../internal-urls/index";
@@ -5063,8 +5067,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			try {
 				// j2x: a failed persona switch discarded the primary snapshot but
 				// left the stash behind — the still-active source mode restores
-				// from it.
-				const previousPresentation = this.#planModePreviousToolPresentation ?? this.#personaSwitchRollbackPlan;
+				// from it. Only when no persona is active: under a live persona
+				// the stash holds the SOURCE snapshot the pre-switch hook
+				// deliberately discarded, and replaying it would leak source
+				// restrictions (R3-4).
+				const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
+				const previousPresentation =
+					this.#planModePreviousToolPresentation ?? (personaActive ? undefined : this.#personaSwitchRollbackPlan);
 				if (previousPresentation) {
 					await this.session.restoreNonMCPToolPresentation(
 						previousPresentation.enabled,
@@ -5089,10 +5098,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (this.goalModeEnabled || this.goalModePaused) {
-			// j2x: a failed persona switch discarded the primary snapshot but
-			// left the stash behind — the still-active source mode restores
-			// from it.
-			const goalPreviousTools = this.#goalModePreviousTools ?? this.#personaSwitchRollbackGoal;
+			// j2x: same persona-active gate as the plan path above (R3-4).
+			const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
+			const goalPreviousTools =
+				this.#goalModePreviousTools ?? (personaActive ? undefined : this.#personaSwitchRollbackGoal);
 			if (goalPreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(goalPreviousTools);
 			}
@@ -5343,8 +5352,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#goalModePreviousTools = undefined;
 		const runtime = this.session.getPersonaRuntime();
 		if (!runtime?.policy.isPersonaActive()) {
-			this.#personaSwitchRollbackPlan = undefined;
-			this.#personaSwitchRollbackGoal = undefined;
+			// No source persona to exit — but the mode snapshots above are still
+			// discarded deliberately: the post-switch #clearTransientModeState
+			// would otherwise replay the SOURCE session's snapshot onto the
+			// target session. The stash survives so a failed switch (bash/journal
+			// flush failure below the reconciler) restores the still-active
+			// source mode's presentation from it; a committed switch drops it.
 			return;
 		}
 		try {
@@ -8903,7 +8916,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (!this.#pendingPlanModelSwitch) this.#pendingModelSwitch = undefined;
 			},
 			shouldDeferModelSwitch: () => this.session.isStreaming,
-			deferModelSwitchWhileStreaming: agent => {
+			deferModelSwitchWhileStreaming: async agent => {
 				// A thinking-only persona (thinking set, no model) still queues:
 				// `#pendingModelSwitch` carries `thinkingLevel` alongside `model`
 				// and `flushPendingModelSwitch` forwards both to
@@ -8929,8 +8942,14 @@ export class InteractiveMode implements InteractiveModeContext {
 					}
 					return;
 				}
-				const resolved = resolveModelOverride(agent.model, this.session.modelRegistry, this.session.settings);
-				if (!resolved.model) return;
+				const resolved = await resolveWithDiscoveryRetry(agent.model, this.session);
+				if (!resolved.model) {
+					logger.warn(
+						`Agent persona "${agent.name}": model frontmatter did not resolve; keeping the session model`,
+						{ patterns: agent.model },
+					);
+					return;
+				}
 				// The pattern itself can carry the thinking level (`model: [provider/m:high]`).
 				// The default hooks resolve that suffix in the synchronous apply
 				// (persona-model-hooks.ts j2v); the queue must receive the same value

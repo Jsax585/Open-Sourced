@@ -48,7 +48,6 @@ import type { ToolSession } from "../tools";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SessionToolPolicy } from "./tool-policy";
-import type { PersonaRuntime } from "./persona-runtime";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { SessionManager } from "./session-manager";
 
@@ -409,21 +408,11 @@ export interface AgentSessionConfig {
 	 *
 	 * Ownership: the AgentSession owns this instance once constructed. It is set
 	 * by sdk.ts (`createAgentSessionScoped`) at construction time; PersonaRuntime
-	 * (later stage) reads and mutates it via `enterPersona`/`exitPersona`.
-	 *
-	 * TODO(stage 2+): not yet consumed — stage 1 only wires the seam. The field
-	 * is inert until later stages replace the shadow tool-state machinery.
+	 * reads and mutates it via `enterPersona`/`exitPersona`.
 	 */
 	toolPolicy?: SessionToolPolicy;
 	/**
-	 * Persona runtime owning persona enter/exit/reconcile for this session.
-	 * @internal placeholder — PersonaRuntime is constructed by a later stage;
-	 * the concrete type replaces `unknown` once the runtime module exists.
-	 */
-	personaRuntime?: PersonaRuntime;
-	/** System prompt used by automatic session-title generation. */
-	/**
-	 * Host spawn-policy fallback consulted by the persona-owned
+	 * Host spawn-policy ceiling intersected with the persona-owned
 	 * `AgentSession.setSessionSpawns` override. A string is CLI `--spawns`
 	 * (comma-separated names, `*` = unrestricted); `null` = unrestricted.
 	 * Absent = unrestricted.

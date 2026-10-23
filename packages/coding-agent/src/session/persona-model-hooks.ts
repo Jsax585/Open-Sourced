@@ -32,7 +32,7 @@ export interface PersonaModelApplyHooks {
 	 * Defer a mid-turn persona model switch (ACP semantics: notice + skip,
 	 * tools/prompt still apply immediately). Absent on the default hooks.
 	 */
-	deferModelSwitchWhileStreaming?(agent: DiscoveredAgent): void;
+	deferModelSwitchWhileStreaming?(agent: DiscoveredAgent): void | Promise<void>;
 
 	/**
 	 * Defer a mid-turn persona model RESTORE (exit path): the persona teardown
@@ -89,7 +89,7 @@ export interface ModelBaseline {
  * model, never the persona selector. Missing registry seams (test stubs,
  * registry flavors without discovery) skip straight to the miss.
  */
-async function resolveWithDiscoveryRetry(
+export async function resolveWithDiscoveryRetry(
 	patterns: string[],
 	session: AgentSession,
 ): Promise<{
@@ -173,6 +173,90 @@ export function createDefaultPersonaModelHooks(session: AgentSession): PersonaMo
 			if (thinking !== undefined) {
 				session.setThinkingLevel(thinking);
 			}
+		},
+	};
+}
+
+/**
+ * Headless (ACP/RPC/print) persona-model hooks: mid-turn switches defer
+ * through the session-level deferred slot (flushed at the surface's
+ * `agent_end`), with in-band text notices; everything else falls through to
+ * the shared default hooks. Without this a mid-turn `/agent` throws instead
+ * of deferring — the documented behavior is "tools/prompt now, model at turn
+ * end" on every surface.
+ */
+export function createHeadlessPersonaModelHooks(
+	session: AgentSession,
+	emitNotice: (text: string) => void | Promise<void>,
+): PersonaModelApplyHooks {
+	const defaultHooks = createDefaultPersonaModelHooks(session);
+	const priorPending = session.getDeferredModelRestore?.();
+	const resolveQueuedSelection = async (
+		agent: DiscoveredAgent,
+	): Promise<{ model: Model | undefined; thinkingLevel?: ConfiguredThinkingLevel } | undefined> => {
+		if (!agent.model || agent.model.length === 0) {
+			// Thinking-only persona: the flush forwards both halves to
+			// setModelTemporary, which applies a thinking-only change without
+			// touching the model.
+			if (agent.thinkingLevel === undefined) return undefined;
+			const current = session.model;
+			return current ? { model: current, thinkingLevel: agent.thinkingLevel } : undefined;
+		}
+		const resolved = await resolveWithDiscoveryRetry(agent.model, session);
+		if (!resolved.model) {
+			logger.warn(`Agent persona "${agent.name}": model frontmatter did not resolve; keeping the session model`, {
+				patterns: agent.model,
+			});
+			return undefined;
+		}
+		const queuedThinking =
+			agent.thinkingLevel ?? (resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined);
+		return { model: resolved.model, thinkingLevel: queuedThinking };
+	};
+	return {
+		...defaultHooks,
+		shouldDeferModelSwitch: () => session.isStreaming,
+		deferModelSwitchWhileStreaming: async agent => {
+			// Chained switches (A active, mid-turn enter of modeled B): the
+			// runtime already queued A's pre-persona restore through the exit
+			// channel. B's selection must REPLACE it — leaving A's restore queued
+			// would apply the pre-A model at agent_end while B runs (and B's
+			// model would never land).
+			// Thinking-only selections carry the LIVE model, so they keep an
+			// already-queued entry's model and only take over the thinking
+			// level — replacing wholesale would swap A's owed baseline restore
+			// for A's persona model.
+			const selection = await resolveQueuedSelection(agent);
+			if (selection?.model) {
+				const thinkingOnly = !agent.model || agent.model.length === 0;
+				const prior = thinkingOnly ? session.getDeferredModelRestore?.() : undefined;
+				session.queueDeferredModelRestore?.(
+					prior?.model ?? selection.model,
+					selection.thinkingLevel ?? prior?.thinkingLevel,
+				);
+				void emitNotice(
+					`Agent "${agent.name}" model switch deferred: mid-turn. Its tools and prompt apply now; the model stays until the turn ends.`,
+				);
+			}
+		},
+		deferModelRestoreWhileStreaming: baseline => {
+			// Mid-turn persona exit: queue the pre-persona restore on the
+			// session; `agent_end` applies it. A thinking-only persona (or an
+			// unresolvable baseline model) leaves baseline.model undefined —
+			// fall back to the live model so the thinking-level half still
+			// restores instead of stranding the persona level.
+			const model = baseline.model ?? session.model;
+			if (!model) return;
+			session.queueDeferredModelRestore?.(model, baseline.thinkingLevel);
+			void emitNotice("Agent persona cleared: model restore deferred until the turn ends.");
+		},
+		// Rollback safety: undo THIS transaction's queue mutation by restoring
+		// the transaction-start entry (not blanket-clearing): a failed chained
+		// switch rolls the runtime back to A, whose own owed switch (or an
+		// earlier successful exit's restore) must survive.
+		onPersonaSwitchFailed: () => {
+			if (priorPending) session.queueDeferredModelRestore?.(priorPending.model, priorPending.thinkingLevel);
+			else session.clearDeferredModelRestore?.();
 		},
 	};
 }

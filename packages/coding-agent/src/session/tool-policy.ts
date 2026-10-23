@@ -43,13 +43,12 @@ export interface PolicySnapshot {
 		grant: ReadonlySet<string> | null;
 		spawnsBroken: boolean;
 	} | null;
-	sessionToggles: Map<string, boolean>;
 }
 
 /**
  * Single source of truth for what a session may do right now.
- * Layers: registry ∩ cliGrant ∩ sessionToggles ∩ personaGrant.
- * Mutators restricted to PersonaRuntime + session-level toggle APIs.
+ * Layers: registry ∩ cliGrant ∩ personaGrant (plus default-activity).
+ * Mutators restricted to PersonaRuntime.
  *
  * Replaces 16 shadow fields + 3 apply sequences + 4 task-suppression copies +
  * 4 LSP/Hub lift copies with one layered intersect: 12+ codex P1 fixes across
@@ -78,7 +77,7 @@ export class SessionToolPolicy {
 	/** options.lspReadOnly ?? restrictToolNames (preserves restricted-session default). */
 	readonly cliLspReadOnly: boolean;
 
-	// Live state (mutated by PersonaRuntime + session-level toggles only)
+	// Live state (mutated by PersonaRuntime only)
 	#globalRegistry: () => ReadonlySet<string>; // getter into ToolSession registry (live, not snapshot)
 	#persona: {
 		agent: DiscoveredAgent;
@@ -95,12 +94,6 @@ export class SessionToolPolicy {
 		/** Declared spawns that cannot spawn (e.g. `spawns: []`) — `task` stays off even under a null (registry-wide) grant. */
 		spawnsBroken: boolean;
 	} | null;
-	// Sparse-delta layer captured and reinstated by snapshot()/restore() so a
-	// rolled-back switch restores the pre-switch toggle state byte-for-byte.
-	// Live tool activation/deactivation flows through the granted() funnel (the
-	// PERMISSION question) rather than mutating this layer — the toggles map is
-	// policy-owned transaction state, not a user-input mirror.
-	#sessionToggles: Map<string, boolean>;
 	#isDefaultActive: (name: string) => boolean;
 
 	constructor(options: {
@@ -119,7 +112,6 @@ export class SessionToolPolicy {
 		this.#globalRegistry = options.registry;
 		this.#isDefaultActive = options.isDefaultActive;
 		this.#persona = null;
-		this.#sessionToggles = new Map();
 	}
 
 	/**
@@ -173,7 +165,7 @@ export class SessionToolPolicy {
 	 * whitelist, not a filesystem grant), while a persona's declared `tools:` is
 	 * a real restriction the funnel must respect. `/mcp` toggles and RPC
 	 * activations pass through freely so a `defaultInactive` tool can be turned
-	 * ON (the toggles layer answers "on by default", not "may it run").
+	 * ON (the default-activity layer answers "on by default", not "may it run").
 	 */
 	granted(name: string): boolean {
 		// A journal-reinstalled CLI ceiling IS a filesystem grant — unlike the
@@ -228,10 +220,10 @@ export class SessionToolPolicy {
 	}
 	/**
 	 * The effective set computed IGNORING the persona layer: registry ∩
-	 * cliGrant ∩ sessionToggles. Spawn inheritance uses this baseline instead
+	 * cliGrant ∩ default-activity. Spawn inheritance uses this baseline instead
 	 * of {@link effectiveSet}: the persona layer scopes the main agent's own
 	 * behavior; it does not cage spawned descendants. Children are bounded by
-	 * the ORIGINAL main's restriction state (CLI grant ∩ session toggles)
+	 * the ORIGINAL main's restriction state (CLI grant ∩ default-activity)
 	 * plus their own frontmatter.
 	 */
 	baselineEffectiveSet(): ReadonlySet<string> {
@@ -243,15 +235,14 @@ export class SessionToolPolicy {
 	}
 
 	/**
-	 * True when cliGrant or sessionToggles narrow the default capability
-	 * envelope — the persona layer is deliberately excluded, so a persona-active
-	 * session with an unrestricted baseline is NOT baseline-restricted.
+	 * True when cliGrant narrows the default capability envelope — the persona
+	 * layer is deliberately excluded, so a persona-active session with an
+	 * unrestricted baseline is NOT baseline-restricted.
 	 */
 	isBaselineRestricted(): boolean {
 		// Restriction = some default-active registered tool is not
 		// baseline-effective (a size-comparison against the registry is unsound:
-		// a cliGrant with unknown names can still omit default-active tools, and
-		// a sessionToggle that only ADDS a tool is not a restriction).
+		// a cliGrant with unknown names can still omit default-active tools).
 		// A non-null cliGrant is ITSELF a restriction: a whitelist naming every
 		// default-ACTIVE tool still omits default-INACTIVE registry tools, and
 		// the child derivation must stay bounded by baselineEffectiveSet() or a
@@ -265,7 +256,7 @@ export class SessionToolPolicy {
 		return false;
 	}
 
-	// Mutators (PersonaRuntime + session toggles ONLY)
+	// Mutators (PersonaRuntime ONLY)
 	enterPersona(agent: DiscoveredAgent, explicit: PersonaExplicitOverrides): void {
 		this.#persona = {
 			agent,
@@ -287,7 +278,6 @@ export class SessionToolPolicy {
 						grant: this.#persona.grant ? new Set(this.#persona.grant) : null,
 					}
 				: null,
-			sessionToggles: new Map(this.#sessionToggles),
 		};
 	}
 
@@ -298,17 +288,15 @@ export class SessionToolPolicy {
 					grant: snapshot.persona.grant ? new Set(snapshot.persona.grant) : null,
 				}
 			: null;
-		this.#sessionToggles = new Map(snapshot.sessionToggles);
 	}
 
 	#toggledOnOrDefault(name: string): boolean {
 		// An explicit CLI grant of a defaultInactive tool IS its activation: the
 		// user named it on the command line, which is a stronger statement than
-		// the registry's default. Session toggles still override both ways.
-		if (this.#sessionToggles.has(name)) return this.#sessionToggles.get(name)!;
+		// the registry's default.
 		return this.#isDefaultActive(name) || (this.cliGrant !== null && this.cliGrant.has(name));
 	}
-	/** Baseline layer of {@link effective}: registry ∩ cliGrant ∩ sessionToggles — persona grant/spawnsBroken conjuncts removed. */
+	/** Baseline layer of {@link effective}: registry ∩ cliGrant ∩ default-activity — persona grant/spawnsBroken conjuncts removed. */
 	#baselineEffective(name: string): boolean {
 		return (this.cliGrant === null || this.cliGrant.has(name)) && this.#toggledOnOrDefault(name);
 	}

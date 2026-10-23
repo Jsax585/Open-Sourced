@@ -597,6 +597,22 @@ describe("ACP persona reconciliation", () => {
 		const harness = await createPersonaHarness();
 		const session = new PersonaStubSession(harness.cwd);
 		session.stub.isStreaming = true;
+		const personaModel = buildModel({
+			id: "some-model",
+			name: "Some Model",
+			api: "anthropic-messages",
+			provider: "stub",
+			baseUrl: "https://example.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		}) as Model<Api>;
+		Object.defineProperty(session, "modelRegistry", {
+			value: { getAvailable: () => [personaModel] },
+			configurable: true,
+		});
 		const notices: string[] = [];
 		const hooks = createAcpPersonaModelHooks(session as unknown as AgentSession, async text => {
 			notices.push(text);
@@ -610,7 +626,7 @@ describe("ACP persona reconciliation", () => {
 			source: "bundled",
 			model: ["stub/some-model"],
 		};
-		hooks.deferModelSwitchWhileStreaming?.(agentDef);
+		await hooks.deferModelSwitchWhileStreaming?.(agentDef);
 		expect(notices).toHaveLength(1);
 		expect(notices[0]).toContain('Agent "acp-testa" model switch deferred');
 		expect(notices[0]).toContain("mid-turn");
@@ -714,7 +730,7 @@ describe("ACP persona reconciliation", () => {
 		hooks.deferModelRestoreWhileStreaming?.({ model: preA, thinkingLevel: undefined });
 		expect(queued?.model).toBe(preA);
 
-		hooks.deferModelSwitchWhileStreaming?.({
+		await hooks.deferModelSwitchWhileStreaming?.({
 			name: "acp-b",
 			description: "",
 			systemPrompt: "prompt",
@@ -857,12 +873,27 @@ describe("ACP persona reconciliation", () => {
 		const harness = await createPersonaHarness();
 		const session = new PersonaStubSession(harness.cwd);
 		session.stub.isStreaming = true;
+		// Thinking-only queueing carries the LIVE model; the stub exposes
+		// none, so install one like the deferred-queue stubs do.
+		const liveModel = buildModel({
+			id: "live-model",
+			name: "Live Model",
+			api: "anthropic-messages",
+			provider: "stub",
+			baseUrl: "https://example.invalid",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		}) as Model<Api>;
+		Object.defineProperty(session, "model", { value: liveModel, configurable: true });
 		const notices: string[] = [];
 		const hooks = createAcpPersonaModelHooks(session as unknown as AgentSession, async text => {
 			notices.push(text);
 		});
 
-		hooks.deferModelSwitchWhileStreaming?.({
+		await hooks.deferModelSwitchWhileStreaming?.({
 			name: "acp-thinker",
 			description: "",
 			systemPrompt: "prompt",

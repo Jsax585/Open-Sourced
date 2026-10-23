@@ -411,8 +411,8 @@ export interface ToolSession {
 	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
 	/**
 	 * Effective session spawn policy. Session-owned overrides (persona `spawns`
-	 * frontmatter) win when set; the string form is the host CLI `--spawns`
-	 * fallback (comma-separated agent names), `null` = unrestricted.
+	 * frontmatter) narrow the host CLI `--spawns` ceiling (comma-separated
+	 * agent names), never widen; `null` = unrestricted.
 	 */
 	getSessionSpawns: () => string | string[] | "*" | null;
 	/** Live scout availability (task.disabledAgents ∩ persona-aware spawn policy). Optional: stub sessions fall back to the local derivation. */

@@ -23,7 +23,6 @@ describe("PersonaRuntime", () => {
 
 		const snap = await runtime.snapshot();
 		expect(snap.policy.persona?.agent.name).toBe("persona-a");
-		expect(snap.policy.sessionToggles).toBeInstanceOf(Map);
 		expect([...snap.tools]).toEqual(stub.enabledToolNames);
 		expect([...snap.mountedToolNames]).toEqual(stub.mountedToolNames);
 		expect(snap.baseModelOverride).toEqual({
@@ -140,7 +139,7 @@ describe("PersonaRuntime", () => {
 			makeHooks({
 				apply: async () => void (applied += 1),
 				shouldDeferModelSwitch: () => true,
-				deferModelSwitchWhileStreaming: agent => deferredAgents.push(agent.name),
+				deferModelSwitchWhileStreaming: agent => void deferredAgents.push(agent.name),
 			}),
 		);
 

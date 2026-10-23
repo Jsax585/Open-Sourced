@@ -1452,22 +1452,22 @@ export function applyResolvedSystemPromptInputs(
 }
 
 /**
- * Selector persisted as the persona's explicit model override. The CLI resolver
- * honors `--provider <name> --model <pattern>` together, but the bare pattern
- * alone can match the same id on another provider; persisting the resolved
- * `provider/model` form keeps resume reconcile pinned to the requested provider.
+ * Selector persisted as the persona's explicit model override. Persisting the
+ * resolved `provider/model` form keeps resume reconcile pinned: re-resolving
+ * the bare pattern against the then-current catalog and match preferences
+ * (including recently-used ordering) can bind the same id on another provider.
+ * Unresolved patterns persist verbatim (resume retries with a warmer catalog).
  */
 function personaExplicitModelPattern(parsed: Args, resolved: ResolveCliModelResult | undefined): string | undefined {
 	if (!parsed.model) return undefined;
-	if (!parsed.provider) return parsed.model;
-	if (!resolved?.model) return `${parsed.provider}/${parsed.model}`;
-	// A thinking suffix on the CLI pattern (`--provider openai --model gpt-5:high`)
-	// must survive the provider-qualified composition: the resume reconcile
-	// re-resolves the persisted pattern, so dropping the suffix silently
-	// re-classifies the thinking effort. `resolved.thinkingLevel` is set exactly
-	// when the resolver stripped a valid suffix — append it back.
+	// A thinking suffix on the CLI pattern (`--model gpt-5:high`) must survive
+	// the composition: the resume reconcile re-resolves the persisted pattern,
+	// so dropping the suffix silently re-classifies the thinking effort.
+	// `resolved.thinkingLevel` is set exactly when the resolver stripped a
+	// valid suffix — append it back.
 	// fw_sK: preserve `@upstream` routing (`openrouter/z-ai/glm-4.7@cerebras`)
 	// — provider/id alone would strip the route and re-resolve elsewhere.
+	if (!resolved?.model) return parsed.provider ? `${parsed.provider}/${parsed.model}` : parsed.model;
 	const qualified = formatModelStringWithRouting(resolved.model);
 	return resolved.thinkingLevel ? `${qualified}:${resolved.thinkingLevel}` : qualified;
 }
