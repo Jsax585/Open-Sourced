@@ -69,6 +69,7 @@ export function formatTaskResultSummary(
 		agentName: result.agent,
 		id: result.id,
 		status,
+		missingYield: result.missingYield,
 		duration: formatDuration(options.totalDurationMs),
 		abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
 		error: error === undefined ? undefined : escapeHarnessTags(error),

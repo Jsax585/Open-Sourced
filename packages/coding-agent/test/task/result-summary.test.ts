@@ -62,6 +62,17 @@ describe("formatTaskResultSummary", () => {
 		expect(summary).not.toContain("<preview");
 		expect(summary).not.toContain("<meta");
 	});
+	it("marks missing-yield provenance on the task envelope", () => {
+		const summary = formatTaskResultSummary(
+			{
+				...settledResult("SYSTEM WARNING: Structured subagent replied without calling yield.\n\nreport"),
+				missingYield: "wake",
+			},
+			{ totalDurationMs: 5 },
+		);
+
+		expect(summary).toContain('missing-yield="wake"');
+	});
 
 	it("names the failure when the preview is the text streamed before it", () => {
 		// Production 2026-09-21: a scout whose stream died mid-prose reported

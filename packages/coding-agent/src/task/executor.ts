@@ -663,8 +663,8 @@ interface FinalizeSubprocessOutputArgs {
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
 	lastAssistantText?: string;
-	/** Wake turns do not use the initial run's reminder ladder. */
-	missingYieldWarning?: string;
+	/** The structured result protocol was not submitted. */
+	missingYield?: "initial" | "wake";
 	/** `false` = no `yield` tool: `rawOutput` is the final assistant message, returned verbatim. Default `true`. */
 	structured?: boolean;
 }
@@ -675,6 +675,7 @@ interface FinalizeSubprocessOutputResult {
 	stderr: string;
 	abortedViaYield: boolean;
 	hasYield: boolean;
+	missingYield?: "initial" | "wake";
 	structuredOutput?: StructuredSubagentOutput;
 }
 export const SUBAGENT_WARNING_SCHEMA_OVERRIDDEN =
@@ -713,12 +714,14 @@ function buildSchemaViolationOutcome(
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
 	let { rawOutput, exitCode, stderr } = args;
 	const { yieldItems, doneAborted, signalAborted, outputSchema, lastAssistantText } = args;
-	const missingYieldWarning = args.missingYieldWarning ?? SUBAGENT_WARNING_MISSING_YIELD;
+	const missingYieldWarning =
+		args.missingYield === "wake" ? SUBAGENT_WARNING_MISSING_YIELD_WAKE : SUBAGENT_WARNING_MISSING_YIELD;
 	const mode = args.outputSchemaMode ?? "permissive";
 	const source = args.outputSchemaSource ?? (outputSchema === undefined ? "none" : "session");
 	const includeStructuredOutput = source !== "none";
 	let structuredOutput: StructuredSubagentOutput | undefined;
 	let abortedViaYield = false;
+	let resultMissingYield: "initial" | "wake" | undefined;
 	const hasYield = Array.isArray(yieldItems) && yieldItems.length > 0;
 	const hadFailureBeforeYield = exitCode !== 0 && stderr.trim().length > 0;
 
@@ -854,10 +857,12 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 				stderr = "";
 			}
 		} else if (!hasOutputSchema && allowFallback && rawOutput.trim().length > 0) {
+			resultMissingYield = args.missingYield ?? "initial";
 			rawOutput = `${missingYieldWarning}\n\n${rawOutput}`;
 			stderr = missingYieldWarning;
 		} else if (exitCode === 0) {
 			const hasRawOutput = rawOutput.trim().length > 0;
+			resultMissingYield = args.missingYield ?? "initial";
 			rawOutput = rawOutput ? `${missingYieldWarning}\n\n${rawOutput}` : missingYieldWarning;
 			if (hasOutputSchema || !hasRawOutput) {
 				exitCode = 1;
@@ -866,7 +871,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
 		}
 	}
 
-	return { rawOutput, exitCode, stderr, abortedViaYield, hasYield, structuredOutput };
+	return {
+		rawOutput,
+		exitCode,
+		stderr,
+		abortedViaYield,
+		hasYield,
+		missingYield: resultMissingYield,
+		structuredOutput,
+	};
 }
 
 function formatToolArgsPreview(value: string, key: string): { value: string; key: string } {
@@ -2731,17 +2744,18 @@ async function driveSessionToResult(
 	return { exitCode, error, aborted, abortReasonText };
 }
 
-function truncateResultOutput(rawOutput: string): { content: string; truncated: boolean } {
-	const warning = [SUBAGENT_WARNING_MISSING_YIELD, SUBAGENT_WARNING_MISSING_YIELD_WAKE].find(candidate =>
-		rawOutput.startsWith(`${candidate}\n\n`),
-	);
-	if (!warning) {
+function truncateResultOutput(
+	rawOutput: string,
+	missingYield: SingleResult["missingYield"],
+): { content: string; truncated: boolean } {
+	if (!missingYield) {
 		const { content, truncated } = truncateTail(rawOutput, {
 			maxBytes: MAX_OUTPUT_BYTES,
 			maxLines: MAX_OUTPUT_LINES,
 		});
 		return { content, truncated: Boolean(truncated) };
 	}
+	const warning = missingYield === "wake" ? SUBAGENT_WARNING_MISSING_YIELD_WAKE : SUBAGENT_WARNING_MISSING_YIELD;
 	const prefix = `${warning}\n\n`;
 	const { content, truncated } = truncateTail(rawOutput.slice(prefix.length), {
 		maxBytes: MAX_OUTPUT_BYTES - Buffer.byteLength(prefix),
@@ -2766,8 +2780,8 @@ interface FinalizeRunArgs {
 	outputSchema?: unknown;
 	outputSchemaMode?: StructuredSubagentSchemaMode;
 	outputSchemaSource?: StructuredSubagentSchemaSource;
-	/** Replaces the normal reminder-specific warning for a non-reminder completion path. */
-	missingYieldWarning?: string;
+	/** The structured result protocol was not submitted. */
+	missingYield?: "initial" | "wake";
 	signal?: AbortSignal;
 	artifactsDir?: string;
 	eventBus?: EventBus;
@@ -2821,7 +2835,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 			outputSchemaMode: args.outputSchemaMode,
 			outputSchemaSource: args.outputSchemaSource,
 			lastAssistantText: monitor.lastReportTurnText(),
-			missingYieldWarning: args.missingYieldWarning,
+			missingYield: args.missingYield,
 			structured,
 		});
 	} finally {
@@ -2844,7 +2858,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 	const lastYield = yieldItems?.[yieldItems.length - 1];
 	const yieldAbortReason = lastYield?.status === "aborted" ? lastYield.error || "Subagent aborted task" : undefined;
 	const { abortedViaYield, hasYield } = finalized;
-	const { content: truncatedOutput, truncated } = truncateResultOutput(rawOutput);
+	const { content: truncatedOutput, truncated } = truncateResultOutput(rawOutput, finalized.missingYield);
 
 	// Write output artifact (input and jsonl already written in real-time).
 	// Compute output metadata for agent:// URL integration.
@@ -2978,6 +2992,7 @@ async function finalizeRunResult(args: FinalizeRunArgs): Promise<SingleResult> {
 		output: truncatedOutput,
 		stderr,
 		truncated: Boolean(truncated),
+		...(finalized.missingYield ? { missingYield: finalized.missingYield } : {}),
 		...(finalized.structuredOutput ? { structuredOutput: finalized.structuredOutput } : {}),
 		durationMs: Date.now() - args.startTime,
 		tokens: progress.tokens,
@@ -3368,8 +3383,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 					outputSchema: options.outputSchema,
 					outputSchemaMode: options.outputSchemaMode,
 					outputSchemaSource: options.outputSchemaSource,
-					missingYieldWarning:
-						ownerWoken && options.structured !== false ? SUBAGENT_WARNING_MISSING_YIELD_WAKE : undefined,
+					missingYield: ownerWoken && options.structured !== false ? "wake" : undefined,
 					artifactsDir: options.artifactsDir,
 					eventBus: options.eventBus,
 					subagentEventBus: options.subagentEventBus,
@@ -3407,7 +3421,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// parent whatever it is: the yield result, the failure that
 				// superseded it, or a structured parent wake's finalized
 				// missing-yield warning.
-				const parentStructuredWake = ownerWoken && options.structured !== false && turnText.trim().length > 0;
+				const parentStructuredWake = ownerWoken && options.structured !== false;
 				if (wakeJob && result && (yielded || messageResult || parentStructuredWake)) {
 					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
 					const structured = result.structuredOutput;

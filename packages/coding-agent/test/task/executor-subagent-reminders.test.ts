@@ -807,6 +807,51 @@ describe("runSubprocess yield reminders", () => {
 		expect(result.output).toBe(report);
 		expect(result.output).not.toContain("SYSTEM WARNING");
 	});
+	it.each(["yielded", "unstructured"])(
+		"does not infer missing-yield provenance from a warning-looking %s report",
+		async kind => {
+			const report = `${SUBAGENT_WARNING_MISSING_YIELD}\n\n${"x".repeat(500_001)}`;
+			const session = createMockSession(({ promptIndex, emit, state }) => {
+				if (kind === "unstructured" || promptIndex === 1) {
+					const assistant = createAssistantStopMessage(report);
+					state.messages.push(assistant);
+					emit({ type: "message_end", message: assistant });
+					return;
+				}
+				const finalize: AssistantMessage = {
+					...createAssistantStopMessage(""),
+					content: [{ type: "toolCall", id: "tool-finalize", name: "yield", arguments: { type: "result" } }],
+					stopReason: "toolUse",
+				};
+				state.messages.push(finalize);
+				emit({ type: "message_end", message: finalize });
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-finalize",
+					toolName: "yield",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", type: "result", useLastTurn: true },
+					},
+					isError: false,
+				});
+			});
+
+			mockCreateAgentSession(session);
+
+			const result = await runSubprocess({
+				...baseOptions,
+				id: `warning-looking-${kind}`,
+				...(kind === "unstructured" ? { structured: false } : {}),
+			});
+
+			expect(result.exitCode).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.truncated).toBe(true);
+			expect(result.missingYield).toBeUndefined();
+			expect(result.output.startsWith(SUBAGENT_WARNING_MISSING_YIELD)).toBe(false);
+		},
+	);
 
 	it("never harvests mid-work narration as the final result", async () => {
 		// Counterpart to the test above: the report turn is the one that started
