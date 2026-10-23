@@ -9,7 +9,7 @@ use super::{
 	clipboard::resolve_clipboard_edits,
 	input::{Patch, PatchSection, contains_recognizable_hashline_operations},
 	parser::parse_patch_streaming,
-	patcher::{apply_with_recovery, mismatch, recover_target},
+	patcher::{apply_with_current_tag, mismatch, recover_target},
 	types::{Cursor, Edit, FileOp},
 };
 use crate::{
@@ -183,8 +183,15 @@ fn preview_section(
 		} else {
 			parsed.edits.as_slice()
 		};
-		let applied =
-			apply_with_recovery(target, &read.canonical, &read.text, edits, clipboard, store, None)?;
+		let applied = apply_with_current_tag(
+			target,
+			&read.canonical,
+			&read.text,
+			edits,
+			clipboard,
+			store,
+			None,
+		)?;
 		result.op = Some(if matches!(parsed.file_op, Some(FileOp::Rem)) {
 			EngineFileOp::Delete
 		} else {
