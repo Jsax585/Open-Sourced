@@ -3088,6 +3088,18 @@ export class AgentSession implements SettingsScope {
 		this.#sessionSwitchReconciler = reconciler ?? undefined;
 	}
 
+	// j2x: the TUI's pre-switch hook stashes the outer mode's pre-mode
+	// snapshots keyed to the switch ATTEMPT (the session-level persona
+	// teardown runs before the hook, so live persona state cannot tell a
+	// committed switch from a rolled-back one). A switch that commits drops
+	// the stash in the post-switch reconciler; a switch that FAILS must
+	// reinstate it instead — this slot notifies the owner.
+	#switchRollbackNotifier: (() => void) | undefined;
+
+	setSwitchRollbackNotifier(notifier: (() => void) | null): void {
+		this.#switchRollbackNotifier = notifier ?? undefined;
+	}
+
 	/**
 	 * j2n: session-level persona reconcile for headless surfaces (ACP/RPC/SDK).
 	 * The TUI installs a single-slot reconciler (#reconcilePersonaFromSession)
@@ -12728,6 +12740,9 @@ export class AgentSession implements SettingsScope {
 			if (runtime && personaSnapshot) {
 				await runtime.restore(personaSnapshot);
 			}
+			// j2x: the TUI already stashed + discarded its pre-mode snapshots
+			// in the before-switch hook — reinstate them with the persona.
+			this.#switchRollbackNotifier?.();
 			throw error;
 		}
 		// A queued deferred restore is SOURCE-session state (headless ACP/RPC
@@ -13032,6 +13047,10 @@ export class AgentSession implements SettingsScope {
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);
+			// j2x: the source session survives — reinstate the TUI's stashed
+			// pre-mode snapshots BEFORE the reconciler below runs, so a
+			// source mode still active restores from them.
+			this.#switchRollbackNotifier?.();
 			// The source session survives: reinstate its owed deferred restore
 			// (cleared speculatively before the fallible file/cwd transitions).
 			this.#pendingDeferredModelRestore = previousDeferredModelRestore;

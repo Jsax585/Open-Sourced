@@ -1659,8 +1659,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	// snapshots so a successful switch cannot replay them onto the target.
 	// A FAILED switch restores the persona runtime state but not these TUI
 	// snapshots — stashing them here keeps the still-active source mode's
-	// presentation restorable until #clearTransientModeState clears the stash
-	// on the next successful reconciliation.
+	// presentation restorable. The stash is keyed to the switch ATTEMPT, not
+	// to live persona state: the post-switch #clearTransientModeState always
+	// drops it (a committed switch must never replay source snapshots), so
+	// every replay site gates on persona-INACTIVE instead — a failed switch
+	// leaves the persona exited at session level, while a committed switch
+	// re-enters the target persona before any exit path can run.
 	#personaSwitchRollbackPlan: { enabled: string[]; mounted: string[] } | undefined;
 	#personaSwitchRollbackGoal: string[] | undefined;
 	// True from `/guided-goal` kickoff until the interview ends: a goal record
@@ -2599,6 +2603,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.#exitSourcePersonaForSwitch();
 		});
 		this.session.setSessionSwitchReconciler?.(() => this.#reconcileModeFromSession({ preserveActiveGoal: true }));
+		// j2x: a FAILED switch reinstates the stashed pre-mode snapshots (the
+		// source mode is still active); a COMMITTED switch drops them in the
+		// post-switch #clearTransientModeState instead. Keyed to the attempt,
+		// not to live persona state (which the teardown already exited).
+		this.session.setSwitchRollbackNotifier?.(() => this.#reinstateStashedModeSnapshots());
 		await logger.time("InteractiveMode.init:reconcileMode", () => this.#reconcileModeFromSession());
 
 		// Brand-new sessions optionally start in plan mode when the user has made it
@@ -5065,15 +5074,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			const previousModel = this.#planModePreviousModelState;
 			this.session.setPlanModeState(undefined);
 			try {
-				// j2x: a failed persona switch discarded the primary snapshot but
-				// left the stash behind — the still-active source mode restores
-				// from it. Only when no persona is active: under a live persona
-				// the stash holds the SOURCE snapshot the pre-switch hook
-				// deliberately discarded, and replaying it would leak source
-				// restrictions (R3-4).
-				const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
-				const previousPresentation =
-					this.#planModePreviousToolPresentation ?? (personaActive ? undefined : this.#personaSwitchRollbackPlan);
+				// The primary snapshot is undefined exactly when the pre-switch
+				// hook discarded it — and a COMMITTED switch must never replay
+				// the stashed source snapshot onto the target (R3-4). The stash
+				// only replays after a FAILED switch, via the rollback
+				// notifier that reinstates it into the primary slot above.
+				const previousPresentation = this.#planModePreviousToolPresentation;
 				if (previousPresentation) {
 					await this.session.restoreNonMCPToolPresentation(
 						previousPresentation.enabled,
@@ -5098,10 +5104,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		if (this.goalModeEnabled || this.goalModePaused) {
-			// j2x: same persona-active gate as the plan path above (R3-4).
-			const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
-			const goalPreviousTools =
-				this.#goalModePreviousTools ?? (personaActive ? undefined : this.#personaSwitchRollbackGoal);
+			// Same attempt-keying as the plan path above: only the primary
+			// slot replays here; the stash replays via the rollback notifier.
+			const goalPreviousTools = this.#goalModePreviousTools;
 			if (goalPreviousTools !== undefined) {
 				await this.session.setActiveToolsByName(goalPreviousTools);
 			}
@@ -5376,6 +5381,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	/**
+	 * j2x: reinstate the pre-switch stashed pre-mode snapshots after a FAILED
+	 * switch (the source mode is still active). Called through the session's
+	 * rollback notifier — the only writer besides the pre-switch hook and the
+	 * exit-rollback catch above.
+	 */
+	#reinstateStashedModeSnapshots(): void {
+		if (this.#personaSwitchRollbackPlan !== undefined) {
+			this.#planModePreviousToolPresentation = this.#personaSwitchRollbackPlan;
+		}
+		if (this.#personaSwitchRollbackGoal !== undefined) {
+			this.#goalModePreviousTools = this.#personaSwitchRollbackGoal;
+		}
+		this.#personaSwitchRollbackPlan = undefined;
+		this.#personaSwitchRollbackGoal = undefined;
+	}
+
 	async #enterPlanMode(options?: {
 		planFilePath?: string;
 		workflow?: "parallel" | "iterative";
@@ -5544,14 +5566,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			: undefined;
 		this.session.setPlanModeState(undefined);
 		try {
-			// j2x: a failed persona switch discarded the primary snapshot but
-			// left the stash behind — the still-active source mode restores
-			// from it. Persona-active gate (R3-4 parity with
-			// #clearTransientModeState): under a live persona the stash holds
-			// the SOURCE snapshot the pre-switch hook deliberately discarded.
-			const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
-			const previousPresentation =
-				this.#planModePreviousToolPresentation ?? (personaActive ? undefined : this.#personaSwitchRollbackPlan);
+			// Only the primary slot replays here: the stash replays via the
+			// rollback notifier (which reinstates it into the primary slot),
+			// never by direct read — a committed switch must not replay
+			// source snapshots (R3-4).
+			const previousPresentation = this.#planModePreviousToolPresentation;
 			if (previousPresentation) {
 				await this.session.restoreNonMCPToolPresentation(
 					previousPresentation.enabled,
@@ -5671,12 +5690,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		paused?: boolean;
 		reason?: "completed" | "paused" | "dropped";
 	}): Promise<void> {
-		// j2x: a failed persona switch discarded the primary snapshot but left
-		// the stash behind — the still-active source mode restores from it.
-		// Persona-active gate (R3-4 parity with #clearTransientModeState).
-		const personaActive = this.session.getPersonaRuntime()?.policy.isPersonaActive() ?? false;
-		const previousTools =
-			this.#goalModePreviousTools ?? (personaActive ? undefined : this.#personaSwitchRollbackGoal);
+		// Only the primary slot replays here: the stash replays via the
+		// rollback notifier, never by direct read (R3-4).
+		const previousTools = this.#goalModePreviousTools;
 		if (this.goalModeEnabled && previousTools) {
 			await this.session.setActiveToolsByName(previousTools);
 		}

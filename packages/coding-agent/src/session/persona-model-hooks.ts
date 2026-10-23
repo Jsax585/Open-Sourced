@@ -178,12 +178,12 @@ export function createDefaultPersonaModelHooks(session: AgentSession): PersonaMo
 }
 
 /**
- * Headless (ACP/RPC/print) persona-model hooks: mid-turn switches defer
- * through the session-level deferred slot (flushed at the surface's
- * `agent_end`), with in-band text notices; everything else falls through to
- * the shared default hooks. Without this a mid-turn `/agent` throws instead
- * of deferring — the documented behavior is "tools/prompt now, model at turn
- * end" on every surface.
+ * Headless (ACP/RPC) persona-model hooks: mid-turn switches defer through the
+ * session-level deferred slot (flushed at the surface's `agent_end`), with
+ * in-band text notices; everything else falls through to the shared default
+ * hooks. Without this a mid-turn `/agent` throws instead of deferring — the
+ * documented behavior is "tools/prompt now, model at turn end" on every
+ * surface. (Print mode never dispatches /agent, so no flush is needed there.)
  */
 export function createHeadlessPersonaModelHooks(
 	session: AgentSession,

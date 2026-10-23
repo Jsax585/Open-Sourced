@@ -2496,15 +2496,19 @@ export class AcpAgent implements Agent {
 	}
 
 	#applyModeChange(session: AgentSession, modeId: string): void {
-		const availableModes = this.#getAvailableModes(session);
-		if (!availableModes.some(mode => mode.id === modeId)) {
-			throw new Error(`Unsupported ACP mode: ${modeId}`);
-		}
 		if (modeId === ACP_PLAN_MODE_ID && session.getToolPolicy?.()?.isPersonaActive()) {
 			// Mirror the TUI (handlePlanModeCommand refuses while a persona is
 			// active): the persona's tool grant and the plan partition would
 			// fight. Exiting the persona (`/agent`) first is the entry order.
+			// Checked BEFORE the membership test: Plan is hidden from the
+			// available list under a persona, but a stale client cache may
+			// still send it — answer with the actionable refusal, not the
+			// generic unsupported-mode error.
 			throw new Error("Exit the agent persona before entering plan mode.");
+		}
+		const availableModes = this.#getAvailableModes(session);
+		if (!availableModes.some(mode => mode.id === modeId)) {
+			throw new Error(`Unsupported ACP mode: ${modeId}`);
 		}
 		if (modeId === ACP_PLAN_MODE_ID) {
 			const previous = session.getPlanModeState();

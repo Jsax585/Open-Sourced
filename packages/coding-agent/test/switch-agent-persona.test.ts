@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -204,5 +205,22 @@ describe("persona switch deferral", () => {
 		// Teardown applied immediately; the model restore is queued, not dropped.
 		expect(runtime.policy.isPersonaActive()).toBe(false);
 		expect(queued).toHaveLength(1);
+	});
+	it("mid-turn /agent switch defers through the headless hooks instead of throwing", async () => {
+		// The ACP/RPC/print handler routes through createHeadlessPersonaModelHooks
+		// (not the default hooks): a mid-turn switch must queue + notice, not
+		// throw PersonaSwitchError.
+		const { session, policy } = makeSessionStub({ isStreaming: true, model: { provider: "stub", id: "live" } });
+		const { output, runtime: slashRuntime } = makeAgentSlashHarness(session);
+		// Thinking-only persona: queues against the live model without needing
+		// a resolvable model pattern.
+		mockDiscovery([makeAgent({ thinkingLevel: ThinkingLevel.High })]);
+
+		const result = await executeAcpBuiltinSlashCommand("/agent persona-a", slashRuntime);
+
+		expect(result).toEqual({ consumed: true });
+		expect(policy.isPersonaActive()).toBe(true);
+		expect(output.some(line => line.includes("model switch deferred"))).toBe(true);
+		expect(output).toContain("Agent persona: persona-a");
 	});
 });
