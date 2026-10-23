@@ -101,26 +101,42 @@ const taskSchemaNoIsolation = type({
 	"tools?": "string[]",
 	"+": "delete",
 });
-const taskSchemaBatch = type({
-	context: "string",
-	tasks: taskItemSchemaIsolated.array(),
-	// A top-level `isolated` is not part of the batch shape; a flat-form call
-	// with `isolated` must reject (lenient raw-args fallthrough → preflight)
-	// rather than strip and silently run the batch non-isolated.
-	"isolated?": "false",
-	"+": "delete",
-});
-const taskSchemaBatchNoIsolation = type({
-	context: "string",
-	tasks: taskItemSchema.array(),
-	// A top-level `isolated` (flat-form key) must also reject, not strip: the
-	// batch wrapper otherwise accepts `{ context, tasks[], isolated: true }`
-	// with the key deleted, and the child spawns quietly run non-isolated.
-	// Rejection forces the lenient raw-args fallthrough so execute() surfaces
-	// the nested-isolation preflight (see taskItemSchema).
-	"isolated?": "false",
-	"+": "delete",
-});
+function guardBatchAgent(schema: BaseType): BaseType {
+	// Inspect the input before undeclared-key deletion can erase the requested agent.
+	return schema.in
+		.narrow((params, ctx) => {
+			if (params !== null && typeof params === "object" && Object.hasOwn(params, "agent")) {
+				return ctx.reject("a batch with `agent` specified in `tasks[].agent`, not at the top level");
+			}
+			return true;
+		})
+		.pipe(schema);
+}
+
+const taskSchemaBatch = guardBatchAgent(
+	type.raw({
+		context: "string",
+		tasks: taskItemSchemaIsolated.array(),
+		// A top-level `isolated` is not part of the batch shape; a flat-form call
+		// with `isolated` must reject (lenient raw-args fallthrough → preflight)
+		// rather than strip and silently run the batch non-isolated.
+		"isolated?": "false",
+		"+": "delete",
+	}),
+);
+const taskSchemaBatchNoIsolation = guardBatchAgent(
+	type.raw({
+		context: "string",
+		tasks: taskItemSchema.array(),
+		// A top-level `isolated` (flat-form key) must also reject, not strip: the
+		// batch wrapper otherwise accepts `{ context, tasks[], isolated: true }`
+		// with the key deleted, and the child spawns quietly run non-isolated.
+		// Rejection forces the lenient raw-args fallthrough so execute() surfaces
+		// the nested-isolation preflight (see taskItemSchema).
+		"isolated?": "false",
+		"+": "delete",
+	}),
+);
 const ALL_TASK_SCHEMAS = [taskSchema, taskSchemaNoIsolation, taskSchemaBatch, taskSchemaBatchNoIsolation] as const;
 
 type DynamicTaskSchema = (typeof ALL_TASK_SCHEMAS)[number];
@@ -174,16 +190,18 @@ function createTaskSchema(options: {
 				"isolated?": "boolean",
 				"+": "delete",
 			});
-			return type.raw({
-				context: "string",
-				tasks: item.array(),
-				// A top-level `isolated` is not part of the batch shape; a flat-form
-				// call with `isolated` must reject (lenient raw-args fallthrough →
-				// preflight) rather than strip and silently run the batch
-				// non-isolated.
-				"isolated?": "false",
-				"+": "delete",
-			});
+			return guardBatchAgent(
+				type.raw({
+					context: "string",
+					tasks: item.array(),
+					// A top-level `isolated` is not part of the batch shape; a flat-form
+					// call with `isolated` must reject (lenient raw-args fallthrough →
+					// preflight) rather than strip and silently run the batch
+					// non-isolated.
+					"isolated?": "false",
+					"+": "delete",
+				}),
+			);
 		}
 		const item = type.raw({
 			"name?": "string",
@@ -198,13 +216,15 @@ function createTaskSchema(options: {
 			...seanceFields,
 			"+": "delete",
 		});
-		return type.raw({
-			context: "string",
-			tasks: item.array(),
-			// Top-level `isolated` must reject, not strip (see taskItemSchema).
-			"isolated?": "false",
-			"+": "delete",
-		});
+		return guardBatchAgent(
+			type.raw({
+				context: "string",
+				tasks: item.array(),
+				// Top-level `isolated` must reject, not strip (see taskItemSchema).
+				"isolated?": "false",
+				"+": "delete",
+			}),
+		);
 	}
 	if (options.isolationEnabled) {
 		return type.raw({
