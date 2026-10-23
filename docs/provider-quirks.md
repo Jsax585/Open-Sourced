@@ -950,6 +950,9 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/gith
 - **Connection-bound Responses history**: WS outputs preserve visible content and tool calls but
   discard native replay payloads and reasoning signatures owned by the socket. Later HTTP turns
   can warm their own native replay without reintroducing foreign WS reasoning.
+  Computer actions and safety checks remain available for current-call execution;
+  fallback history rebuilds old computer calls as notes and screenshot input instead
+  of native item references. Explicit remote compaction also demotes such fallback calls.
 - **Dynamic Copilot Headers & Initiator**: `buildCopilotDynamicHeaders` (`packages/ai/src/providers/github-copilot-headers.ts`) injects per-request headers `X-Initiator` (`"user"` vs `"agent"` inferred from message history via `inferCopilotInitiator` or overridden via `getCopilotInitiatorOverride`), `Openai-Intent: conversation-edits`, and `Copilot-Vision-Request: true` when `hasCopilotVisionInput` detects image payloads in user or tool result blocks.
 - **Base URL & Endpoint Resolution**: `resolveGitHubCopilotBaseUrl` (`packages/ai/src/providers/github-copilot-headers.ts`) and `parseGitHubCopilotApiKey` (`packages/catalog/src/wire/github-copilot.ts`) parse custom `enterpriseUrl` and `apiEndpoint` properties embedded in API keys or credentials, defaulting to `https://api.githubcopilot.com` (`PERSONAL_GITHUB_COPILOT_BASE_URL`).
 - **OpenAI & Responses Compat Flags**:

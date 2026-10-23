@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import { type as schemaType } from "@oh-my-pi/omptype";
 import {
 	clearCopilotIntegrationCache,
 	getCachedCopilotIntegrationId,
@@ -13,7 +14,7 @@ import {
 	openAIResponsesReplaysNativeHistory,
 	type OpenAIResponsesOptions,
 } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const resources: Array<() => Promise<void>> = [];
@@ -462,6 +463,131 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.upgrades).toHaveLength(2);
 		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
 		expect(fixture.requests[1]?.body.input).toHaveLength(3);
+	});
+
+	it("rebuilds socket-owned computer history while preserving execution metadata and HTTP-native replay", async () => {
+		const safetyChecks = [{ id: "must-ack", code: "confirm", message: "Confirm screenshot" }];
+		const computerEvents = (id: string, callId: string) => {
+			const item = {
+				type: "computer_call",
+				id,
+				call_id: callId,
+				status: "completed",
+				actions: [{ type: "screenshot" }],
+				pending_safety_checks: safetyChecks,
+			};
+			return [
+				{ type: "response.created", response: { id: `resp_${id}` } },
+				{ type: "response.output_item.added", output_index: 0, item },
+				{ type: "response.output_item.done", output_index: 0, item },
+				{
+					type: "response.completed",
+					response: {
+						id: `resp_${id}`,
+						status: "completed",
+						usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+					},
+				},
+			];
+		};
+		let httpTurns = 0;
+		const foreignId = "cu_ws_owned";
+		const denied = () =>
+			Response.json({ error: { message: "input item does not belong to this connection" } }, { status: 401 });
+		const fixture = endpoint(
+			(socket, body, index) => {
+				if (index > 1 && JSON.stringify(body.input).includes(foreignId)) {
+					socket.send(
+						JSON.stringify({
+							type: "error",
+							error: { code: "unauthorized", message: "input item does not belong to this connection" },
+						}),
+					);
+				} else {
+					send(
+						socket,
+						index === 1 ? computerEvents(foreignId, "call_ws") : textEvents("Continue", "resp_continue"),
+					);
+				}
+			},
+			{
+				provider: "github-copilot",
+				httpResponse: body => {
+					if (JSON.stringify(body.input).includes(foreignId)) return denied();
+					if (++httpTurns !== 1) return undefined;
+					return new Response(
+						computerEvents("cu_http_owned", "call_http")
+							.map(event => `data: ${JSON.stringify(event)}\n\n`)
+							.join(""),
+						{
+							headers: { "content-type": "text/event-stream" },
+						},
+					);
+				},
+			},
+		);
+		const model = { ...fixture.model, supportsComputerUse: true };
+		let context: Context = {
+			...fixture.context,
+			tools: [
+				{
+					name: "computer",
+					description: "Inspect the desktop",
+					parameters: schemaType({}),
+					native: { type: "computer" },
+				},
+			],
+		};
+		const options = {
+			apiKey: fixture.options.apiKey,
+			sessionId: fixture.options.sessionId,
+			providerSessionState: fixture.providerSessionState,
+			preferWebsockets: true,
+		};
+		const screenshot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ncVkAAAAASUVORK5CYII=";
+		const appendComputerResult = (turn: AssistantMessage) => {
+			expect(turn.stopReason).toBe("toolUse");
+			const call = turn.content.find(block => block.type === "toolCall");
+			if (call?.type !== "toolCall" || call.providerMetadata?.type !== "computer")
+				throw new Error("Missing native computer call");
+			// Keep actions and safety checks for executing the current call, not just its history.
+			expect(call.providerMetadata.actions).toEqual([{ type: "screenshot" }]);
+			expect(call.providerMetadata.pendingSafetyChecks).toEqual(safetyChecks);
+			context = {
+				...context,
+				messages: JSON.parse(
+					JSON.stringify([
+						...context.messages,
+						turn,
+						{
+							role: "toolResult",
+							toolName: "computer",
+							toolCallId: call.id,
+							timestamp: 2,
+							providerMetadata: {
+								type: "computer",
+								screenshot: { type: "computer_screenshot", image_url: `data:image/png;base64,${screenshot}` },
+								acknowledgedSafetyChecks: safetyChecks,
+							},
+							content: [{ type: "image", mimeType: "image/png", data: screenshot }],
+						},
+					]),
+				) as Context["messages"],
+			};
+		};
+		appendComputerResult(await streamSimple(model, context, options).result());
+		const reconnected = await streamSimple(model, context, { ...options, apiKey: "replacement-key" }).result();
+		expect(reconnected.stopReason).toBe("stop");
+		const rebuilt = JSON.stringify(fixture.requests[1]?.body.input);
+		expect(rebuilt).not.toContain(foreignId);
+		expect(rebuilt).toContain("screenshot");
+		expect(rebuilt).toContain("data:image/png;base64,");
+		context = { ...context, messages: [...context.messages, reconnected] };
+		appendComputerResult(await streamSimple(model, context, { ...options, preferWebsockets: false }).result());
+		const http = await streamSimple(model, context, { ...options, preferWebsockets: false }).result();
+		expect(http.stopReason).toBe("stop");
+		expect(JSON.stringify(fixture.httpRequests[1]?.input)).not.toContain(foreignId);
+		expect(JSON.stringify(fixture.httpRequests[1]?.input)).toContain("cu_http_owned");
 	});
 
 	it("rebuilds connection-bound history across reconnects and repeated HTTP turns", async () => {

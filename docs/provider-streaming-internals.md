@@ -154,6 +154,13 @@ unchanged. Serialized WS turns therefore stay safe after later HTTP warmups, whi
 HTTP responses keep their own replay metadata. No provider-wide cold-state latch
 or persisted transport tag is needed.
 
+Computer-call metadata remains available for executing the current action and its
+safety checks. On a connection-bound target, fallback history without a replayable
+native payload becomes visible action notes and screenshot input, not native
+computer calls carrying an old item ID. Valid HTTP-native payloads bypass that
+fallback and retain their own computer-call replay. Explicit remote compaction
+on such a target likewise demotes fallback computer items to history notes.
+
 The coding-agent resolves the session transport hint against the actual request
 model, including advisor and side requests. Codex uses `providers.openaiWebsockets`
 independently. The registry's final model projection fills an unset model preference
