@@ -9,15 +9,18 @@ import {
 	type UserMessage,
 } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
+import * as settingsModule from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	buildLocalInferenceMessages,
 	registerLocalInferenceApi,
 } from "@oh-my-pi/pi-coding-agent/tiny/local-inference-api";
-import { TINY_LOCAL_MODELS } from "@oh-my-pi/pi-coding-agent/tiny/models";
+import { TINY_LOCAL_MODELS, isTinyJudgeLocalModelKey } from "@oh-my-pi/pi-coding-agent/tiny/models";
 import {
 	type TinyModelChatOptions,
 	TinyTitleClient,
+	modelEnvKey,
+	onnxLaunch,
 	tinyModelClient,
 } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import type {
@@ -25,6 +28,11 @@ import type {
 	TinyWorkerRequest,
 	TinyWorkerResponse,
 } from "@oh-my-pi/pi-coding-agent/tiny/title-protocol";
+import {
+	isRequestScopedError,
+	markRequestScoped,
+	REQUEST_SCOPED_ERROR,
+} from "@oh-my-pi/pi-coding-agent/tiny/worker-server";
 
 const SOURCE_ID = "omp/local-inference";
 const model = getBundledModel("local", "lfm2.5-230m")!;
@@ -244,15 +252,18 @@ describe("tiny model chat client", () => {
 		});
 
 		try {
-			for (const [index, spec] of TINY_LOCAL_MODELS.entries()) {
+			const chatSpecs = TINY_LOCAL_MODELS.filter(spec => !isTinyJudgeLocalModelKey(spec.key));
+			for (const [index, spec] of chatSpecs.entries()) {
 				const maxTokens = index === 0 ? 0 : 100_000;
 				expect(await client.chat(spec.key, [{ role: "user", content: "hello" }], { maxTokens })).toBe(spec.key);
 			}
-			expect(connected).toEqual(TINY_LOCAL_MODELS.map(spec => spec.key));
+			expect(connected).toEqual(chatSpecs.map(spec => spec.key));
 			expect(requests.map(request => (request.type === "chat" ? request.maxNewTokens : undefined))).toEqual([
 				1,
-				...TINY_LOCAL_MODELS.slice(1).map(() => 1024),
+				...chatSpecs.slice(1).map(() => 1024),
 			]);
+			expect(await client.chat("julia-1", [{ role: "user", content: "hi" }], {})).toBeNull();
+			expect(connected).not.toContain("julia-1");
 		} finally {
 			await client.terminate();
 		}
@@ -275,6 +286,40 @@ describe("tiny model chat client", () => {
 		}
 	});
 
+	it("returns null from generate() for judge keys without connecting a worker", async () => {
+		const connected: string[] = [];
+		const client = new TinyTitleClient(async modelKey => {
+			connected.push(modelKey);
+			return new FakeTinyWorker(() => {});
+		});
+
+		try {
+			expect(await client.generate("julia-1", "hi")).toBeNull();
+			expect(connected).not.toContain("julia-1");
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("returns null from judge() for non-judge keys without connecting a worker", async () => {
+		const connected: string[] = [];
+		const client = new TinyTitleClient(async modelKey => {
+			connected.push(modelKey);
+			return new FakeTinyWorker(() => {});
+		});
+
+		try {
+			expect(
+				await client.judge("lfm2.5-230m", "s", {
+					q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+				}),
+			).toEqual({ logits: null });
+			expect(connected).not.toContain("lfm2.5-230m");
+		} finally {
+			await client.terminate();
+		}
+	});
+
 	it("prewarms and generates titles with memory-group tiny models", async () => {
 		const firstRequest = Promise.withResolvers<TinyWorkerRequest>();
 		const worker = new FakeTinyWorker((request, current) => {
@@ -291,5 +336,188 @@ describe("tiny model chat client", () => {
 		} finally {
 			await client.terminate();
 		}
+	});
+	it("returns error without poisoning model or dropping worker when fatal is false", async () => {
+		let callCount = 0;
+		const worker = new FakeTinyWorker((request, current) => {
+			callCount += 1;
+			if (request.type === "judge") {
+				if (request.state === "invalid") {
+					current.emit({
+						type: "error",
+						id: request.id,
+						error: 'judge question "q": empty option string at index 0',
+						fatal: false,
+					});
+				} else {
+					current.emit({
+						type: "judged",
+						id: request.id,
+						logits: { q: [0.2, 0.8] },
+					});
+				}
+			}
+		});
+		const client = new TinyTitleClient(async () => worker);
+
+		try {
+			const result1 = await client.judge("julia-1", "invalid", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result1).toEqual({
+				logits: null,
+				error: 'judge question "q": empty option string at index 0',
+			});
+			expect(worker.terminated).toBe(false);
+
+			const result2 = await client.judge("julia-1", "valid", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result2).toEqual({ logits: { q: [0.2, 0.8] } });
+			expect(callCount).toBe(2);
+			expect(worker.terminated).toBe(false);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("preserves sibling in-flight requests when one request fails non-fatally", async () => {
+		const requests: TinyWorkerRequest[] = [];
+		let currentWorker: FakeTinyWorker;
+		const worker = new FakeTinyWorker((request, current) => {
+			currentWorker = current;
+			requests.push(request);
+		});
+		const client = new TinyTitleClient(async () => worker);
+
+		try {
+			const req1 = client.judge("julia-1", "req1", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			const req2 = client.judge("julia-1", "req2", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+
+			while (requests.length < 2) {
+				await new Promise(r => setTimeout(r, 1));
+			}
+			expect(requests.length).toBe(2);
+
+			currentWorker!.emit({
+				type: "error",
+				id: requests[0]!.id,
+				error: "validation failure",
+				fatal: false,
+			});
+			currentWorker!.emit({
+				type: "judged",
+				id: requests[1]!.id,
+				logits: { q: [0.3, 0.7] },
+			});
+
+			const [res1, res2] = await Promise.all([req1, req2]);
+			expect(res1).toEqual({ logits: null, error: "validation failure" });
+			expect(res2).toEqual({ logits: { q: [0.3, 0.7] } });
+			expect(worker.terminated).toBe(false);
+		} finally {
+			await client.terminate();
+		}
+	});
+
+	it("poisons model and drops worker when fatal error occurs", async () => {
+		let connectCount = 0;
+		const worker = new FakeTinyWorker((request, current) => {
+			if (request.type === "judge") {
+				current.emit({
+					type: "error",
+					id: request.id,
+					error: "CUDA out of memory",
+				});
+			}
+		});
+		const client = new TinyTitleClient(async () => {
+			connectCount += 1;
+			return worker;
+		});
+
+		try {
+			const result1 = await client.judge("julia-1", "state1", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result1).toEqual({ logits: null, error: "CUDA out of memory" });
+			expect(worker.terminated).toBe(true);
+
+			// Subsequent request is poisoned - returns null logits immediately without reconnecting
+			const result2 = await client.judge("julia-1", "state2", {
+				q: { type: "noul", instructions: "i", options: ["no", "yes"] },
+			});
+			expect(result2).toEqual({ logits: null });
+			expect(connectCount).toBe(1);
+		} finally {
+			await client.terminate();
+		}
+	});
+});
+
+describe("judge worker device independence", () => {
+	it("proves judge launch tag ignores device/dtype env", () => {
+		const judgeDefault = onnxLaunch("julia-1", {});
+		const judgeWithDevice = onnxLaunch("julia-1", {
+			PI_TINY_DEVICE: "webgpu",
+			PI_TINY_DTYPE: "fp16",
+		});
+		expect(judgeWithDevice.tag).toBe(judgeDefault.tag);
+		expect(judgeWithDevice.tag).toMatch(/\|onnx\|\|$/);
+
+		const chatWithDevice = onnxLaunch("lfm2.5-230m", {
+			PI_TINY_DEVICE: "webgpu",
+			PI_TINY_DTYPE: "fp16",
+		});
+		expect(chatWithDevice.tag).toMatch(/\|onnx\|webgpu\|fp16$/);
+	});
+
+	it("keeps the judge env key stable across device flips that move chat keys", () => {
+		// The judge key feeds #failedModels: stability means a fatal judge error
+		// stays failed (no silent un-fail) and a healthy judge worker is never
+		// dropped as stale when the user flips providers.tinyModelDevice.
+		// Local restore: this describe has no afterEach(vi.restoreAllMocks),
+		// so a leaked spy would poison every later test in the file.
+		const spy = vi.spyOn(settingsModule, "isSettingsInitialized").mockReturnValue(false);
+		const device = process.env.PI_TINY_DEVICE;
+		const dtype = process.env.PI_TINY_DTYPE;
+		try {
+			process.env.PI_TINY_DEVICE = "cpu";
+			process.env.PI_TINY_DTYPE = "q8";
+			expect(modelEnvKey("julia-1")).toBe("judge");
+			const chatBefore = modelEnvKey("lfm2.5-230m");
+			process.env.PI_TINY_DEVICE = "webgpu";
+			process.env.PI_TINY_DTYPE = "fp16";
+			expect(modelEnvKey("julia-1")).toBe("judge");
+			expect(modelEnvKey("lfm2.5-230m")).not.toBe(chatBefore);
+		} finally {
+			spy.mockRestore();
+			if (device === undefined) delete process.env.PI_TINY_DEVICE;
+			else process.env.PI_TINY_DEVICE = device;
+			if (dtype === undefined) delete process.env.PI_TINY_DTYPE;
+			else process.env.PI_TINY_DTYPE = dtype;
+		}
+	});
+});
+
+describe("worker request-scoped error marker", () => {
+	it("recognizes errors marked with markRequestScoped", () => {
+		const error = markRequestScoped(new Error("validation error"));
+		expect(isRequestScopedError(error)).toBe(true);
+		expect((error as unknown as Record<string, unknown>).requestScoped).toBe(true);
+		expect(REQUEST_SCOPED_ERROR in error).toBe(true);
+	});
+
+	it("duck-types error with requestScoped boolean property", () => {
+		expect(isRequestScopedError({ requestScoped: true })).toBe(true);
+		expect(isRequestScopedError({ requestScoped: false })).toBe(false);
+		expect(isRequestScopedError(new Error("plain error"))).toBe(false);
+		expect(isRequestScopedError(null)).toBe(false);
+		expect(isRequestScopedError(undefined)).toBe(false);
+		expect(isRequestScopedError("string")).toBe(false);
 	});
 });

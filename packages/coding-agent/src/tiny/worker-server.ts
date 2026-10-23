@@ -1,14 +1,36 @@
 import { type JsonLineReply, JsonLineServer } from "../subprocess/jsonl-server";
 import type { TinyWorkerRequest, TinyWorkerResponse } from "./title-protocol";
 
+/** Marker symbol attached to errors caused by bad request payloads rather than broken models. */
+export const REQUEST_SCOPED_ERROR = Symbol.for("omp.tiny.requestScopedError");
+
+export interface RequestScopedError extends Error {
+	requestScoped?: boolean;
+	[REQUEST_SCOPED_ERROR]?: boolean;
+}
+
+/** Check whether an error carries a request-scoped validation marker. */
+export function isRequestScopedError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false;
+	const candidate = error as Record<string | symbol, unknown>;
+	return candidate.requestScoped === true || candidate[REQUEST_SCOPED_ERROR] === true;
+}
+
+/** Mark an error as request-scoped so worker failures do not poison model availability. */
+export function markRequestScoped<T extends Error>(error: T): T {
+	(error as unknown as Record<string | symbol, unknown>).requestScoped = true;
+	(error as unknown as Record<string | symbol, unknown>)[REQUEST_SCOPED_ERROR] = true;
+	return error;
+}
+
 export interface TinyWorkerServerOptions {
 	/** Launch identity echoed in `pong`; clients replace a worker whose tag differs. */
 	tag: string;
 	/** Idle window (nothing in flight, no request received) after which the process exits. */
 	idleMs: number;
-	/** Serve one `load`/`chat`; `reply.send` reaches only the requesting client. Errors become `error` replies. */
+	/** Serve one `load`/`chat`/`judge`; `reply.send` reaches only the requesting client. Errors become `error` replies. */
 	handle(
-		request: Extract<TinyWorkerRequest, { type: "load" | "chat" }>,
+		request: Extract<TinyWorkerRequest, { type: "load" | "chat" | "judge" }>,
 		reply: JsonLineReply<TinyWorkerResponse>,
 	): Promise<void>;
 }
@@ -48,10 +70,12 @@ export class TinyWorkerServer {
 			try {
 				await this.#options.handle(request, reply);
 			} catch (error) {
+				const isRequestScoped = isRequestScopedError(error);
 				reply.send({
 					type: "error",
 					id: request.id,
 					error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+					...(isRequestScoped ? { fatal: false } : {}),
 				});
 			}
 		};

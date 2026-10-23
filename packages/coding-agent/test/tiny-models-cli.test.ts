@@ -18,14 +18,25 @@ describe("tiny-models download model resolution", () => {
 		const all = resolveModels("all", false);
 		for (const key of unsupported) expect(all).not.toContain(key);
 
+		// Usable = loadable AND not the judge key: julia-1 is opt-in
+		// (role-scoped download on first judge use), not bulk prefetch —
+		// excluded from `all` by design, still explicitly resolvable.
+		// Hardcoded (not via isTinyJudgeLocalModelKey): a broken predicate
+		// must not silently re-add the ~577MB weights to bulk prefetch.
 		const usable = TINY_LOCAL_MODELS.filter(
-			spec => !("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason,
+			spec => (!("onnxUnsupportedReason" in spec) || !spec.onnxUnsupportedReason) && spec.key !== "julia-1",
 		).map(spec => spec.key);
+		expect(TINY_LOCAL_MODELS.some(spec => spec.key === "julia-1")).toBe(true);
 		for (const key of usable) expect(all).toContain(key);
+		expect(all).not.toContain("julia-1");
+		expect(resolveModels("julia-1", false)).toEqual(["julia-1"]);
 	});
 
 	it("includes ONNX-blocked models in `all` when the MLX backend is active", () => {
-		expect(resolveModels("all", true)).toEqual(TINY_LOCAL_MODELS.map(spec => spec.key));
+		// julia-1 stays excluded even under MLX (no mlxRepo — judge forces ONNX).
+		const all = resolveModels("all", true);
+		expect(all).toEqual(TINY_LOCAL_MODELS.filter(spec => spec.key !== "julia-1").map(spec => spec.key));
+		expect(all).not.toContain("julia-1");
 	});
 
 	it("still resolves an explicitly requested unsupported model (only `all` is filtered)", () => {

@@ -35,7 +35,7 @@ import { tinyModelDtypeSettingToEnv } from "./dtype";
 import { formatTitleUserMessage } from "./message-preproc";
 import { ensureTinyMlxRuntime, getTinyMlxModelDir, MLX_LM_VERSION } from "./mlx-runtime";
 import MLX_SERVER_SCRIPT from "./mlx-server.py" with { type: "text" };
-import { getTinyLocalModelSpec, isTinyLocalModelKey, type TinyLocalModelKey } from "./models";
+import { getTinyLocalModelSpec, isTinyJudgeLocalModelKey, isTinyLocalModelKey, type TinyLocalModelKey } from "./models";
 import { normalizeGeneratedTitle } from "./text";
 import {
 	TINY_WORKER_ARG,
@@ -43,6 +43,7 @@ import {
 	TINY_WORKER_MODEL_ENV,
 	TINY_WORKER_SOCKET_ENV,
 	TINY_WORKER_TAG_ENV,
+	type JudgeQuestionPayload,
 	type TinyChatMessage,
 	type TinyTitleProgressEvent,
 	type TinyWorkerBackend,
@@ -65,6 +66,11 @@ type WorkerHandle = RefCountedWorkerHandle<TinyWorkerRequest, TinyWorkerResponse
 type PendingRequest =
 	| { kind: "title"; modelKey: TinyLocalModelKey; source: string; resolve: (title: string | null) => void }
 	| { kind: "chat"; modelKey: TinyLocalModelKey; resolve: (text: string | null) => void }
+	| {
+			kind: "judge";
+			modelKey: TinyLocalModelKey;
+			resolve: (result: { logits: Record<string, number[]> | null; error?: string }) => void;
+	  }
 	| { kind: "load"; modelKey: TinyLocalModelKey; resolve: (result: TinyTitleDownloadResult) => void };
 
 export interface TinyTitleDownloadResult {
@@ -90,6 +96,11 @@ export interface TinyTitleGenerateOptions {
 
 export interface TinyModelChatOptions {
 	maxTokens?: number;
+	signal?: AbortSignal;
+}
+
+/** Scoring requests carry no generation budget: only cancellation. */
+export interface TinyJudgeOptions {
 	signal?: AbortSignal;
 }
 
@@ -145,6 +156,14 @@ export function tinyModelEnvKey(): string {
 	const env = tinyModelEnv();
 	return `${env.PI_TINY_DEVICE ?? ""}|${env.PI_TINY_DTYPE ?? ""}`;
 }
+/**
+ * Resolved env key for a model; judge keys use a fixed "judge" key so device
+ * flips never invalidate them or un-fail them.
+ * @internal
+ */
+export function modelEnvKey(modelKey: TinyLocalModelKey): string {
+	return isTinyJudgeLocalModelKey(modelKey) ? "judge" : tinyModelEnvKey();
+}
 
 /**
  * Env for an ONNX inference subprocess with the resolved device/dtype —
@@ -176,7 +195,12 @@ export interface TinyWorkerLaunch extends SharedWorkerLaunch {
 
 /** How to start the ONNX worker for `modelKey` with the resolved device/dtype env. @internal */
 export function onnxLaunch(modelKey: TinyLocalModelKey, modelEnv: Record<string, string>): TinyWorkerLaunch {
-	const tag = `${packageJson.version}|onnx|${modelEnv.PI_TINY_DEVICE ?? ""}|${modelEnv.PI_TINY_DTYPE ?? ""}`;
+	const effectiveEnv = isTinyJudgeLocalModelKey(modelKey)
+		? Object.fromEntries(
+				Object.entries(modelEnv).filter(([key]) => key !== "PI_TINY_DEVICE" && key !== "PI_TINY_DTYPE"),
+			)
+		: modelEnv;
+	const tag = `${packageJson.version}|onnx|${effectiveEnv.PI_TINY_DEVICE ?? ""}|${effectiveEnv.PI_TINY_DTYPE ?? ""}`;
 	return {
 		label: `tiny onnx worker for ${modelKey}`,
 		backend: "onnx",
@@ -184,7 +208,7 @@ export function onnxLaunch(modelKey: TinyLocalModelKey, modelEnv: Record<string,
 		spawn(endpoint, logPath) {
 			const command = resolveWorkerSpawnCmd(TINY_WORKER_ARG);
 			const env = inferenceWorkerEnv({
-				...modelEnv,
+				...effectiveEnv,
 				[TINY_WORKER_SOCKET_ENV]: endpoint,
 				[TINY_WORKER_MODEL_ENV]: modelKey,
 				[TINY_WORKER_TAG_ENV]: tag,
@@ -200,6 +224,9 @@ function mlxLaunch(
 ): TinyWorkerLaunch {
 	const spec = getTinyLocalModelSpec(modelKey);
 	if (!spec) throw new Error(`Unknown tiny local model: ${modelKey}`);
+	// Judge keys never reach here (#connectDefault forces ONNX), so ONNX-only specs are unreachable.
+	const mlxRepo = spec.mlxRepo;
+	if (!mlxRepo) throw new Error(`Tiny local model has no MLX export: ${modelKey}`);
 	const tag = `mlx|${MLX_LM_VERSION}|${Bun.hash.crc32(MLX_SERVER_SCRIPT).toString(16)}`;
 	return {
 		label: `tiny mlx worker for ${modelKey}`,
@@ -229,9 +256,9 @@ function mlxLaunch(
 				"--model-key",
 				modelKey,
 				"--repo",
-				spec.mlxRepo,
+				mlxRepo,
 				"--dir",
-				getTinyMlxModelDir(spec.mlxRepo),
+				getTinyMlxModelDir(mlxRepo),
 				"--idle-seconds",
 				String(idleSeconds),
 			];
@@ -307,7 +334,8 @@ export class TinyTitleClient {
 	}
 
 	async #connectDefault(modelKey: TinyLocalModelKey): Promise<WorkerHandle> {
-		if (tinyWorkerUsesMlx()) {
+		// Judge keys force the ONNX backend: the MLX worker layout does not support Julia-1.
+		if (!isTinyJudgeLocalModelKey(modelKey) && tinyWorkerUsesMlx()) {
 			try {
 				return await connectTinyWorker(
 					mlxLaunch(modelKey, event => this.#emitProgress(event)),
@@ -321,7 +349,10 @@ export class TinyTitleClient {
 				this.#downloads.observe({ modelKey, status: "error" }, `MLX unavailable: ${message}`);
 			}
 		}
-		return connectTinyWorker(onnxLaunch(modelKey, tinyModelEnv()), modelKey);
+		return connectTinyWorker(
+			onnxLaunch(modelKey, isTinyJudgeLocalModelKey(modelKey) ? {} : tinyModelEnv()),
+			modelKey,
+		);
 	}
 
 	onProgress(listener: (event: TinyTitleProgressEvent) => void): () => void {
@@ -356,6 +387,8 @@ export class TinyTitleClient {
 	): Promise<string | null> {
 		const options = normalizeTinyTitleGenerateOptions(optionsOrSignal);
 		if (!isTinyLocalModelKey(modelKey)) return null;
+		// Judge models do not serve chat — fail soft so a misroute never poisons #failedModels.
+		if (isTinyJudgeLocalModelKey(modelKey)) return null;
 		if (options.signal?.aborted || this.#hasFailed(modelKey)) return null;
 		const { promise, resolve } = Promise.withResolvers<string | null>();
 		const request: TinyWorkerRequest = {
@@ -377,6 +410,8 @@ export class TinyTitleClient {
 		options: TinyModelChatOptions = {},
 	): Promise<string | null> {
 		if (!isTinyLocalModelKey(modelKey)) return null;
+		// Judge models do not serve chat — fail soft so a misroute never poisons #failedModels.
+		if (isTinyJudgeLocalModelKey(modelKey)) return null;
 		if (options.signal?.aborted || this.#hasFailed(modelKey)) return null;
 		const requested = options.maxTokens ?? COMPLETION_DEFAULT_MAX_NEW_TOKENS;
 		const { promise, resolve } = Promise.withResolvers<string | null>();
@@ -387,6 +422,30 @@ export class TinyTitleClient {
 			maxNewTokens: Math.min(Math.max(1, requested), COMPLETION_MAX_NEW_TOKENS),
 		};
 		return this.#run(request, { kind: "chat", modelKey, resolve }, promise, options.signal, () => resolve(null));
+	}
+
+	/**
+	 * Score `state` against `questions` with a judge model (Julia-1); resolves
+	 * per-question logits. Non-judge keys resolve null, mirroring `chat()`.
+	 */
+	async judge(
+		modelKey: string,
+		state: string,
+		questions: Record<string, JudgeQuestionPayload>,
+		options: TinyJudgeOptions = {},
+	): Promise<{ logits: Record<string, number[]> | null; error?: string }> {
+		if (!isTinyJudgeLocalModelKey(modelKey)) return { logits: null };
+		if (options.signal?.aborted || this.#hasFailed(modelKey)) return { logits: null };
+		const { promise, resolve } = Promise.withResolvers<{ logits: Record<string, number[]> | null; error?: string }>();
+		const request: TinyWorkerRequest = {
+			type: "judge",
+			id: String(++this.#nextRequestId),
+			state,
+			questions,
+		};
+		return this.#run(request, { kind: "judge", modelKey, resolve }, promise, options.signal, () =>
+			resolve({ logits: null }),
+		);
 	}
 
 	async complete(
@@ -467,7 +526,10 @@ export class TinyTitleClient {
 	}
 
 	#ensureWorker(modelKey: TinyLocalModelKey): ModelWorker {
-		const envKey = tinyModelEnvKey();
+		// Judge keys force the ONNX CPU backend (the MLX layout lacks the judge
+		// head): device/dtype settings never apply, so they must not respawn the
+		// 577MB worker either.
+		const envKey = modelEnvKey(modelKey);
 		const existing = this.#workers.get(modelKey);
 		if (existing) {
 			// Device/dtype changed since connecting: reconnect once idle so in-flight
@@ -516,14 +578,21 @@ export class TinyTitleClient {
 		}
 		// Any answer settles the model's load, even for an abandoned request;
 		// MLX `chat` loads send no `ready` of their own.
-		if (message.type === "error") this.#downloads.observe({ modelKey, status: "error" }, message.error);
-		else this.#downloads.observe({ modelKey, status: "ready" });
+		if (message.type === "error") {
+			if (message.fatal !== false) this.#downloads.observe({ modelKey, status: "error" }, message.error);
+		} else {
+			this.#downloads.observe({ modelKey, status: "ready" });
+		}
 		const pending = this.#pending.get(message.id);
 		if (!pending) return;
 		this.#pending.delete(message.id);
 		this.#syncWorkerRef(modelKey);
 		if (message.type === "error") {
 			logger.debug("tiny-title: worker returned error", { modelKey, error: message.error });
+			if (message.fatal === false) {
+				this.#fail(pending, message.error);
+				return;
+			}
 			this.#markFailedModel(pending);
 			this.#fail(pending, message.error);
 			// One worker serves one model: a failed load/generation leaves nothing
@@ -534,6 +603,10 @@ export class TinyTitleClient {
 		if (message.type === "text") {
 			if (pending.kind === "title") pending.resolve(extractTinyTitle(message.text, pending.source));
 			else if (pending.kind === "chat") pending.resolve(message.text.trim() || null);
+			return;
+		}
+		if (message.type === "judged") {
+			if (pending.kind === "judge") pending.resolve({ logits: message.logits });
 			return;
 		}
 		if (pending.kind === "load") pending.resolve({ ok: true });
@@ -547,17 +620,18 @@ export class TinyTitleClient {
 	}
 
 	#hasFailed(modelKey: TinyLocalModelKey): boolean {
-		return this.#failedModels.get(modelKey) === tinyModelEnvKey();
+		return this.#failedModels.get(modelKey) === modelEnvKey(modelKey);
 	}
 
 	#fail(pending: PendingRequest, error: string | undefined): void {
 		this.#emitProgress({ modelKey: pending.modelKey, status: "error" }, error);
 		if (pending.kind === "load") pending.resolve(error === undefined ? { ok: false } : { ok: false, error });
+		else if (pending.kind === "judge") pending.resolve({ logits: null, error });
 		else pending.resolve(null);
 	}
 
 	#markFailedModel(pending: PendingRequest): void {
-		if (pending.kind !== "load") this.#failedModels.set(pending.modelKey, tinyModelEnvKey());
+		if (pending.kind !== "load") this.#failedModels.set(pending.modelKey, modelEnvKey(pending.modelKey));
 	}
 
 	#emitProgress(event: TinyTitleProgressEvent, error?: string): void {
