@@ -1454,6 +1454,19 @@ fn front_target(
 	}
 }
 
+/// Whether keys posted to `pid` now reach window `wid`, as `focus` shows
+/// ([`ax::KeyFocus::destination`]): the window it reports focused or, while it
+/// reports none, as Finder does during an inline rename, the window holding
+/// the focused element or the overlay holding it.
+fn keys_reach(
+	focus: ax::KeyFocus,
+	pid: libc::pid_t,
+	wid: u32,
+	parent_of: impl Fn(u32) -> Option<u32>,
+) -> bool {
+	focus.destination(pid, wid, parent_of) == ax::KeyDestination::Target(pid)
+}
+
 /// Makes `wid` the key window of its background application, as that
 /// application sees it, without activating it.
 ///
@@ -1496,13 +1509,8 @@ pub(super) fn make_key_in_background(
 	focus_in_overlay: bool,
 	visit: skylight::TargetVisit<'_>,
 ) -> CoreResult<bool> {
-	// While Finder renames a file it reports no focused window: its keys go
-	// to the window holding the focused element, the rename field's.
-	let takes_keys = || {
-		focus_in_overlay
-			|| ax::key_focus(pid).destination(pid, wid, skylight::window_parent)
-				== ax::KeyDestination::Target(pid)
-	};
+	let takes_keys =
+		|| focus_in_overlay || keys_reach(ax::key_focus(pid), pid, wid, skylight::window_parent);
 	match front_target(entry_front, skylight::front_pid(), pid, takes_keys) {
 		FrontTarget::Background => {},
 		FrontTarget::Key => return Ok(false),
@@ -7066,17 +7074,39 @@ mod tests {
 	}
 
 	#[test]
+	fn the_frontmost_applications_key_window_is_where_its_keys_go() {
+		use ax::FocusedWindow::{Id, Unmapped, Unreadable, Unreported};
+
+		let front = |focus, wid| {
+			let rename = |id| (id == 12).then_some(7);
+			front_target(EntryFront(Some(41)), Some(41), 41, || keys_reach(focus, 41, wid, rename))
+		};
+		// Finder reports no focused window while its rename field, overlay 12
+		// on window 7, has focus: keys for either window reach the field, and
+		// another Finder window would take them from it.
+		let renaming = ax::KeyFocus {
+			window:         Unreported,
+			element_window: Some(12),
+			element_mapped: true,
+		};
+		assert_eq!(front(renaming, 7), FrontTarget::Key);
+		assert_eq!(front(renaming, 12), FrontTarget::Key);
+		assert_eq!(front(renaming, 9), FrontTarget::UserSibling);
+		// A reported focused window decides; one that cannot be mapped or read
+		// proves nothing.
+		let focused = |window| ax::KeyFocus { window, element_window: Some(9), element_mapped: true };
+		assert_eq!(front(focused(Id(9)), 9), FrontTarget::Key);
+		assert_eq!(front(focused(Id(9)), 7), FrontTarget::UserSibling);
+		assert_eq!(front(focused(Unmapped), 9), FrontTarget::UserSibling);
+		assert_eq!(front(focused(Unreadable), 9), FrontTarget::UserSibling);
+	}
+
+	#[test]
 	fn a_target_brought_forward_before_its_key_window_step_refuses_even_as_key() {
 		// The user brought the background target forward and picked its window:
 		// delivering now would type into the window they just selected.
-		assert_eq!(
-			front_target(EntryFront(Some(9)), Some(7), 7, || true),
-			FrontTarget::CameForward
-		);
-		assert_eq!(
-			front_target(EntryFront(None), Some(7), 7, || true),
-			FrontTarget::CameForward
-		);
+		assert_eq!(front_target(EntryFront(Some(9)), Some(7), 7, || true), FrontTarget::CameForward);
+		assert_eq!(front_target(EntryFront(None), Some(7), 7, || true), FrontTarget::CameForward);
 	}
 
 	#[test]

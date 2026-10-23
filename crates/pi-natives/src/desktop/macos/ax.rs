@@ -752,6 +752,19 @@ fn element_window(element: &AXUIElement) -> Option<CFRetained<AXUIElement>> {
 	None
 }
 
+/// The window id of `element` when it is itself one of `pid`'s `AXWindows`
+/// though not an `AXWindow`, as Finder's inline rename field is: such an
+/// element has no window above it and stands for its own.
+fn listed_window_id(pid: libc::pid_t, element: &AXUIElement) -> Option<u32> {
+	let app = probe_application(pid)?;
+	let windows = copy_elements(&app, "AXWindows").ok()?;
+	windows
+		.iter()
+		.any(|window| **window == *element)
+		.then(|| window_id(element))
+		.flatten()
+}
+
 /// An element that stands for its own `WindowServer` window but is absent
 /// from `AXWindows`, with what can identify that window.
 #[derive(Clone, Copy, Debug)]
@@ -960,17 +973,13 @@ impl AxBackend for MacAx {
 			Some(window) => window_id(&window).ok_or_else(|| {
 				DesktopError::ax_failed("AX element's native window id is unavailable")
 			})?,
-			// Finder lists its inline rename field among its windows: the field
-			// has no window above it and maps to its own.
-			None => match window_id(element) {
+			None => match listed_window_id(pid, element) {
 				Some(wid) => wid,
 				None => {
 					// A destroyed element has no window either: say so as the
 					// `StaleRef` every element operation gives.
 					copy_held_attribute(element, "AXRole")?;
-					return Err(DesktopError::ax_failed(
-						"AX element has no identifiable owning window",
-					));
+					return Err(DesktopError::ax_failed("AX element has no identifiable owning window"));
 				},
 			},
 		};
