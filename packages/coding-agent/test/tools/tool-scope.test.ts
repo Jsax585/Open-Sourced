@@ -8,7 +8,6 @@ describe("ToolScope", () => {
 		const scope = new ToolScope({});
 
 		expect(scope.enforced).toBe(false);
-		expect(scope.targetsMcp).toBe(false);
 		expect(scope.restricted).toBe(false);
 
 		expect(scope.isExplicitlyAllowed("read")).toBe(false);
@@ -96,7 +95,6 @@ describe("ToolScope", () => {
 	test("blanket deny blocks normal tools, keeps hidden protocol tools, and denies all servers", () => {
 		const scope = new ToolScope({ disallowedTools: ["*"] });
 
-		expect(scope.targetsMcp).toBe(true);
 		expect(scope.restricted).toBe(true);
 
 		expect(scope.isDenied("read")).toBe(true);
@@ -134,7 +132,7 @@ describe("ToolScope", () => {
 
 	test("capped minted keys match by owner metadata even when name prefix was truncated", () => {
 		const longServerName = "very long server name that gets truncated at the 64 character cap boundary for testing";
-		const sanitizedServer = sanitizeNamePart(longServerName, "server", { domain: "mint" });
+		const sanitizedServer = sanitizeNamePart(longServerName, "server");
 		const longServerPattern = `mcp__${sanitizedServer}_*`;
 
 		// Build a 64-char capped minted name mirroring the MCP minting cap logic:
@@ -227,14 +225,12 @@ describe("ToolScope", () => {
 		const scope = new ToolScope({ disallowedTools: ["**"] });
 		expect(scope.isDenied("read")).toBe(true);
 		expect(scope.deniesServer("any")).toBe(true);
-		expect(scope.targetsMcp).toBe(true);
 		expect(scope.deniesAllTools).toBe(true);
 		expect(scope.isScopedIn("yield")).toBe(true);
 	});
 
 	test("brace glob targets MCP and matches server namespaces", () => {
 		const scope = new ToolScope({ disallowedTools: ["{mcp__foo_*,mcp__bar_*}"] });
-		expect(scope.targetsMcp).toBe(true);
 		expect(scope.deniesServer("foo")).toBe(true);
 		expect(scope.deniesServer("baz")).toBe(false);
 		expect(scope.isDenied("mcp__foo_q", "foo")).toBe(true);
@@ -242,7 +238,7 @@ describe("ToolScope", () => {
 
 	test("allow-side owner match for capped names using server wildcard pattern", () => {
 		const longServerName = "very long server name that gets truncated at the 64 character cap boundary for testing";
-		const segment = sanitizeNamePart(longServerName, "server", { domain: "mint" });
+		const segment = sanitizeNamePart(longServerName, "server");
 		const fullMintedName = `mcp__${segment}_query_special_tool_name`;
 		const hash = Bun.hash(fullMintedName).toString(36).slice(0, 8);
 		const capped = `${fullMintedName.slice(0, 64 - hash.length - 1)}_${hash}`;
@@ -305,6 +301,51 @@ describe("ToolScope", () => {
 		expect(nonServerDenyPatterns.deniesServer("github")).toBe(false);
 		expect(nonServerDenyPatterns.deniesServer("foo")).toBe(false);
 	});
+	test("runtime scope keeps an enforced half-pair the startup scope kept", () => {
+		// `tools: [checkpoint]` lists no `rewind`, but the sister is unlisted —
+		// not denied — so startup keeps the half-pair. A runtime filter pairing
+		// on `!isScopedIn` would drop it (`rewind` reads as not scoped in);
+		// pairing must judge `isDenied`, matching startup.
+		const scope = new ToolScope({ allowedToolNames: ["checkpoint"] });
+		expect(scope.isScopedIn("checkpoint")).toBe(true);
+		expect(scope.isScopedIn("rewind")).toBe(false);
+		expect(scope.isDenied("checkpoint")).toBe(false);
+		expect(scope.isDenied("rewind")).toBe(false);
+	});
+
+	test("trailing-** server entries judge by owner like trailing-*", () => {
+		// Without ownership classification, `mcp__foo_**` falls through to plain
+		// prefix matching and grants/strips server `foo_bar`'s tools.
+		const allowScope = new ToolScope({ allowedToolNames: ["mcp__foo_**"] });
+		expect(allowScope.isExplicitlyAllowed("mcp__foo_q", "foo")).toBe(true);
+		expect(allowScope.isExplicitlyAllowed("mcp__foo_bar_q", "foo_bar")).toBe(false);
+		const denyScope = new ToolScope({ disallowedTools: ["mcp__foo_**"] });
+		expect(denyScope.isDenied("mcp__foo_q", "foo")).toBe(true);
+		expect(denyScope.isDenied("mcp__foo_bar_q", "foo_bar")).toBe(false);
+		expect(denyScope.deniesServer("foo")).toBe(true);
+		expect(denyScope.deniesServer("foo_bar")).toBe(false);
+	});
+
+	test("deny-side alias resolution requires the declared owning server", () => {
+		// `mcp__foo__bar_query` (Claude spelling: server `foo`, tool `bar_query`)
+		// mints to `mcp__foo_bar_query`, which may belong to server `foo_bar`
+		// (tool `query`). The deny must not strip the other server's tool.
+		const scope = new ToolScope({ disallowedTools: ["mcp__foo__bar_query"] }).setAliasResolver(entry =>
+			entry === "mcp__foo__bar_query" ? "mcp__foo_bar_query" : undefined,
+		);
+		expect(scope.isDenied("mcp__foo_bar_query", "foo")).toBe(true);
+		expect(scope.isDenied("mcp__foo_bar_query", "foo_bar")).toBe(false);
+	});
+
+	test("brace-spelled allow entries resolve aliases after expansion", () => {
+		// `mcp__{a,b}__tool` must grant both minted keys, matching the deny
+		// side — skipping alias resolution on unexpanded entries grants neither.
+		const scope = new ToolScope({ allowedToolNames: ["mcp__{a,b}__tool"] }).setAliasResolver(entry =>
+			entry === "mcp__a__tool" ? "mcp__a_tool" : entry === "mcp__b__tool" ? "mcp__b_tool" : undefined,
+		);
+		expect(scope.isExplicitlyAllowed("mcp__a_tool")).toBe(true);
+		expect(scope.isExplicitlyAllowed("mcp__b_tool")).toBe(true);
+	});
 
 	test("expandBraceAlternatives expands brace alternatives and ignores unbalanced braces", () => {
 		expect(expandBraceAlternatives("a{b,c}d")).toEqual(["abd", "acd"]);
@@ -312,5 +353,8 @@ describe("ToolScope", () => {
 		expect(expandBraceAlternatives("{mcp__a_*,mcp__b_*}")).toEqual(["mcp__a_*", "mcp__b_*"]);
 		expect(expandBraceAlternatives("plain")).toEqual(["plain"]);
 		expect(expandBraceAlternatives("unclosed{a,b")).toEqual(["unclosed{a,b"]);
+		// Nested alternatives recurse through top-level commas; splitting every
+		// comma shreds `a{b,{c,d}}e` into `abe` plus garbage literals.
+		expect(expandBraceAlternatives("a{b,{c,d}}e")).toEqual(["abe", "ace", "ade"]);
 	});
 });

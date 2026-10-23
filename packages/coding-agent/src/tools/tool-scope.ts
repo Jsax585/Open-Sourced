@@ -3,6 +3,7 @@ import {
 	expandDisallowedTools,
 	HIDDEN_TOOL_NAMES,
 	type HiddenToolName,
+	isWholeServerPattern,
 	mcpWildcardServerSegment,
 	normalizeToolNames,
 } from "./builtin-names";
@@ -37,7 +38,7 @@ function claudeSpellingServerSegment(entry: string): string | undefined {
 
 function matchServerEntries(entries: readonly ServerEntry[], ownerSegment: string, name: string): boolean {
 	for (const entry of entries) {
-		const isWholeServer = entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment);
+		const isWholeServer = isWholeServerPattern(entry.pattern, entry.segment) && entry.segmentGlob.match(ownerSegment);
 		if (isWholeServer) {
 			return true;
 		}
@@ -155,11 +156,6 @@ export class ToolScope {
 		return this.#allow !== undefined;
 	}
 
-	/** Whether the declaration targets MCP access at all (`tools:` enforced, or a `*` / `mcp__…` deny entry). */
-	get targetsMcp(): boolean {
-		return this.enforced || this.#deny.targetsMcp;
-	}
-
 	/** Whether anything is restricted at all: an enforced allowlist or at least one deny entry. */
 	get restricted(): boolean {
 		return this.enforced || this.#deny.entries.length > 0;
@@ -193,7 +189,7 @@ export class ToolScope {
 	isExplicitlyAllowed(name: string, mcpServerName?: string): boolean {
 		if (this.#allow === undefined) return false;
 		if (mcpServerName !== undefined) {
-			const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
+			const ownerSegment = sanitizeNamePart(mcpServerName, "server");
 			if (matchServerEntries(this.#allowServerEntries, ownerSegment, name)) {
 				return true;
 			}
@@ -209,15 +205,14 @@ export class ToolScope {
 			// `mcp__foo__bar_query` also resolves to `mcp__foo_bar_query` when that
 			// key belongs to server `foo_bar`. The declared server must match the
 			// tool's owning server before an alias grant applies.
-			const ownerSegment =
-				mcpServerName !== undefined ? sanitizeNamePart(mcpServerName, "server", { domain: "mint" }) : undefined;
-			return this.#allow.declared.some(entry => {
+			const ownerSegment = mcpServerName !== undefined ? sanitizeNamePart(mcpServerName, "server") : undefined;
+			return this.#allow.entries.some(entry => {
 				if (hasGlobChars(entry) || resolve(entry) !== name) return false;
 				const declaredServer = claudeSpellingServerSegment(entry);
 				return (
 					declaredServer === undefined ||
 					ownerSegment === undefined ||
-					sanitizeNamePart(declaredServer, "server", { domain: "mint" }) === ownerSegment
+					sanitizeNamePart(declaredServer, "server") === ownerSegment
 				);
 			});
 		}
@@ -229,7 +224,7 @@ export class ToolScope {
 		if (HIDDEN_TOOL_NAMES.includes(name as HiddenToolName)) return false;
 		if (this.#deny.blanket) return true;
 		if (mcpServerName !== undefined) {
-			const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
+			const ownerSegment = sanitizeNamePart(mcpServerName, "server");
 			if (matchServerEntries(this.#denyServerEntries, ownerSegment, name)) {
 				return true;
 			}
@@ -244,7 +239,19 @@ export class ToolScope {
 		}
 		const resolve = this.#resolveAlias;
 		if (resolve !== undefined) {
-			return this.#deny.entries.some(entry => !hasGlobChars(entry) && resolve(entry) === name);
+			// Same lossy-mint guard as the allow side: a Claude-spelled deny must
+			// name the tool's owning server, or a mint collision lets one
+			// server's deny strip another server's tool.
+			const ownerSegment = mcpServerName !== undefined ? sanitizeNamePart(mcpServerName, "server") : undefined;
+			return this.#deny.entries.some(entry => {
+				if (hasGlobChars(entry) || resolve(entry) !== name) return false;
+				const declaredServer = claudeSpellingServerSegment(entry);
+				return (
+					declaredServer === undefined ||
+					ownerSegment === undefined ||
+					sanitizeNamePart(declaredServer, "server") === ownerSegment
+				);
+			});
 		}
 		return false;
 	}
@@ -263,9 +270,9 @@ export class ToolScope {
 	deniesServer(serverName: string): boolean {
 		if (this.#deny.blanket) return true;
 		if (this.#deny.entries.includes("mcp__*") || this.#deny.entries.includes("mcp__**")) return true;
-		const ownerSegment = sanitizeNamePart(serverName, "server", { domain: "mint" });
+		const ownerSegment = sanitizeNamePart(serverName, "server");
 		for (const entry of this.#denyServerEntries) {
-			if (entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment)) {
+			if (isWholeServerPattern(entry.pattern, entry.segment) && entry.segmentGlob.match(ownerSegment)) {
 				return true;
 			}
 		}

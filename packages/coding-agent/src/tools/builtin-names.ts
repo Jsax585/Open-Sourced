@@ -166,24 +166,29 @@ export function isMCPToolName(name: string): boolean {
 
 /**
  * Server segment of an `mcp__<server>_*` wildcard pattern (text after `mcp__`
- * up to the trailing `_` before the `*`). Applies to trailing-`*` entries only.
- * The pattern grammar is glob-based; the helper extracts the server segment of
- * a trailing-`*` `mcp__<server>_*` entry for ownership matching. A pattern not
- * starting with `mcp__` or not ending with `*` has no server segment.
+ * up to the trailing `_` before the star run). Applies to trailing-star
+ * entries only: one `*` or several (`**` behaves like `*` — tool names carry
+ * no `/`, so there is nothing for recursive glob to cross). Without this, a
+ * `mcp__foo_**` entry would fall through to plain prefix matching and strip
+ * (or grant) server `foo_bar`'s tools, reintroducing the collision the
+ * owner-consistency guard exists to prevent.
+ * A tool-prefix wildcard like `mcp__foo_query*` matches by name prefix alone —
+ * its last underscore is a tool-name separator, not the server/tool boundary,
+ * and the fallback must not overmatch the server's whole tool set.
+ * A pattern not starting with `mcp__` or not ending with `*` has no server segment.
  */
 export function mcpWildcardServerSegment(pattern: string): string | undefined {
-	if (!pattern.endsWith("*")) return undefined;
-	const base = pattern.slice(0, -1);
+	const base = pattern.replace(/\*+$/, "");
+	if (base === pattern || base.length === 0) return undefined;
 	if (!base.startsWith("mcp__")) return undefined;
-	// Only the bare `mcp__<server>_*` form (pattern ends with `_` before the
-	// `*`) applies the ownership fallback. A tool-prefix wildcard like
-	// `mcp__foo_query*` matches by name prefix alone — its last underscore is a
-	// tool-name separator, not the server/tool boundary, and the fallback must
-	// not overmatch the server's whole tool set.
 	if (!base.endsWith("_")) return undefined;
 	const afterPrefix = base.slice("mcp__".length);
 	const sep = afterPrefix.lastIndexOf("_");
 	return sep < 0 ? undefined : afterPrefix.slice(0, sep);
+}
+/** Whether a server-entry pattern is the whole-server form (`mcp__<segment>_` plus a star run). */
+export function isWholeServerPattern(pattern: string, segment: string): boolean {
+	return new RegExp(`^mcp__${segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_\\*+$`).test(pattern);
 }
 
 /**
@@ -238,9 +243,10 @@ export function isToolDisallowed(
 	}
 
 	if (mcpServerName !== undefined) {
-		const ownerSegment = sanitizeNamePart(mcpServerName, "server", { domain: "mint" });
+		const ownerSegment = sanitizeNamePart(mcpServerName, "server");
 		for (const entry of serverEntries) {
-			const isWholeServer = entry.pattern === `mcp__${entry.segment}_*` && entry.segmentGlob.match(ownerSegment);
+			const isWholeServer =
+				isWholeServerPattern(entry.pattern, entry.segment) && entry.segmentGlob.match(ownerSegment);
 			if (isWholeServer) return true;
 			const isOwnerConsistent =
 				entry.segmentGlob.match(ownerSegment) ||

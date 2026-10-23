@@ -1435,7 +1435,7 @@ const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 /** Matches the truncation applied to per-server instructions inside `rebuildSystemPrompt`. */
 const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
-export const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["manage_skill", "learn", "context_notes", "new_context"];
+const SESSION_MANAGED_BUILTIN_TOOL_NAMES = ["manage_skill", "learn", "context_notes", "new_context"];
 
 let sshCleanupRegistered = false;
 
@@ -2664,7 +2664,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// internal-urls/mcp-protocol.ts): judge the owning server against this
 		// session, or a scoped subagent reads any connected server's resources.
 		toolSession.isMCPServerResourceAllowed = serverName => session?.isMCPServerResourceAllowed(serverName) ?? true;
-		toolSession.isToolScopedIn = (name, mcpServerName) => session?.isToolScopedIn(name, mcpServerName) ?? true;
 		toolSession.enableMCP = enableMCP;
 		const deferMCPDiscoveryForUI = enableMCP && !mcpManager && options.hasUI === true;
 		const customTools: CustomTool[] = [];
@@ -4178,11 +4177,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// registered tool's `mcpServerName`, never a `mcp__<server>_` name
 				// prefix — minted names are lossy-sanitized and length-capped.
 				// Unrestricted sessions keep every connected server's instructions,
-				// byte-identical to before. Ownership filtering runs only when the
-				// scope targets MCP access: an unrelated disallow keeps every
-				// server's instructions (resource-only servers have no owned tool
-				// to match).
-				const scopeTargetsMcp = toolScope.targetsMcp;
+				// byte-identical to before. Ownership filtering runs for any
+				// restricted scope: a glob deny without `mcp__` text (`*query*`)
+				// can still strip a single-tool server's only tool, and the
+				// resource gate (which always applies) would deny its resources
+				// while the prompt kept guidance for tools the session cannot
+				// call. An unrelated deny matches no owned tool, so every server
+				// keeps its instructions — identical outcome, one code path.
+				const scopeTargetsMcp = toolScope.restricted;
 				let scopedInServerNames: Set<string> | undefined;
 				if (scopeTargetsMcp) {
 					scopedInServerNames = new Set();
@@ -4378,9 +4380,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const mcpServerName = (toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)?.mcpServerName;
 			return typeof mcpServerName === "string" ? mcpServerName : undefined;
 		};
+		const resolveDeclaredAlias = (entry: string): string | undefined =>
+			hasGlobChars(entry)
+				? undefined
+				: resolveMCPToolAlias(entry, candidate => (toolRegistry.has(candidate) ? { name: candidate } : undefined))
+						?.name;
 		if (enforceToolAllowlist && explicitlyRequestedToolNames) {
 			const unresolvable = explicitlyRequestedToolNames.filter(entry => {
-				const entryScope = new ToolScope({ allowedToolNames: [entry] });
+				const entryScope = new ToolScope({ allowedToolNames: [entry] }).setAliasResolver(resolveDeclaredAlias);
 				return !toolNamesFromRegistry.some(name => entryScope.isExplicitlyAllowed(name, ownerOf(name)));
 			});
 			if (unresolvable.length > 0) {
@@ -4388,13 +4395,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 		const declaredScope = explicitlyRequestedToolNames
-			? new ToolScope({ allowedToolNames: explicitlyRequestedToolNames }).setAliasResolver(entry =>
-					hasGlobChars(entry)
-						? undefined
-						: resolveMCPToolAlias(entry, candidate =>
-								toolRegistry.has(candidate) ? { name: candidate } : undefined,
-							)?.name,
-				)
+			? new ToolScope({ allowedToolNames: explicitlyRequestedToolNames }).setAliasResolver(resolveDeclaredAlias)
 			: undefined;
 		const requestsTool = (name: string): boolean =>
 			enforceToolAllowlist
@@ -4958,8 +4959,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// everything, leaving top-level behaviour unchanged.
 		const scopedAdvisorToolNames = new Set(
 			withoutSiblingTools(
-				builtAdvisorTools.map(tool => tool.name),
-				name => !toolScope.isScopedIn(name),
+				builtAdvisorTools.map(tool => tool.name).filter(name => toolScope.isScopedIn(name)),
+				name => toolScope.isDenied(name),
 			),
 		);
 		const advisorTools: Tool[] = builtAdvisorTools

@@ -39,7 +39,7 @@ import { SERVER_INSTRUCTIONS } from "./fixtures/instructions-mcp";
 // truncates the whole name and appends a hash suffix, so `mcp__<server>_*`
 // cannot match by name prefix and must match by `mcpServerName` ownership.
 const LONG_SERVER_NAME = "very long server name that gets truncated at the 64 character cap boundary for testing";
-const LONG_SERVER_DISALLOW_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_*`;
+const LONG_SERVER_DISALLOW_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server")}_*`;
 
 import { cfgExternalThinking } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgPlanEnabled } from "@oh-my-pi/pi-coding-agent/plan-mode/settings";
@@ -3678,6 +3678,47 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(active).toContain("checkpoint");
 			expect(active).not.toContain("rewind");
 			expect(active).not.toContain("bash");
+			// The runtime scope must keep the enforced half-pair too: `rewind`
+			// is unlisted, not denied, so a mutation re-applying the active set
+			// (cold-revive clamp, MCP refresh) must not drop `checkpoint`.
+			await session.setActiveToolsByName([...active]);
+			expect(session.getActiveToolNames()).toContain("checkpoint");
+		} finally {
+			await session.dispose();
+		}
+	});
+	it("resolves Claude-spelled allowlist entries before warning about unresolvable names", async () => {
+		// `mcp__srv_x__tool` (Claude spelling: server `srv-x`, tool `tool`)
+		// mints to the registered `mcp__srv_x_tool`: the unresolvable-allowlist
+		// diagnostic must resolve the alias like the session scope does, or it
+		// warns about an entry that actually grants a tool.
+		const tempDir = makeTempDir();
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		const aliasExtension: ExtensionFactory = pi => {
+			pi.registerTool({
+				name: "mcp__srv_x_tool",
+				label: "srv-x/tool",
+				description: "Aliased fixture tool.",
+				parameters: type({}),
+				mcpServerName: "srv-x",
+				mcpToolName: "tool",
+				async execute() {
+					return { content: [{ type: "text", text: "ok" }] };
+				},
+			});
+		};
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			extensions: [aliasExtension],
+			toolNames: ["mcp__srv_x__tool"],
+			enforceToolAllowlist: true,
+		});
+		try {
+			expect(session.getActiveToolNames()).toContain("mcp__srv_x_tool");
+			expect(warn).not.toHaveBeenCalledWith(
+				"Subagent tools: allowlist entries match no registered tool",
+				expect.anything(),
+			);
 		} finally {
 			await session.dispose();
 		}

@@ -372,8 +372,6 @@ export interface ToolSession {
 	getEvalBridgeToolNames?: () => readonly string[];
 	/** Return whether a built-in tool is active in this turn's tool set. */
 	isToolActive?: (name: string) => boolean;
-	/** Whether a tool survives this session's tool scope (allowlist + disallow patterns). */
-	isToolScopedIn?: (name: string, mcpServerName?: string) => boolean;
 	/**
 	 * Whether an MCP server's resources may be listed or read under this
 	 * session's tool scope. `read mcp://…` resolves through a process-global

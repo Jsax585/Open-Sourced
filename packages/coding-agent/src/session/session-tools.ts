@@ -1217,10 +1217,7 @@ export class SessionTools {
 	 * against the tool's actual owning server. Alias resolution lives in `ToolScope`.
 	 */
 	isToolScopedIn(name: string, mcpServerName?: string): boolean {
-		const registryServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)
-			?.mcpServerName;
-		const owner = mcpServerName ?? (typeof registryServerName === "string" ? registryServerName : undefined);
-		return this.#toolScope.isScopedIn(name, owner);
+		return this.#toolScope.isScopedIn(name, mcpServerName ?? this.#ownerOf(name));
 	}
 
 	/**
@@ -1231,11 +1228,19 @@ export class SessionTools {
 	 */
 	#scopeActiveToolSelection(toolNames: string[]): string[] {
 		if (!this.#toolScope.restricted) return toolNames;
-		// Pair-aware, like the startup scope: a runtime mutation (extension
-		// hook, internal toggle, cold-revive clamp) must not readmit one half of
-		// a sibling pair whose other half the scope removed — the survivor's
-		// companion call could never succeed.
-		return withoutSiblingTools(toolNames, name => !this.isToolScopedIn(name));
+		// Scope first, then pair: an enforced half-pair (`tools: [checkpoint]`,
+		// whose sister `rewind` is unlisted but NOT denied) survives startup,
+		// so runtime mutations must keep it too. Pairing on `!isScopedIn`
+		// would drop it — the sister reads as "not scoped in" — breaking
+		// live/revive parity on every cold-revive clamp and MCP refresh.
+		const scoped = toolNames.filter(name => this.isToolScopedIn(name));
+		return withoutSiblingTools(scoped, name => this.#toolScope.isDenied(name, this.#ownerOf(name)));
+	}
+
+	#ownerOf(name: string): string | undefined {
+		const registryServerName = (this.#toolRegistry.get(name) as { mcpServerName?: unknown } | undefined)
+			?.mcpServerName;
+		return typeof registryServerName === "string" ? registryServerName : undefined;
 	}
 
 	async #applyActiveToolsByName(toolNames: string[], forcePromptRefresh = false, signal?: AbortSignal): Promise<void> {

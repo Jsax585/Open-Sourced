@@ -462,8 +462,8 @@ async function reconnectWithAbort(
  * if the prefix-strip or cap rules change, the legacy alias changes with them.
  */
 function mintMCPToolName(serverName: string, toolName: string, keepDigits: boolean): string {
-	const sanitizedServerName = sanitizeNamePart(serverName, "server", { domain: "mint", keepDigits });
-	const sanitizedToolName = sanitizeNamePart(toolName, "tool", { domain: "mint", keepDigits });
+	const sanitizedServerName = sanitizeNamePart(serverName, "server", { keepDigits });
+	const sanitizedToolName = sanitizeNamePart(toolName, "tool", { keepDigits });
 
 	// Strip redundant server name prefix from tool name if present
 	const prefixWithUnderscore = `${sanitizedServerName}_`;
@@ -589,7 +589,7 @@ export function canonicalMCPToolNameCandidates(name: string): string[] {
 	}
 	// The whole-suffix candidate has no boundary, so there is no minted fallback
 	// shape to reproduce: a suffix that sanitizes away is a dead end.
-	const sanitizedSuffix = sanitizeNamePart(suffix, "", { domain: "mint", keepDigits: true });
+	const sanitizedSuffix = sanitizeNamePart(suffix, "", { keepDigits: true });
 	if (sanitizedSuffix.length > 0) {
 		add(capMCPToolNameLength(`${MCP_TOOL_NAME_PREFIX}${sanitizedSuffix}`));
 	}

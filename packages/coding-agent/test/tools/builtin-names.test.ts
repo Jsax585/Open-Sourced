@@ -12,7 +12,7 @@ import {
 // `createMCPToolName` truncates the whole name and appends a hash suffix, so
 // the `mcp__<server>_` prefix is no longer present in the registry key.
 const LONG_SERVER_NAME = "very long server name that gets truncated at the 64 character cap boundary for testing";
-const LONG_SERVER_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_*`;
+const LONG_SERVER_PATTERN = `mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server")}_*`;
 const CAPPED_MINTED_NAME = createMCPToolName(LONG_SERVER_NAME, "query_special_tool_name");
 
 describe("isToolDisallowed", () => {
@@ -93,9 +93,7 @@ describe("isToolDisallowed", () => {
 	test("capped minted names need mcpServerName metadata to match a server wildcard", () => {
 		// Sanity: the fixture really is a capped name whose prefix no longer matches.
 		expect(CAPPED_MINTED_NAME.length).toBe(64);
-		expect(
-			CAPPED_MINTED_NAME.startsWith(`mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server", { domain: "mint" })}_`),
-		).toBe(false);
+		expect(CAPPED_MINTED_NAME.startsWith(`mcp__${sanitizeNamePart(LONG_SERVER_NAME, "server")}_`)).toBe(false);
 		// Name-only: the truncated + hashed name misses the prefix match.
 		expect(isToolDisallowed(CAPPED_MINTED_NAME, [LONG_SERVER_PATTERN])).toBe(false);
 		// Ownership metadata (raw config server name) restores the one-server match.
@@ -206,5 +204,10 @@ describe("mcpWildcardServerSegment", () => {
 		expect(mcpWildcardServerSegment("mcp__github_a")).toBeUndefined();
 		expect(mcpWildcardServerSegment("mcp__github_*")).toBe("github");
 		expect(mcpWildcardServerSegment("mcp__foo_query*")).toBeUndefined();
+		// `**` behaves like `*` (tool names carry no `/`): the entry must
+		// classify as a server wildcard, or it falls through to plain prefix
+		// matching and overmatches neighbouring servers.
+		expect(mcpWildcardServerSegment("mcp__foo_**")).toBe("foo");
+		expect(mcpWildcardServerSegment("mcp__*")).toBeUndefined();
 	});
 });

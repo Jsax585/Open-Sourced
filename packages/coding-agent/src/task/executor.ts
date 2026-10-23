@@ -88,6 +88,7 @@ import {
 } from "@oh-my-pi/pi-tui/thinking";
 import type { ContextFileEntry, ToolSession } from "../tools";
 import { expandDisallowedTools, expandExecToolAlias, isToolDisallowed } from "../tools/builtin-names";
+import { ToolScope } from "../tools/tool-scope";
 import { resolveEvalBackends } from "../tools/eval-backends";
 import { isIrcEnabled } from "../irc/messaging";
 import { LIST_STATUS_ORDER } from "@oh-my-pi/pi-tui/tools/irc";
@@ -4273,6 +4274,18 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (toolNames) {
 		toolNames = expandExecToolAlias(toolNames, expandedDisallowed, evalBackends);
 	}
+	// `tools:` entries are globs now (`*`, `mcp__db_*`, `{read,write}`), so the
+	// membership tests below (wait auto-add, IRC enablement, eval preflight,
+	// persisted write) must judge the GRANT, not literal list membership: a
+	// glob-granted builtin behaves exactly like a literally-named one. The
+	// child session's own scope re-judges with owner metadata at startup; this
+	// owner-blind probe only answers "does the declaration grant this builtin".
+	const declarationScope =
+		toolNames === undefined
+			? undefined
+			: new ToolScope({ allowedToolNames: toolNames, disallowedTools: expandedDisallowed });
+	const declarationGrants = (name: string): boolean =>
+		declarationScope?.isScopedIn(name) ?? !isToolDisallowed(name, expandedDisallowed);
 	// Agents that can start background work (`task`, `bash`) need `wait` to block on it;
 	// without it they `sleep`. Runs after `exec` expansion and the max-depth `task` strip.
 	// `createTools` still drops it when no wake source (async/IRC/services) is enabled.
@@ -4280,8 +4293,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (
 		toolNames &&
 		!options.restrictToolNames &&
-		!toolNames.includes("wait") &&
-		(toolNames.includes("task") || toolNames.includes("bash"))
+		!declarationGrants("wait") &&
+		(declarationGrants("task") || declarationGrants("bash"))
 	) {
 		toolNames = [...toolNames, "wait"];
 	}
@@ -4290,7 +4303,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		!preparedSession &&
 		options.enableIrc !== false &&
 		isIrcEnabled(subagentSettings, childDepth) &&
-		(toolNames === undefined || toolNames.includes("write"));
+		(toolNames === undefined || declarationGrants("write"));
 
 	const modelPatterns = normalizeModelPatterns(modelOverride ?? agent.model);
 	const sessionFile = subtaskSessionFile ?? null;
@@ -4303,9 +4316,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const skipPythonPreflight =
-		(Array.isArray(toolNames) && !toolNames.includes("eval")) ||
-		(disallowedTools !== undefined && isToolDisallowed("eval", disallowedTools));
+	const skipPythonPreflight = toolNames === undefined ? false : !declarationGrants("eval");
 
 	const completionProbe = isCompletionProbeEnabled(settings, parentDepth);
 	const monitor = createSubagentRunMonitor({
@@ -4845,7 +4856,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// replayed as an explicit grant during cold revival, so persist write
 			// only when the original agent contract granted it.
 			const persistedSubagentTools =
-				toolNames !== undefined && !toolNames.includes("write")
+				toolNames !== undefined && !declarationGrants("write")
 					? enabledSubagentTools.filter(name => name !== "write")
 					: enabledSubagentTools;
 

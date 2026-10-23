@@ -20,14 +20,8 @@ export interface NamePatternSet {
 	readonly entries: readonly string[];
 	/** An entry is a bare `*` or `**`: every name matches, whatever its spelling. */
 	readonly blanket: boolean;
-	/** The set targets MCP tools (`*`, `**`, or an entry containing `mcp__`). */
-	readonly targetsMcp: boolean;
-	/**
-	 * Whether `name` (or, when given, its `sanitize`d spelling) matches an entry.
-	 * `sanitize` lets a caller match a raw identifier against the canonical one it
-	 * was sanitized to (e.g. MCP advertised names against the filter domain).
-	 */
-	readonly matches: (name: string, sanitize?: (name: string) => string) => boolean;
+	/** Whether `name` matches an entry (exact-first, then `Bun.Glob`). */
+	readonly matches: (name: string) => boolean;
 	/**
 	 * Entries as declared, before brace expansion. `entries` expands `a{b,c}` into
 	 * `ab`/`ac`, which would otherwise make a brace alternative look like a
@@ -52,10 +46,22 @@ export function expandBraceAlternatives(pattern: string): string[] {
 		else if (ch === "}" && --depth === 0) {
 			const head = pattern.slice(0, open);
 			const tail = pattern.slice(i + 1);
-			return pattern
-				.slice(open + 1, i)
-				.split(",")
-				.flatMap(alternative => expandBraceAlternatives(`${head}${alternative.trim()}${tail}`));
+			// Split the body on top-level commas only: a nested `a{b,{c,d}}e`
+			// must expand through recursion (`abe`/`ace`/`ade`), not shred
+			// into garbage literals (`a{ce`, `ad}e`) that silently mis-grant.
+			const alternatives: string[] = [];
+			let alternativeDepth = 0;
+			let start = open + 1;
+			for (let j = open + 1; j < i; j++) {
+				if (pattern[j] === "{") alternativeDepth++;
+				else if (pattern[j] === "}") alternativeDepth--;
+				else if (pattern[j] === "," && alternativeDepth === 0) {
+					alternatives.push(pattern.slice(start, j));
+					start = j + 1;
+				}
+			}
+			alternatives.push(pattern.slice(start, i));
+			return alternatives.flatMap(alternative => expandBraceAlternatives(`${head}${alternative.trim()}${tail}`));
 		}
 	}
 	return [pattern];
@@ -78,14 +84,10 @@ export function compileNamePatterns(patterns: Iterable<string>): NamePatternSet 
 		entries,
 		declared,
 		blanket,
-		targetsMcp: blanket || entries.some(entry => entry.includes("mcp__")),
-		matches(name, sanitize) {
+		matches(name) {
 			if (blanket) return true;
-			const spellings = sanitize ? [name, sanitize(name)] : [name];
 			for (const { pattern, glob } of compiled) {
-				for (const spelling of spellings) {
-					if (pattern === spelling || glob?.match(spelling) === true) return true;
-				}
+				if (pattern === name || glob?.match(name) === true) return true;
 			}
 			return false;
 		},

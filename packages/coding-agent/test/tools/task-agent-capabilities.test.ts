@@ -126,6 +126,35 @@ describe("task agent capability descriptions", () => {
 		expect(isReadOnlyAgent({ ...base, disallowedTools: ["write"] })).toBe(false);
 	});
 
+	it("never strips an MCP tool by server-wildcard prefix without owner metadata", () => {
+		// `mcp__foo_bar_q` is owned by server `foo_bar`, but its minted name
+		// starts with `mcp__foo_`: a name-only prefix match would strip it while
+		// the owner-aware runtime keeps it, misreporting a writable child as
+		// read-only. Only exact names and whole-registry blankets deny here.
+		const base: AgentDefinition = {
+			name: "x",
+			description: "x",
+			systemPrompt: "x",
+			source: "bundled",
+		};
+		expect(isReadOnlyAgent({ ...base, tools: ["read", "mcp__foo_bar_q"], disallowedTools: ["mcp__foo_*"] })).toBe(
+			false,
+		);
+		expect(isReadOnlyAgent({ ...base, tools: ["read", "mcp__foo_bar_q"], disallowedTools: ["mcp__*"] })).toBe(true);
+		expect(isReadOnlyAgent({ ...base, tools: ["read", "mcp__foo_bar_q"], disallowedTools: ["mcp__foo_bar_q"] })).toBe(
+			true,
+		);
+	});
+
+	it("treats ** like * as a deny-all disallow", () => {
+		const base: AgentDefinition = {
+			name: "x",
+			description: "x",
+			systemPrompt: "x",
+			source: "bundled",
+		};
+		expect(isReadOnlyAgent({ ...base, disallowedTools: ["**"] })).toBe(true);
+	});
 	it("keeps `wait` read-only while any exec-tier tool disqualifies the agent", () => {
 		const scout = agentByName(loadBundledAgents(), "scout");
 

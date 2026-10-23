@@ -1499,6 +1499,35 @@ describe("runSubprocess yield reminders", () => {
 		expect(callArgs.enforceToolAllowlist).toBeFalsy();
 		expect(callArgs.disallowedTools).toBeUndefined();
 	});
+	it("grants wait and IRC write through tools globs, not literal membership", async () => {
+		// `tools: ["b*h"]` grants `bash` by glob without naming `wait`, so the
+		// spawn-time probes must judge the grant: literal `.includes` misses the
+		// glob-granted `bash` and leaves a background-capable child without
+		// `wait`. (A bare `*` grants `wait` itself, so no auto-add fires there.)
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "yield-glob-grant",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+		const spy = mockCreateAgentSession(session);
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-glob-grant",
+			agent: { ...baseAgent, tools: ["b*h"] },
+		});
+
+		expect(result.exitCode).toBe(0);
+		const callArgs = spy.mock.calls[0][0] as { toolNames?: string[]; enableIrc?: boolean };
+		expect(callArgs.toolNames).toContain("wait");
+	});
 	it("persists declaredTools without parent-owned tools", async () => {
 		// The live spawn strips parent-owned `todo` from the subagent's active
 		// set, but the declarative allowlist still names it. `declaredTools`

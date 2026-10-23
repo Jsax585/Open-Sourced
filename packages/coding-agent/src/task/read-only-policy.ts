@@ -1,5 +1,5 @@
 import type { EvalBackendsAllowance } from "../tools/eval-backends";
-import { expandDisallowedTools, expandExecToolAlias, isToolDisallowed } from "../tools/builtin-names";
+import { expandDisallowedTools, expandExecToolAlias, isMCPToolName, isToolDisallowed } from "../tools/builtin-names";
 import type { AgentDefinition } from "./types";
 
 // Built-in tools whose approval tier is "read" (see tool classes' `approval`).
@@ -32,18 +32,21 @@ export function isReadOnlyAgent(agent: AgentDefinition, evalBackends?: EvalBacke
 	// writable — and the parent uses this to decide whether it may assign
 	// edits to the child.
 	// Name-only matching (no `mcpServerName` metadata): `AgentDefinition` carries
-	// declared tool names, not registry tool objects, so a capped-name MCP server
-	// needs an exact-name disallow here or relies on the sdk-level metadata-aware
-	// filters. A MCP tool surviving this check is at worst classified non-read-only
-	// (fail-safe) — it can never turn a mutating MCP tool "read-only".
+	// declared tool names, not registry tool objects, so an MCP name is never
+	// judged against `mcp__<server>_*` patterns by its lossy public prefix —
+	// server `foo_bar` mints names starting `mcp__foo_`, and stripping one here
+	// while the owner-aware runtime keeps it would misreport a writable child
+	// as read-only. Only exact names and whole-registry blankets (`*`, `**`,
+	// `mcp__*`, `mcp__**`) deny an MCP tool without owner metadata; everything
+	// else survives to fail-safe writable below.
 	const patterns = expandDisallowedTools(agent.disallowedTools ?? []);
-	// A deny-all disallow (`disallowedTools: ["*"]`) without a `tools` list
-	// removes every non-hidden tool at runtime, leaving a protocol-only scope —
-	// the effective set is empty BECAUSE everything was stripped, so the agent
-	// is read-only (it cannot mutate anything). The inherited-tools case (no
-	// disallows, no allowlist) stays non-read-only: unknown inherited tools
+	// A deny-all disallow (`disallowedTools: ["*"]`, `["**"]`) without a `tools`
+	// list removes every non-hidden tool at runtime, leaving a protocol-only
+	// scope — the effective set is empty BECAUSE everything was stripped, so the
+	// agent is read-only (it cannot mutate anything). The inherited-tools case
+	// (no disallows, no allowlist) stays non-read-only: unknown inherited tools
 	// keep the fail-safe false.
-	if (patterns.some(pattern => pattern === "*")) return true;
+	if (patterns.some(pattern => pattern === "*" || pattern === "**")) return true;
 	// No explicit allowlist means full inheritance: the child may inherit
 	// mutating tools, so it is never read-only (fail-safe).
 	if (agent.tools === undefined) return false;
@@ -65,8 +68,18 @@ export function isReadOnlyAgent(agent: AgentDefinition, evalBackends?: EvalBacke
 	//   depth reads one notch conservative — fail-safe toward writable).
 	//   Delegation to a writable child breaks the read-only contract even when
 	//   the agent's own allowlist is read-only.
+	const deniedWithoutOwner = (tool: string): boolean => {
+		if (!isMCPToolName(tool)) return isToolDisallowed(tool, patterns);
+		// Owner-blind: exact names and whole-registry blankets only. A
+		// `mcp__<server>_*` pattern is undecidable without `mcpServerName`
+		// (see above) and must not strip the tool here.
+		if (patterns.includes(tool)) return true;
+		return patterns.some(
+			pattern => pattern === "*" || pattern === "**" || pattern === "mcp__*" || pattern === "mcp__**",
+		);
+	};
 	const effective = expandExecToolAlias(agent.tools, patterns, evalBackends ?? { python: true, js: true }).filter(
-		tool => !isToolDisallowed(tool, patterns),
+		tool => !deniedWithoutOwner(tool),
 	);
 	const taskAutoAdded =
 		agent.spawns !== undefined && !effective.includes("task") && !isToolDisallowed("task", patterns);
