@@ -80,7 +80,10 @@ import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
 import { resolvePath } from "./extensibility/utils";
-import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
+import {
+	scheduleMarketplaceAutoUpdate,
+	type MarketplaceAutoUpdateOptions,
+} from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { InteractiveMode } from "./modes/interactive-mode";
@@ -176,6 +179,7 @@ import {
 	cfgSymbolPreset,
 	cfgThemeDark,
 	cfgThemeLight,
+	cfgTuiCompleteScrollback,
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
@@ -704,6 +708,7 @@ async function runInteractiveMode(
 	startupLease?: ComposerLease,
 	startupGoal?: string,
 	startupRestore?: () => Promise<RestoreOutcome>,
+	refreshScopedModelsAfterLogin?: () => Promise<void>,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -718,6 +723,7 @@ async function runInteractiveMode(
 			eventBus,
 			startupLease?.composer,
 			subagentEventBus,
+			refreshScopedModelsAfterLogin,
 		);
 		startupLease?.adopt();
 	} catch (error) {
@@ -1165,19 +1171,39 @@ export async function rebuildScopedModelsAfterDiscovery(
 	modelRegistry: Pick<ModelRegistry, "getAvailable" | "awaitBackgroundRefresh">,
 	activeSettings: Settings,
 ): Promise<void> {
-	const patterns = parsed.models ?? cfgEnabledModels.get(activeSettings);
-	if (!patterns || patterns.length === 0) return;
 	await modelRegistry.awaitBackgroundRefresh();
-	if (session.isDisposed) return;
+	await rebuildScopedModels(session, parsed, modelRegistry, activeSettings);
+}
+
+/**
+ * Re-resolve the `--models`/`enabledModels` scope against the registry as it is
+ * now and, when the set changed, push it into the session. Returns the new scope,
+ * or `undefined` when the session keeps its current one. Extension providers
+ * register inside `createSession`, after the startup snapshot, so the CLI calls
+ * this right after the session is built: their models then join the scoped
+ * `/models` list and Ctrl+P cycle before the first frame instead of after the
+ * background catalog refresh. Issue #6694.
+ */
+export async function rebuildScopedModels(
+	session: ScopedModelSink,
+	parsed: Args,
+	modelRegistry: Pick<ModelRegistry, "getAvailable">,
+	activeSettings: Settings,
+): Promise<ScopedModel[] | undefined> {
+	const patterns = parsed.models ?? cfgEnabledModels.get(activeSettings);
+	if (!patterns || patterns.length === 0) return undefined;
+	if (session.isDisposed) return undefined;
 	const rebuilt = await resolveModelScope(
 		patterns,
 		modelRegistry,
 		getModelMatchPreferences(activeSettings),
 		activeSettings,
 	);
+	if (session.isDisposed) return undefined;
 	const mapped = toSessionScopedModels(rebuilt, activeSettings);
-	if (mapped.length === 0 || sameScopedModelSet(session.scopedModels, mapped)) return;
+	if (mapped.length === 0 || sameScopedModelSet(session.scopedModels, mapped)) return undefined;
 	session.setScopedModels(mapped);
+	return rebuilt;
 }
 
 /** Settings the scoped model list follows (see {@link watchScopedModelSettings}). */
@@ -1646,8 +1672,9 @@ export async function buildSessionOptions(
 		// provider for resolveScopedModels' pre-refresh. Defer the choice to the
 		// SDK's post-extension resolution — the same `modelPattern` path a deferred
 		// `--model` uses — so the initial model is picked from the requested scope
-		// instead of an unrelated fallback. The fire-and-forget rebuild then
-		// activates the scoped list once discovery settles (issue #9220).
+		// instead of an unrelated fallback. The rebuild right after createSession
+		// then activates the scoped list for extension providers (issue #6694), and
+		// the fire-and-forget one once discovery settles (issue #9220).
 		options.modelPattern = parsed.models;
 	}
 
@@ -2218,6 +2245,7 @@ export async function runRootCommand(
 			showHardwareCursor: cfgShowHardwareCursor.get(settingsInstance),
 			maxInlineImages: cfgTuiMaxInlineImages.get(settingsInstance),
 			resizeScrollback: cfgTuiResizeScrollback.get(settingsInstance),
+			completeScrollback: cfgTuiCompleteScrollback.get(settingsInstance),
 			imeSafeCursor: cfgTuiImeSafeCursor.get(settingsInstance),
 			autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(settingsInstance),
 			spellingTypoDetection: cfgSpellingTypoDetection.get(settingsInstance),
@@ -2454,12 +2482,6 @@ export async function runRootCommand(
 				: undefined;
 		daemonPresencePromise?.catch(() => {});
 
-		scheduleMarketplaceAutoUpdate({
-			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
-			resolveActiveProjectRegistryPath,
-			clearPluginRootsCache: clearPluginRootsAndCaches,
-		});
-
 		const sessionOptions = await logger.time(
 			"buildSessionOptions",
 			buildSessionOptions,
@@ -2469,6 +2491,11 @@ export async function runRootCommand(
 			modelRegistry,
 			settingsInstance,
 		);
+		const marketplaceAutoUpdateOptions: MarketplaceAutoUpdateOptions = {
+			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
+			resolveActiveProjectRegistryPath,
+			clearPluginRootsCache: clearPluginRootsAndCaches,
+		};
 		sessionOptions.authStorage = authStorage;
 		sessionOptions.modelRegistry = modelRegistry;
 		sessionOptions.hasUI = isInteractive || mode === "rpc-ui";
@@ -2553,6 +2580,7 @@ export async function runRootCommand(
 			});
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
+			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 			stopStartupWatchdog();
 			// Startup is over: stop recording spans, or every later session and subagent
 			// appends to the timing tree for the life of the server.
@@ -2572,9 +2600,20 @@ export async function runRootCommand(
 
 			const eventBus = new EventBus();
 			const subagentEventBus = new EventBus();
+			// Interactive launches bind startup-safe extensions after the composer accepts
+			// input; the first request waits for them instead. Kept eager when argv may
+			// carry extension flags (they must parse now), `--tools` must validate
+			// extension tools, or a restored transcript needs extension renderers.
+			const deferStartupSafeExtensions =
+				isInteractive &&
+				parsedArgs.unrecognizedFlags.length === 0 &&
+				!parsedArgs.tools?.length &&
+				!(parsedArgs.continue || parsedArgs.resume || parsedArgs.fork || parsedArgs.restore || foreignSource);
 			const extensionsResult = parsedArgs.trustedExtensions?.length
-				? await loadTrustedSessionExtensions(sessionOptions, cwd, eventBus)
-				: await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus);
+				? { ...(await loadTrustedSessionExtensions(sessionOptions, cwd, eventBus)), deferredPaths: [] }
+				: await loadSessionExtensions(sessionOptions, cwd, settingsInstance, eventBus, {
+						deferStartupSafe: deferStartupSafeExtensions,
+					});
 			const extensionFlagSink: ExtensionFlagSink = {
 				getFlags: () => ExtensionRunner.aggregateFlags(extensionsResult.extensions),
 				setFlagValue: (name, value) => {
@@ -2698,6 +2737,7 @@ export async function runRootCommand(
 				eventBus,
 				subagentEventBus,
 				preloadedExtensions: extensionsResult,
+				deferredExtensionPaths: extensionsResult.deferredPaths,
 				// Validated once the background refresh is in flight, so selectors it
 				// may still supply defer instead of warning; interactive mode also
 				// waits for the first frame (`startDeferredStartupWork`).
@@ -2718,6 +2758,7 @@ export async function runRootCommand(
 				}
 				throw error;
 			}
+			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -2742,18 +2783,34 @@ export async function runRootCommand(
 				authStorage.keys.setRuntime(session.model.provider, parsedArgs.apiKey);
 			}
 
+			const configuredScope = parsedArgs.models ?? cfgEnabledModels.get(settingsInstance);
+			// Extension providers registered inside createSession, after the scope was
+			// snapshotted. Pick their models up now so the startup scope notice, the
+			// scoped /models list and the Ctrl+P cycle include them from the first frame
+			// instead of after the background catalog refresh (issue #6694).
+			if (configuredScope.length > 0) {
+				const rebuilt = await logger.time(
+					"rebuildScopedModels",
+					rebuildScopedModels,
+					session,
+					parsedArgs,
+					modelRegistry,
+					settingsInstance,
+				);
+				if (rebuilt) scopedModels = rebuilt;
+			}
 			// Runtime provider discovery (opencode-go, models.yml `discovery:`, proxies)
 			// populates the registry AFTER the scope was snapshotted at startup; re-resolve
 			// once it settles so newly-discovered configured models join the scoped
 			// /models list and Ctrl+P cycle, including scopes that initially resolved
 			// empty (issue #9220). Fire-and-forget: the prompt must never block on the
 			// background pass.
-			const configuredScope = parsedArgs.models ?? cfgEnabledModels.get(settingsInstance);
 			// Interactive-only work that must not delay the first session-bound frame:
 			// runInteractiveMode calls it once init has painted. Neither feeds the first
 			// prompt: fallback-chain validation only produces header warnings, and the
 			// background refresh already raced the first prompt when it ran earlier.
 			const startDeferredStartupWork = (): void => {
+				void session.loadDeferredExtensions();
 				modelRegistry.refreshInBackground();
 				session.validateRetryFallbackChains();
 				if (configuredScope.length > 0) {
@@ -2763,6 +2820,9 @@ export async function runRootCommand(
 					);
 				}
 				void startBackgroundModelDiscovery?.();
+			};
+			const refreshScopedModelsAfterLogin = async () => {
+				await rebuildScopedModels(session, parsedArgs, modelRegistry, settingsInstance);
 			};
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
@@ -2836,6 +2896,7 @@ export async function runRootCommand(
 					setToolUIContext: mode === "rpc-ui" ? setToolUIContext : undefined,
 					headless: parsedArgs.noUi === true,
 					subagentEventBus,
+					mcpManager,
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
@@ -2890,6 +2951,7 @@ export async function runRootCommand(
 						startupLease,
 						initialArgs.goal,
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
+						refreshScopedModelsAfterLogin,
 					);
 				} finally {
 					startupLease?.dispose();
