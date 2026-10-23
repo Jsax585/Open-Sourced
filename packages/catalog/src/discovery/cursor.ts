@@ -21,6 +21,7 @@ import {
 	type AvailableModelsResponse_ModelDetails,
 	AvailableModelsRequestSchema,
 	AvailableModelsResponseSchema,
+	DegradationStatus,
 	GetDefaultModelForCliRequestSchema,
 	GetDefaultModelForCliResponseSchema,
 	GetUsableModelsRequestSchema,
@@ -568,13 +569,24 @@ function normalizeRichCursorModels(
 		// a model none of whose ids a usable row matches (blocked variants count
 		// as matched) is kept whole; blocked variants are still filtered. An empty
 		// usable list stays authoritative (nothing usable), never "all uncovered".
-		// A hidden or admin-default-disabled row the server omits on purpose is
-		// not lag, so it is never kept by this fallback.
+		// A row the server omits on purpose is not lag, so this fallback never
+		// keeps one that is hidden, admin-default-disabled, degradation-disabled,
+		// ZDR-consent-blocked, CmdK-only, or without positive agent support.
 		const uncovered =
 			usableModelIds !== undefined &&
 			usableModelIds.size > 0 &&
 			![...collectRichCursorCatalogIds([details])].some(id => usableModelIds.has(id));
-		if (uncovered && (details.isHidden === true || details.defaultDisabledInAdminAllowlist === true)) continue;
+		if (
+			uncovered &&
+			(details.isHidden === true ||
+				details.defaultDisabledInAdminAllowlist === true ||
+				details.degradationStatus === DegradationStatus.DISABLED ||
+				details.onlySupportsCmdK === true ||
+				details.supportsAgent !== true ||
+				Boolean(details.reasonForZdrConsentBlock))
+		) {
+			continue;
+		}
 		const variants = normalizeRichCursorVariants(details, baseId, uncovered ? undefined : usableModelIds);
 		if (variants.length === 0) continue;
 		// The bare lane id belongs to Cursor's flagged default configuration, so

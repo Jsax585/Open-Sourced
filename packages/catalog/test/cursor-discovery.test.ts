@@ -17,6 +17,7 @@ import {
 	AvailableModelsResponse_TooltipDataSchema,
 	AvailableModelsResponse_ModelVariantConfigSchema,
 	AvailableModelsResponseSchema,
+	DegradationStatus,
 	GetDefaultModelForCliResponseSchema,
 	GetUsableModelsResponseSchema,
 	ModelDetailsSchema,
@@ -664,12 +665,12 @@ describe("fetchCursorUsableModels", () => {
 		expect([...byId.keys()].filter(id => id.startsWith("admin-blocked"))).toEqual([]);
 	});
 
-	it("does not keep uncovered AvailableModels rows the server hides or admin-disables by default", async () => {
-		const row = (name: string, flags: { isHidden?: boolean; defaultDisabledInAdminAllowlist?: boolean }) =>
+	it("does not keep uncovered AvailableModels rows the server cannot run through the agent transport", async () => {
+		const row = (name: string, fields: Partial<AvailableModelsResponse_ModelDetails> = {}) =>
 			create(AvailableModelsResponse_ModelDetailsSchema, {
 				name,
 				supportsAgent: true,
-				...flags,
+				...fields,
 				variants: [richVariant(`${name}-high`, { reasoning: "high" })],
 			});
 		const usable = create(GetUsableModelsResponseSchema, {
@@ -677,9 +678,15 @@ describe("fetchCursorUsableModels", () => {
 		});
 		const available = create(AvailableModelsResponseSchema, {
 			models: [
-				row("plain-uncovered", {}),
+				row("plain-uncovered"),
+				row("degraded-uncovered", { degradationStatus: DegradationStatus.DEGRADED }),
 				row("hidden-uncovered", { isHidden: true }),
 				row("admin-disabled-uncovered", { defaultDisabledInAdminAllowlist: true }),
+				row("degradation-disabled-uncovered", { degradationStatus: DegradationStatus.DISABLED }),
+				row("cmdk-only-uncovered", { onlySupportsCmdK: true }),
+				row("cmdk-only-no-agent-flag-uncovered", { supportsAgent: undefined, onlySupportsCmdK: true }),
+				row("no-agent-flag-uncovered", { supportsAgent: undefined }),
+				row("zdr-blocked-uncovered", { reasonForZdrConsentBlock: "Requires data retention" }),
 				// Covered rows are unaffected by the flags: the usable list decides.
 				row("covered-hidden", { isHidden: true }),
 			],
@@ -695,7 +702,11 @@ describe("fetchCursorUsableModels", () => {
 			timeoutMs: 1_000,
 		});
 
-		expect((models ?? []).map(model => model.id)).toEqual(["covered-hidden", "plain-uncovered"]);
+		expect((models ?? []).map(model => model.id)).toEqual([
+			"covered-hidden",
+			"degraded-uncovered",
+			"plain-uncovered",
+		]);
 	});
 
 	it("publishes no rich models when GetUsableModels decodes to an empty list", async () => {
