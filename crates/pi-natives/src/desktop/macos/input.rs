@@ -1348,8 +1348,8 @@ fn activate_then_await(
 enum FrontTarget {
 	/// Another application is frontmost.
 	Background,
-	/// The target already was the key window of the frontmost application
-	/// when the input began.
+	/// The frontmost application's keys already went to the target when the
+	/// input began ([`ax::KeyFocus::destination`]).
 	Key,
 	/// The target's application came to the front after the input began, so
 	/// the user may just have selected another of its windows.
@@ -1443,14 +1443,13 @@ fn front_target(
 	entry_front: EntryFront,
 	front: Option<libc::pid_t>,
 	pid: libc::pid_t,
-	wid: u32,
-	focused: impl FnOnce() -> Option<u32>,
+	takes_keys: impl FnOnce() -> bool,
 ) -> FrontTarget {
 	match front {
 		None => FrontTarget::Unknown,
 		Some(front) if front != pid => FrontTarget::Background,
 		Some(_) if entry_front.came_forward(front, pid) => FrontTarget::CameForward,
-		Some(_) if focused() == Some(wid) => FrontTarget::Key,
+		Some(_) if takes_keys() => FrontTarget::Key,
 		Some(_) => FrontTarget::UserSibling,
 	}
 }
@@ -1467,19 +1466,20 @@ fn front_target(
 /// of its controls.
 /// `WindowServer`'s front process and key-focus application, which route the
 /// user's keystrokes and key equivalents, stay with the user's app. In the
-/// frontmost application itself, nothing is posted: the target already is
-/// key, or making it key would move the user's typing, so the input refuses.
+/// frontmost application itself, nothing is posted: the target already takes
+/// its keys, or making it key would move the user's typing, so the input
+/// refuses.
 /// `entry_front` is the front process read as the input began
 /// ([`EntryFront`]); a target that has come forward since then refuses,
 /// because the user may have just picked the window that would receive the
 /// input.
 ///
 /// `focus_in_overlay` says the caller has seen the application's keyboard
-/// focus in an overlay window attached to `wid`, such as Finder's inline
-/// rename field or a popover: the target then counts as the frontmost
-/// application's key window, and in a background application the activation
-/// goes out without the press, which would make `wid` key and so end that
-/// overlay's editing.
+/// focus in an overlay window attached to `wid`, or in `wid` as one, such as
+/// Finder's inline rename field or a popover: the target then counts as the
+/// frontmost application's key window, and in a background application the
+/// activation goes out without the press, which would make `wid` key and so
+/// end that overlay's editing.
 ///
 /// Returns whether the activation step ran. The user can bring the target app
 /// forward at any moment, which would turn the step into a key-window switch
@@ -1496,14 +1496,14 @@ pub(super) fn make_key_in_background(
 	focus_in_overlay: bool,
 	visit: skylight::TargetVisit<'_>,
 ) -> CoreResult<bool> {
-	let focused = || {
-		if focus_in_overlay {
-			Some(wid)
-		} else {
-			ax::focused_window_id(pid)
-		}
+	// While Finder renames a file it reports no focused window: its keys go
+	// to the window holding the focused element, the rename field's.
+	let takes_keys = || {
+		focus_in_overlay
+			|| ax::key_focus(pid).destination(pid, wid, skylight::window_parent)
+				== ax::KeyDestination::Target(pid)
 	};
-	match front_target(entry_front, skylight::front_pid(), pid, wid, focused) {
+	match front_target(entry_front, skylight::front_pid(), pid, takes_keys) {
 		FrontTarget::Background => {},
 		FrontTarget::Key => return Ok(false),
 		refused => return Err(front_refusal(refused, wid)),
@@ -7057,14 +7057,12 @@ mod tests {
 	fn key_window_step_never_moves_the_frontmost_applications_key_window() {
 		// A non-key window of the frontmost app shares the user's key window:
 		// preparing it would send the user's next keystrokes and pastes there.
-		let unread =
-			|| -> Option<u32> { panic!("a background process's focused window is not read") };
+		let unread = || -> bool { panic!("a background process's focus is not read") };
 		let (user, target) = (EntryFront(Some(9)), EntryFront(Some(7)));
-		assert_eq!(front_target(user, Some(9), 7, 42, unread), FrontTarget::Background);
-		assert_eq!(front_target(user, None, 7, 42, unread), FrontTarget::Unknown);
-		assert_eq!(front_target(target, Some(7), 7, 42, || Some(42)), FrontTarget::Key);
-		assert_eq!(front_target(target, Some(7), 7, 42, || Some(43)), FrontTarget::UserSibling);
-		assert_eq!(front_target(target, Some(7), 7, 42, || None), FrontTarget::UserSibling);
+		assert_eq!(front_target(user, Some(9), 7, unread), FrontTarget::Background);
+		assert_eq!(front_target(user, None, 7, unread), FrontTarget::Unknown);
+		assert_eq!(front_target(target, Some(7), 7, || true), FrontTarget::Key);
+		assert_eq!(front_target(target, Some(7), 7, || false), FrontTarget::UserSibling);
 	}
 
 	#[test]
@@ -7072,11 +7070,11 @@ mod tests {
 		// The user brought the background target forward and picked its window:
 		// delivering now would type into the window they just selected.
 		assert_eq!(
-			front_target(EntryFront(Some(9)), Some(7), 7, 42, || Some(42)),
+			front_target(EntryFront(Some(9)), Some(7), 7, || true),
 			FrontTarget::CameForward
 		);
 		assert_eq!(
-			front_target(EntryFront(None), Some(7), 7, 42, || Some(42)),
+			front_target(EntryFront(None), Some(7), 7, || true),
 			FrontTarget::CameForward
 		);
 	}
@@ -7095,7 +7093,7 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(entry, EntryFront(Some(9)));
-		assert_eq!(front_target(entry, Some(7), 7, 42, || Some(42)), FrontTarget::CameForward);
+		assert_eq!(front_target(entry, Some(7), 7, || true), FrontTarget::CameForward);
 	}
 
 	#[test]
