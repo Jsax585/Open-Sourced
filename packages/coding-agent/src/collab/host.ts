@@ -880,7 +880,15 @@ export class CollabHost {
 		const canWrite = this.#verifyWriteToken(writeToken);
 		const firstPeer = this.#peers.size === 0;
 		this.#peers.set(fromPeer, { name: cleanName, canWrite });
+		if (!this.#socket) return;
 		this.#sendSnapshot(fromPeer, canWrite, firstPeer);
+		this.#ctx.session.emitNotice(
+			"info",
+			`${cleanName} joined the collab session${canWrite ? "" : " (read-only)"}`,
+			"collab",
+		);
+		this.#updateStatusSegment();
+		this.#scheduleStateBroadcast();
 	}
 
 	#sendSnapshot(fromPeer: number, canWrite: boolean, firstPeer = false): void {
