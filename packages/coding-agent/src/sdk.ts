@@ -3215,6 +3215,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						seenSelectors.add(fallbackSelector);
 						fallbackSelectors.push(fallbackSelector);
 					}
+					const explicitCandidates = fallbackSelectors.length > 0;
 					if (fallbackSelectors.length === 0) {
 						for (const selector of options.modelPatternDefaultFallbackChain ?? []) {
 							if (typeof selector !== "string" || seenSelectors.has(selector)) continue;
@@ -3229,7 +3230,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							{
 								primary: primarySelector,
 								chain: fallbackSelectors,
-								shadowPrimaryKeys: fallbackSelectors.length > 0,
+								shadowPrimaryKeys: explicitCandidates,
 							},
 							modelRegistry,
 						);
