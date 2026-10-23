@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added collapsible `/tree` branches: `Space` or `Tab` folds the selected subtree (marked `▸` with the number of hidden entries), and `Shift+Tab` folds every branch off the active thread ([#7762](https://github.com/can1357/oh-my-pi/pull/7762) by [@ParadaCarleton](https://github.com/ParadaCarleton)).
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
