@@ -4078,7 +4078,10 @@ export interface VercelAiGatewayModelManagerConfig {
 
 const DEFAULT_VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
 
-function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { baseUrl: string; catalogBaseUrl: string } {
+export function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): {
+	baseUrl: string;
+	catalogBaseUrl: string;
+} {
 	const trimmed = rawBaseUrl?.trim();
 	const canonical = trimmed === undefined || trimmed === "" ? undefined : trimmed;
 	const baseUrl = (canonical ?? DEFAULT_VERCEL_AI_GATEWAY_BASE_URL).replace(/\/+$/, "");
@@ -4088,6 +4091,16 @@ function normalizeVercelAiGatewayBaseUrls(rawBaseUrl: string | undefined): { bas
 		baseUrl: baseUrl.endsWith("/v1") ? baseUrl.slice(0, -3) : baseUrl,
 		catalogBaseUrl,
 	};
+}
+
+/**
+ * Strip a trailing `/v1` from a Vercel AI Gateway base URL for evaluation routes.
+ * Vercel AI Gateway evaluation routes (e.g. `/v1/evaluate`) are path-relative
+ * to the gateway host root; keeping `/v1` on the base URL would produce
+ * `/v1/v1/evaluate`.
+ */
+export function vercelAiGatewayEvaluationBaseUrl(rawBaseUrl: string): string {
+	return normalizeVercelAiGatewayBaseUrls(rawBaseUrl).baseUrl;
 }
 
 // convaiinnovations/laya and laya-free are temporary promo models omitted from seeds
@@ -4103,9 +4116,24 @@ export function vercelAiGatewayModelManagerOptions(
 ): ModelManagerOptions<"anthropic-messages" | "typesafe"> {
 	const apiKey = config?.apiKey;
 	const { baseUrl, catalogBaseUrl } = normalizeVercelAiGatewayBaseUrls(config?.baseUrl);
+	const staticModels = (getBundledModels("vercel-ai-gateway") as Model<"anthropic-messages" | "typesafe">[]).map(
+		model => {
+			const shouldRebase = model.baseUrl === DEFAULT_VERCEL_AI_GATEWAY_BASE_URL;
+			if (!shouldRebase) return model;
+			if (model.api === "typesafe" || model.kind === "judge") {
+				return {
+					...model,
+					kind: "judge" as const,
+					baseUrl,
+				};
+			}
+			return model;
+		},
+	);
 	const options: ModelManagerOptions<"anthropic-messages" | "typesafe"> = {
 		providerId: "vercel-ai-gateway",
 		dropCachedModelIdsOnStaticMismatch: VERCEL_AI_GATEWAY_STATIC_MODEL_IDS,
+		staticModels,
 		fetchDynamicModels: () =>
 			fetchOpenAICompatibleModels<"anthropic-messages" | "typesafe">({
 				api: "anthropic-messages",

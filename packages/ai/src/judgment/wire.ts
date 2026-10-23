@@ -146,10 +146,11 @@ export function decorateJudgmentWire(inner: JudgmentWire, config: JudgmentConfig
 			for (const id in request.questions) {
 				if (!Object.hasOwn(request.questions, id)) continue;
 				const question = request.questions[id];
-				const wireQuestion: Record<string, unknown> = {
-					...question,
-					[typeField]: typeMap?.[question.type] ?? question.type,
-				};
+				const wireQuestion: Record<string, unknown> = { ...question };
+				if (question.type === "box") {
+					delete wireQuestion.image;
+				}
+				wireQuestion[typeField] = typeMap?.[question.type] ?? question.type;
 				if (typeField !== "type") delete wireQuestion.type;
 				wireQuestions[id] = wireQuestion;
 			}

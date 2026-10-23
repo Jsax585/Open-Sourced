@@ -1,9 +1,13 @@
-import type { Api, Model, ModelSpec, RemoteCompactionConfig, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { RemoteCompactionConfig, ThinkingConfig } from "@oh-my-pi/pi-ai/types";
+import type { Api, Model, ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isVertexExpressOpenAIUrl } from "@oh-my-pi/pi-catalog/hosts";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { PROVIDER_DESCRIPTORS } from "@oh-my-pi/pi-catalog/provider-models";
-import { openrouterDecisionsBaseUrl } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
+import {
+	openrouterDecisionsBaseUrl,
+	vercelAiGatewayEvaluationBaseUrl,
+} from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind, runnerApiKind } from "@oh-my-pi/pi-catalog/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
@@ -40,17 +44,30 @@ export interface ProviderOverride {
  * own API — a model must never end up pi-native on a catalog upstream host
  * (#2555). An unscoped override names the OpenRouter `/api/v1` chat root, so
  * Decisions models move to its `/api/alpha` sibling on the same host.
+ *
+ * Vercel AI Gateway evaluation models use the `typesafe` API with path-relative
+ * routes (e.g. `/v1/evaluate`). An unscoped override provides the gateway root
+ * or chat root (often ending with `/v1`); strip `/v1` from the evaluation base URL
+ * to avoid double-prefixing `/v1/v1/evaluate`.
  */
 export function resolveProviderBaseUrl<TApi extends Api>(
 	modelApi: TApi,
 	modelBaseUrl: string | undefined,
 	override: Pick<ProviderOverride, "baseUrl" | "baseUrlApis" | "transport"> | undefined,
+	provider?: string,
 ): string | undefined {
 	if (override?.baseUrl === undefined) return modelBaseUrl;
 	if (override.transport === "pi-native") return override.baseUrl;
 	if (override.baseUrlApis !== undefined && !override.baseUrlApis.includes(modelApi)) return modelBaseUrl;
 	if (override.baseUrlApis === undefined && modelApi === "openrouter-decisions") {
 		return openrouterDecisionsBaseUrl(override.baseUrl);
+	}
+	if (
+		override.baseUrlApis === undefined &&
+		modelApi === "typesafe" &&
+		(provider === "vercel-ai-gateway" || modelBaseUrl?.includes("ai-gateway.vercel.sh"))
+	) {
+		return vercelAiGatewayEvaluationBaseUrl(override.baseUrl);
 	}
 	return override.baseUrl;
 }
@@ -97,7 +114,12 @@ export function mergeDiscoveredModel<TApi extends Api>(
 		const supportsTools = model.supportsTools ?? existing.supportsTools;
 		const merged = buildModel({
 			...toModelSpec(model),
-			baseUrl: resolveProviderBaseUrl(model.api, model.baseUrl ?? existing.baseUrl, providerOverride),
+			baseUrl: resolveProviderBaseUrl(
+				model.api,
+				model.baseUrl ?? existing.baseUrl,
+				providerOverride,
+				model.provider,
+			),
 			headers: undefined,
 			resolveHeaders: createConfigHeaderResolver(
 				[
@@ -123,7 +145,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 	if (providerOverride) {
 		const merged = buildModel({
 			...toModelSpec(model),
-			baseUrl: resolveProviderBaseUrl(model.api, model.baseUrl, providerOverride),
+			baseUrl: resolveProviderBaseUrl(model.api, model.baseUrl, providerOverride, model.provider),
 			headers: undefined,
 			resolveHeaders: createConfigHeaderResolver([model.resolveHeaders ?? model.headers, providerOverride.headers], {
 				authHeader: providerOverride.authHeader,
@@ -279,7 +301,7 @@ export interface ModelPatch {
  */
 type ModelTransportPolicy = "merge" | "replace";
 export function applyModelPatch(base: Model<Api>, patch: ModelPatch, transport: ModelTransportPolicy): Model<Api> {
-	const result = { ...base };
+	const result: Model<Api> = { ...base };
 	if (patch.name !== undefined) result.name = patch.name;
 	if (patch.api !== undefined) result.api = patch.api;
 	// Judgment wire policy is api-scoped (see mergeDynamicModel): a patch that

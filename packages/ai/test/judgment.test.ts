@@ -1523,6 +1523,56 @@ describe("NativeJudge", () => {
 		).toThrow(ConfigurationError);
 	});
 
+	it("strips local box image index before type remap under judgment overrides", async () => {
+		const calls: { body: Record<string, unknown> }[] = [];
+		const judge = new NativeJudge({
+			apiKey: "b-key",
+			baseUrl: "https://bifrost.example",
+			model: "judge-model",
+			supportsImages: true,
+			judgment: {
+				typeField: "kind",
+				typeMap: { box: "bounding_box" },
+			},
+			fetch: async (_url, init) => {
+				calls.push({ body: JSON.parse(String(init?.body)) });
+				return Response.json({
+					model: "judge-model",
+					answers: {
+						target: {
+							kind: "bounding_box",
+							box: { top: 0.1, left: 0.2, bottom: 0.5, right: 0.6 },
+							confidence: 0.95,
+						},
+					},
+					usage: {},
+				});
+			},
+		});
+
+		const result = await judge.judge({
+			state: "Locate the target.",
+			questions: {
+				target: { type: "box", instructions: "Where is the target?", image: 0 },
+			},
+			images: [IMAGE_REFS[0]],
+		});
+
+		expect(calls).toHaveLength(1);
+		const wireQuestions = calls[0].body.questions as Record<string, Record<string, unknown>>;
+		expect(wireQuestions.target).toEqual({
+			kind: "bounding_box",
+			instructions: "Where is the target?",
+		});
+		expect(wireQuestions.target.image).toBeUndefined();
+		expect(wireQuestions.target.type).toBeUndefined();
+		expect(result.answers.target).toMatchObject({
+			type: "box",
+			box: { top: 0.1, left: 0.2, bottom: 0.5, right: 0.6 },
+			confidence: 0.95,
+		});
+	});
+
 	it("surfaces validation errors without retrying and rejects answers of the wrong type", async () => {
 		let calls = 0;
 		const rejecting = new NativeJudge({

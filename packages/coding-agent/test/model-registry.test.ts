@@ -1158,6 +1158,21 @@ describe("ModelRegistry", () => {
 			});
 		});
 
+		test("unscoped Vercel AI Gateway override strips /v1 from evaluation base URL so /v1/evaluate does not double-prefix", () => {
+			const gatewayRegistry = readonlyRegistry({
+				providers: {
+					"vercel-ai-gateway": {
+						baseUrl: "https://proxy.example/v1",
+						auth: "none",
+					},
+				},
+			});
+			expect(gatewayRegistry.find("vercel-ai-gateway", "typesafe-ai/jev")).toMatchObject({
+				api: "typesafe",
+				baseUrl: "https://proxy.example",
+			});
+		});
+
 		test("a custom model baseUrl keeps its own host and does not scope the provider", () => {
 			const directHostRegistry = readonlyRegistry({
 				providers: {

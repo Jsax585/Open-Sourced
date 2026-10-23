@@ -114,6 +114,21 @@ describe("Vercel AI Gateway provider", () => {
 			seedSpy.mockRestore();
 		}
 	});
+	test("rebases bundled judges onto custom gateways in resolveProviderModels", async () => {
+		const options = vercelAiGatewayModelManagerOptions({
+			baseUrl: "https://proxy.example/v1",
+			fetch: mockModelsList([{ id: "some-chat-model", tags: ["tool-use"] }]),
+		});
+		const { models } = await resolveProviderModels(options, "online");
+		const jev = byId(models).get("typesafe-ai/jev");
+		expect(jev?.baseUrl).toBe("https://proxy.example");
+		expect(jev?.kind).toBe("judge");
+
+		const offline = await resolveProviderModels(options, "offline");
+		const offlineJev = byId(offline.models).get("typesafe-ai/jev");
+		expect(offlineJev?.baseUrl).toBe("https://proxy.example");
+		expect(offlineJev?.kind).toBe("judge");
+	});
 
 	test("maps type:evaluation rows to api typesafe kind judge beside chat rows", async () => {
 		const chatId = "anthropic/claude-sonnet-4-5-20250929";
