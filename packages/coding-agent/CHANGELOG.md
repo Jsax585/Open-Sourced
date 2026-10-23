@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed Cursor models failing to ask questions: their native `AskQuestion` now opens the `ask` dialog instead of being rejected with "Interactive questions are not implemented by this client", one question at a time (including `ask` called over MCP), each closing when the turn is aborted. Sessions without `ask` (subagents, headless) still reject it ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
@@ -12,6 +9,7 @@
 
 ### Fixed
 
+- Fixed Cursor models failing to ask questions: their native `AskQuestion` now opens the `ask` dialog instead of being rejected with "Interactive questions are not implemented by this client", one question at a time (including `ask` called over MCP), each closing when the turn is aborted. Sessions without `ask` (subagents, headless) still reject it ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
 - Fixed `omp gc --compress` exiting with "the event loop drained while it was still pending" on Bun 1.3.14 when a session artifact is pretty-printed JSON larger than 1 MiB, and session header probes (gc, session move and transfer) reading whole artifacts on Windows ([#15745](https://github.com/can1357/oh-my-pi/issues/15745), [#16754](https://github.com/can1357/oh-my-pi/pull/16754) by [@wolfiesch](https://github.com/wolfiesch))
 - `/resume` into another session now cancels the previous session's background jobs, as `/new` does, instead of delivering their results into the resumed session and starting a turn there ([#16760](https://github.com/can1357/oh-my-pi/pull/16760) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the models config migration writing `models.yml` readable by other users on the machine, and dropping every custom provider when the write was interrupted; the migrated file is now published atomically with owner-only permissions ([#16654](https://github.com/can1357/oh-my-pi/pull/16654) by [@adi-IL](https://github.com/adi-IL))
