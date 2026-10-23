@@ -5,6 +5,14 @@
 ### Added
 
 - Added `CursorExecHandlers.askQuestion`: Cursor's native `AskQuestion` is answered through the host instead of being rejected, with typed "Other" answers sent as `freeform_text` and duplicate or host-reserved option labels renamed so every option stays answerable. Hosts without the handler, and async questions, are still rejected ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
+- Added `PI_ANTHROPIC_API_VERSION=2026-10-21` to send Anthropic API version 2026-10-21 to the official Anthropic API; sampling parameters are omitted under that version, which rejects them ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
+
+### Fixed
+
+- Fixed Xiaomi MiMo API-key login failing with `Unsupported model mimo-v2.5` after the V2.5 retirement ([#16727](https://github.com/can1357/oh-my-pi/pull/16727) by [@LiPu-jpg](https://github.com/LiPu-jpg))
+- Fixed non-streaming requests reporting a missing API key when the credential resolver actually failed, hiding auth broker, OAuth and network outages behind "No API key" ([#16655](https://github.com/can1357/oh-my-pi/pull/16655) by [@adi-IL](https://github.com/adi-IL))
+- Fixed auth-gateway requests failing when a client requests an unsupported thinking effort; the gateway now uses the nearest supported tier ([#16671](https://github.com/can1357/oh-my-pi/pull/16671) by [@codyw912](https://github.com/codyw912))
+- Fixed Anthropic tools whose parameters are a root `anyOf`/`oneOf`/`allOf` of objects being sent as an empty closed object that only accepts `{}`; variant properties now fold into the root `input_schema` ([#16630](https://github.com/can1357/oh-my-pi/issues/16630))
 
 ## [18.12.5] - 2026-10-21
 

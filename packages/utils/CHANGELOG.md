@@ -5,6 +5,11 @@
 ### Changed
 
 - Moved `sanitizeCarriageReturns` and `disambiguateDisplayLabels` from `pi-tui` into `pi-utils` so the Cursor provider labels native `AskQuestion` options the same way as the `ask` dialog; `pi-tui` re-exports both ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali)).
+## [18.12.6] - 2026-10-21
+
+### Added
+
+- Added `RpcConnection.requestCancellable()` and `Client.requestPermission(params, { signal })`; client connections abort a handler and answer `-32800` when the peer sends `$/cancel_request`, while agent connections keep running the request and return its real result ([#15885](https://github.com/can1357/oh-my-pi/pull/15885) by [@marcintustin](https://github.com/marcintustin))
 
 ## [18.12.4] - 2026-10-20
 
