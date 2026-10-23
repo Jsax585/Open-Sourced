@@ -27,8 +27,7 @@ export interface MCPToolFilterResult {
  * name and its filter-domain sanitized spelling. The raw name is kept
  * everywhere else: the filter is a filter, not a renamer. Entries are never
  * environment-expanded.
- */
-/**
+ *
  * A leading `!` negates in Bun.Glob, so `!foo` would silently invert an
  * allowlist instead of tripping the unmatched-entry diagnostic. Filters have
  * no negation syntax (deny is the separate `disabledTools` field), so a

@@ -561,7 +561,7 @@ export function createMCPToolName(serverName: string, toolName: string): string 
  *
  * This is normalization, not fuzzy matching: every candidate is derived from
  * the emitted name by the same rules that minted the registry, never selected
- * from siblings. `sanitizeMCPToolNamePart` is idempotent and registry keys are
+ * from siblings. `sanitizeNamePart` is idempotent and registry keys are
  * already in its output form, so an already-registered name yields no
  * candidates at all and stays on the exact-match path. Callers try each
  * candidate as an exact lookup and keep failing when none is registered.

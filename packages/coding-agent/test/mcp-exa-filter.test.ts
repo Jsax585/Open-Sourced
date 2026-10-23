@@ -116,17 +116,17 @@ describe("Exa MCP filtering", () => {
 		expect(result.configs).toEqual({});
 	});
 
-test("keeps an unrestricted exa server whose allowlist contains a glob", () => {
-	// The unrestricted decision is a literal native-name check, not glob
-	// compilation: any entry spelled unlike `web_search_exa` keeps the
-	// server, so one representative glob row pins the branch.
-	const configs: Record<string, MCPServerConfig> = {
-		exa: { type: "http", url: "https://mcp.exa.ai/mcp", enabledTools: ["web_*"] },
-	};
-	const result = filterExaMCPServers(configs, { exa: SOURCE });
+	test("keeps an unrestricted exa server whose allowlist contains a glob", () => {
+		// The unrestricted decision is a literal native-name check, not glob
+		// compilation: any entry spelled unlike `web_search_exa` keeps the
+		// server, so one representative glob row pins the branch.
+		const configs: Record<string, MCPServerConfig> = {
+			exa: { type: "http", url: "https://mcp.exa.ai/mcp", enabledTools: ["web_*"] },
+		};
+		const result = filterExaMCPServers(configs, { exa: SOURCE });
 
-	expect(Object.keys(result.configs)).toEqual(["exa"]);
-});
+		expect(Object.keys(result.configs)).toEqual(["exa"]);
+	});
 
 	test("keeps an exa server restricted only by a denylist", () => {
 		// Any non-empty denylist with an empty allowlist keeps the server
