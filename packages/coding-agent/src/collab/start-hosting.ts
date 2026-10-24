@@ -1,3 +1,4 @@
+import { logger } from "@oh-my-pi/pi-utils";
 /**
  * Programmatic collab hosting: start, read, and stop the room a session
  * shares, without routing through the /collab slash command.
@@ -93,7 +94,9 @@ function ensureRolledBackHostReaper(ctx: InteractiveModeContext): void {
 		const host = ctx.collabHost;
 		if (!host?.sessionId) return;
 		if (!outcome.rolledBack && host.sessionId === ctx.sessionManager.getSessionId()) return;
-		void host.stop("session switch rolled back");
+		void host.stop("session switch rolled back").catch(err => {
+			logger.warn("Failed to stop rolled back collab host", { error: String(err) });
+		});
 	});
 }
 

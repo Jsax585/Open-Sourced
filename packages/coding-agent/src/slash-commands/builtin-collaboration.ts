@@ -329,7 +329,9 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
-			const host = runtime.ctx.collabController.host;
+			const host =
+				runtime.ctx.collabController.host ??
+				(runtime.ctx.collabHost && !runtime.ctx.collabHost.ending ? runtime.ctx.collabHost : undefined);
 			if (host) {
 				return `Collab: hosting (${Math.max(0, host.participants.length - 1)} guests)`;
 			}
@@ -349,7 +351,8 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			if (verb === "status") {
-				const host = ctx.collabController.host;
+				const host =
+					ctx.collabController.host ?? (ctx.collabHost && !ctx.collabHost.ending ? ctx.collabHost : undefined);
 				if (host) {
 					const names = host.participants.map(p =>
 						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
@@ -509,7 +512,9 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "signOut",
 		description: "Leave the collab session",
 		getTuiAutocompleteDescription: runtime => {
-			if (runtime.ctx.collabController.host) return "Leave collab: hosting";
+			if (runtime.ctx.collabController.host || (runtime.ctx.collabHost && !runtime.ctx.collabHost.ending)) {
+				return "Leave collab: hosting";
+			}
 			if (runtime.ctx.collabGuest) return "Leave collab: guest";
 			return "Leave collab: not in collab";
 		},

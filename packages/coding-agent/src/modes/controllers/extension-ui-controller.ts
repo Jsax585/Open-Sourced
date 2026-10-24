@@ -250,6 +250,7 @@ export class ExtensionUiController {
 			startCollab: async options => collabHostLinks(await startCollabHosting(this.ctx, options)),
 			getCollabLinks: () => activeCollabHostLinks(this.ctx),
 			stopCollab: async () => {
+				await this.ctx.collabController?.stop("host stopped");
 				await stopCollabHosting(this.ctx);
 			},
 		};
@@ -486,6 +487,7 @@ export class ExtensionUiController {
 			startCollab: async options => collabHostLinks(await startCollabHosting(this.ctx, options)),
 			getCollabLinks: () => activeCollabHostLinks(this.ctx),
 			stopCollab: async () => {
+				await this.ctx.collabController?.stop("host stopped");
 				await stopCollabHosting(this.ctx);
 			},
 		};
