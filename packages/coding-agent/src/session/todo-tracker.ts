@@ -132,6 +132,9 @@ export class TodoTracker {
 	onToolResult(toolName: string, isError: boolean): void {
 		if (toolName === "todo") {
 			this.#mutationsSinceLastTouch = 0;
+			// A `todo` touch is the progress the cap exists to ration, so a long
+			// turn earns a fresh nudge budget instead of going silent for good.
+			this.#midRunNudgeCount = 0;
 		} else if (!isError && MUTATING_TOOLS[toolName]) {
 			this.#mutationsSinceLastTouch++;
 		}

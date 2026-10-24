@@ -268,6 +268,27 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		expect(reminderEvents).toEqual([]);
 	});
 
+	it("re-arms the nudge budget after a `todo` touch so a long turn keeps getting nudged", async () => {
+		// Without the re-arm, the cap outlives the progress it rations: two
+		// nudges in a single prompt silence the mid-run path until the next
+		// user prompt, which is precisely the stale-HUD case the nudge exists
+		// for.
+		let fired = 0;
+		for (let cycle = 0; cycle < MAX_PER_CYCLE; cycle++) {
+			for (let i = 0; i < THRESHOLD; i++) emitToolResult("edit");
+			fired += (await drainNudges()).length;
+		}
+		expect(fired).toBe(MAX_PER_CYCLE);
+		expect(await drainNudges()).toEqual([]);
+
+		// The agent acted on a nudge and recorded progress.
+		emitToolResult("todo");
+		for (let i = 0; i < THRESHOLD; i++) emitToolResult("edit");
+
+		expect((await drainNudges()).length).toBe(1);
+		expect(reminderEvents).toEqual([]);
+	});
+
 	it("counter update lands synchronously with the message_end emit (no microtask drain required)", () => {
 		// Regression for the review on PR #3652: pre-fix the counter update sat
 		// after `await messageEndPersistence.persist(...)`, so the live counter
