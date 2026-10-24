@@ -109,31 +109,29 @@ export function snapshotAgentRegistry(registry: AgentRegistry = AgentRegistry.gl
 		else if (ref.history?.resolvedModel !== undefined) snapshot.model = ref.history.resolvedModel;
 		if (liveMetrics !== undefined) {
 			snapshot.metrics = { usedTokens: liveMetrics.tokens, costAmount: liveMetrics.cost };
-		} else if (history !== undefined) {
-			snapshot.metrics = {
-				usedTokens: history.tokens,
-				costAmount: history.cost,
-				durationMs: history.durationMs,
-			};
+		} else {
+			const retained = retainedProjections.get(ref);
+			if (retained?.metrics !== undefined) {
+				snapshot.metrics = {
+					...retained.metrics,
+					...(ref.history?.directCost !== undefined ? { costAmount: ref.history.directCost } : {}),
+				};
+			} else if (history !== undefined) {
+				snapshot.metrics = {
+					usedTokens: history.tokens,
+					costAmount: ref.history?.directCost ?? history.cost,
+					durationMs: history.durationMs,
+				};
+			}
+			if (snapshot.model === undefined && retained?.model !== undefined) {
+				snapshot.model = retained.model;
+			}
 		}
 		if (live !== null) {
 			retainedProjections.set(ref, {
 				model: snapshot.model,
 				metrics: snapshot.metrics,
 			});
-		} else {
-			const retained = retainedProjections.get(ref);
-			if (retained) {
-				if (snapshot.model === undefined && retained.model !== undefined) {
-					snapshot.model = retained.model;
-				}
-				if (snapshot.metrics === undefined && retained.metrics !== undefined) {
-					snapshot.metrics = {
-						...retained.metrics,
-						...(ref.history?.directCost !== undefined ? { costAmount: ref.history.directCost } : {}),
-					};
-				}
-			}
 		}
 		return snapshot;
 	});

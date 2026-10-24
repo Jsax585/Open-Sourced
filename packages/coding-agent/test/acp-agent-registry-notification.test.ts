@@ -550,4 +550,87 @@ describe("ACP agent registry notification", () => {
 		expect(snapshots[0]?.metrics?.usedTokens).toBe(150);
 		expect(snapshots[0]?.metrics?.costAmount).toBe(0.1);
 	});
+
+	it("prefers retained metrics when revived agents park", async () => {
+		// First run: 150 tokens, 0.1 cost
+		const session1 = sessionStub("s-sub", {
+			model: { provider: "openai", id: "gpt-4o" },
+			direct: { input: 100, output: 50, cacheWrite: 0, cost: 0.1 },
+		});
+		registry.register({ id: "sub", displayName: "Sub", kind: "sub", session: session1, status: "idle" });
+		registry.setHistory("sub", {
+			metrics: { tokens: 150, cost: 0.1, durationMs: 1000, requests: 1, tools: 0 },
+			resolvedModel: "openai/gpt-4o",
+		});
+
+		// Revive agent: attach session with accumulated usage (350 tokens, 0.25 cost)
+		const session2 = sessionStub("s-sub", {
+			model: { provider: "openai", id: "gpt-4o" },
+			direct: { input: 200, output: 150, cacheWrite: 0, cost: 0.25 },
+		});
+		registry.attachSession("sub", session2);
+		registry.setStatus("sub", "running");
+
+		// Snapshot while live observes the new usage
+		let snapshots = snapshotAgentRegistry(registry);
+		expect(snapshots[0]?.metrics?.usedTokens).toBe(350);
+		expect(snapshots[0]?.metrics?.costAmount).toBe(0.25);
+
+		// Agent parks again
+		registry.setStatus("sub", "parked");
+
+		// Snapshot while parked must retain the revived metrics, not jump backward to old history
+		snapshots = snapshotAgentRegistry(registry);
+		expect(snapshots[0]?.status).toBe("parked");
+		expect(snapshots[0]?.metrics?.usedTokens).toBe(350);
+		expect(snapshots[0]?.metrics?.costAmount).toBe(0.25);
+	});
+
+	it("publishes idle cache-warming spend when cache_warming_end fires", async () => {
+		const sent: SentFrame[] = [];
+		const connection = {
+			extNotification: async (method: string, params: Record<string, unknown>) => {
+				sent.push({ method, params });
+			},
+		} as unknown as Pick<AgentSideConnection, "extNotification">;
+
+		let onEvent: ((event: unknown) => void) | undefined;
+		let cost = 0.1;
+		const base = sessionStub("s-idle", {
+			model: { provider: "openai", id: "gpt-4o" },
+			direct: { input: 100, output: 50, cacheWrite: 0, cost: 0.1 },
+		});
+		const session = {
+			...base,
+			sessionManager: {
+				getUsageStatistics: () => ({ cost, subagentCost: 0 }),
+			},
+			isStreaming: false,
+			registerSessionIdentityChangeCallback: () => () => {},
+			subscribeRunState: () => () => {},
+			subscribe: (listener: (event: unknown) => void) => {
+				onEvent = listener;
+				return () => {};
+			},
+		} as unknown as AgentSession;
+
+		registry.register({ id: "sub", displayName: "Sub", kind: "sub", session, status: "idle" });
+		expect(registry.syncOwnedSession(session)).toBe(true);
+
+		vi.useFakeTimers();
+		const stop = mirrorAgentRegistry(connection, registry);
+		await flush();
+		sent.length = 0;
+
+		// Cache warming refresh finishes after a prompt with recorded usage
+		cost += 0.05;
+		onEvent?.({ type: "cache_warming_end" });
+		await flush();
+
+		// Should have sent an updated roster notification with the warmed cost
+		expect(sent.length).toBe(1);
+		expect(sent[0]?.method).toBe(AGENT_REGISTRY_NOTIFICATION);
+		expect(agentsOf(sent)[0]?.metrics?.costAmount).toBe(0.15);
+		stop();
+	});
 });

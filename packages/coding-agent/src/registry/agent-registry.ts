@@ -439,7 +439,7 @@ export class AgentRegistry {
 			const stopRunState = this.syncSessionStatus(ref.id, session);
 			const stopIdentity = session.registerSessionIdentityChangeCallback(publish);
 			const stopModel = session.subscribe(event => {
-				if (event.type === "model_changed") publish();
+				if (event.type === "model_changed" || event.type === "cache_warming_end") publish();
 			});
 			this.#ownedSessionUnsubscribes.set(session, () => {
 				stopRunState();
