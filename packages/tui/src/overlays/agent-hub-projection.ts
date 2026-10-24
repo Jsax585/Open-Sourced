@@ -127,7 +127,7 @@ export function progressMetrics(observed: ObservableSession | undefined): AgentM
 }
 
 /** Lifetime cost from the authoritative session index, excluding task-result child billing. */
-function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>): number | undefined {
+export function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>): number | undefined {
 	try {
 		const usage = session.sessionManager?.getUsageStatistics();
 		if (
@@ -136,7 +136,8 @@ function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>)
 			Number.isFinite(usage.subagentCost) &&
 			usage.cost >= usage.subagentCost
 		) {
-			return usage.cost - usage.subagentCost;
+			const direct = usage.cost - usage.subagentCost;
+			return Math.round(direct * 1e6) / 1e6;
 		}
 	} catch {
 		// A session stopping during render may have already closed its stats host.
@@ -149,9 +150,9 @@ function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>)
  * usage embedded in completed `task` tool results, so using it for a parent
  * row would double-count child rows in the aggregate.
  */
-function readSessionMetrics(
+export function readSessionMetrics(
 	session: NonNullable<AgentRecordLike["session"]>,
-	directCost: number | undefined,
+	directCost?: number | undefined,
 ): AgentMetrics | undefined {
 	try {
 		const stats = session.getSessionStats();
@@ -176,9 +177,16 @@ function readSessionMetrics(
 		for (const message of messages) {
 			if (message.role !== "assistant") continue;
 			requests++;
-			tokens += message.usage.input + message.usage.output + message.usage.cacheWrite;
+			// Persisted and imported transcripts can predate usage metadata despite
+			// the current message type, the same case `getSessionStats` skips.
+			// Dereferencing it threw, and the catch below turned one legacy entry
+			// into no metrics at all for the whole session.
+			const usage = message.usage;
+			if (usage) {
+				tokens += usage.input + usage.output + usage.cacheWrite;
+				cost += usage.cost.total;
+			}
 			tools += message.content.filter(content => content.type === "toolCall").length;
-			cost += message.usage.cost.total;
 		}
 		return {
 			tokens,
