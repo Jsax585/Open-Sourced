@@ -722,6 +722,16 @@ describe("ExtensionUiController tool approval", () => {
 			expect(await pending).toBe("session");
 			expect(notify).toHaveBeenCalledTimes(1);
 
+			// Warp's structured protocol already rings permission_request: no legacy toast.
+			Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
+			const warp = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const deniedWarp = warp.controller.showCollabAwareApproval(prompt);
+			warp.editor.onSubmit = text => warp.queueSteer(text);
+			for (const key of "stop") warp.handleInput(key);
+			warp.handleInput("\r");
+			expect(await deniedWarp).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(1);
+			delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
 			const denied = off.controller.showCollabAwareApproval(prompt);
 			off.editor.onSubmit = text => off.queueSteer(text);

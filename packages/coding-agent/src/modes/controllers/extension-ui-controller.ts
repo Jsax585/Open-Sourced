@@ -4,6 +4,7 @@ import { Container, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { cfgApprovalNotify } from "../settings";
+import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type {
 	CompactOptions,
@@ -713,8 +714,10 @@ export class ExtensionUiController {
 				this.#presentDialog(localSignal, settle => {
 					// A pending approval needs the human, like ask and completion:
 					// flag the terminal and the desktop so a backgrounded session
-					// is findable. Only when notifications are enabled.
-					if (cfgApprovalNotify.get(this.ctx.settings) === "on") {
+					// is findable. Only when notifications are enabled and Warp's
+					// structured OSC 777 protocol has not already rung
+					// permission_request — avoid a second legacy toast.
+					if (cfgApprovalNotify.get(this.ctx.settings) === "on" && !isWarpCliAgentProtocolActive()) {
 						const sessionName = this.ctx.sessionManager.getSessionName();
 						TERMINAL.sendNotification({
 							title: sessionName || "omp",
