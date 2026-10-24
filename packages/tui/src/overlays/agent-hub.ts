@@ -374,11 +374,14 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#selectedRow = 0;
 	/**
 	 * A generation's rank is frozen when the hub first sees it, so heartbeats and
-	 * status changes cannot move rows. Agents found on disk take their place in the
-	 * status/recency ranking; agents spawned while the hub is open go on top.
+	 * status changes cannot move rows. An agent the saved-agent scan finds takes
+	 * its place in the status/recency ranking; every other generation that appears
+	 * while the hub is open goes on top.
 	 */
 	#frozenRank = new Map<TRecord, FrozenRank>();
-	#openedAt = Date.now();
+	/** Ids ranked at any time while open: a new object under a known id is a new generation, not a saved agent. */
+	#seenIds = new Set<string>();
+	#opened = false;
 	#spawnBatches = 0;
 	#hoveredRow: number | null = null;
 	/** Per-render screen-line to agent-row map, shared by click and hover routing. */
@@ -531,11 +534,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 						logger.warn("Failed to register persisted subagents", { error });
 					})
 					.finally(() => {
+						if (this.#disposed) return;
+						// Rank what the scan found before its end turns later arrivals into spawns.
+						this.#refreshRows();
 						this.#loadingPersistedSubagents = false;
-						if (!this.#disposed) {
-							this.#refreshRows();
-							this.#requestRender();
-						}
+						this.#requestRender();
 					});
 		this.#refreshRows();
 	}
@@ -1542,6 +1545,16 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
+	/** While the saved-agent scan runs, a parked or killed agent without a live session under a new id is one it found. */
+	#foundOnDisk(ref: TRecord): boolean {
+		return (
+			this.#loadingPersistedSubagents &&
+			ref.session === null &&
+			(ref.status === "parked" || ref.status === "aborted") &&
+			!this.#seenIds.has(ref.id)
+		);
+	}
+
 	#refreshRows(): void {
 		const selectedId = this.#rows[this.#selectedRow]?.id;
 		const refs = this.#registry.list().filter(ref => ref.id !== MAIN_AGENT_ID);
@@ -1552,14 +1565,15 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		let spawnBatch: number | undefined;
 		for (const ref of refs) {
 			if (this.#frozenRank.has(ref)) continue;
-			const spawned = ref.createdAt > this.#openedAt;
 			this.#frozenRank.set(ref, {
-				batch: spawned ? (spawnBatch ??= --this.#spawnBatches) : 0,
+				batch: this.#opened && !this.#foundOnDisk(ref) ? (spawnBatch ??= --this.#spawnBatches) : 0,
 				id: ref.id,
 				status: ref.status,
 				lastActivity: ref.lastActivity,
 			});
+			this.#seenIds.add(ref.id);
 		}
+		this.#opened = true;
 		const ordered = refs.sort((a, b) => {
 			const rankA = this.#frozenRank.get(a)!;
 			const rankB = this.#frozenRank.get(b)!;
