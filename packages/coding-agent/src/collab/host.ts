@@ -292,6 +292,11 @@ export class CollabHost {
 	get access(): CollabAccess {
 		return this.#access;
 	}
+
+	/** Whether guest actions (prompts, aborts, agent commands) are accepted yet. */
+	get areGuestActionsReady(): boolean {
+		return this.#guestActionsReady();
+	}
 	get stopped(): boolean {
 		return this.#stopped;
 	}

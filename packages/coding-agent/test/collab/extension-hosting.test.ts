@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:te
 import * as path from "node:path";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
+import { CollabController } from "@oh-my-pi/pi-coding-agent/collab/controller";
 import { CollabHost } from "@oh-my-pi/pi-coding-agent/collab/host";
 import { COLLAB_PROTO, type CollabFrame, parseCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
@@ -61,6 +62,7 @@ function makeCtx(
 		relayUrl?: string;
 		webUrl?: string;
 		guest?: boolean;
+		autoStart?: "off" | "view" | "control";
 		extensionRunner?: ExtensionRunner | (() => ExtensionRunner | undefined);
 		isSessionTransitionInFlight?: boolean | (() => boolean);
 		onTransitionSettledRegistered?: (fire: (outcome: SessionTransitionOutcome) => void) => void;
@@ -72,6 +74,7 @@ function makeCtx(
 		settings: Settings.isolated({
 			"collab.relayUrl": options.relayUrl ?? "",
 			"collab.webUrl": options.webUrl ?? "",
+			"collab.autoStart": options.autoStart ?? "off",
 		}),
 		sessionManager: {
 			getSessionId: () => "sess-1",
@@ -103,6 +106,11 @@ function makeCtx(
 				options.onTransitionSettledRegistered?.(callback);
 				return () => {};
 			},
+			registerSessionChangeCallback: (_callback: () => void): (() => void) => {
+				return () => {};
+			},
+			isSessionTransitioning: false,
+			waitForSessionTransition: () => Promise.resolve(),
 			isStreaming: false,
 			queuedMessageCount: 0,
 			sessionName: "test",
@@ -1190,6 +1198,70 @@ describe("startCollabHosting", () => {
 		expect(postSwitchError).toBeUndefined();
 		expect(postSwitchLinks).toBeDefined();
 		expect(ctx.collabHost?.sessionId).toBe("sess-target");
+	});
+
+	it("serializes API starts through the controller during session switches so auto-start does not overwrite the room", async () => {
+		let currentSessionId = "sess-1";
+		const changeCallbacks: (() => void)[] = [];
+		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475", autoStart: "control" });
+		ctx.sessionManager.getSessionId = () => currentSessionId;
+		ctx.session.registerSessionChangeCallback = (cb: () => void) => {
+			changeCallbacks.push(cb);
+			return () => {};
+		};
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
+
+		// Start hosting first session via autoStart
+		controller.autoStart();
+		await controller.idle();
+		const initialHost = ctx.collabHost;
+		expect(initialHost).toBeDefined();
+		startedHosts.push(initialHost!);
+
+		// Now session switches to sess-2
+		currentSessionId = "sess-2";
+		for (const cb of changeCallbacks) cb();
+
+		// In session_switch hook, extension calls startCollabHosting
+		const apiHost = await startCollabHosting(ctx);
+		startedHosts.push(apiHost);
+		await controller.idle();
+
+		// On the broken tree, controller.#launch runs after the hook returns,
+		// creates a second host, and overwrites ctx.collabHost!
+		expect(ctx.collabHost).toBe(apiHost);
+		expect(controller.host).toBe(apiHost);
+	});
+
+	it("gates guest actions on extension-hosted rooms until controller startup completes", async () => {
+		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475" });
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
+
+		const host = await startHosting(ctx, "ws://localhost:7475");
+		expect(host.areGuestActionsReady).toBe(false);
+
+		controller.startupComplete();
+		expect(host.areGuestActionsReady).toBe(true);
+	});
+
+	it("preserves the controller's process instanceId and increments generation across restarts", async () => {
+		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475" });
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
+
+		const first = await startCollabHosting(ctx, { relayUrl: "ws://localhost:7475" });
+		startedHosts.push(first);
+		expect(first.instanceId).toBe(controller.instanceId);
+		expect(first.generation).toBe(1);
+
+		await stopCollabHosting(ctx);
+
+		const second = await startCollabHosting(ctx, { relayUrl: "ws://localhost:7475" });
+		startedHosts.push(second);
+		expect(second.instanceId).toBe(controller.instanceId);
+		expect(second.generation).toBe(2);
 	});
 });
 

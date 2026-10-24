@@ -14,11 +14,11 @@ import { logger } from "@oh-my-pi/pi-utils";
 import type { CollabHostLinks, StartCollabOptions } from "../extensibility/extensions/types";
 import type { InteractiveModeContext } from "../modes/types";
 import { hasInFlightCollabGuestTransition } from "./guest";
-import { COLLAB_STOPPED_ERROR, CollabHost } from "./host";
+import { COLLAB_STOPPED_ERROR, CollabHost, CollabRelayUnavailableError } from "./host";
 import { normalizeRelayOrigin } from "./protocol";
 import { cfgCollabRelayUrl, cfgCollabWebUrl } from "./settings";
 
-interface InFlightStart {
+export interface InFlightStart {
 	readonly host: CollabHost;
 	readonly relayOrigin: string;
 	readonly sessionId: string;
@@ -37,6 +37,10 @@ const inFlightStarts = new WeakMap<InteractiveModeContext, InFlightStart>();
 
 export function hasInFlightCollabHosting(ctx: InteractiveModeContext): boolean {
 	return inFlightStarts.has(ctx);
+}
+
+export function getInFlightCollabHosting(ctx: InteractiveModeContext): InFlightStart | undefined {
+	return inFlightStarts.get(ctx);
 }
 
 /** The links of a hosted room, in both strengths and both renderings. */
@@ -169,10 +173,14 @@ export async function startCollabHosting(
 			throw new Error(`Already hosting a collab session on relay ${pending.relayOrigin} (stop it first)`);
 		}
 
-		const existing = ctx.collabHost;
+		let existing = ctx.collabHost ?? ctx.collabController?.host;
+		if (existing && !existing.relayOrigin && ctx.collabController) {
+			await ctx.collabController.idle();
+			existing = ctx.collabHost ?? ctx.collabController?.host;
+		}
 		const staleExisting =
 			existing && existing.sessionId && existing.sessionId !== currentSessionId ? existing : undefined;
-		if (existing && !staleExisting) {
+		if (existing && !staleExisting && existing.relayOrigin) {
 			if (existing.relayOrigin === normalized.origin) return existing;
 			throw new Error(`Already hosting a collab session on relay ${existing.relayOrigin} (stop it first)`);
 		}
@@ -186,7 +194,18 @@ export async function startCollabHosting(
 		// Progress guarantee: every iteration either returns, throws, awaits a
 		// pending start with matching parameters, or claims a fresh reservation
 		// for the current session and stops iterating.
-		const host = new CollabHost(ctx, { deferStatus: true });
+		const controller = ctx.collabController;
+		const instanceId = controller?.instanceId;
+		const generation = controller ? controller.nextGeneration() : undefined;
+		const guestActionsReady = controller
+			? () => controller.isGuestActionsReady
+			: () => !ctx.session.isSessionTransitioning;
+		const host = new CollabHost(ctx, {
+			instanceId,
+			generation,
+			guestActionsReady,
+			deferStatus: true,
+		});
 		const inFlight: InFlightStart = {
 			host,
 			relayOrigin: normalized.origin,
@@ -259,11 +278,17 @@ export async function startCollabHosting(
 					if (inFlight.cancelled) throw new Error(COLLAB_STOPPED_ERROR);
 					throw new CollabStartSuperseded();
 				}
+				if (controller) {
+					controller.adoptHost(host);
+				}
 				ctx.collabHost = host;
 				ensureRolledBackHostReaper(ctx);
 				host.publishStatus();
 				return host;
 			} catch (err) {
+				if (controller && generation !== undefined && err instanceof CollabRelayUnavailableError) {
+					controller.rollbackGeneration(generation);
+				}
 				if (inFlight.cancelled) await host.stop("host stopped");
 				throw err;
 			} finally {
