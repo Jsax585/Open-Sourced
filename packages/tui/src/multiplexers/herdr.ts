@@ -26,8 +26,8 @@ export const herdrMultiplexer = {
 	 * backgrounded tab — so without its CLI a backgrounded pane gets no signal
 	 * at all that the agent finished or is waiting for input.
 	 *
-	 * `sound` maps the notification kind onto what Herdr offers: a question
-	 * waiting on the user and a turn that stopped with an error both need the
+	 * `sound` maps the notification kind onto what Herdr offers: a question,
+	 * a pending approval, and a turn that stopped with an error all need the
 	 * human and ring `request`, a settled turn rings `done`, anything else stays
 	 * silent. The exact pane ID addresses the CLI call; without a valid one, or
 	 * without the binary, delivery falls through.
@@ -42,7 +42,7 @@ export const herdrMultiplexer = {
 			const title = Object.hasOwn(HERDR_USAGE_TOKENS, parsed.title) ? DEFAULT_NOTIFICATION_TITLE : parsed.title;
 			const kinds = typeof message === "string" ? [] : [message.type ?? []].flat();
 			const sound =
-				kinds.includes("ask") || kinds.includes("error")
+				kinds.includes("ask") || kinds.includes("error") || kinds.includes("approval")
 					? "request"
 					: kinds.includes("completion")
 						? "done"
