@@ -132,10 +132,11 @@ export class TodoTracker {
 	onToolResult(toolName: string, isError: boolean, details?: unknown): void {
 		if (toolName === "todo") {
 			this.#mutationsSinceLastTouch = 0;
-			// Only a state-writing todo call records progress: view reads and
-			// errored attempts leave the HUD as stale as it was.
+			// Only a proven state-writing todo call records progress. A view, an
+			// errored attempt, and a result with no details op (a Cursor read
+			// snapshot is one) leave the HUD as stale as it was.
 			const op = isRecord(details) ? stringProperty(details, "op") : undefined;
-			if (!isError && op !== "view") this.#midRunNudgeCount = 0;
+			if (!isError && op !== undefined && op !== "view") this.#midRunNudgeCount = 0;
 		} else if (!isError && MUTATING_TOOLS[toolName]) {
 			this.#mutationsSinceLastTouch++;
 		}

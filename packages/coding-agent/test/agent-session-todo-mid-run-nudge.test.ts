@@ -291,7 +291,7 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		expect(reminderEvents).toEqual([]);
 	});
 
-	it("view reads and errored `todo` results do not re-arm the nudge budget", async () => {
+	it("view reads, errored results and details-less results do not re-arm the nudge budget", async () => {
 		let fired = 0;
 		for (let cycle = 0; cycle < MAX_PER_CYCLE; cycle++) {
 			for (let i = 0; i < THRESHOLD; i++) emitToolResult("edit");
@@ -305,6 +305,12 @@ describe("AgentSession mid-run todo reconciliation nudge", () => {
 		expect(await drainNudges()).toEqual([]);
 
 		emitToolResult("todo", { isError: true, details: { op: "done", phases: [] } });
+		for (let i = 0; i < THRESHOLD; i++) emitToolResult("edit");
+		expect(await drainNudges()).toEqual([]);
+
+		// An unchanged Cursor read_todos snapshot settles without details, so no
+		// op proves a write: it must not buy a third nudge either.
+		emitToolResult("todo");
 		for (let i = 0; i < THRESHOLD; i++) emitToolResult("edit");
 		expect(await drainNudges()).toEqual([]);
 		expect(reminderEvents).toEqual([]);
