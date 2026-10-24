@@ -22,7 +22,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSideConnection } from "@oh-my-pi/pi-utils/acp";
 import { type AgentRef, AgentRegistry } from "../../registry/agent-registry";
-import { readSessionMetrics } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
+import { readSessionDirectCost, readSessionMetrics } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
 
 export const AGENT_REGISTRY_NOTIFICATION = "notifications/agent_registry";
 
@@ -61,6 +61,11 @@ export interface AgentRegistrySnapshot {
 	metrics?: { usedTokens: number; costAmount?: number; durationMs?: number };
 }
 
+const retainedProjections = new WeakMap<
+	AgentRef,
+	{ model?: string; metrics?: { usedTokens: number; costAmount?: number; durationMs?: number } }
+>();
+
 export function snapshotAgentRegistry(registry: AgentRegistry = AgentRegistry.global()): AgentRegistrySnapshot[] {
 	const refs = registry.list();
 	// `AgentRef.session` is documented null exactly when parked/aborted, but the
@@ -82,7 +87,8 @@ export function snapshotAgentRegistry(registry: AgentRegistry = AgentRegistry.gl
 		// `readSessionMetrics` rather than `getSessionStats` directly: stats fold
 		// in the usage carried by a completed `task` result, which would bill a
 		// parent for children that report the same tokens on their own rows.
-		const liveMetrics = live === null ? undefined : readSessionMetrics(live);
+		const directCost = live === null ? undefined : readSessionDirectCost(live);
+		const liveMetrics = live === null ? undefined : readSessionMetrics(live, directCost);
 		const history = ref.history?.metrics;
 		const snapshot: AgentRegistrySnapshot = {
 			id: ref.id,
@@ -109,6 +115,25 @@ export function snapshotAgentRegistry(registry: AgentRegistry = AgentRegistry.gl
 				costAmount: history.cost,
 				durationMs: history.durationMs,
 			};
+		}
+		if (live !== null) {
+			retainedProjections.set(ref, {
+				model: snapshot.model,
+				metrics: snapshot.metrics,
+			});
+		} else {
+			const retained = retainedProjections.get(ref);
+			if (retained) {
+				if (snapshot.model === undefined && retained.model !== undefined) {
+					snapshot.model = retained.model;
+				}
+				if (snapshot.metrics === undefined && retained.metrics !== undefined) {
+					snapshot.metrics = {
+						...retained.metrics,
+						...(ref.history?.directCost !== undefined ? { costAmount: ref.history.directCost } : {}),
+					};
+				}
+			}
 		}
 		return snapshot;
 	});

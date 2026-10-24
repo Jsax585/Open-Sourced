@@ -27,6 +27,7 @@ import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import {
+	type AgentHistorySummary,
 	type AgentRef,
 	type AgentRefExpectation,
 	AgentRegistry,
@@ -338,8 +339,17 @@ export class AgentLifecycleManager {
 				try {
 					const usage = session.sessionManager.getUsageStatistics();
 					const directCost = usage.cost - usage.subagentCost;
+					const historyPatch: AgentHistorySummary = {};
 					if (Number.isFinite(directCost) && directCost >= 0) {
-						this.#registry.setHistory(id, { directCost }, ref.sessionFile ?? undefined);
+						historyPatch.directCost = directCost;
+					}
+					const serving = session.servingModel;
+					if (serving) {
+						historyPatch.resolvedModel = serving.modelIdentity ?? serving.selector;
+						historyPatch.resolvedModelIsFallback = serving.isFallback;
+					}
+					if (Object.keys(historyPatch).length > 0) {
+						this.#registry.setHistory(id, historyPatch, ref.sessionFile ?? undefined);
 					}
 				} catch (error) {
 					logger.debug("AgentLifecycleManager.park: cost snapshot failed", { id, error: String(error) });

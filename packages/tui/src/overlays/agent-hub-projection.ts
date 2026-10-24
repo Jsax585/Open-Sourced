@@ -127,7 +127,7 @@ export function progressMetrics(observed: ObservableSession | undefined): AgentM
 }
 
 /** Lifetime cost from the authoritative session index, excluding task-result child billing. */
-function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>): number | undefined {
+export function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>): number | undefined {
 	try {
 		const usage = session.sessionManager?.getUsageStatistics();
 		if (
@@ -136,7 +136,8 @@ function readSessionDirectCost(session: NonNullable<AgentRecordLike["session"]>)
 			Number.isFinite(usage.subagentCost) &&
 			usage.cost >= usage.subagentCost
 		) {
-			return usage.cost - usage.subagentCost;
+			const direct = usage.cost - usage.subagentCost;
+			return Math.round(direct * 1e6) / 1e6;
 		}
 	} catch {
 		// A session stopping during render may have already closed its stats host.

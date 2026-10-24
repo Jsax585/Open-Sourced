@@ -6,6 +6,7 @@ import {
 	mirrorAgentRegistry,
 	snapshotAgentRegistry,
 } from "@oh-my-pi/pi-coding-agent/modes/acp/agent-registry-notification";
+import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
@@ -52,12 +53,14 @@ function sessionStub(
 		model?: { provider: string; id: string };
 		direct?: StubUsage;
 		child?: StubUsage;
+		offTranscriptCost?: number;
 		/** Prepend an entry with no `usage`, as a loaded or resumed transcript can hold. */
 		legacy?: boolean;
 	},
 ): AgentSession {
 	const direct = live?.direct;
 	const child = live?.child;
+	const offTranscriptCost = live?.offTranscriptCost ?? 0;
 	const total = (usage: StubUsage | undefined): number =>
 		usage === undefined ? 0 : usage.input + usage.output + usage.cacheWrite;
 	const messages = (() => {
@@ -74,10 +77,16 @@ function sessionStub(
 			tokens: { input: direct?.input ?? 0, output: direct?.output ?? 0, cacheWrite: direct?.cacheWrite ?? 0 },
 			assistantMessages: direct === undefined ? 0 : 1,
 			toolCalls: 0,
-			cost: (direct?.cost ?? 0) + (child?.cost ?? 0),
+			cost: (direct?.cost ?? 0) + (child?.cost ?? 0) + offTranscriptCost,
 			contextUsage: undefined,
 			totalTokens: total(direct) + total(child),
 		}),
+		sessionManager: {
+			getUsageStatistics: () => ({
+				cost: (direct?.cost ?? 0) + (child?.cost ?? 0) + offTranscriptCost,
+				subagentCost: child?.cost ?? 0,
+			}),
+		},
 	} as unknown as AgentSession;
 }
 
@@ -505,5 +514,40 @@ describe("ACP agent registry notification", () => {
 		registry.register({ id: "sub", displayName: "Sub", kind: "sub", session: sessionStub("s-sub") });
 		await flush();
 		stop();
+	});
+
+	it("includes off-transcript spend in live cost metrics", async () => {
+		const session = sessionStub("s-sub", {
+			model: { provider: "openai", id: "gpt-4o" },
+			direct: { input: 100, output: 50, cacheWrite: 0, cost: 0.1 },
+			offTranscriptCost: 0.05,
+		});
+		registry.register({ id: "sub", displayName: "Sub", kind: "sub", session, status: "running" });
+		const snapshots = snapshotAgentRegistry(registry);
+		expect(snapshots[0]?.metrics?.costAmount).toBeCloseTo(0.15);
+	});
+
+	it("retains model and metrics when task agents park", async () => {
+		const session = sessionStub("s-sub", {
+			model: { provider: "openai", id: "gpt-4o" },
+			direct: { input: 100, output: 50, cacheWrite: 0, cost: 0.1 },
+		});
+		registry.register({ id: "sub", displayName: "Sub", kind: "sub", session, status: "idle" });
+		const lifecycle = new AgentLifecycleManager(registry);
+		lifecycle.adopt("sub", { idleTtlMs: 1000 }, registry.get("sub")!);
+
+		let snapshots = snapshotAgentRegistry(registry);
+		expect(snapshots[0]?.model).toBe("openai/gpt-4o");
+		expect(snapshots[0]?.metrics?.usedTokens).toBe(150);
+		expect(snapshots[0]?.metrics?.costAmount).toBe(0.1);
+
+		await lifecycle.park("sub");
+		expect(registry.get("sub")?.status).toBe("parked");
+
+		snapshots = snapshotAgentRegistry(registry);
+		expect(snapshots[0]?.status).toBe("parked");
+		expect(snapshots[0]?.model).toBe("openai/gpt-4o");
+		expect(snapshots[0]?.metrics?.usedTokens).toBe(150);
+		expect(snapshots[0]?.metrics?.costAmount).toBe(0.1);
 	});
 });
