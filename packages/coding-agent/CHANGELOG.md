@@ -9,7 +9,7 @@
 
 ### Changed
 
-- Documented a map-reduce sub-call pattern for the eval tool (slice a long input inside the kernel, run one `completion` per slice, barrier with `wait`, aggregate in code, load large sources via in-kernel `read` rather than the outer `read` tool's `:raw` form) and routed bulk per-chunk semantic work there instead of subagent fan-out.
+- Agents now label, extract or summarize every chunk of a long input inside `eval` instead of spawning subagents or reading the whole input into the conversation, so bulk transforms no longer flood the main context ([#9954](https://github.com/can1357/oh-my-pi/pull/9954) by [@apoc](https://github.com/apoc))
 
 ### Fixed
 
