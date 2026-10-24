@@ -123,7 +123,7 @@ function makeCtx(
 			},
 		},
 		eventBus: undefined,
-		eventController: { takeDisplaceableComponents: () => [] },
+		eventController: { takeDisplaceableComponents: () => [], resetTranscriptAnchors: () => {} },
 		statusLine: {
 			setCollabStatus: (status: unknown) => {
 				collabStatus = status;
