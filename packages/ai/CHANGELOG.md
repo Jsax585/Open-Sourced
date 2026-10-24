@@ -9,6 +9,7 @@
 ### Changed
 
 - Google Antigravity requests now carry the same request labels as the official 2.26.0 client (`cascade_id`, `root_cascade_id`, `request_id`, `used_non_gemini_model`), and image model lookup sends the account's project
+- Google Antigravity requests now send each model tier's own `model_enum` label, output cap and thinking setting from the account's model list, as the official client does: Claude 5.5 and Gemini 4 Argon tiers send a thinking level, Gemini 3.8 Flash tiers the tier's thinking budget
 
 ### Fixed
 

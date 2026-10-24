@@ -476,6 +476,29 @@ describe("collapseVariants with a reviewed table", () => {
 		expect(deduped).toEqual(once);
 	});
 
+	it("keeps every routed member's Antigravity wire profile on the collapsed row", () => {
+		const profiled = (id: string, modelEnum: string) =>
+			memberSpec(id, { antigravityWireProfiles: { [id]: { modelEnum, thinkingBudget: 1000 } } });
+		const fresh = collapseVariants(
+			[profiled("gemini-3.5-flash-extra-low", "M1"), profiled("gemini-3.5-flash-low", "M2")],
+			{ table: antigravityTable },
+		);
+		expect(fresh[0]?.antigravityWireProfiles).toEqual({
+			"gemini-3.5-flash-extra-low": { modelEnum: "M1", thinkingBudget: 1000 },
+			"gemini-3.5-flash-low": { modelEnum: "M2", thinkingBudget: 1000 },
+		});
+
+		// A collapsed snapshot that predates profiles takes the live members' own.
+		const snapshot = collapseVariants(FLASH_TRIPLET(), { table: antigravityTable });
+		const merged = collapseVariants([...snapshot, profiled("gemini-3-flash-agent", "M3")], {
+			table: antigravityTable,
+		});
+		expect(merged).toHaveLength(1);
+		expect(merged[0]?.antigravityWireProfiles).toEqual({
+			"gemini-3-flash-agent": { modelEnum: "M3", thinkingBudget: 1000 },
+		});
+	});
+
 	it("keeps gemini-cli flash on the level transport with the original routing", () => {
 		const out = collapseVariants(FLASH_TRIPLET(), { table: geminiCliTable });
 		const flash = out.find(m => m.id === "gemini-3.5-flash");

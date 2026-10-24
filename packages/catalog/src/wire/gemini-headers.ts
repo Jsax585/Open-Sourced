@@ -1,4 +1,5 @@
 import type { FetchImpl } from "@oh-my-pi/pi-utils";
+import type { AntigravityModelWireProfile } from "../types";
 
 /**
  * Build a User-Agent string that identifies as Gemini CLI to unlock higher rate limits.
@@ -145,34 +146,55 @@ export function getAntigravityUserAgent(): string {
 }
 
 /**
- * Per-wire-id Antigravity Cloud Code Assist request constants, captured from the
- * real `antigravity/hub` client against `daily-cloudcode-pa`. `modelEnum` is the
- * opaque `labels.model_enum` token the client tags each request with — optional
- * because Anthropic-backed wire ids (e.g. `claude-sonnet-4-6`,
- * `claude-opus-4-6-thinking`) are accepted without one; the label is purely
- * telemetry. `maxOutputTokens` is the fixed `generationConfig.maxOutputTokens`
- * the backend enforces regardless of the thinking budget (Claude caps at
- * 64000, Gemini accepts the discovered cap). Keyed by the routed upstream wire
- * id (post effort-routing), not the collapsed logical id. Checkpoint-only ids
- * (e.g. `gemini-3.1-flash-lite`) are intentionally absent — this provider only
- * emits agent requests.
+ * Offline fallback for {@link Model.antigravityWireProfiles}: per-SKU request
+ * constants for rows that predate discovery profiles (the bundled snapshot).
+ * Live discovery carries the account's own values and takes precedence.
+ * Captured from `fetchAvailableModels` and the native 2.26.0 client on
+ * `daily-cloudcode-pa`. Keyed by the routed upstream wire id (post
+ * effort-routing), not the collapsed logical id. `modelEnum` is the opaque
+ * `labels.model_enum` token; the backend accepts requests without it.
  */
-export interface AntigravityModelWireProfile {
-	modelEnum?: string;
-	maxOutputTokens: number;
-}
 export const ANTIGRAVITY_MODEL_WIRE_PROFILES: Readonly<Record<string, AntigravityModelWireProfile>> = {
+	"gemini-3.8-flash-low": { modelEnum: "MODEL_PLACEHOLDER_M320", maxOutputTokens: 65536, thinkingBudget: 1000 },
+	"gemini-3.8-flash-medium": { modelEnum: "MODEL_PLACEHOLDER_M319", maxOutputTokens: 65536, thinkingBudget: 4000 },
+	"gemini-3.8-flash-high": { modelEnum: "MODEL_PLACEHOLDER_M318", maxOutputTokens: 65536, thinkingBudget: -1 },
+	"gemini-3.8-flash-tiered": { modelEnum: "MODEL_PLACEHOLDER_M322", maxOutputTokens: 65536, thinkingBudget: -1 },
+	"gemini-4-argon-low": { modelEnum: "MODEL_PLACEHOLDER_M419", maxOutputTokens: 65536, thinkingLevel: "LOW" },
+	"gemini-4-argon-medium": { modelEnum: "MODEL_PLACEHOLDER_M418", maxOutputTokens: 65536, thinkingLevel: "MEDIUM" },
+	"gemini-4-argon-high": { modelEnum: "MODEL_PLACEHOLDER_M417", maxOutputTokens: 65536, thinkingLevel: "HIGH" },
+	"claude-opus-5-5-low": { modelEnum: "MODEL_PLACEHOLDER_M400", maxOutputTokens: 128000, thinkingLevel: "LOW" },
+	"claude-opus-5-5-medium": { modelEnum: "MODEL_PLACEHOLDER_M401", maxOutputTokens: 128000, thinkingLevel: "MEDIUM" },
+	"claude-opus-5-5-high": { modelEnum: "MODEL_PLACEHOLDER_M402", maxOutputTokens: 128000, thinkingLevel: "HIGH" },
+	"claude-sonnet-5-5-low": { modelEnum: "MODEL_PLACEHOLDER_M403", maxOutputTokens: 128000, thinkingLevel: "LOW" },
+	"claude-sonnet-5-5-medium": {
+		modelEnum: "MODEL_PLACEHOLDER_M404",
+		maxOutputTokens: 128000,
+		thinkingLevel: "MEDIUM",
+	},
+	"claude-sonnet-5-5-high": { modelEnum: "MODEL_PLACEHOLDER_M405", maxOutputTokens: 128000, thinkingLevel: "HIGH" },
+	"gpt-oss-120b-medium": {
+		modelEnum: "MODEL_OPENAI_GPT_OSS_120B_MEDIUM",
+		maxOutputTokens: 32768,
+		thinkingBudget: 8192,
+	},
 	"gemini-3.5-flash-extra-low": { modelEnum: "MODEL_PLACEHOLDER_M187", maxOutputTokens: 65536 },
 	"gemini-3.5-flash-low": { modelEnum: "MODEL_PLACEHOLDER_M20", maxOutputTokens: 65536 },
 	"gemini-3-flash-agent": { modelEnum: "MODEL_PLACEHOLDER_M132", maxOutputTokens: 65536 },
 	"gemini-3.1-pro-low": { modelEnum: "MODEL_PLACEHOLDER_M36", maxOutputTokens: 65535 },
 	"gemini-pro-agent": { modelEnum: "MODEL_PLACEHOLDER_M16", maxOutputTokens: 65535 },
-	// Claude on `daily-cloudcode-pa` rejects `maxOutputTokens > 64000` with a
-	// 400 (`Request contains an invalid argument`). The model_enum label is
-	// untracked for these ids; the backend does not require it.
+	// Claude 4.6 on `daily-cloudcode-pa` rejects `maxOutputTokens > 64000` with
+	// a 400 (`Request contains an invalid argument`).
 	"claude-sonnet-4-6": { maxOutputTokens: 64000 },
 	"claude-opus-4-6-thinking": { maxOutputTokens: 64000 },
 };
-export function getAntigravityModelWireProfile(wireModelId: string): AntigravityModelWireProfile | undefined {
-	return ANTIGRAVITY_MODEL_WIRE_PROFILES[wireModelId];
+
+/**
+ * Request constants for `wireModelId`: the row's discovered profile, else the
+ * offline fallback table.
+ */
+export function getAntigravityModelWireProfile(
+	wireModelId: string,
+	discovered?: Readonly<Record<string, AntigravityModelWireProfile>>,
+): AntigravityModelWireProfile | undefined {
+	return discovered?.[wireModelId] ?? ANTIGRAVITY_MODEL_WIRE_PROFILES[wireModelId];
 }

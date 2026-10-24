@@ -16,6 +16,7 @@ import {
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type {
+	AntigravityModelWireProfile,
 	Api,
 	AssistantMessage,
 	Context,
@@ -39,6 +40,7 @@ import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/str
 import { prepareAnthropicImageContext } from "./anthropic-images";
 import forcedToolDirective from "./google-antigravity-forced-tool.md" with { type: "text" };
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
+import type { ThinkingLevel } from "./google-types";
 import {
 	convertMessages,
 	convertTools,
@@ -1222,6 +1224,22 @@ interface AntigravityRequestEnvelope {
 }
 
 /**
+ * Whether `wireModelId` is one tier of a family that routes efforts to two or
+ * more distinct SKUs (`-low`/`-medium`/`-high`). There the SKU, not the effort,
+ * sets the thinking strength, as in the native client. Families routing every
+ * effort to one `-thinking` SKU keep the effort's own budget or level.
+ */
+function isAntigravityTierSku(model: Model<"google-gemini-cli">, wireModelId: string): boolean {
+	const routing = model.thinking?.effortRouting;
+	if (routing === undefined) return false;
+	const tiers = new Set<string>();
+	for (const [effort, target] of Object.entries(routing)) {
+		if (effort !== "off" && target !== undefined) tiers.add(target);
+	}
+	return tiers.size > 1 && tiers.has(wireModelId);
+}
+
+/**
  * Build the Antigravity request envelope (sessionId, structured requestId,
  * labels) advancing the per-conversation session state. Mirrors the real
  * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`,
@@ -1234,7 +1252,7 @@ interface AntigravityRequestEnvelope {
 function buildAntigravityRequestEnvelope(
 	model: Model<"google-gemini-cli">,
 	context: Context,
-	wireModelId: string,
+	profile: AntigravityModelWireProfile | undefined,
 	state: AntigravityProviderSessionState | undefined,
 ): AntigravityRequestEnvelope {
 	let requestIndex = 0;
@@ -1252,7 +1270,6 @@ function buildAntigravityRequestEnvelope(
 	const step = state?.stepIndex ?? 2;
 	const requestId = `agent/${agentId}/${Date.now()}/${trajectoryId}/${step}`;
 	const isClaude = model.identity.class === "anthropic";
-	const profile = getAntigravityModelWireProfile(wireModelId);
 	const labels: Record<string, string> = {};
 	labels.cascade_id = agentId;
 	if (state?.lastExecutionId) labels.last_execution_id = state.lastExecutionId;
@@ -1385,14 +1402,33 @@ export function buildRequest(
 	const wireModelId = options.requestModelId ?? model.requestModelId ?? model.id;
 
 	if (isAntigravity) {
-		// The real client sends a fixed per-model output cap independent of the
-		// thinking budget; reassign so it keeps its slot ahead of thinkingConfig.
-		const profile = getAntigravityModelWireProfile(wireModelId);
-		if (profile) {
+		// The native client sends each SKU's own constants from the account's
+		// roster: a fixed output cap independent of the thinking budget
+		// (reassigned so it keeps its slot ahead of thinkingConfig) and the
+		// `model_enum` label.
+		const profile = getAntigravityModelWireProfile(wireModelId, model.antigravityWireProfiles);
+		if (profile?.maxOutputTokens !== undefined) {
 			generationConfig.maxOutputTokens = profile.maxOutputTokens;
 		}
+		const thinkingConfig = generationConfig.thinkingConfig;
+		if (profile && thinkingConfig && options.thinking?.enabled && isAntigravityTierSku(model, wireModelId)) {
+			// A tier SKU fixes its own thinking strength; the effort only chose
+			// the SKU. Send it the way the SKU advertises: a level when it has
+			// one, else its budget (`-1` is dynamic).
+			if (profile.thinkingLevel !== undefined) {
+				generationConfig.thinkingConfig = {
+					includeThoughts: thinkingConfig.includeThoughts,
+					thinkingLevel: profile.thinkingLevel as ThinkingLevel,
+				};
+			} else if (profile.thinkingBudget !== undefined) {
+				generationConfig.thinkingConfig = {
+					includeThoughts: thinkingConfig.includeThoughts,
+					thinkingBudget: profile.thinkingBudget,
+				};
+			}
+		}
 		const state = getAntigravityProviderSessionState(options.providerSessionState);
-		const envelope = buildAntigravityRequestEnvelope(model, context, wireModelId, state);
+		const envelope = buildAntigravityRequestEnvelope(model, context, profile, state);
 		request.labels = envelope.labels;
 		if (Object.keys(generationConfig).length > 0) {
 			request.generationConfig = generationConfig;

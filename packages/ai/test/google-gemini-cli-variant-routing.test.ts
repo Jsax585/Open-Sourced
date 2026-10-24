@@ -10,6 +10,7 @@ import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 interface CapturedRequestBody {
 	model?: string;
 	request?: {
+		labels?: Record<string, string>;
 		generationConfig?: {
 			maxOutputTokens?: number;
 			thinkingConfig?: {
@@ -124,7 +125,7 @@ async function captureRequest(
 }
 
 describe("google-gemini-cli effort-tier variant routing", () => {
-	it("discovers one Claude 5.5 model per family and routes its supported efforts to the served tiers", async () => {
+	it("discovers one Claude 5.5 model per family and sends each served tier its advertised level, label and cap", async () => {
 		const tiers = [Effort.Low, Effort.Medium, Effort.High] as const;
 		const families = ["claude-opus-5-5", "claude-sonnet-5-5"];
 		const result = await fetchAntigravityDiscoveryModels({
@@ -134,13 +135,15 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 				Response.json({
 					models: Object.fromEntries(
 						families.flatMap(id =>
-							tiers.map(tier => [
+							tiers.map((tier, index) => [
 								`${id}-${tier}`,
 								{
 									supportsThinking: true,
 									supportsImages: true,
 									maxTokens: 1_000_000,
 									maxOutputTokens: 128_000,
+									model: `MODEL_TEST_${id}-${tier}`,
+									thinkingLevel: index + 1,
 								},
 							]),
 						),
@@ -160,8 +163,11 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 				const request = await captureRequest(model, tier);
 				expect(request.body.model).toBe(`${id}-${tier}`);
 				expect(request.attributedModel).toBe(id);
-				expect(request.body.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBeGreaterThan(0);
-				expect(request.body.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBeUndefined();
+				expect(request.body.request?.generationConfig).toEqual({
+					maxOutputTokens: 128_000,
+					thinkingConfig: { includeThoughts: true, thinkingLevel: tier.toUpperCase() },
+				});
+				expect(request.body.request?.labels?.model_enum).toBe(`MODEL_TEST_${id}-${tier}`);
 			}
 
 			// These SKUs always think: off and external scratchpads (an effort is
@@ -173,8 +179,10 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 			] as const) {
 				const request = await captureRequest(model, reasoning, options);
 				expect(request.body.model).toBe(`${id}-low`);
-				expect(request.body.request?.generationConfig?.thinkingConfig?.includeThoughts).toBe(true);
-				expect(request.body.request?.generationConfig?.thinkingConfig?.thinkingBudget).toBe(4096);
+				expect(request.body.request?.generationConfig?.thinkingConfig).toEqual({
+					includeThoughts: true,
+					thinkingLevel: "LOW",
+				});
 			}
 		}
 	});
@@ -187,13 +195,16 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 			fetcher: async () =>
 				Response.json({
 					models: Object.fromEntries(
-						tiers.map(tier => [
+						tiers.map((tier, index) => [
 							`gemini-4-argon-${tier}`,
 							{
 								supportsThinking: true,
 								supportsImages: true,
 								maxTokens: 1_048_576,
 								maxOutputTokens: 65_536,
+								// Argon advertises both; the level wins like in the native client.
+								thinkingBudget: -1,
+								thinkingLevel: index + 1,
 							},
 						]),
 					),
@@ -227,6 +238,80 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 				thinkingLevel: "LOW",
 			});
 		}
+	});
+
+	it("sends each Gemini 3.8 Flash tier the thinking budget its SKU advertises", async () => {
+		const budgets = { [Effort.Low]: 1000, [Effort.Medium]: 4000, [Effort.High]: -1 } as const;
+		const result = await fetchAntigravityDiscoveryModels({
+			token: "token",
+			userAgent: "test",
+			fetcher: async () =>
+				Response.json({
+					models: Object.fromEntries(
+						Object.entries(budgets).map(([tier, thinkingBudget]) => [
+							`gemini-3.8-flash-${tier}`,
+							{
+								supportsThinking: true,
+								supportsImages: true,
+								maxTokens: 1_048_576,
+								maxOutputTokens: 65_536,
+								model: `MODEL_TEST_FLASH_${tier}`,
+								thinkingBudget,
+							},
+						]),
+					),
+				}),
+		});
+		if (!result || result.rejectedStatus !== undefined) throw new Error("discovery failed");
+		expect(result.models.map(spec => spec.id)).toEqual(["gemini-3.8-flash"]);
+		const model = buildModel(result.models[0]);
+
+		for (const [tier, thinkingBudget] of Object.entries(budgets) as [Effort, number][]) {
+			const request = await captureRequest(model, tier);
+			expect(request.body.model).toBe(`gemini-3.8-flash-${tier}`);
+			expect(request.body.request?.generationConfig).toEqual({
+				maxOutputTokens: 65_536,
+				thinkingConfig: { includeThoughts: true, thinkingBudget },
+			});
+			expect(request.body.request?.labels?.model_enum).toBe(`MODEL_TEST_FLASH_${tier}`);
+		}
+	});
+
+	it("keeps per-effort budgets when every effort routes to one thinking SKU", async () => {
+		const result = await fetchAntigravityDiscoveryModels({
+			token: "token",
+			userAgent: "test",
+			fetcher: async () =>
+				Response.json({
+					models: Object.fromEntries(
+						["gemini-2.5-flash", "gemini-2.5-flash-thinking"].map(id => [
+							id,
+							{
+								supportsThinking: true,
+								maxTokens: 1_048_576,
+								maxOutputTokens: 65_535,
+								model: `MODEL_TEST_${id}`,
+								thinkingLevel: 1,
+							},
+						]),
+					),
+				}),
+		});
+		if (!result || result.rejectedStatus !== undefined) throw new Error("discovery failed");
+		expect(result.models.map(spec => spec.id)).toEqual(["gemini-2.5-flash"]);
+		const model = buildModel(result.models[0]);
+
+		const low = await captureRequest(model, Effort.Low);
+		const high = await captureRequest(model, Effort.High);
+		for (const request of [low, high]) {
+			expect(request.body.model).toBe("gemini-2.5-flash-thinking");
+			expect(request.body.request?.labels?.model_enum).toBe("MODEL_TEST_gemini-2.5-flash-thinking");
+			expect(request.body.request?.generationConfig?.thinkingConfig?.thinkingLevel).toBeUndefined();
+		}
+		const lowBudget = low.body.request?.generationConfig?.thinkingConfig?.thinkingBudget;
+		const highBudget = high.body.request?.generationConfig?.thinkingConfig?.thinkingBudget;
+		expect(lowBudget).toBeGreaterThan(0);
+		expect(highBudget).toBeGreaterThan(lowBudget ?? 0);
 	});
 
 	it("routes each effort to its backing wire id with the per-tier budget and attributes usage to the logical id", async () => {

@@ -36,7 +36,7 @@
  */
 import { buildModel } from "../build";
 import { Effort, THINKING_EFFORTS } from "../effort";
-import type { Api, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
+import type { AntigravityModelWireProfile, Api, Model, ModelSpec, Provider, ThinkingConfig } from "../types";
 import { resolveModelPolicy } from "./resolve";
 import { parseRevision, parseRevisionConstraint, type RevisionTerm, revisionSatisfies } from "./revision";
 import { collapseVariantId, collapseVocabulary, stripThinkingVariantSuffix } from "./taxonomy";
@@ -820,6 +820,37 @@ function reconcileCursorMaxMode<TSpec extends VariantSpecLike>(spec: TSpec, memb
 }
 
 /**
+ * Union the members' discovered Antigravity wire profiles, keyed by each
+ * member's own wire id, so the collapsed row keeps the request constants of
+ * every SKU it routes to (`...firstMember` alone keeps only the first tier's).
+ * Returns `undefined` when no member carries a profile.
+ */
+function antigravityWireProfilesOf<TSpec extends VariantSpecLike>(
+	memberSpecs: readonly TSpec[],
+): Record<string, AntigravityModelWireProfile> | undefined {
+	let profiles: Record<string, AntigravityModelWireProfile> | undefined;
+	for (const member of memberSpecs) {
+		if (member.antigravityWireProfiles === undefined) continue;
+		profiles = { ...profiles, ...member.antigravityWireProfiles };
+	}
+	return profiles;
+}
+
+/**
+ * Merge live members' wire profiles over an already-collapsed snapshot, which
+ * froze them (or none) when it was written. Returns `spec` by reference when no
+ * member carries a profile.
+ */
+function reconcileAntigravityWireProfiles<TSpec extends VariantSpecLike>(
+	spec: TSpec,
+	memberSpecs: readonly TSpec[],
+): TSpec {
+	const profiles = antigravityWireProfilesOf(memberSpecs);
+	if (profiles === undefined) return spec;
+	return { ...spec, antigravityWireProfiles: { ...spec.antigravityWireProfiles, ...profiles } };
+}
+
+/**
  * Collapse every family in `table` found in `specs`. Non-member specs pass
  * through verbatim (by reference), order preserved; the collapsed spec
  * replaces the first occurrence of its family.
@@ -890,7 +921,10 @@ function collapseWithTable<TSpec extends VariantSpecLike>(
 			// lowest tier.
 			replacement.set(
 				family.id,
-				reconcileCursorMaxMode(reconcileDefaultMember(reconciled, family, new Set(rawPresent)), memberSpecs),
+				reconcileAntigravityWireProfiles(
+					reconcileCursorMaxMode(reconcileDefaultMember(reconciled, family, new Set(rawPresent)), memberSpecs),
+					memberSpecs,
+				),
 			);
 			continue;
 		}
@@ -937,6 +971,7 @@ function collapseWithTable<TSpec extends VariantSpecLike>(
 		// which tier needed it, so the members' own markers are kept per wire id.
 		const cursorMaxMode = memberSpecs.some(spec => spec.cursorMaxMode === true) ? true : undefined;
 		const cursorMaxModeRoutes = cursorMaxModeRoutesOf(firstMember.provider, memberSpecs);
+		const antigravityWireProfiles = antigravityWireProfilesOf(memberSpecs);
 		const collapsed: TSpec = {
 			...firstMember,
 			id: family.id,
@@ -947,6 +982,7 @@ function collapseWithTable<TSpec extends VariantSpecLike>(
 			maxTokens: maxOrNull(memberSpecs.map(spec => spec.maxTokens)),
 			...(cursorMaxMode === undefined ? {} : { cursorMaxMode }),
 			...(cursorMaxModeRoutes === undefined ? {} : { cursorMaxModeRoutes }),
+			...(antigravityWireProfiles === undefined ? {} : { antigravityWireProfiles }),
 		};
 		if (memberSpecs.some(spec => spec.isProviderDefault === true)) {
 			collapsed.isProviderDefault = true;

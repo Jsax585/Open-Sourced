@@ -1,7 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
 import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { collapseVariants, type VariantCollapseTable } from "../compat/collapse";
-import type { ModelSpec } from "../types";
+import type { AntigravityModelWireProfile, ModelSpec } from "../types";
 import { discoveryFetch, toPositiveNumber } from "../utils";
 import { ensureAntigravityVersion, getAntigravityUserAgent } from "../wire/gemini-headers";
 
@@ -14,6 +14,13 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 64_000;
 const ANTIGRAVITY_DISCOVERY_DENYLIST = new Set(["chat_20706", "chat_23310", "gemini-2.5-pro"]);
 
+/** `fetchAvailableModels` `thinkingLevel` → wire `thinkingConfig.thinkingLevel` (verified against the native client). */
+const ANTIGRAVITY_THINKING_LEVELS: Readonly<Record<number, AntigravityModelWireProfile["thinkingLevel"]>> = {
+	1: "LOW",
+	2: "MEDIUM",
+	3: "HIGH",
+};
+
 /**
  * Raw model metadata returned by Antigravity's `fetchAvailableModels` endpoint.
  */
@@ -22,6 +29,8 @@ export interface AntigravityDiscoveryApiModel {
 	supportsImages?: boolean;
 	supportsThinking?: boolean;
 	thinkingBudget?: number;
+	/** SKU thinking level: 1 low, 2 medium, 3 high. */
+	thinkingLevel?: number;
 	recommended?: boolean;
 	maxTokens?: number;
 	maxOutputTokens?: number;
@@ -66,6 +75,9 @@ const AntigravityDiscoveryApiModelSchema = type({
 	"supportsImages?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
 	"supportsThinking?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
 	"thinkingBudget?": type("unknown").pipe(value =>
+		typeof value === "number" && Number.isFinite(value) ? value : undefined,
+	),
+	"thinkingLevel?": type("unknown").pipe(value =>
 		typeof value === "number" && Number.isFinite(value) ? value : undefined,
 	),
 	"recommended?": type("unknown").pipe(value => (typeof value === "boolean" ? value : undefined)),
@@ -206,6 +218,7 @@ export async function fetchAntigravityDiscoveryModels(
 			}
 
 			const supportsImages = model.supportsImages === true;
+			const wireProfile = antigravityWireProfileOf(model);
 			models.push({
 				id: modelId,
 				name: model.displayName || modelId,
@@ -222,6 +235,7 @@ export async function fetchAntigravityDiscoveryModels(
 				},
 				contextWindow: toPositiveNumber(model.maxTokens, DEFAULT_CONTEXT_WINDOW),
 				maxTokens: toPositiveNumber(model.maxOutputTokens, DEFAULT_MAX_TOKENS),
+				...(wireProfile === undefined ? {} : { antigravityWireProfiles: { [modelId]: wireProfile } }),
 			});
 		}
 	}
@@ -235,6 +249,24 @@ export async function fetchAntigravityDiscoveryModels(
 	);
 	collapsed.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 	return { models: collapsed };
+}
+
+/**
+ * Request constants the native client derives from one roster row: the
+ * `model_enum` label, the fixed output cap, and the SKU's thinking setting.
+ * Returns `undefined` when the row carries none of them.
+ */
+function antigravityWireProfileOf(model: AntigravityDiscoveryApiModel): AntigravityModelWireProfile | undefined {
+	const profile: AntigravityModelWireProfile = {};
+	if (model.model) profile.modelEnum = model.model;
+	if (model.maxOutputTokens !== undefined && model.maxOutputTokens > 0) {
+		profile.maxOutputTokens = model.maxOutputTokens;
+	}
+	const thinkingLevel =
+		model.thinkingLevel === undefined ? undefined : ANTIGRAVITY_THINKING_LEVELS[model.thinkingLevel];
+	if (thinkingLevel !== undefined) profile.thinkingLevel = thinkingLevel;
+	if (model.thinkingBudget !== undefined) profile.thinkingBudget = model.thinkingBudget;
+	return Object.keys(profile).length > 0 ? profile : undefined;
 }
 
 /** Advertised image model and serving endpoint for one Antigravity account. */
