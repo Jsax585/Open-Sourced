@@ -428,8 +428,8 @@ export interface SessionBeforeSwitchResult {
 
 /**
  * Fired before each prompt-cache warming refresh with the warmer's economics
- * filled in, and when a safety window would end warming before the next
- * refresh. Return `{ action }` to override whether the refresh is sent.
+ * filled in; for a refresh past a safety window, once when it is scheduled.
+ * Return `{ action }` to override whether the refresh is sent.
  */
 export interface CacheWarmingDecisionEvent {
 	type: "cache_warming_decision";
@@ -441,7 +441,9 @@ export interface CacheWarmingDecisionEvent {
 	continuationProbability: number;
 	/** Time from this refresh to the next one the warmer would send. */
 	refreshIntervalMs: number;
-	/** The warmer's own decision; "stop" past a safety window, where only an extension's "warm" continues. */
+	/** Safety window this refresh falls past (60 min streaming, 30 min idle); `action` is then "stop". */
+	window?: "streaming" | "idle";
+	/** The warmer's own decision. */
 	action: CacheWarmingAction;
 }
 
@@ -449,6 +451,8 @@ export interface CacheWarmingDecisionEvent {
 export interface CacheWarmingDecisionEventResult {
 	/** Override whether this refresh is sent. "stop" ends warming until the next real request. */
 	action?: CacheWarmingAction;
+	/** With `action: "warm"`, sends a refresh past its safety `window`; ignored inside the windows. */
+	extendWindow?: boolean;
 }
 
 /** Return type for `session_before_branch` handlers */
