@@ -5,7 +5,7 @@
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
-- `cache_warming_decision` handlers can keep prompt-cache warming past the 60-minute streaming and 30-minute idle safety windows, including a 1h entry after its run settles, by answering `"warm"` for each further refresh; the event also reports `refreshIntervalMs`, the time to the following refresh. Without such a handler warming stops at the windows as before
+- `cache_warming_decision` handlers can keep prompt-cache warming past the 60-minute streaming and 30-minute idle safety windows, including a 1h entry after its run settles, by answering `"warm"` for each further refresh; the event also reports `refreshIntervalMs`, the time to the following refresh. Without such a handler warming stops at the windows as before ([#16960](https://github.com/can1357/oh-my-pi/pull/16960) by [@aramalipoor](https://github.com/aramalipoor))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
 ### Fixed
