@@ -108,6 +108,10 @@ export class TodoTracker {
 	/** Replaces todo phases with a defensive clone. */
 	setPhases(phases: TodoPhase[]): void {
 		this.#phases = this.#clonePhases(phases);
+		// Every state write lands here — the native tool, a Cursor sync, or a
+		// bridged call — so the nudge budget re-arms on the progress it
+		// rations. Views, failed batches, and unchanged reads never arrive.
+		this.#midRunNudgeCount = 0;
 	}
 
 	/** Rehydrates todo phases from the current transcript branch. */
@@ -129,14 +133,9 @@ export class TodoTracker {
 	}
 
 	/** Records a completed tool result before asynchronous event processing begins. */
-	onToolResult(toolName: string, isError: boolean, details?: unknown): void {
+	onToolResult(toolName: string, isError: boolean): void {
 		if (toolName === "todo") {
 			this.#mutationsSinceLastTouch = 0;
-			// Only a proven state-writing todo call records progress. A view, an
-			// errored attempt, and a result with no details op (a Cursor read
-			// snapshot is one) leave the HUD as stale as it was.
-			const op = isRecord(details) ? stringProperty(details, "op") : undefined;
-			if (!isError && op !== undefined && op !== "view") this.#midRunNudgeCount = 0;
 		} else if (!isError && MUTATING_TOOLS[toolName]) {
 			this.#mutationsSinceLastTouch++;
 		}

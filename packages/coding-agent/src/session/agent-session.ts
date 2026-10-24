@@ -4177,7 +4177,7 @@ export class AgentSession implements SettingsScope {
 		// and only successful mutating tools tick — read-only exploration is
 		// not progress an agent could mark done.
 		if (event.type === "message_end" && event.message.role === "toolResult") {
-			this.#todo.onToolResult(event.message.toolName, event.message.isError, event.message.details);
+			this.#todo.onToolResult(event.message.toolName, event.message.isError);
 		}
 		// Track the settled assistant turn synchronously as well: agent_end
 		// maintenance reads `#lastAssistantMessage`, and when a turn's events all
