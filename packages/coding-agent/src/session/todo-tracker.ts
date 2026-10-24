@@ -129,12 +129,13 @@ export class TodoTracker {
 	}
 
 	/** Records a completed tool result before asynchronous event processing begins. */
-	onToolResult(toolName: string, isError: boolean): void {
+	onToolResult(toolName: string, isError: boolean, details?: unknown): void {
 		if (toolName === "todo") {
 			this.#mutationsSinceLastTouch = 0;
-			// A `todo` touch is the progress the cap exists to ration, so a long
-			// turn earns a fresh nudge budget instead of going silent for good.
-			this.#midRunNudgeCount = 0;
+			// Only a state-writing todo call records progress: view reads and
+			// errored attempts leave the HUD as stale as it was.
+			const op = isRecord(details) ? stringProperty(details, "op") : undefined;
+			if (!isError && op !== "view") this.#midRunNudgeCount = 0;
 		} else if (!isError && MUTATING_TOOLS[toolName]) {
 			this.#mutationsSinceLastTouch++;
 		}
