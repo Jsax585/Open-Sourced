@@ -4,7 +4,7 @@
 
 ### Added
 
-- Extension command handlers can call enabled session MCP tools with `ctx.callMCPTool`, preserving approval and hooks without a model turn; calls are single-attempt and cancel with the session.
+- Extension command handlers can call enabled session MCP tools with `ctx.callMCPTool`, preserving approval and hooks without a model turn; calls are single-attempt and cancel with the session ([#16964](https://github.com/can1357/oh-my-pi/pull/16964) by [@Mathews-Tom](https://github.com/Mathews-Tom))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
