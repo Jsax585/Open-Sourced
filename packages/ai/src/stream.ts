@@ -1558,10 +1558,14 @@ const GOOGLE_THINKING: Record<Effort, number> = {
 /**
  * Estimated thinking spend for an effort, used to size Google's
  * `maxOutputTokens` (Gemini counts thinking against it). Level mode and the
- * dynamic budget (`-1`) put no number on the wire, so this stands in for them.
+ * dynamic budget (`-1`, from a custom or catalog budget) put no positive
+ * number on the wire, so the effort default stands in for them.
  */
 function googleThinkingHeadroom(model: Model<Api>, effort: Effort, customBudgets?: ThinkingBudgets): number {
-	return customBudgets?.[effort] ?? model.thinking?.effortBudgets?.[effort] ?? GOOGLE_THINKING[effort];
+	const custom = customBudgets?.[effort];
+	if (custom !== undefined && custom > 0) return custom;
+	const catalog = model.thinking?.effortBudgets?.[effort];
+	return catalog !== undefined && catalog > 0 ? catalog : GOOGLE_THINKING[effort];
 }
 
 /**
@@ -2182,7 +2186,8 @@ function mapOptionsForApi<TApi extends Api>(
 					});
 				}
 
-				let thinkingBudget = googleThinkingHeadroom(model, effort, options.thinkingBudgets);
+				let thinkingBudget =
+					options.thinkingBudgets?.[effort] ?? model.thinking?.effortBudgets?.[effort] ?? GOOGLE_THINKING[effort];
 
 				// Caller's maxTokens is desired output, so add thinking budget on top. With no caller/model cap, use a finite total fallback.
 				const maxTokens = maxTokensWithThinkingBudget(base.maxTokens, model.maxTokens, thinkingBudget);
