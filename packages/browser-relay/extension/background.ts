@@ -18,6 +18,8 @@ const DEFAULT_PORT = 9224;
 const PING_INTERVAL_MS = 20_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 10_000;
+const REMOVE_TAB_ATTEMPTS = 3;
+const REMOVE_TAB_RETRY_MS = 500;
 
 let ws: WebSocket | null = null;
 let reconnectDelay = RECONNECT_MIN_MS;
@@ -39,6 +41,25 @@ async function ensureInstanceId(): Promise<string> {
 	instanceId = typeof existing === "string" && existing.length > 0 ? existing : crypto.randomUUID();
 	await chrome.storage.local.set({ [key]: instanceId } as Record<string, string>);
 	return instanceId;
+}
+
+/**
+ * Identity of this browser run, in `chrome.storage.session`. Chrome clears it on restart, when it also reuses tab
+ * ids, so the relay retires the previous run's targets instead of resolving an old target id to a new tab. An
+ * extension reload clears it too: omp then loses its handles to the tabs it opened, which stay open.
+ */
+let browserSession: Promise<string> | null = null;
+function ensureBrowserSession(): Promise<string> {
+	browserSession ??= (async () => {
+		const key = "relayBrowserSession";
+		const stored = await chrome.storage.session.get({ [key]: "" });
+		const existing = stored[key];
+		if (typeof existing === "string" && existing.length > 0) return existing;
+		const created = crypto.randomUUID();
+		await chrome.storage.session.set({ [key]: created } as Record<string, string>);
+		return created;
+	})();
+	return browserSession;
 }
 
 interface RelaySettings {
@@ -143,6 +164,23 @@ function post(msg: ExtToRelayMessage): void {
 	if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
+/** Chrome can refuse a tab close for a moment (a tab being dragged, an unload in progress); try again before failing. */
+async function removeTab(tabId: number): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await chrome.tabs.remove(tabId);
+			return;
+		} catch (error) {
+			// Already closed: the close the relay asked for has happened.
+			if (/No tab with id/.test(String(error))) return;
+			if (attempt >= REMOVE_TAB_ATTEMPTS) throw error;
+			const pause = Promise.withResolvers<void>();
+			setTimeout(pause.resolve, REMOVE_TAB_RETRY_MS);
+			await pause.promise;
+		}
+	}
+}
+
 async function setBadge(connected: boolean): Promise<void> {
 	try {
 		await chrome.action.setBadgeText({ text: connected ? "on" : "off" });
@@ -167,6 +205,7 @@ async function buildHello(): Promise<ExtToRelayMessage> {
 	return {
 		t: "hello",
 		instanceId: await ensureInstanceId(),
+		browserSession: await ensureBrowserSession(),
 		userAgent: navigator.userAgent,
 		browserVersion: versionMatch?.[0] ?? "Chrome/unknown",
 		discardedTabsProtocol: 1, // Keep in sync with the relay protocol version.
@@ -175,7 +214,8 @@ async function buildHello(): Promise<ExtToRelayMessage> {
 	};
 }
 
-async function runRpc(msg: Extract<RelayToExtMessage, { t: "rpc" }>): Promise<unknown> {
+/** Run one relay RPC; `origin` is the socket it came in on, which alone can carry its answer. */
+async function runRpc(msg: Extract<RelayToExtMessage, { t: "rpc" }>, origin: WebSocket): Promise<unknown> {
 	switch (msg.op) {
 		case "attach":
 			await chrome.debugger.attach({ tabId: msg.tabId }, "1.3");
@@ -201,12 +241,13 @@ async function runRpc(msg: Extract<RelayToExtMessage, { t: "rpc" }>): Promise<un
 		case "createTab": {
 			const { isFragmented, hash } = parseFragmentedAboutBlank(msg.url);
 			if (!isFragmented) {
-				const tab = await chrome.tabs.create({ url: msg.url });
+				const tab = await chrome.tabs.create({ url: msg.url, active: msg.active ?? true });
 				const snap = snapshot(tab);
 				if (!snap) throw new Error("created tab has no id");
+				if (origin.readyState !== WebSocket.OPEN) void removeTab(snap.tabId).catch(() => {});
 				return { tab: snap };
 			}
-			const tab = await chrome.tabs.create({ url: "about:blank" });
+			const tab = await chrome.tabs.create({ url: "about:blank", active: msg.active ?? true });
 			if (tab.id === undefined) throw new Error("created tab has no id");
 			const tabId = tab.id;
 			try {
@@ -233,10 +274,12 @@ async function runRpc(msg: Extract<RelayToExtMessage, { t: "rpc" }>): Promise<un
 			const updated = await chrome.tabs.get(tabId);
 			const snap = snapshot(updated);
 			if (!snap) throw new Error("created tab has no id");
+			// The relay failed this call when its socket closed, so nobody learns this tab's id to close it later.
+			if (origin.readyState !== WebSocket.OPEN) void removeTab(snap.tabId).catch(() => {});
 			return { tab: snap };
 		}
 		case "removeTab":
-			await chrome.tabs.remove(msg.tabId);
+			await removeTab(msg.tabId);
 			return {};
 		case "activateTab": {
 			const tab = await chrome.tabs.get(msg.tabId);
@@ -252,7 +295,7 @@ async function runRpc(msg: Extract<RelayToExtMessage, { t: "rpc" }>): Promise<un
 	}
 }
 
-function handleRelayMessage(raw: string): void {
+function handleRelayMessage(socket: WebSocket, raw: string): void {
 	let msg: RelayToExtMessage;
 	try {
 		msg = JSON.parse(raw) as RelayToExtMessage;
@@ -260,10 +303,15 @@ function handleRelayMessage(raw: string): void {
 		return;
 	}
 	if (msg.t === "pong") return;
-	void runRpc(msg)
-		.then(result => post({ t: "rpcResult", id: msg.id, ok: true, result }))
+	// Answer only on the socket the RPC came in on: RPC ids are local to that connection, and the relay already
+	// failed the call when it closed.
+	const answer = (reply: ExtToRelayMessage): void => {
+		if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(reply));
+	};
+	void runRpc(msg, socket)
+		.then(result => answer({ t: "rpcResult", id: msg.id, ok: true, result }))
 		.catch((err: unknown) => {
-			post({ t: "rpcResult", id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+			answer({ t: "rpcResult", id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
 		});
 }
 
@@ -287,7 +335,7 @@ async function connect(): Promise<void> {
 		pingTimer = setInterval(() => post({ t: "ping" }), PING_INTERVAL_MS);
 	};
 	socket.onmessage = event => {
-		if (typeof event.data === "string") handleRelayMessage(event.data);
+		if (typeof event.data === "string") handleRelayMessage(socket, event.data);
 	};
 	socket.onclose = () => {
 		if (ws !== socket) return;
