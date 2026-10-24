@@ -200,18 +200,19 @@ const DATA_CHANGE_RENDER_COALESCE_MS = 100;
 /** Double-tap window for the table's left-left "close hub" gesture. */
 const LEFT_TAP_WINDOW_MS = 500;
 
-type RosterRankKey = Pick<AgentRecordLike, "id" | "status" | "lastActivity">;
-
-function compareRosterAgents(a: RosterRankKey, b: RosterRankKey): number {
-	return (
-		STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || b.lastActivity - a.lastActivity || a.id.localeCompare(b.id)
-	);
+/** A row's rank, frozen when the hub first saw its generation: the batch it came in, and its status and recency then. */
+interface FrozenRank extends Pick<AgentRecordLike, "id" | "status" | "lastActivity"> {
+	/** 0 for the agents the hub opened with or the saved-agent scan found; each later batch of new generations is one lower. */
+	batch: number;
 }
 
-/** The rank frozen when the hub first saw a generation: its spawn batch, status and recency of that moment. */
-interface FrozenRank extends RosterRankKey {
-	/** 0 for agents the hub opened with or found on disk; each later batch of spawns gets a lower number. */
-	batch: number;
+function compareFrozenRanks(a: FrozenRank, b: FrozenRank): number {
+	return (
+		a.batch - b.batch ||
+		STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+		b.lastActivity - a.lastActivity ||
+		a.id.localeCompare(b.id)
+	);
 }
 
 function activityGlyph(row: AgentActivityRow): string {
@@ -373,13 +374,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#statusCounts: Record<AgentStatus, number> = { running: 0, idle: 0, parked: 0, aborted: 0 };
 	#selectedRow = 0;
 	/**
-	 * A generation's rank is frozen when the hub first sees it, so heartbeats and
-	 * status changes cannot move rows. An agent the saved-agent scan finds takes
-	 * its place in the status/recency ranking; every other generation that appears
-	 * while the hub is open goes on top.
+	 * Each row keeps the rank it got when the hub first saw its generation, so
+	 * heartbeats and status changes do not move rows. An agent the saved-agent
+	 * scan finds takes its place in the status/recency order; every other new
+	 * generation goes on top.
 	 */
 	#frozenRank = new Map<TRecord, FrozenRank>();
-	/** Ids ranked at any time while open: a new object under a known id is a new generation, not a saved agent. */
+	/** Every id ranked so far: a new object under a known id is a new generation, not a saved agent. */
 	#seenIds = new Set<string>();
 	#opened = false;
 	#spawnBatches = 0;
@@ -1545,7 +1546,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		this.#requestRender();
 	}
 
-	/** While the saved-agent scan runs, a parked or killed agent without a live session under a new id is one it found. */
+	/** A parked or killed agent with no live session and an unknown id, seen while the saved-agent scan runs, is one the scan found. */
 	#foundOnDisk(ref: TRecord): boolean {
 		return (
 			this.#loadingPersistedSubagents &&
@@ -1574,11 +1575,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			this.#seenIds.add(ref.id);
 		}
 		this.#opened = true;
-		const ordered = refs.sort((a, b) => {
-			const rankA = this.#frozenRank.get(a)!;
-			const rankB = this.#frozenRank.get(b)!;
-			return rankA.batch - rankB.batch || compareRosterAgents(rankA, rankB);
-		});
+		const ordered = refs.sort((a, b) => compareFrozenRanks(this.#frozenRank.get(a)!, this.#frozenRank.get(b)!));
 		const query = this.#agentFilter.getValue().trim();
 		const rosterRows =
 			query.length > 0
