@@ -3,7 +3,7 @@ import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import { collapseVariants, type VariantCollapseTable } from "../compat/collapse";
 import type { AntigravityModelWireProfile, ModelSpec } from "../types";
 import { discoveryFetch, toPositiveNumber } from "../utils";
-import { ensureAntigravityVersion, getAntigravityUserAgent } from "../wire/gemini-headers";
+import { ensureAntigravityVersion, getAntigravityHeaders } from "../wire/gemini-headers";
 
 export const ANTIGRAVITY_PRIMARY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 export const ANTIGRAVITY_SANDBOX_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com";
@@ -311,7 +311,7 @@ async function fetchAntigravityDiscoveryResponse(
 				headers: {
 					Authorization: `Bearer ${options.token}`,
 					"Content-Type": "application/json",
-					"User-Agent": options.userAgent ?? getAntigravityUserAgent(),
+					...getAntigravityHeaders(options.userAgent),
 				},
 				body: JSON.stringify(options.projectId ? { project: options.projectId } : {}),
 				signal: options.signal,

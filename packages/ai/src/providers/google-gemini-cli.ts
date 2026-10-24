@@ -9,8 +9,8 @@ import { type } from "@oh-my-pi/omptype";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import {
 	ensureAntigravityVersion,
+	getAntigravityHeaders,
 	getAntigravityModelWireProfile,
-	getAntigravityUserAgent,
 	getGeminiCliHeaders,
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
@@ -287,8 +287,8 @@ export interface AntigravityProviderSessionState extends ProviderSessionState {
 	 * Per-conversation request-envelope identity that mirrors the real
 	 * Antigravity client. `sessionId` is the signed-decimal session id;
 	 * `agentId`/`trajectoryId` are UUIDs (`agentId` doubles as
-	 * `labels.cascade_id`/`root_cascade_id`); `stepIndex` is the monotonic step
-	 * counter; `requestCount` counts envelopes already built for the trajectory
+	 * `labels.cascade_id`/`root_cascade_id`); `stepIndex` is the last
+	 * requestId step (monotonic); `requestCount` counts envelopes already built for the trajectory
 	 * (`labels.request_id` suffix); `lastExecutionId` is the prior response id
 	 * echoed as `labels.last_execution_id`.
 	 */
@@ -596,13 +596,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			// The backend gates newer models on the client version; a process that
 			// skipped discovery (fresh model cache) must still send the current one.
 			if (isAntigravity) await ensureAntigravityVersion(options?.fetch ?? fetch, options?.signal);
-			const headers = isAntigravity ? { "User-Agent": getAntigravityUserAgent() } : getGeminiCliHeaders(model.id);
-
+			// Antigravity mirrors the native Go client: no `Accept`, gzip only, and
+			// no Claude-thinking beta on Claude 5.x (the compat flag scopes it).
 			const requestHeaders = {
 				Authorization: `Bearer ${accessToken}`,
 				"Content-Type": "application/json",
-				Accept: "text/event-stream",
-				...headers,
+				...(isAntigravity
+					? getAntigravityHeaders()
+					: { Accept: "text/event-stream", ...getGeminiCliHeaders(model.id) }),
 				...(model.compat.claudeThinkingBetaHeader && model.identity.class === "anthropic" && model.reasoning
 					? { "anthropic-beta": CLAUDE_THINKING_BETA_HEADER }
 					: {}),
@@ -1242,12 +1243,15 @@ function isAntigravityTierSku(model: Model<"google-gemini-cli">, wireModelId: st
 /**
  * Build the Antigravity request envelope (sessionId, structured requestId,
  * labels) advancing the per-conversation session state. Mirrors the real
- * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`,
- * `labels.last_step_index` trails the requestId step by one, `labels.cascade_id`
+ * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`
+ * where `<step>` counts the trajectory's steps so far (each user turn, model
+ * turn and tool result is one step: 1 on the first request, 3 after one tool
+ * round trip), `labels.last_step_index` trails it by one, `labels.cascade_id`
  * and `labels.root_cascade_id` repeat the agentId, and `labels.request_id` is
  * `<trajectoryId>-<n>` for the n-th (0-based) request of the trajectory. Labels
- * are inserted in alphabetical key order like the real client. Without session
- * state (direct callers/tests) it falls back to ephemeral ids.
+ * are inserted in alphabetical key order like the real client. The step never
+ * moves backwards, so a compacted or resent context still advances it. Without
+ * session state (direct callers/tests) it falls back to ephemeral ids.
  */
 function buildAntigravityRequestEnvelope(
 	model: Model<"google-gemini-cli">,
@@ -1255,19 +1259,20 @@ function buildAntigravityRequestEnvelope(
 	profile: AntigravityModelWireProfile | undefined,
 	state: AntigravityProviderSessionState | undefined,
 ): AntigravityRequestEnvelope {
+	const contextSteps = Math.max(1, context.messages.length);
 	let requestIndex = 0;
 	if (state) {
 		state.agentId ??= randomUUID();
 		state.trajectoryId ??= randomUUID();
 		state.sessionId ??= randomSignedDecimalSessionId();
-		state.stepIndex = (state.stepIndex ?? 1) + 1;
+		state.stepIndex = Math.max(contextSteps, (state.stepIndex ?? 0) + 1);
 		requestIndex = state.requestCount ?? 0;
 		state.requestCount = requestIndex + 1;
 	}
 	const agentId = state?.agentId ?? randomUUID();
 	const trajectoryId = state?.trajectoryId ?? randomUUID();
 	const sessionId = state?.sessionId ?? deriveAntigravitySessionId(context);
-	const step = state?.stepIndex ?? 2;
+	const step = state?.stepIndex ?? contextSteps;
 	const requestId = `agent/${agentId}/${Date.now()}/${trajectoryId}/${step}`;
 	const isClaude = model.identity.class === "anthropic";
 	const labels: Record<string, string> = {};

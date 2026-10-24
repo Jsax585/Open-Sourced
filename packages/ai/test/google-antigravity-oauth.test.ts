@@ -57,6 +57,7 @@ describe("Antigravity OAuth project discovery", () => {
 				Authorization: "Bearer access-token",
 				"Content-Type": "application/json",
 				"User-Agent": expect.stringMatching(/^antigravity\/hub\//),
+				"Accept-Encoding": "gzip",
 			});
 			expect(JSON.parse(String(init?.body))).toEqual({
 				metadata: ANTIGRAVITY_LOAD_CODE_ASSIST_METADATA,
@@ -190,6 +191,7 @@ describe("Antigravity OAuth project discovery", () => {
 			Authorization: "Bearer access-token",
 			"Content-Type": "application/json",
 			"User-Agent": expect.stringMatching(/^antigravity\/hub\//),
+			"Accept-Encoding": "gzip",
 		});
 		expect(fetchSpy.mock.calls[2]?.[1]?.body).toBeUndefined();
 		expect(fetchSpy.mock.calls.filter(([url]) => url === ONBOARD_USER_URL)).toHaveLength(1);

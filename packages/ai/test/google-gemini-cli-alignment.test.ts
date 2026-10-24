@@ -13,6 +13,7 @@ import type {
 	Model,
 	ProviderSessionState,
 	TJsonSchema,
+	Usage,
 } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
@@ -274,32 +275,62 @@ describe("Google Gemini CLI alignment", () => {
 		expect(labels.cascade_id).toBe(agentId!);
 		expect(labels.root_cascade_id).toBe(agentId!);
 		expect(labels.request_id).toBe(`${labels.trajectory_id}-0`);
-		expect(labels.last_step_index).toBe("1");
+		expect(labels.last_step_index).toBe("0");
 		expect(labels.used_claude).toBe("false");
 		expect(labels.used_claude_conservative).toBe("false");
 		expect(labels.used_non_gemini_model).toBe("false");
 	});
 
-	it("numbers Antigravity request_id labels per trajectory across requests in one session", () => {
+	it("numbers Antigravity steps and request_id labels like the native client across one session", () => {
 		const model = createModel("google-antigravity");
 		const providerSessionState = new Map<string, ProviderSessionState>();
-		// Two consecutive requests in the same conversation.
-		const [first, second] = [0, 1].map(
-			() =>
-				buildRequest(
-					model,
-					createContext(),
-					"proj-123",
-					{ requestModelId: "gemini-3.5-flash-low", providerSessionState },
-					true,
-				) as { request: { labels?: Record<string, string> }; requestId?: string },
-		);
-		if (!first || !second) throw new Error("expected two requests");
+		const send = (context: Context) =>
+			buildRequest(
+				model,
+				context,
+				"proj-123",
+				{ requestModelId: "gemini-3.5-flash-low", providerSessionState },
+				true,
+			) as { request: { labels?: Record<string, string> }; requestId?: string };
+		const usage: Usage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const afterToolRoundTrip: Context = {
+			messages: [
+				...createContext().messages,
+				{
+					role: "assistant",
+					provider: "google-antigravity",
+					api: "google-gemini-cli",
+					model: "gemini-3.5-flash",
+					content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.txt" } }],
+					usage,
+					stopReason: "toolUse",
+					timestamp: 2,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "read",
+					isError: false,
+					content: [{ type: "text", text: "contents" }],
+					timestamp: 3,
+				},
+			],
+		};
+
+		// The first request is step 1 with the user turn as step 0.
+		const first = send(createContext());
 		const [, agentId, , trajectoryId, firstStep] = first.requestId?.split("/") ?? [];
-		expect(firstStep).toBe("2");
+		expect(firstStep).toBe("1");
 		expect(first.request.labels).toEqual({
 			cascade_id: agentId!,
-			last_step_index: "1",
+			last_step_index: "0",
 			model_enum: "MODEL_PLACEHOLDER_M20",
 			request_id: `${trajectoryId}-0`,
 			root_cascade_id: agentId!,
@@ -320,7 +351,10 @@ describe("Google Gemini CLI alignment", () => {
 			"used_non_gemini_model",
 		]);
 
+		// The model's tool call and its result are one step each.
+		const second = send(afterToolRoundTrip);
 		expect(second.requestId?.split("/")[1]).toBe(agentId!);
+		expect(second.requestId?.split("/")[4]).toBe("3");
 		expect(second.request.labels).toMatchObject({
 			cascade_id: agentId!,
 			last_step_index: "2",
@@ -328,6 +362,11 @@ describe("Google Gemini CLI alignment", () => {
 			root_cascade_id: agentId!,
 			trajectory_id: trajectoryId!,
 		});
+
+		// Resending the same (or a compacted) context never moves the step back.
+		const resent = send(createContext());
+		expect(resent.requestId?.split("/")[4]).toBe("4");
+		expect(resent.request.labels?.last_step_index).toBe("3");
 	});
 
 	it("marks Antigravity Claude requests as non-Gemini usage", () => {
@@ -462,7 +501,7 @@ describe("Google Gemini CLI alignment", () => {
 		expect(parameters).toBeDefined();
 		expect(JSON.stringify(parameters)).not.toContain('"patternProperties"');
 	});
-	it("adds anthropic-beta for Antigravity Claude reasoning models without relying on id suffix", async () => {
+	it("adds anthropic-beta for Antigravity Claude 4.x reasoning models without relying on id suffix", async () => {
 		let requestHeaders: Headers | undefined;
 		const fetchMock: FetchImpl = async (_url, init) => {
 			requestHeaders = new Headers(init?.headers);
@@ -482,7 +521,22 @@ describe("Google Gemini CLI alignment", () => {
 		expect(requestHeaders!.get("Client-Metadata")).toBeNull();
 	});
 
-	it("sends the antigravity/hub User-Agent header on the Antigravity transport", async () => {
+	it("sends no anthropic-beta for Antigravity Claude 5.5, like the native client", async () => {
+		let requestHeaders: Headers | undefined;
+		const fetchMock: FetchImpl = async (_url, init) => {
+			requestHeaders = new Headers(init?.headers);
+			return new Response('{"error":{"message":"bad request"}}', { status: 400 });
+		};
+
+		await streamGoogleGeminiCli(createModel("google-antigravity", "claude-sonnet-5-5", true), createContext(), {
+			apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+			fetch: fetchMock,
+		}).result();
+
+		expect(requestHeaders!.get("anthropic-beta")).toBeNull();
+	});
+
+	it("sends the native client's transport headers on the Antigravity transport", async () => {
 		let requestHeaders: Headers | undefined;
 		const fetchMock: FetchImpl = async (_url, init) => {
 			requestHeaders = new Headers(init?.headers);
@@ -496,6 +550,9 @@ describe("Google Gemini CLI alignment", () => {
 		}).result();
 
 		expect(requestHeaders!.get("User-Agent")).toMatch(/^antigravity\/hub\/[0-9.]+ /);
+		// Go net/http offers gzip only and sends no Accept of its own.
+		expect(requestHeaders!.get("Accept-Encoding")).toBe("gzip");
+		expect(requestHeaders!.get("Accept")).toBeNull();
 	});
 
 	it("filters out empty text parts at stream end but preserves terminal thought signatures", async () => {

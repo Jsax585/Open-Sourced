@@ -4,7 +4,7 @@ import {
 	fetchAntigravityImageModel,
 } from "@oh-my-pi/pi-catalog/discovery/antigravity";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
-import { getAntigravityUserAgent } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
+import { getAntigravityHeaders } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { readSseJson } from "@oh-my-pi/pi-utils";
 import { withAuth } from "../auth-retry";
 import * as AIError from "../error";
@@ -156,8 +156,7 @@ export async function generateAntigravityImage(
 					headers: {
 						Authorization: `Bearer ${credentials.accessToken}`,
 						"Content-Type": "application/json",
-						Accept: "text/event-stream",
-						"User-Agent": getAntigravityUserAgent(),
+						...getAntigravityHeaders(),
 					},
 					body: JSON.stringify(body),
 					signal: options.signal,

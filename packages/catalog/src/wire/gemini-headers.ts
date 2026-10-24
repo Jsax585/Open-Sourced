@@ -146,6 +146,20 @@ export function getAntigravityUserAgent(): string {
 }
 
 /**
+ * Client headers for every Antigravity Cloud Code Assist request. The native
+ * client is Go `net/http`, which offers `Accept-Encoding: gzip` and no `Accept`;
+ * pinning the encoding replaces the runtime's `gzip, deflate, br, zstd` (Bun
+ * still decompresses the gzip body). Bun always adds `Accept: *\/*` itself, so
+ * callers must not set a more specific `Accept`.
+ */
+export function getAntigravityHeaders(userAgent: string = getAntigravityUserAgent()): {
+	"User-Agent": string;
+	"Accept-Encoding": string;
+} {
+	return { "User-Agent": userAgent, "Accept-Encoding": "gzip" };
+}
+
+/**
  * Offline fallback for {@link Model.antigravityWireProfiles}: per-SKU request
  * constants for rows that predate discovery profiles (the bundled snapshot).
  * Live discovery carries the account's own values and takes precedence.
