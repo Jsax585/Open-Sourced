@@ -1441,10 +1441,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	#speedoTrailer(): string | undefined {
 		if (!cfgComposerTokenRate.get(settings)) return undefined;
 		const meter = this.tokenRate;
+		const streaming = this.viewSession.isStreaming;
 		const fast = meter.fastestRate();
-		const average = this.viewSession.isStreaming ? null : meter.objectiveRate();
 		const parts: string[] = [];
-		if (average !== null) parts.push(`Avg: ${average.toFixed(1)} tok/s`);
+		if (streaming) {
+			// The same live 1 s window the composer shows, mirrored above it.
+			const current = meter.windowRate();
+			if (current !== null) parts.push(`${current.toFixed(1)} tok/s`);
+		} else {
+			const average = meter.objectiveRate();
+			if (average !== null) parts.push(`Avg: ${average.toFixed(1)} tok/s`);
+		}
 		if (fast !== null) parts.push(`(Fast: ${fast.toFixed(1)} tok/s)`);
 		return parts.length > 0 ? parts.join(" ") : undefined;
 	}
