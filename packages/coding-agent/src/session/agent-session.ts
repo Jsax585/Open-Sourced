@@ -5684,6 +5684,7 @@ export class AgentSession implements SettingsScope {
 
 	#beginSessionTransition(): Disposable {
 		if (this.#sessionTransitionDepth++ === 0) {
+			this.#extensionRunner?.abortMCPCalls();
 			const settled = Promise.withResolvers<void>();
 			this.#sessionTransitionSettled = settled.promise;
 			this.#resolveSessionTransition = settled.resolve;
@@ -8707,6 +8708,9 @@ export class AgentSession implements SettingsScope {
 			getContextUsage: () => this.getContextUsage(),
 			getAsyncJobSnapshot: () => this.getAsyncJobSnapshot(),
 			waitForIdle: () => this.waitForIdle(),
+			callMCPTool: async () => {
+				throw new Error("MCP command dispatch requires an extension runner");
+			},
 			newSession: async options => {
 				const success = await this.newSession({ parentSession: options?.parentSession });
 				if (!success) {
@@ -10623,6 +10627,7 @@ export class AgentSession implements SettingsScope {
 		const unwind = Promise.withResolvers<void>();
 		this.#abortUnwinds.add(unwind.promise);
 		try {
+			this.#extensionRunner?.abortMCPCalls();
 			this.#titleGenerationAbortController.abort();
 			if (!this.#isDisposed) this.#titleGenerationAbortController = new AbortController();
 			this.#abortAutolearnCapture();

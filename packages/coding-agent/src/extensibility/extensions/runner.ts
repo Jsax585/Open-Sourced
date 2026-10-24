@@ -26,7 +26,7 @@ import {
 	setContextHistoryIndex,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import type { KeyId } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { refreshShellConfigCache } from "@oh-my-pi/pi-utils/procmgr";
 import { MAIN_AGENT_RULE_NAME } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -446,6 +446,7 @@ export type ShutdownHandler = () => void;
  */
 export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner | undefined): Promise<boolean> {
 	if (!extensionRunner) return false;
+	extensionRunner.abortMCPCalls(true);
 	try {
 		if (!extensionRunner.hasHandlers("session_shutdown")) return false;
 		await extensionRunner.emit({
@@ -655,6 +656,22 @@ export class ExtensionRunner {
 	 */
 	#nativeToolResolver?: (name: string) => { tool: AgentTool; makeContext: () => AgentToolContext } | undefined;
 	#toolCallPreflight?: ToolCallPreflight;
+	#mcpToolInvoker?: ExtensionCommandContext["callMCPTool"];
+	#mcpCommandController?: AbortController;
+	#mcpCommandGeneration = 0;
+
+	/** SDK-owned dispatch through the live, permission-wrapped session registry. */
+	setMCPToolInvoker(invoke: ExtensionCommandContext["callMCPTool"]): void {
+		this.#mcpToolInvoker = invoke;
+	}
+
+	/** Invalidate saved command contexts and cancel their calls before changing session state. */
+	abortMCPCalls(shutdown = false): void {
+		this.#mcpCommandGeneration++;
+		this.#mcpCommandController?.abort();
+		this.#mcpCommandController = undefined;
+		if (shutdown) this.#mcpToolInvoker = undefined;
+	}
 
 	/** Wires the native-tool resolver used by {@link invokeNativeTool}. */
 	setNativeToolResolver(
@@ -1582,10 +1599,23 @@ export class ExtensionRunner {
 	}
 
 	createCommandContext(): ExtensionCommandContext {
+		const generation = this.#mcpCommandGeneration;
+		const sessionId = this.sessionId;
 		return {
 			...this.createContext(),
 			getContextUsage: () => this.#getContextUsageFn(),
 			waitForIdle: () => this.#waitForIdleFn(),
+			callMCPTool: async (serverName, toolName, input, options) => {
+				if (generation !== this.#mcpCommandGeneration || sessionId !== this.sessionId) {
+					throw new Error("MCP command context has been invalidated");
+				}
+				const invoke = this.#mcpToolInvoker;
+				if (!invoke) throw new Error("MCP command dispatch is not available in this session");
+				const controller = (this.#mcpCommandController ??= new AbortController());
+				const signal = options?.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+				signal.throwIfAborted();
+				return untilAborted(signal, () => invoke(serverName, toolName, input, { ...options, signal }));
+			},
 			newSession: options => this.#newSessionHandler(options),
 			branch: entryId => this.#branchHandler(entryId),
 			navigateTree: (targetId, options) => this.#navigateTreeHandler(targetId, options),

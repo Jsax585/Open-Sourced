@@ -28,6 +28,7 @@ import { formatApprovalArguments } from "../tools/approval";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
 import { schemaDeclaresIntentField } from "../utils/tool-schema";
 import { callTool } from "./client";
+import { isMCPSingleAttempt } from "./execution-policy";
 import { formatMCPToolFailure, MCPTransportError } from "./errors";
 import { describeMCPCall, describeMCPResult, renderMCPCall, renderMCPResult } from "@oh-my-pi/pi-tui/tools/mcp";
 import type {
@@ -411,7 +412,7 @@ async function callToolWithAuthRetry(
 ): Promise<MCPToolCallAttempt> {
 	const result = await callTool(connection, toolName, args, { signal, onProgress });
 	const authChallenge = getMcpAuthChallenge(result);
-	if (!authChallenge || !reconnect) return { connection, result };
+	if (!authChallenge || !reconnect || isMCPSingleAttempt()) return { connection, result };
 
 	let newConnection: MCPServerConnection | null;
 	try {
@@ -818,7 +819,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 			);
 		} catch (error) {
 			rethrowIfAborted(error, signal);
-			if (this.reconnect && isRetriableConnectionError(error)) {
+			if (this.reconnect && !isMCPSingleAttempt() && isRetriableConnectionError(error)) {
 				const newConn = await reconnectWithAbort(this.reconnect, signal);
 				if (newConn) {
 					// Rebind so subsequent calls on this instance use the fresh connection
@@ -972,7 +973,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 				);
 			} catch (callError) {
 				rethrowIfAborted(callError, signal);
-				if (this.reconnect && isRetriableConnectionError(callError)) {
+				if (this.reconnect && !isMCPSingleAttempt() && isRetriableConnectionError(callError)) {
 					const newConn = await reconnectWithAbort(this.reconnect, signal);
 					if (newConn) {
 						const retryProvider = newConn._source?.provider ?? provider;
@@ -999,7 +1000,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 			// This is always worth a reconnect attempt for deferred tools, since the
 			// error ("MCP server not connected") isn't a network error from callTool.
 			rethrowIfAborted(connError, signal);
-			if (this.reconnect) {
+			if (this.reconnect && !isMCPSingleAttempt()) {
 				const newConn = await reconnectWithAbort(this.reconnect, signal);
 				if (newConn) {
 					try {

@@ -11,6 +11,7 @@ import {
 	resolveTelemetry,
 	type StreamFn,
 	type ThinkingLevel,
+	validateAgentToolArguments,
 } from "@oh-my-pi/pi-agent-core";
 import type {
 	Context,
@@ -162,7 +163,8 @@ import {
 } from "./mcp";
 import { parseMCPToolName } from "@oh-my-pi/pi-tui/tools/mcp";
 import { MCP_CONNECTION_STATUS_EVENT_CHANNEL, type McpConnectionStatusEvent } from "./mcp/startup-events";
-import { resolveMCPToolAlias } from "./mcp/tool-bridge";
+import { withMCPSingleAttempt } from "./mcp/execution-policy";
+import { type MCPToolOriginSource, resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
@@ -3628,6 +3630,42 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		for (const tool of toolRegistry.values()) {
 			toolRegistry.set(tool.name, new ExtensionToolWrapper(tool, extensionRunner));
 		}
+		extensionRunner.setMCPToolInvoker(async (serverName, toolName, input, callOptions) => {
+			if (!hasSession || session.isDisposed || session.isSessionTransitioning) {
+				throw new Error("MCP command dispatch is unavailable during a session transition");
+			}
+			if (typeof serverName !== "string" || !serverName || typeof toolName !== "string" || !toolName) {
+				throw new Error("MCP server and tool names must be nonempty strings");
+			}
+			if (input === null || typeof input !== "object" || Array.isArray(input)) {
+				throw new Error("MCP tool input must be an object");
+			}
+			let target: Tool | undefined;
+			for (const tool of toolRegistry.values()) {
+				const origin: MCPToolOriginSource = tool;
+				if (origin.mcpServerName !== serverName || origin.mcpToolName !== toolName) continue;
+				if (target) throw new Error(`Ambiguous MCP tool: ${serverName}/${toolName}`);
+				target = tool;
+			}
+			// Reuse the enabled-tool lookup and its ACP decorator, never an unwrapped MCP handle.
+			const executable = target && session.getToolForEvalBridge(target.name);
+			if (!executable) throw new Error(`MCP tool is unavailable or disabled: ${serverName}/${toolName}`);
+			const toolCallId = Bun.randomUUIDv7();
+			const args = validateAgentToolArguments(
+				executable,
+				{ type: "toolCall", id: toolCallId, name: executable.name, arguments: input },
+				"payload",
+			);
+			return withMCPSingleAttempt(() =>
+				executable.execute(
+					toolCallId,
+					args,
+					callOptions?.signal,
+					callOptions?.onUpdate,
+					toolContextStore.getContext(),
+				),
+			);
+		});
 		// Image and speech generation are optional custom tools gated by live settings.
 		// They install here, not through the custom-tools extension, so the settings
 		// reconcile can add and remove exactly the entries it owns and never a

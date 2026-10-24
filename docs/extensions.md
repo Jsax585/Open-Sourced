@@ -440,6 +440,7 @@ const contrasting = ctx.models
 Command handlers additionally get:
 
 - `waitForIdle()`
+- `callMCPTool(serverName, toolName, input, { signal?, onUpdate? }?)`
 - `newSession(...)`
 - `switchSession(...)`
 - `branch(entryId)`
@@ -447,6 +448,32 @@ Command handlers additionally get:
 - `reload()`
 
 Use command context for session-control flows; these methods are intentionally separated from general event handlers.
+
+### Calling a session MCP tool
+
+`ctx.callMCPTool` invokes an enabled MCP tool through the running session's canonical registry, without starting a model turn or importing the SDK at runtime. Pass the exact configured server name and original MCP tool name, not the normalized `mcp__...` alias. Missing, disabled, removed, or ambiguous routes fail rather than selecting another source. Each invocation looks up the current registry, so a reconnect or tool refresh does not leave the command bound to an old tool instance.
+
+The call retains the normal tool approval policy, ACP permission decoration where applicable, `tool_call` input revisions and blocks, preflight rules, progress updates, and `tool_result` transformations. A command does not inherit a blanket approval or expose an unwrapped executable tool.
+
+```ts
+pi.registerCommand("server-status", {
+  description: "Read the configured MCP server status",
+  handler: async (_args, ctx) => {
+    const result = await ctx.callMCPTool("my-server", "status", {});
+    if (result.isError) throw new Error("MCP status failed");
+    for (const part of result.content) {
+      if (part.type === "text") ctx.ui.notify(part.text, "info");
+    }
+  },
+});
+```
+
+Command calls are single-attempt: the bridge and HTTP transports do not automatically refresh authorization, reconnect to reissue the call, or replay the tool request. Ordinary model-driven calls keep their existing retry behavior. Protocol response-stream resumption does not replay the originating request.
+
+Policy and validation failures throw; MCP failures can return error tool results. Neither an error nor cancellation proves that a remote write did not happen. Reconcile its effect before explicitly retrying; do not blindly repeat a write.
+
+Pass an `AbortSignal` to cancel a call. Session aborts, session/transcript transitions, and shutdown also cancel in-flight calls and invalidate saved command contexts. Use the context supplied to a subsequent command instead of retaining MCP access across those boundaries. Cancellation cannot undo an effect already performed by the server.
+
 
 ## Event surface (current names and behavior)
 

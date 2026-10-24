@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { CustomToolContext } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { connectToServer } from "@oh-my-pi/pi-coding-agent/mcp/client";
+import { withMCPSingleAttempt } from "@oh-my-pi/pi-coding-agent/mcp/execution-policy";
 import { DeferredMCPTool, MCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -21,6 +22,7 @@ let context: CustomToolContext;
 beforeEach(async () => {
 	tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-no-replay-"));
 	effectsPath = path.join(tempDir, "effects.txt");
+	await Bun.write(effectsPath, "");
 	auth = await AuthStorage.create(":memory:");
 	context = {
 		sessionManager: SessionManager.inMemory(),
@@ -51,7 +53,8 @@ async function openConnection(): Promise<MCPServerConnection> {
 }
 
 async function effects(): Promise<string[]> {
-	return (await Bun.file(effectsPath).text()).trimEnd().split("\n");
+	const recorded = (await Bun.file(effectsPath).text()).trimEnd();
+	return recorded ? recorded.split("\n") : [];
 }
 
 describe("MCP tool calls after dispatch", () => {
@@ -120,5 +123,154 @@ describe("MCP tool calls after dispatch", () => {
 		expect(result.content).toEqual([{ type: "text", text: "effect recorded" }]);
 		expect(reconnects).toBe(1);
 		expect(await effects()).toEqual(["record_effect"]);
+	});
+});
+
+describe("single-attempt MCP calls", () => {
+	for (const deferred of [false, true]) {
+		describe(deferred ? "DeferredMCPTool" : "MCPTool", () => {
+			it("leaves a closed connection unsent until a subsequent ordinary call reconnects", async () => {
+				const connection = await openConnection();
+				let reconnects = 0;
+				const reconnect = async () => {
+					reconnects++;
+					return openConnection();
+				};
+				const tool = deferred
+					? new DeferredMCPTool("side-effect", TOOL_DEF, async () => connection, undefined, reconnect)
+					: new MCPTool(connection, TOOL_DEF, reconnect);
+				await connection.transport.close();
+
+				const failed = await withMCPSingleAttempt(() => tool.execute("single-unsent", {}, undefined, context));
+
+				expect(failed.details?.isError).toBe(true);
+				expect(reconnects).toBe(0);
+				expect(await effects()).toEqual([]);
+
+				const recovered = await tool.execute("ordinary-unsent", {}, undefined, context);
+
+				expect(recovered.details?.isError).toBeFalsy();
+				expect(reconnects).toBe(1);
+				expect(await effects()).toEqual(["record_effect"]);
+			});
+
+			it("records an auth-challenged effect once while ordinary calls still retry the challenge", async () => {
+				const connection = await openConnection();
+				let reconnects = 0;
+				const reconnect = async () => {
+					reconnects++;
+					return openConnection();
+				};
+				const tool = deferred
+					? new DeferredMCPTool("side-effect", TOOL_DEF, async () => connection, undefined, reconnect)
+					: new MCPTool(connection, TOOL_DEF, reconnect);
+
+				const failed = await withMCPSingleAttempt(() =>
+					tool.execute("single-auth", { authChallenge: true }, undefined, context),
+				);
+
+				expect(failed.details?.isError).toBe(true);
+				expect(reconnects).toBe(0);
+				expect(await effects()).toEqual(["record_effect"]);
+
+				const ordinary = await tool.execute("ordinary-auth", { authChallenge: true }, undefined, context);
+
+				expect(ordinary.details?.isError).toBe(true);
+				expect(reconnects).toBe(1);
+				expect(await effects()).toEqual(["record_effect", "record_effect", "record_effect"]);
+			});
+		});
+	}
+
+	it("does not reconnect a failed deferred lookup until a subsequent ordinary call", async () => {
+		let reconnects = 0;
+		const tool = new DeferredMCPTool(
+			"side-effect",
+			TOOL_DEF,
+			async () => {
+				throw new Error("MCP server not connected");
+			},
+			undefined,
+			async () => {
+				reconnects++;
+				return openConnection();
+			},
+		);
+
+		const failed = await withMCPSingleAttempt(() => tool.execute("single-lookup", {}, undefined, context));
+
+		expect(failed.details?.isError).toBe(true);
+		expect(reconnects).toBe(0);
+		expect(await effects()).toEqual([]);
+
+		const recovered = await tool.execute("ordinary-lookup", {}, undefined, context);
+
+		expect(recovered.details?.isError).toBeFalsy();
+		expect(reconnects).toBe(1);
+		expect(await effects()).toEqual(["record_effect"]);
+	});
+
+	it("keeps retry policy isolated while scoped and ordinary calls overlap", async () => {
+		const scopedConnection = await openConnection();
+		const ordinaryConnection = await openConnection();
+		await scopedConnection.transport.close();
+		await ordinaryConnection.transport.close();
+		const lookupEntered = Promise.withResolvers<void>();
+		const releaseLookup = Promise.withResolvers<void>();
+		let scopedReconnects = 0;
+		let ordinaryReconnects = 0;
+		const scopedTool = new DeferredMCPTool(
+			"side-effect",
+			TOOL_DEF,
+			async () => {
+				lookupEntered.resolve();
+				await releaseLookup.promise;
+				return scopedConnection;
+			},
+			undefined,
+			async () => {
+				scopedReconnects++;
+				return openConnection();
+			},
+		);
+		const ordinaryTool = new MCPTool(ordinaryConnection, TOOL_DEF, async () => {
+			ordinaryReconnects++;
+			return openConnection();
+		});
+
+		const pending = withMCPSingleAttempt(() => scopedTool.execute("overlapping-single", {}, undefined, context));
+		await lookupEntered.promise;
+		const [ordinary, failed] = await Promise.all([
+			ordinaryTool.execute("overlapping-ordinary", {}, undefined, context).finally(() => releaseLookup.resolve()),
+			pending,
+		]);
+
+		expect(ordinary.details?.isError).toBeFalsy();
+		expect(ordinaryReconnects).toBe(1);
+		expect(failed.details?.isError).toBe(true);
+		expect(scopedReconnects).toBe(0);
+		expect(await effects()).toEqual(["record_effect"]);
+	});
+
+	it("restores ordinary retries for background work inherited from a completed command", async () => {
+		const scopedTool = new MCPTool(await openConnection(), TOOL_DEF);
+		const ordinaryConnection = await openConnection();
+		await ordinaryConnection.transport.close();
+		let reconnects = 0;
+		const ordinaryTool = new MCPTool(ordinaryConnection, TOOL_DEF, async () => {
+			reconnects++;
+			return openConnection();
+		});
+		const release = Promise.withResolvers<void>();
+		let backgroundCall: Promise<unknown> | undefined;
+		await withMCPSingleAttempt(async () => {
+			backgroundCall = release.promise.then(() => ordinaryTool.execute("later-ordinary", {}, undefined, context));
+			return scopedTool.execute("completed-command", {}, undefined, context);
+		});
+
+		release.resolve();
+		expect(await backgroundCall).toMatchObject({ content: [{ type: "text", text: "effect recorded" }] });
+		expect(reconnects).toBe(1);
+		expect(await effects()).toEqual(["record_effect", "record_effect"]);
 	});
 });
