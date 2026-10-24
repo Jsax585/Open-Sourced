@@ -923,6 +923,7 @@ const streamOpenAIResponsesOnce = (
 			let activeStrictToolsApplied = builtParams.strictToolsApplied;
 			let forceDisableStrictTools = false;
 			let forcedToolChoiceRetryAvailable = true;
+			let activeToolChoiceOverride: ToolChoice | undefined;
 			const rebuildChainedParams = async (overrides?: { disableStrictTools?: boolean; toolChoice?: ToolChoice }) => {
 				const fallbackBuilt = buildParams(
 					model,
@@ -932,7 +933,7 @@ const streamOpenAIResponsesOnce = (
 					strictToolsScope,
 					overrides?.disableStrictTools ?? forceDisableStrictTools,
 					chainState?.canAppend ? chainState.lastParams?.input : undefined,
-					overrides?.toolChoice,
+					overrides?.toolChoice ?? activeToolChoiceOverride,
 				);
 				const fallbackParams = fallbackBuilt.params;
 				if (chainState && !chainState.disabled) fallbackParams.store = true;
@@ -1009,6 +1010,7 @@ const streamOpenAIResponsesOnce = (
 							isForcedToolChoiceRejection(error, capturedErrorResponse)
 						) {
 							forcedToolChoiceRetryAvailable = false;
+							activeToolChoiceOverride = "auto";
 							await rebuildChainedParams({ toolChoice: "auto" });
 							continue;
 						}
@@ -1063,6 +1065,8 @@ const streamOpenAIResponsesOnce = (
 							providerSessionState,
 							strictToolsScope,
 							forceDisableStrictTools,
+							undefined,
+							activeToolChoiceOverride,
 						);
 						const currentParams = currentBuilt.params;
 						// Only ZDR forces `store: false` (the org never persists responses). A

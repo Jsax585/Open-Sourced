@@ -306,6 +306,77 @@ describe("forced tool_choice runtime self-healing downgrade", () => {
 		expect(sentBodies[1]?.tool_choice).toBe("auto");
 	});
 
+	it("OpenAI responses: preserves auto tool_choice downgrade across subsequent strict tools retry", async () => {
+		const spec: ModelSpec<"openai-responses"> = {
+			id: "responses-test-model",
+			name: "Responses Test Model",
+			api: "openai-responses",
+			provider: "openai-compat-test",
+			baseUrl: "https://compat.example.com/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 100_000,
+			maxTokens: 4_096,
+			compat: {
+				supportsStrictMode: true,
+			},
+		};
+		const model = buildModel(spec);
+		// Use module-level context
+		const sentBodies: any[] = [];
+		let callCount = 0;
+
+		const mockFetch: FetchImpl = async (_input, init) => {
+			callCount++;
+			const body = JSON.parse(init?.body as string);
+			sentBodies.push(body);
+			if (callCount === 1) {
+				return new Response(
+					JSON.stringify({
+						error: {
+							message: "only auto is supported for tool_choice",
+							type: "invalid_request_error",
+							code: "unsupported_parameter",
+						},
+					}),
+					{ status: 400, headers: { "content-type": "application/json" } },
+				);
+			}
+			if (callCount === 2) {
+				return new Response(
+					JSON.stringify({
+						error: {
+							message: "invalid schema for function: strict tools not supported",
+							type: "invalid_request_error",
+							code: "invalid_schema",
+						},
+					}),
+					{ status: 400, headers: { "content-type": "application/json" } },
+				);
+			}
+			return new Response(makeResponsesSuccessStream(), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		};
+
+		const result = await streamOpenAIResponses(model, context, {
+			apiKey: "test-key",
+			fetch: mockFetch,
+			toolChoice: { type: "tool", name: "test_tool" },
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(sentBodies.length).toBe(3);
+		expect(sentBodies[0]?.tool_choice).toEqual({
+			type: "function",
+			name: "test_tool",
+		});
+		expect(sentBodies[1]?.tool_choice).toBe("auto");
+		expect(sentBodies[2]?.tool_choice).toBe("auto");
+	});
+
 	it("OpenAI completions: restores reasoning effort on retry when disableReasoningOnForcedToolChoice is configured", async () => {
 		const spec: ModelSpec<"openai-completions"> = {
 			id: "kimi-reasoning-compat",
