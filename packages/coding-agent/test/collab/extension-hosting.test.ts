@@ -1263,6 +1263,50 @@ describe("startCollabHosting", () => {
 		expect(second.instanceId).toBe(controller.instanceId);
 		expect(second.generation).toBe(2);
 	});
+
+	it("waits for controller handshakes before resolving startCollab when autoStart is enabled", async () => {
+		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475", autoStart: "control" });
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
+
+		const connectSpy = vi
+			.spyOn(CollabSocket.prototype, "connect")
+			.mockImplementationOnce(function (this: CollabSocket) {
+				queueMicrotask(() => {
+					this.onClose?.("relay handshake refused", false);
+				});
+			});
+
+		try {
+			controller.autoStart();
+			await expect(startCollabHosting(ctx)).rejects.toThrow(/relay handshake refused/);
+		} finally {
+			connectSpy.mockRestore();
+			await controller.shutdown("done");
+		}
+	});
+
+	it("keeps auto-start recovery on API-adopted hosts when fatal close occurs", async () => {
+		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475", autoStart: "control" });
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
+
+		const apiHost = await startCollabHosting(ctx, { relayUrl: "ws://localhost:7475" });
+		startedHosts.push(apiHost);
+		expect(ctx.collabHost).toBe(apiHost);
+		expect(controller.host).toBe(apiHost);
+
+		// Relay terminates host fatally
+		await relay.closeHostFatal();
+
+		// Wait for controller to handle the ended host and reapply autoStart
+		await controller.idle();
+
+		expect(ctx.collabHost).toBeDefined();
+		expect(ctx.collabHost).not.toBe(apiHost);
+		expect(controller.host).toBe(ctx.collabHost);
+		if (ctx.collabHost) startedHosts.push(ctx.collabHost);
+	});
 });
 
 describe("collab hosting on non-interactive extension hosts", () => {

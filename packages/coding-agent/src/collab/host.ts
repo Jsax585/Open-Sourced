@@ -224,8 +224,9 @@ export class CollabHost {
 	readonly #instanceId: string;
 	readonly #generation: number;
 	readonly #guestActionsReady: () => boolean;
-	readonly #onEnded: (() => void) | undefined;
+	readonly #onEndedCallbacks: Array<() => void> = [];
 	readonly #access: CollabAccess;
+	#startPromise: Promise<void> | null = null;
 	#relayConnected = false;
 	#registryPublication: CollabHostPublication | null = null;
 	/** Publication still being created; teardown awaits and withdraws it. */
@@ -272,12 +273,22 @@ export class CollabHost {
 		this.#generation = options.generation ?? 1;
 		this.#access = options.access ?? "control";
 		this.#guestActionsReady = options.guestActionsReady ?? (() => true);
-		this.#onEnded = options.onEnded;
+		if (options.onEnded) this.#onEndedCallbacks.push(options.onEnded);
 		// The room mirrors the session that is active when it is created; the
 		// frame guard and the registry snapshot compare against this from then on.
 		this.#sessionId = ctx.sessionManager.getSessionId();
 		this.#published = !options.deferStatus;
 	}
+	/** Add a callback invoked when the relay ends the room fatally. */
+	addOnEnded(callback: () => void): void {
+		this.#onEndedCallbacks.push(callback);
+	}
+
+	/** Active start() promise while connecting, or null when idle/settled. */
+	waitForStart(): Promise<void> | null {
+		return this.#startPromise;
+	}
+
 	/** Registry identity shared by every room this process hosts. */
 	get instanceId(): string {
 		return this.#instanceId;
@@ -417,6 +428,17 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
+		const promise = this.#doStart(relayUrl, webUrl);
+		this.#startPromise = promise;
+		promise.catch(() => {});
+		try {
+			await promise;
+		} finally {
+			if (this.#startPromise === promise) this.#startPromise = null;
+		}
+	}
+
+	async #doStart(relayUrl: string, webUrl = ""): Promise<void> {
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
@@ -468,7 +490,13 @@ export class CollabHost {
 			} else {
 				void this.#teardown();
 				this.#ctx.session.emitNotice("warning", `Collab ended: ${reason}`, "collab");
-				this.#onEnded?.();
+				for (const callback of this.#onEndedCallbacks) {
+					try {
+						callback();
+					} catch (err) {
+						logger.warn("Collab onEnded callback threw", { error: String(err) });
+					}
+				}
 			}
 		};
 		socket.connect();

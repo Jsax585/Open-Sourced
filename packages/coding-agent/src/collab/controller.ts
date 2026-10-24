@@ -103,6 +103,14 @@ export class CollabController {
 		this.#generation = Math.max(this.#generation, host.generation);
 		this.#stopEpoch++;
 		this.#observeSessionChanges();
+		host.addOnEnded(() => this.#onHostEnded(host));
+	}
+
+	#activeLaunch: Promise<CollabHost> | null = null;
+
+	/** In-flight #launch promise, if any room is currently connecting. */
+	get activeLaunch(): Promise<CollabHost> | null {
+		return this.#activeLaunch;
 	}
 
 	/** Registry generation of the most recently started room; 0 before the first. */
@@ -264,6 +272,17 @@ export class CollabController {
 	 * and state first. Connect only after the previous room is fully gone.
 	 */
 	async #launch(access: CollabAccess, stopEpoch: number, relay?: string): Promise<CollabHost> {
+		const promise = this.#doLaunch(access, stopEpoch, relay);
+		this.#activeLaunch = promise;
+		promise.catch(() => {});
+		try {
+			return await promise;
+		} finally {
+			if (this.#activeLaunch === promise) this.#activeLaunch = null;
+		}
+	}
+
+	async #doLaunch(access: CollabAccess, stopEpoch: number, relay?: string): Promise<CollabHost> {
 		if (this.#shutdown) throw new CollabHostStoppedError("collab controller shut down");
 		if (stopEpoch !== this.#stopEpoch) throw new CollabHostStoppedError("collab controller stopped");
 		// Identity cleanup callbacks can precede awaited hooks and message replacement.

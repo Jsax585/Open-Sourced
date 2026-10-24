@@ -173,10 +173,31 @@ export async function startCollabHosting(
 			throw new Error(`Already hosting a collab session on relay ${pending.relayOrigin} (stop it first)`);
 		}
 
-		let existing = ctx.collabHost ?? ctx.collabController?.host;
-		if (existing && !existing.relayOrigin && ctx.collabController) {
-			await ctx.collabController.idle();
-			existing = ctx.collabHost ?? ctx.collabController?.host;
+		const activeLaunch = ctx.session.isSessionTransitioning ? null : ctx.collabController?.activeLaunch;
+		if (activeLaunch) {
+			try {
+				await activeLaunch;
+				continue;
+			} catch (err) {
+				if (err instanceof CollabStartSuperseded) continue;
+				throw err;
+			}
+		}
+
+		const existing = ctx.collabHost ?? ctx.collabController?.host;
+		if (existing && ctx.collabController && !existing.relayConnected) {
+			const startPromise = existing.waitForStart();
+			if (startPromise) {
+				try {
+					await startPromise;
+				} catch (err) {
+					if (err instanceof CollabStartSuperseded) continue;
+					throw err;
+				}
+			} else {
+				await ctx.collabController.idle();
+			}
+			continue;
 		}
 		const staleExisting =
 			existing && existing.sessionId && existing.sessionId !== currentSessionId ? existing : undefined;
