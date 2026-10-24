@@ -401,7 +401,7 @@ export class CacheWarmer {
 			nextWarmAt: 0,
 			extensionOverride: false,
 		};
-		this.#schedule(this.#run);
+		void this.#schedule(this.#run);
 	}
 
 	/**
@@ -430,7 +430,7 @@ export class CacheWarmer {
 		run.timer = undefined;
 		run.tier = observed;
 		run.delayMs = delayMs;
-		this.#schedule(run);
+		void this.#schedule(run);
 	}
 
 	onAgentSettled(): void {
@@ -448,7 +448,7 @@ export class CacheWarmer {
 			return;
 		}
 		// A refresh in flight asks again when it reschedules.
-		if (run.timer !== undefined) this.#checkWindow(run, reason);
+		if (run.timer !== undefined) void this.#checkWindow(run, reason);
 	}
 
 	/** Reconcile an active run after the effective warming mode changes. */
@@ -486,19 +486,17 @@ export class CacheWarmer {
 	}
 
 	/** Keeps the armed refresh only when an extension answers "warm" past the window. */
-	#checkWindow(run: ActiveRun, reason: string): void {
+	async #checkWindow(run: ActiveRun, reason: string): Promise<void> {
 		const check = {};
 		run.windowCheck = check;
 		run.extensionOverride = false;
-		const decision = this.#evaluate(run);
-		void this.#decide(run, decision).then(action => {
-			if (this.#run !== run || run.windowCheck !== check || !this.#validateRun(run)) return;
-			if (action === "warm") {
-				run.extensionOverride = true;
-				return;
-			}
-			this.#stop(reason);
-		});
+		const action = await this.#decide(run, this.#evaluate(run));
+		if (this.#run !== run || run.windowCheck !== check || !this.#validateRun(run)) return;
+		if (action === "warm") {
+			run.extensionOverride = true;
+			return;
+		}
+		this.#stop(reason);
 	}
 
 	#clearRun(): void {
@@ -515,7 +513,8 @@ export class CacheWarmer {
 		this.#inactive = { state: "inactive", reason, ...stopped };
 	}
 
-	#schedule(run: ActiveRun): void {
+	/** Settles once a safety window's ask is answered, so a refresh's end event carries the stop it causes. */
+	#schedule(run: ActiveRun): Promise<void> | undefined {
 		run.extensionOverride = false;
 		run.windowCheck = undefined;
 		run.nextWarmAt = Date.now() + run.delayMs;
@@ -526,7 +525,7 @@ export class CacheWarmer {
 		}
 		run.timer = setTimeout(() => void this.#refresh(run), Math.max(0, run.nextWarmAt - Date.now()));
 		run.timer.unref?.();
-		if (reason) this.#checkWindow(run, reason);
+		return reason ? this.#checkWindow(run, reason) : undefined;
 	}
 
 	async #decide(run: ActiveRun, decision: CacheWarmingDecision): Promise<CacheWarmingAction> {
@@ -621,7 +620,7 @@ export class CacheWarmer {
 			this.#entry = run.entry;
 			if (this.#pendingEntry === run.entry) this.#pendingEntry = undefined;
 			if (!this.#validateRun(run)) return;
-			this.#schedule(run);
+			await this.#schedule(run);
 		} finally {
 			this.onRefreshEnd?.({
 				...refresh,

@@ -416,7 +416,8 @@ describe("cache warmer lifecycle", () => {
 
 	test("idle warming stops at the 30-minute safety limit unless an extension keeps it warm", async () => {
 		// 1M tokens clears the idle savings floor, so only the window stops warming.
-		const unhandled = harness();
+		// The extension runner answers the warmer's own action when no handler does.
+		const unhandled = harness({ decide: event => Promise.resolve(event.action) });
 		unhandled.promptTokens = 1_000_000;
 		start(unhandled);
 		unhandled.warmer.onAgentSettled();
@@ -425,6 +426,11 @@ describe("cache warmer lifecycle", () => {
 		expect(unhandled.warmer.status).toMatchObject({
 			state: "inactive",
 			reason: "30-minute idle safety limit reached",
+		});
+		expect(unhandled.refreshes.at(-1)).toMatchObject({
+			type: "end",
+			outcome: "hit",
+			warmingStopReason: "30-minute idle safety limit reached",
 		});
 
 		let keepWarm = true;
