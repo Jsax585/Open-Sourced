@@ -693,6 +693,28 @@ describe("Browser relay worker navigation behavioral regression", () => {
 		expect(tab.url).toBe("about:blank#relay-proof-existing");
 	});
 
+	it("resolves bare-hash navigation cleanly without error", async () => {
+		const workerSource = getBundledWorkerSource();
+		const fixture = new SimulatedBrowserFixture();
+		const tab = fixture.tabs.get(1)!;
+		tab.url = "about:blank";
+
+		const harness = new WorkerTestHarness(workerSource, fixture);
+		await harness.waitForHello();
+
+		const rpcRes = await harness.sendRpc({
+			op: "send",
+			tabId: 1,
+			method: "Page.navigate",
+			params: { url: "about:blank#" },
+		});
+
+		expect(fixture.lethalAttempts).toHaveLength(0);
+		expect(rpcRes.ok).toBe(true);
+		const result = rpcRes.result as { frameId: string; loaderId?: string };
+		expect(result.frameId).toBe("FRAME_ROOT_1");
+	});
+
 	it("commits canonical blank before setting hash and preserves loaderId lifecycle for cross-document navigation", async () => {
 		const workerSource = getBundledWorkerSource();
 		const fixture = new SimulatedBrowserFixture();

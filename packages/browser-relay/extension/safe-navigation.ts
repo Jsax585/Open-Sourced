@@ -42,7 +42,7 @@ export function parseFragmentedAboutBlank(rawUrl: unknown): { isFragmented: bool
 export function isAlreadyAboutBlank(url?: string): boolean {
 	if (url === undefined || url === "") return true;
 	const lower = url.trim().toLowerCase();
-	return lower === "about:blank" || lower.startsWith("about:blank#") || lower.startsWith("about:blank?");
+	return lower === "about:blank" || lower.startsWith("about:blank#");
 }
 
 export function findFrameInTree(node: FrameTreeNode, targetId: string): FrameInfo | undefined {
@@ -98,10 +98,12 @@ export async function evaluateLocationHash(
 
 	const expression = `(() => {
 		const targetHash = ${JSON.stringify(hash)};
-		if (location.hash !== targetHash) {
-			location.hash = targetHash;
-		} else {
-			history.replaceState(null, "", location.href);
+		try {
+			history.replaceState(null, "", "about:blank" + targetHash);
+		} catch {
+			if (location.hash !== targetHash) {
+				location.hash = targetHash;
+			}
 		}
 		return location.href;
 	})()`;
@@ -134,8 +136,12 @@ export async function evaluateLocationHash(
 		throw new Error("Runtime.evaluate did not return resulting URL string");
 	}
 
-	if (expectedUrl && resultingUrl !== expectedUrl) {
-		throw new Error(`Navigation resulted in URL ${resultingUrl}, expected ${expectedUrl}`);
+	if (expectedUrl) {
+		const normExpected = expectedUrl.trim().toLowerCase();
+		const normResulting = resultingUrl.trim().toLowerCase();
+		if (normResulting !== normExpected && !(normExpected === "about:blank#" && normResulting === "about:blank")) {
+			throw new Error(`Navigation resulted in URL ${resultingUrl}, expected ${expectedUrl}`);
+		}
 	}
 
 	return resultingUrl;

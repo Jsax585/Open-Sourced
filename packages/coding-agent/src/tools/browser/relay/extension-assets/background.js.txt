@@ -1,4 +1,4 @@
-// extension/debugger-ownership.ts
+// packages/browser-relay/extension/debugger-ownership.ts
 async function ownedDebuggerTabs(targets, probe) {
   const owned = await Promise.all(targets.map(async (target) => {
     if (!target.attached || target.tabId === undefined)
@@ -13,7 +13,7 @@ async function ownedDebuggerTabs(targets, probe) {
   return owned.filter((tabId) => tabId !== undefined);
 }
 
-// extension/safe-navigation.ts
+// packages/browser-relay/extension/safe-navigation.ts
 function parseFragmentedAboutBlank(rawUrl) {
   if (typeof rawUrl !== "string")
     return { isFragmented: false, hash: "" };
@@ -28,7 +28,7 @@ function isAlreadyAboutBlank(url) {
   if (url === undefined || url === "")
     return true;
   const lower = url.trim().toLowerCase();
-  return lower === "about:blank" || lower.startsWith("about:blank#") || lower.startsWith("about:blank?");
+  return lower === "about:blank" || lower.startsWith("about:blank#");
 }
 function findFrameInTree(node, targetId) {
   if (node.frame.id === targetId)
@@ -72,10 +72,12 @@ async function evaluateLocationHash(sendCommand, frameId, hash, expectedUrl) {
   }
   const expression = `(() => {
 		const targetHash = ${JSON.stringify(hash)};
-		if (location.hash !== targetHash) {
-			location.hash = targetHash;
-		} else {
-			history.replaceState(null, "", location.href);
+		try {
+			history.replaceState(null, "", "about:blank" + targetHash);
+		} catch {
+			if (location.hash !== targetHash) {
+				location.hash = targetHash;
+			}
 		}
 		return location.href;
 	})()`;
@@ -95,8 +97,12 @@ async function evaluateLocationHash(sendCommand, frameId, hash, expectedUrl) {
   if (typeof resultingUrl !== "string") {
     throw new Error("Runtime.evaluate did not return resulting URL string");
   }
-  if (expectedUrl && resultingUrl !== expectedUrl) {
-    throw new Error(`Navigation resulted in URL ${resultingUrl}, expected ${expectedUrl}`);
+  if (expectedUrl) {
+    const normExpected = expectedUrl.trim().toLowerCase();
+    const normResulting = resultingUrl.trim().toLowerCase();
+    if (normResulting !== normExpected && !(normExpected === "about:blank#" && normResulting === "about:blank")) {
+      throw new Error(`Navigation resulted in URL ${resultingUrl}, expected ${expectedUrl}`);
+    }
   }
   return resultingUrl;
 }
@@ -142,7 +148,7 @@ async function handleSafePageNavigate(sendCommand, params) {
   return { frameId, loaderId };
 }
 
-// extension/background.ts
+// packages/browser-relay/extension/background.ts
 var DEFAULT_PORT = 9224;
 var PING_INTERVAL_MS = 20000;
 var RECONNECT_MIN_MS = 1000;
