@@ -6,6 +6,7 @@ import type { Model } from "@oh-my-pi/pi-catalog/types";
 import {
 	CacheWarmer,
 	type CacheWarmerDeps,
+	type CacheWarmingDecisionEvent,
 	type CacheWarmingRefreshEnd,
 	type CacheWarmingRefreshStart,
 	type CacheWarmStream,
@@ -413,28 +414,90 @@ describe("cache warmer lifecycle", () => {
 		expect(status.decision?.continuationProbability).toBe(0.15);
 	});
 
-	test("idle warming stops at the 30-minute safety limit", async () => {
-		const forced = harness({ decide: () => Promise.resolve("warm") });
+	test("idle warming stops at the 30-minute safety limit unless an extension keeps it warm", async () => {
+		// 1M tokens clears the idle savings floor, so only the window stops warming.
+		const unhandled = harness();
+		unhandled.promptTokens = 1_000_000;
+		start(unhandled);
+		unhandled.warmer.onAgentSettled();
+		for (let minute = 0; minute < 40; minute++) await advance(60_000);
+		expect(unhandled.replays).toHaveLength(6);
+		expect(unhandled.warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "30-minute idle safety limit reached",
+		});
+
+		let keepWarm = true;
+		const events: CacheWarmingDecisionEvent[] = [];
+		const forced = harness({
+			decide: event => {
+				events.push(event);
+				return Promise.resolve(keepWarm ? "warm" : event.action);
+			},
+		});
 		start(forced);
 		forced.warmer.onAgentSettled();
 		for (let minute = 0; minute < 40; minute++) await advance(60_000);
-		expect(forced.replays.length).toBeGreaterThan(0);
+		// Refreshes at 4.5-minute steps continue past the 30-minute window: 36 min is the 8th.
+		expect(forced.replays).toHaveLength(8);
+		expect(forced.refreshes.filter(event => event.type === "end").map(event => event.outcome)).toEqual(
+			Array(8).fill("hit"),
+		);
+		expect(forced.warmed.every(warm => warm.extensionOverride)).toBe(true);
+		expect(forced.warmer.status).toMatchObject({ state: "scheduled", extensionOverride: true });
+		expect(events.every(event => event.refreshIntervalMs === SHORT_DELAY_MS)).toBe(true);
+		expect(events.at(-1)?.action).toBe("stop");
+
+		// Past the window, a handler that answers nothing leaves the warmer's own stop.
+		keepWarm = false;
+		await advance(SHORT_DELAY_MS);
+		expect(forced.replays).toHaveLength(8);
 		expect(forced.warmer.status).toMatchObject({ state: "inactive", reason: "30-minute idle safety limit reached" });
 	});
 
-	test("warms a 1h entry during an active run but not after it settles", async () => {
+	test("warms a 1h entry after its run settles only while an extension asks for it", async () => {
 		const running = harness();
 		start(running, { cacheRetention: "long" });
 		await advance(LONG_DELAY_MS);
 		expect(running.replays).toHaveLength(1);
 
-		const settled = harness({ decide: () => Promise.resolve("warm") });
-		start(settled, { cacheRetention: "long" });
-		settled.warmer.onAgentSettled();
-		expect(settled.warmer.status).toMatchObject({
+		const unhandled = harness();
+		start(unhandled, { cacheRetention: "long" });
+		unhandled.warmer.onAgentSettled();
+		expect(unhandled.warmer.status).toMatchObject({
 			state: "inactive",
 			reason: "cache entry outlives the 30-minute idle window",
 		});
+
+		const silent = harness({ decide: event => Promise.resolve(event.action) });
+		start(silent, { cacheRetention: "long" });
+		silent.warmer.onAgentSettled();
+		await drain();
+		expect(silent.warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "cache entry outlives the 30-minute idle window",
+		});
+		await advance(LONG_DELAY_MS);
+		expect(silent.replays).toHaveLength(0);
+
+		const events: CacheWarmingDecisionEvent[] = [];
+		const settled = harness({
+			decide: event => {
+				events.push(event);
+				return Promise.resolve("warm");
+			},
+		});
+		start(settled, { cacheRetention: "long" });
+		settled.warmer.onAgentSettled();
+		await drain();
+		expect(events).toEqual([expect.objectContaining({ action: "stop", refreshIntervalMs: LONG_DELAY_MS })]);
+		expect(settled.warmer.status).toMatchObject({ state: "scheduled", extensionOverride: true });
+		await advance(LONG_DELAY_MS);
+		expect(settled.replays).toHaveLength(1);
+		expect(settled.refreshes.at(-1)).toMatchObject({ type: "end", phase: "idle", outcome: "hit" });
+		expect(settled.warmer.status).toMatchObject({ state: "scheduled", nextWarmAt: Date.now() + LONG_DELAY_MS });
+		await advance(LONG_DELAY_MS);
+		expect(settled.replays).toHaveLength(2);
 	});
 
 	test("adopts the 1h tier the provider reports writing for a resolver-keyed request", async () => {
@@ -523,7 +586,7 @@ describe("cache warmer lifecycle", () => {
 		expect(missed.warmer.cacheEntry?.touchedAt).toBe(missedTouch);
 	});
 
-	test("extensions can stop a refresh and force one past the threshold", async () => {
+	test("extensions can stop a refresh and force one past the threshold or the one-hour window", async () => {
 		const stopped = harness({ decide: () => Promise.resolve("stop") });
 		start(stopped);
 		await advance(SHORT_DELAY_MS);
@@ -541,6 +604,26 @@ describe("cache warmer lifecycle", () => {
 		await advance(SHORT_DELAY_MS);
 		expect(forced.replays).toHaveLength(1);
 		expect(forced.warmed[0]?.extensionOverride).toBe(true);
+
+		const unhandled = harness();
+		start(unhandled);
+		for (let minute = 0; minute < 70; minute++) await advance(60_000);
+		// 13 refreshes fit in the hour; the 14th would land at 63 minutes.
+		expect(unhandled.replays).toHaveLength(13);
+		expect(unhandled.warmer.status).toMatchObject({ state: "inactive", reason: "one-hour safety limit reached" });
+
+		const actions: CacheWarmingDecisionEvent["action"][] = [];
+		const pastHour = harness({
+			decide: event => {
+				actions.push(event.action);
+				return Promise.resolve("warm");
+			},
+		});
+		start(pastHour);
+		for (let minute = 0; minute < 70; minute++) await advance(60_000);
+		expect(pastHour.replays).toHaveLength(15);
+		expect(pastHour.warmed.map(warm => warm.extensionOverride)).toEqual([...Array(13).fill(false), true, true]);
+		expect(actions.at(-1)).toBe("stop");
 	});
 
 	test("extension failures and slow answers fall back to the warmer's own decision", async () => {

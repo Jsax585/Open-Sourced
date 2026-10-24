@@ -428,7 +428,8 @@ export interface SessionBeforeSwitchResult {
 
 /**
  * Fired before each prompt-cache warming refresh with the warmer's economics
- * filled in. Return `{ action }` to override whether the refresh is sent.
+ * filled in, and when a safety window would end warming before the next
+ * refresh. Return `{ action }` to override whether the refresh is sent.
  */
 export interface CacheWarmingDecisionEvent {
 	type: "cache_warming_decision";
@@ -438,7 +439,9 @@ export interface CacheWarmingDecisionEvent {
 	missCost: number;
 	/** Estimated chance that a real request arrives before the entry expires. */
 	continuationProbability: number;
-	/** The warmer's own decision. */
+	/** Time from this refresh to the next one the warmer would send. */
+	refreshIntervalMs: number;
+	/** The warmer's own decision; "stop" past a safety window, where only an extension's "warm" continues. */
 	action: CacheWarmingAction;
 }
 
