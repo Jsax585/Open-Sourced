@@ -2331,6 +2331,7 @@ export class ModelRegistry {
 								accounts?.map(account => ({
 									accessToken: account.accessToken,
 									accountKey: oauthAccountKey(account),
+									projectId: account.projectId,
 								})) ?? null
 							);
 						},

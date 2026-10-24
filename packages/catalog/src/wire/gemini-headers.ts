@@ -23,16 +23,19 @@ export const getGeminiCliHeaders = (modelId?: string) => ({
  * (and its @google/genai → google-auth-library dependency chain) into the startup
  * parse graph.
  *
- * Format captured from the real 2.8.0 `antigravity/hub` client:
- * `antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)`.
+ * Format captured from the real 2.26.0 `antigravity/hub` client:
+ * `antigravity/hub/2.26.0 (aidev_client; os_type=darwin; arch=arm64; cl=1005016104)`.
  * The backend gates newer models (e.g. gemini-3.7-flash) on the client version,
  * so the version tracks the latest Antigravity release via the update manifest
  * (see {@link ensureAntigravityVersion}) with `DEFAULT_ANTIGRAVITY_VERSION` as
- * the offline fallback. os_type/arch are pinned to the darwin/arm64 reference
- * client the version and manifest are captured from, independent of the host
- * platform. Overrides: PI_AI_ANTIGRAVITY_VERSION / _CL / _OS / _ARCH.
+ * the offline fallback. os_type/arch name the native build for the host OS:
+ * each 2.26.0 installer ships one language-server build whose Go target is
+ * stamped into the header (macOS darwin/arm64, Linux linux/amd64, Windows
+ * windows/amd64; no other OS/arch builds exist); see
+ * {@link getAntigravityPlatform}. The changelist is identical across those
+ * builds. Overrides: PI_AI_ANTIGRAVITY_VERSION / _CL / _OS / _ARCH.
  */
-export const DEFAULT_ANTIGRAVITY_VERSION = "2.19.1";
+export const DEFAULT_ANTIGRAVITY_VERSION = "2.26.0";
 
 const ANTIGRAVITY_VERSION_MANIFEST_URL =
 	"https://antigravity-hub-auto-updater-974169037036.us-central1.run.app/manifest/latest-arm64-mac.yml";
@@ -107,15 +110,37 @@ export function ensureAntigravityVersion(fetcher: FetchImpl = fetch, signal?: Ab
 	return Promise.race([lookup, aborted]).finally(() => signal.removeEventListener("abort", onAbort));
 }
 
+/**
+ * Native Antigravity builds, keyed by host OS, as their language server reports
+ * itself (`GOOS`/`GOARCH`). The macOS installer ships arm64 only and the Linux
+ * and Windows installers x64 only, so the reported arch is the build's, not
+ * the host's: advertising e.g. darwin/amd64 would name a client that does not
+ * exist.
+ */
+const ANTIGRAVITY_BUILDS: Partial<Record<NodeJS.Platform, { os: string; arch: string }>> = {
+	darwin: { os: "darwin", arch: "arm64" },
+	linux: { os: "linux", arch: "amd64" },
+	win32: { os: "windows", arch: "amd64" },
+};
+
+/**
+ * Native build the host would run. OSes without a native build report the
+ * Linux build, the closest client that exists.
+ */
+export function getAntigravityPlatform(platform: NodeJS.Platform = process.platform): { os: string; arch: string } {
+	return ANTIGRAVITY_BUILDS[platform] ?? { os: "linux", arch: "amd64" };
+}
+
 /** Antigravity `User-Agent` header value; rebuilt when the discovered version changes. */
 export function getAntigravityUserAgent(): string {
 	const version = getAntigravityVersion();
 	// The backend does not validate `cl` (verified live: stale, zero, and absent
 	// cl all pass model gating on daily-cloudcode-pa; only the version gates).
 	// The update manifest carries no changelist, so the captured value stays.
-	const cl = process.env.PI_AI_ANTIGRAVITY_CL || "963137146";
-	const os = process.env.PI_AI_ANTIGRAVITY_OS || "darwin";
-	const arch = process.env.PI_AI_ANTIGRAVITY_ARCH || "arm64";
+	const cl = process.env.PI_AI_ANTIGRAVITY_CL || "1005016104";
+	const host = getAntigravityPlatform();
+	const os = process.env.PI_AI_ANTIGRAVITY_OS || host.os;
+	const arch = process.env.PI_AI_ANTIGRAVITY_ARCH || host.arch;
 	return `antigravity/hub/${version} (aidev_client; os_type=${os}; arch=${arch}; cl=${cl})`;
 }
 

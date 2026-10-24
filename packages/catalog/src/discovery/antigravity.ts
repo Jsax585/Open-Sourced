@@ -145,8 +145,11 @@ export interface FetchAntigravityDiscoveryModelsOptions {
 	token: string;
 	/** Optional endpoint override. Defaults to Antigravity fallback endpoints. */
 	endpoint?: string;
-	/** Deprecated and ignored for antigravity discovery parity. */
-	project?: string;
+	/**
+	 * Cloud Code Assist project the account is onboarded to. Sent as the body's
+	 * `project` field like the native client; the body is `{}` when absent.
+	 */
+	projectId?: string;
 	/** Optional user agent override. */
 	userAgent?: string;
 	/** Optional abort signal for request cancellation. */
@@ -278,7 +281,7 @@ async function fetchAntigravityDiscoveryResponse(
 					"Content-Type": "application/json",
 					"User-Agent": options.userAgent ?? getAntigravityUserAgent(),
 				},
-				body: JSON.stringify({}),
+				body: JSON.stringify(options.projectId ? { project: options.projectId } : {}),
 				signal: options.signal,
 			});
 		} catch {

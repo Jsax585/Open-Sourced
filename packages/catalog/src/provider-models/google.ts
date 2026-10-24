@@ -33,6 +33,8 @@ export interface GoogleAntigravityAccount {
 	 * When any account lacks one, no model records per-account access.
 	 */
 	accountKey?: string;
+	/** Cloud Code Assist project of the credential, sent with roster discovery like the native client. */
+	projectId?: string;
 }
 
 export interface GoogleAntigravityModelManagerConfig {
@@ -113,6 +115,7 @@ export function googleAntigravityModelManagerOptions(
 								result: await fetchAntigravityDiscoveryModels({
 									token: account.accessToken,
 									endpoint: config?.endpoint,
+									projectId: account.projectId,
 									fetcher,
 								}),
 							})),
@@ -167,6 +170,7 @@ export function googleGeminiCliModelManagerOptions(
 						}
 						const result = await fetchAntigravityDiscoveryModels({
 							token,
+							projectId: config?.projectId,
 							fetcher,
 							collapseTable,
 						});

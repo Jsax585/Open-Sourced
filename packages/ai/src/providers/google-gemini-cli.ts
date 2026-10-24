@@ -284,14 +284,17 @@ export interface AntigravityProviderSessionState extends ProviderSessionState {
 	/**
 	 * Per-conversation request-envelope identity that mirrors the real
 	 * Antigravity client. `sessionId` is the signed-decimal session id;
-	 * `agentId`/`trajectoryId` are UUIDs; `stepIndex` is the monotonic step
-	 * counter; `lastExecutionId` is the prior response id echoed as
-	 * `labels.last_execution_id`.
+	 * `agentId`/`trajectoryId` are UUIDs (`agentId` doubles as
+	 * `labels.cascade_id`/`root_cascade_id`); `stepIndex` is the monotonic step
+	 * counter; `requestCount` counts envelopes already built for the trajectory
+	 * (`labels.request_id` suffix); `lastExecutionId` is the prior response id
+	 * echoed as `labels.last_execution_id`.
 	 */
 	agentId?: string;
 	trajectoryId?: string;
 	sessionId?: string;
 	stepIndex?: number;
+	requestCount?: number;
 	lastExecutionId?: string;
 }
 
@@ -1221,8 +1224,11 @@ interface AntigravityRequestEnvelope {
 /**
  * Build the Antigravity request envelope (sessionId, structured requestId,
  * labels) advancing the per-conversation session state. Mirrors the real
- * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`
- * and `labels.last_step_index` trails the requestId step by one. Without session
+ * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`,
+ * `labels.last_step_index` trails the requestId step by one, `labels.cascade_id`
+ * and `labels.root_cascade_id` repeat the agentId, and `labels.request_id` is
+ * `<trajectoryId>-<n>` for the n-th (0-based) request of the trajectory. Labels
+ * are inserted in alphabetical key order like the real client. Without session
  * state (direct callers/tests) it falls back to ephemeral ids.
  */
 function buildAntigravityRequestEnvelope(
@@ -1231,11 +1237,14 @@ function buildAntigravityRequestEnvelope(
 	wireModelId: string,
 	state: AntigravityProviderSessionState | undefined,
 ): AntigravityRequestEnvelope {
+	let requestIndex = 0;
 	if (state) {
 		state.agentId ??= randomUUID();
 		state.trajectoryId ??= randomUUID();
 		state.sessionId ??= randomSignedDecimalSessionId();
 		state.stepIndex = (state.stepIndex ?? 1) + 1;
+		requestIndex = state.requestCount ?? 0;
+		state.requestCount = requestIndex + 1;
 	}
 	const agentId = state?.agentId ?? randomUUID();
 	const trajectoryId = state?.trajectoryId ?? randomUUID();
@@ -1245,13 +1254,17 @@ function buildAntigravityRequestEnvelope(
 	const isClaude = model.identity.class === "anthropic";
 	const profile = getAntigravityModelWireProfile(wireModelId);
 	const labels: Record<string, string> = {};
+	labels.cascade_id = agentId;
 	if (state?.lastExecutionId) labels.last_execution_id = state.lastExecutionId;
 	labels.last_step_index = String(step - 1);
 	if (profile?.modelEnum !== undefined) labels.model_enum = profile.modelEnum;
+	labels.request_id = `${trajectoryId}-${requestIndex}`;
+	labels.root_cascade_id = agentId;
 	labels.trajectory_id = trajectoryId;
 	const usageLabel = model.compat.antigravityUsageLabel ?? String(isClaude);
 	labels.used_claude = usageLabel;
 	labels.used_claude_conservative = usageLabel;
+	labels.used_non_gemini_model = String(model.identity.class !== "gemini");
 	return { sessionId, requestId, labels };
 }
 

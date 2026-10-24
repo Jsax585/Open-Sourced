@@ -6,7 +6,14 @@ import {
 	streamGoogleGeminiCli,
 } from "@oh-my-pi/pi-ai/providers/google-gemini-cli";
 import { getOAuthApiKey } from "@oh-my-pi/pi-ai/registry/oauth";
-import type { AssistantMessageEvent, Context, FetchImpl, Model, TJsonSchema } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessageEvent,
+	Context,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+	TJsonSchema,
+} from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 
 function createModel(
@@ -259,11 +266,83 @@ describe("Google Gemini CLI alignment", () => {
 		expect(payload.requestId).toMatch(/^agent\/[0-9a-f-]+\/\d+\/[0-9a-f-]+\/\d+$/);
 		// Antigravity tags its system instruction with role "user".
 		expect(payload.request.systemInstruction?.role).toBe("user");
-		const labels = payload.request.labels;
-		expect(labels?.trajectory_id).toMatch(/^[0-9a-f-]+$/);
-		expect(labels?.last_step_index).toBe("1");
-		expect(labels?.used_claude).toBe("false");
-		expect(labels?.used_claude_conservative).toBe("false");
+		const labels = payload.request.labels ?? {};
+		const agentId = payload.requestId?.split("/")[1];
+		// Real-client key order is alphabetical.
+		expect(Object.keys(labels)).toEqual(Object.keys(labels).toSorted());
+		expect(labels.trajectory_id).toMatch(/^[0-9a-f-]+$/);
+		expect(labels.cascade_id).toBe(agentId!);
+		expect(labels.root_cascade_id).toBe(agentId!);
+		expect(labels.request_id).toBe(`${labels.trajectory_id}-0`);
+		expect(labels.last_step_index).toBe("1");
+		expect(labels.used_claude).toBe("false");
+		expect(labels.used_claude_conservative).toBe("false");
+		expect(labels.used_non_gemini_model).toBe("false");
+	});
+
+	it("numbers Antigravity request_id labels per trajectory across requests in one session", () => {
+		const model = createModel("google-antigravity");
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		// Two consecutive requests in the same conversation.
+		const [first, second] = [0, 1].map(
+			() =>
+				buildRequest(
+					model,
+					createContext(),
+					"proj-123",
+					{ requestModelId: "gemini-3.5-flash-low", providerSessionState },
+					true,
+				) as { request: { labels?: Record<string, string> }; requestId?: string },
+		);
+		if (!first || !second) throw new Error("expected two requests");
+		const [, agentId, , trajectoryId, firstStep] = first.requestId?.split("/") ?? [];
+		expect(firstStep).toBe("2");
+		expect(first.request.labels).toEqual({
+			cascade_id: agentId!,
+			last_step_index: "1",
+			model_enum: "MODEL_PLACEHOLDER_M20",
+			request_id: `${trajectoryId}-0`,
+			root_cascade_id: agentId!,
+			trajectory_id: trajectoryId!,
+			used_claude: "false",
+			used_claude_conservative: "false",
+			used_non_gemini_model: "false",
+		});
+		expect(Object.keys(first.request.labels ?? {})).toEqual([
+			"cascade_id",
+			"last_step_index",
+			"model_enum",
+			"request_id",
+			"root_cascade_id",
+			"trajectory_id",
+			"used_claude",
+			"used_claude_conservative",
+			"used_non_gemini_model",
+		]);
+
+		expect(second.requestId?.split("/")[1]).toBe(agentId!);
+		expect(second.request.labels).toMatchObject({
+			cascade_id: agentId!,
+			last_step_index: "2",
+			request_id: `${trajectoryId}-1`,
+			root_cascade_id: agentId!,
+			trajectory_id: trajectoryId!,
+		});
+	});
+
+	it("marks Antigravity Claude requests as non-Gemini usage", () => {
+		const payload = buildRequest(
+			createModel("google-antigravity", "claude-sonnet-4-6", true),
+			createContext(),
+			"proj-123",
+			{},
+			true,
+		) as { request: { labels?: Record<string, string> } };
+		expect(payload.request.labels).toMatchObject({
+			used_claude: "true",
+			used_claude_conservative: "true",
+			used_non_gemini_model: "true",
+		});
 	});
 
 	it("does not tag Antigravity chat requests with the requestType that draws false 429 quota errors", () => {

@@ -59,6 +59,7 @@ async function resolveTarget(
 	const endpoints = antigravityEndpoints(model);
 	const advertised = await fetchAntigravityImageModel({
 		token: credentials.accessToken,
+		projectId: credentials.projectId,
 		endpoint: endpoints.length === 1 ? endpoints[0] : undefined,
 		signal,
 		fetcher: fetchImpl,

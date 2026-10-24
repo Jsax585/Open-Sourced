@@ -1613,6 +1613,33 @@ describe("antigravity discovery collapsing", () => {
 		});
 	});
 
+	it("sends the Cloud Code Assist project in the discovery body only when known", async () => {
+		const bodies: unknown[] = [];
+		const recordingFetcher = Object.assign(
+			(input: string | URL | Request, init?: RequestInit) => {
+				if (String(input).includes(":fetchAvailableModels")) bodies.push(JSON.parse(String(init?.body)));
+				return Promise.resolve(new Response(JSON.stringify(payload), { status: 200 }));
+			},
+			{ preconnect: fetch.preconnect },
+		);
+
+		await fetchAntigravityDiscoveryModels({
+			token: "t",
+			endpoint: "https://cca.test",
+			projectId: "p-1",
+			userAgent: "test",
+			fetcher: recordingFetcher,
+		});
+		await fetchAntigravityDiscoveryModels({
+			token: "t",
+			endpoint: "https://cca.test",
+			userAgent: "test",
+			fetcher: recordingFetcher,
+		});
+
+		expect(bodies).toEqual([{ project: "p-1" }, {}]);
+	});
+
 	it("discovers Gemini models through Antigravity before provisioning Cloud Code Assist", async () => {
 		const requestedUrls: string[] = [];
 		const geminiCliFetcher = Object.assign(
