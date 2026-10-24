@@ -1,7 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { stripVTControlCharacters } from "node:util";
-import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	isFocusable,
+	TERMINAL,
+	type OverlayOptions,
+	setKeybindings,
+} from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
@@ -10,6 +17,7 @@ import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
 import { InputController } from "../../../src/modes/controllers/input-controller";
 import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { Settings } from "../../../src/config/settings";
 import type { InteractiveModeContext } from "../../../src/modes/types";
 
 afterEach(() => {
@@ -22,7 +30,7 @@ beforeAll(async () => {
 	setThemeInstance(dark);
 });
 
-function makeHarness() {
+function makeHarness(settings: Settings = Settings.isolated({})) {
 	const editor = new CustomEditor(getEditorTheme());
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
@@ -73,6 +81,8 @@ function makeHarness() {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		showStatus: vi.fn(),
+		settings,
+		sessionManager: { getSessionName: () => "approval-session" },
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -685,5 +695,43 @@ describe("ExtensionUiController tool approval", () => {
 		expect(body()).not.toContain("rm-rf~");
 		harness.handleInput("\x0f");
 		expect(body()).toContain("rm-rf~");
+	});
+
+	it("rings the approval notification exactly once while presented, and never when approval.notify is off", async () => {
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const on = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const pending = on.controller.showCollabAwareApproval({
+				...prompt,
+				session: "Approve bash for this session",
+			});
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify).toHaveBeenCalledWith({
+				title: "approval-session",
+				body: "Waiting for approval",
+				type: "approval",
+				urgency: "normal",
+				actions: "focus",
+			});
+			// Approve it: the approve keys arm only after APPROVE_ARM_MS, and no
+			// further notification rings once the prompt is settled.
+			now.mockReturnValue(2_000);
+			on.handleInput("\x1b[B");
+			on.handleInput("\r");
+			expect(await pending).toBe("session");
+			expect(notify).toHaveBeenCalledTimes(1);
+
+			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
+			const denied = off.controller.showCollabAwareApproval(prompt);
+			off.editor.onSubmit = text => off.queueSteer(text);
+			for (const key of "stop") off.handleInput(key);
+			off.handleInput("\r");
+			expect(await denied).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(1);
+		} finally {
+			notify.mockRestore();
+			now.mockRestore();
+		}
 	});
 });
