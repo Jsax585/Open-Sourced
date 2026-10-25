@@ -301,10 +301,12 @@ fn annotation_echo(lines: &[&str], path: Option<&str>, first: u32, last: u32) ->
 
 #[derive(Clone, Copy)]
 struct Ambiguity {
-	start: u32,
-	end:   u32,
-	side:  BoundarySide,
-	count: u32,
+	start:    u32,
+	end:      u32,
+	side:     BoundarySide,
+	count:    u32,
+	/// Range rows the body leaves out if the echo means the range is shifted.
+	left_out: (u32, u32),
 }
 
 fn normalize_echoes(
@@ -338,11 +340,13 @@ fn normalize_echoes(
 			if group.payload.len().saturating_sub(leading) >= range_len {
 				drop_l = leading;
 			} else {
+				let kept = (group.payload.len() - leading) as u32;
 				ambiguities.push(Ambiguity {
-					start: group.start,
-					end:   group.end,
-					side:  BoundarySide::Leading,
-					count: leading as u32,
+					start:    group.start,
+					end:      group.end,
+					side:     BoundarySide::Leading,
+					count:    leading as u32,
+					left_out: (group.start + kept, group.end),
 				});
 			}
 		} else if trailing > 0
@@ -352,11 +356,13 @@ fn normalize_echoes(
 			if group.payload.len().saturating_sub(trailing) >= range_len {
 				drop_t = trailing;
 			} else {
+				let kept = (group.payload.len() - trailing) as u32;
 				ambiguities.push(Ambiguity {
-					start: group.start,
-					end:   group.end,
-					side:  BoundarySide::Trailing,
-					count: trailing as u32,
+					start:    group.start,
+					end:      group.end,
+					side:     BoundarySide::Trailing,
+					count:    trailing as u32,
+					left_out: (group.start, group.end - kept),
 				});
 			}
 		}
@@ -502,6 +508,10 @@ fn group_variants(
 	let drop_k = duplicate_trailing(group, lines);
 	let leading_drops: Vec<_> = if drop_j > 0 { vec![0, drop_j] } else { vec![0] };
 	let trailing_drops: Vec<_> = if drop_k > 0 { vec![0, drop_k] } else { vec![0] };
+	// The shape `normalize_echoes` refuses as ambiguous: an echo on one side
+	// only, with a body too short to cover the range once it is dropped.
+	let one_sided_short = (drop_j == 0) != (drop_k == 0)
+		&& group.payload.len().saturating_sub(drop_j + drop_k) < group.delete_indices.len();
 	let mut variants = Vec::new();
 	let mut ambiguous = None;
 	for drop_l in leading_drops {
@@ -592,15 +602,11 @@ fn group_variants(
 				{
 					continue;
 				}
-				// Dropping a one-sided echo from a body shorter than the range is
-				// the reading `normalize_echoes` rejects as ambiguous:
-				// the echo may mean the range is shifted, so the
-				// uncovered rows may be distinct content the body never
-				// restates. Parsing cannot tell those readings apart.
-				if kept == 0
-					&& (drop_l == 0) != (drop_t == 0)
-					&& payload.len() < group.delete_indices.len()
-				{
+				// In that shape, dropping the echo alone deletes range rows the
+				// body may never restate, and parsing cannot tell a shifted range
+				// from a too-wide one. Only a variant that also keeps a source row
+				// is a different reading.
+				if one_sided_short && kept == 0 {
 					continue;
 				}
 				let mut kept_inserts = inserts[drop_l..inserts.len() - drop_t].to_vec();
@@ -1188,6 +1194,7 @@ pub fn apply_edits(
 				ambiguity.end,
 				ambiguity.side,
 				ambiguity.count,
+				ambiguity.left_out,
 			)));
 		}
 		return Ok(finish(authored, leading));
@@ -1207,6 +1214,7 @@ pub fn apply_edits(
 			ambiguity.end,
 			ambiguity.side,
 			ambiguity.count,
+			ambiguity.left_out,
 		)));
 	}
 	Ok(finish(authored, leading))

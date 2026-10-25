@@ -423,12 +423,15 @@ impl std::fmt::Display for BoundarySide {
 ///
 /// After the duplicated body rows are removed, applying or dropping it would
 /// lose distinct range content, so the edit is rejected unless a
-/// parse-restoring boundary combination proves another reading.
+/// parse-restoring boundary combination proves another reading. `left_out` is
+/// the inclusive span of range rows the body does not cover when the echo is
+/// read as a range shifted by `count` lines.
 pub fn ambiguous_boundary_echo_message(
 	start_line: u32,
 	end_line: u32,
 	side: BoundarySide,
 	count: u32,
+	left_out: (u32, u32),
 ) -> String {
 	let where_clause = match side {
 		BoundarySide::Leading => {
@@ -438,10 +441,15 @@ pub fn ambiguous_boundary_echo_message(
 			format!("ends by restating the {count} line(s) just below the range")
 		},
 	};
+	let left_out = match left_out {
+		(first, last) if first == last => format!("line {first}"),
+		(first, last) => format!("lines {first}-{last}"),
+	};
 	format!(
 		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body {where_clause}, but is too \
-		 short to be the full final content of the selected range. Re-issue with the range covering \
-		 exactly the lines that change and the body as their complete final content."
+		 short to be the full final content of the selected range. If the range is off by those \
+		 line(s), the body leaves out {left_out}, which this edit would delete. Re-issue with the \
+		 range covering exactly the lines that change and the body as their complete final content."
 	)
 }
 
