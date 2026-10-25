@@ -3377,8 +3377,9 @@ export class SessionManager {
 	}
 
 	/**
-	 * Journal an idle recap for this session in history.db. Recaps never enter
-	 * the session file or LLM context; in-memory sessions are not journaled.
+	 * Journal an idle recap for this session in history.db; in-memory sessions are
+	 * not journaled. The journal never enters LLM context; the session file carries
+	 * only the separate turn-bound `completion-recap` custom entry.
 	 */
 	recordRecap(recap: string): void {
 		if (this.#persist && this.#storage instanceof FileSessionStorage) {

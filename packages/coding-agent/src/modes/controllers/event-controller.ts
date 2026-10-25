@@ -36,7 +36,7 @@ import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
 import {
 	isSilentAbort,
 	isUserInvokedSkillPrompt,
@@ -44,6 +44,7 @@ import {
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
+import type { SessionManager } from "../../session/session-manager";
 import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
@@ -1129,6 +1130,7 @@ export class EventController {
 		}
 		this.#cancelIdleCompaction();
 		this.#cancelIdleRecap();
+		this.#clearPublishedRecap();
 		this.composerPrediction.cancel();
 		this.ctx.statusLine.markActivityStart();
 		// The turn owns progress from here; a compaction that started it hands it over.
@@ -2479,6 +2481,7 @@ export class EventController {
 	): Promise<void> {
 		this.#cancelIdleCompaction();
 		this.#cancelIdleRecap();
+		this.#clearPublishedRecap();
 		this.composerPrediction.cancel();
 		if (!this.#terminalProgressActive) {
 			this.#setTerminalProgress(true);
@@ -2785,6 +2788,36 @@ export class EventController {
 		}
 	}
 
+	/** Newest message of `manager` as a recap anchor; undefined unless that message is an assistant reply. */
+	#recapAnchor(manager: SessionManager): { sessionId: string; turnId: string } | undefined {
+		const turn = manager.getBranchView().findLast(entry => entry.type === "message");
+		return turn?.type === "message" && turn.message.role === "assistant"
+			? { sessionId: manager.getSessionId(), turnId: turn.id }
+			: undefined;
+	}
+
+	/**
+	 * Mark the viewed session's (main or focused) published recap as cleared.
+	 * A collab guest's replica mirrors the host's entries, so it never writes its own.
+	 */
+	#clearPublishedRecap(): void {
+		if (this.ctx.collabGuest) return;
+		const manager = this.ctx.viewSession.sessionManager;
+		const entry = manager
+			.getBranchView()
+			.findLast(entry => entry.type === "custom" && entry.customType === "completion-recap");
+		if (entry?.type !== "custom" || !entry.data || typeof entry.data !== "object") return;
+		const data = entry.data as Record<string, unknown>;
+		if (data.version !== 1 || data.state !== "available" || data.sessionId !== manager.getSessionId()) return;
+		if (typeof data.turnId !== "string") return;
+		manager.appendCustomEntry("completion-recap", {
+			version: 1,
+			sessionId: data.sessionId,
+			turnId: data.turnId,
+			state: "cleared",
+		});
+	}
+
 	#scheduleIdleCompaction(): void {
 		this.#cancelIdleCompaction();
 		// Don't schedule idle work while context maintenance is already running; the
@@ -2853,12 +2886,16 @@ export class EventController {
 		if (!recapSettings.enabled) return;
 		if (this.ctx.editor.getText().trim()) return;
 
+		// Bind the recap to the session whose agent_end armed it. A focused
+		// subagent's events arrive here too, and focus can change before the
+		// timer fires; the recap must never describe one session under another's ids.
+		const session = this.ctx.viewSession;
 		const timeoutMs =
 			Math.max(IDLE_RECAP_MIN_SECONDS, Math.min(IDLE_RECAP_MAX_SECONDS, recapSettings.idleSeconds)) * 1000;
 		this.#idleRecapTimer = setTimeout(() => {
 			this.#idleRecapTimer = undefined;
 			this.#idleRecapPending = false;
-			void this.#runIdleRecap();
+			void this.#runIdleRecap(session);
 		}, timeoutMs);
 		this.#idleRecapTimer.unref?.();
 	}
@@ -2866,32 +2903,47 @@ export class EventController {
 	/**
 	 * Generate the idle recap with an ephemeral side-channel turn over the
 	 * current conversation (same pipeline as `/btw`), surface it in the transcript
-	 * ({@link RecapNotice}), and journal it to history.db (`session_recaps`) for the session that
-	 * produced it. Live goal/title and the active todo task are passed as anchoring
-	 * hints because the snapshot only carries conversation history, not the
-	 * controller's todo/goal state. The request is abortable: any activity
-	 * cancels it via #cancelIdleRecap, and idle conditions are re-checked after
-	 * the reply lands so a stale recap never paints over fresh work.
+	 * ({@link RecapNotice}), journal it to history.db (`session_recaps`) for the session that
+	 * produced it, and record it in that session as a turn-bound `completion-recap`
+	 * custom entry (never model context) that the next run clears. Live goal/title
+	 * and the active todo task are passed as anchoring hints because the snapshot
+	 * only carries conversation history, not the controller's todo/goal state. The
+	 * request is abortable: any activity cancels it via #cancelIdleRecap, and idle
+	 * conditions and the session's newest-message anchor are re-checked after the
+	 * reply lands so a stale recap never paints over fresh work or another session.
 	 */
-	async #runIdleRecap(): Promise<void> {
+	async #runIdleRecap(session: AgentSession): Promise<void> {
+		if (session !== this.ctx.viewSession) return;
 		if (!this.#idleConditionsHold()) return;
-		if (!this.ctx.viewSession.model) return;
-		if (this.ctx.viewSession.messages.length === 0) return;
+		if (!session.model) return;
+		if (session.messages.length === 0) return;
 
 		const promptText = prompt.render(idleRecapPrompt, {
 			goal: this.#idleRecapGoalText() ?? "",
 			task: nextActionableTask(this.ctx.todoPhases)?.content ?? "",
 		});
 
+		const manager = session.sessionManager;
+		const anchor = this.#recapAnchor(manager);
 		const abort = new AbortController();
 		this.#idleRecapAbort = abort;
 		try {
-			const session = this.ctx.viewSession;
 			const { replyText } = await session.runEphemeralTurn({ promptText, signal: abort.signal });
 			if (this.#idleRecapAbort !== abort || abort.signal.aborted || !this.#idleConditionsHold()) return;
+			if (session !== this.ctx.viewSession) return;
+			const currentAnchor = this.#recapAnchor(manager);
+			if (anchor?.sessionId !== currentAnchor?.sessionId || anchor?.turnId !== currentAnchor?.turnId) return;
 			const recap = previewLine(replyText, TRUNCATE_LENGTHS.RECAP);
 			if (!recap) return;
-			session.sessionManager.recordRecap(replyText);
+			manager.recordRecap(replyText);
+			if (anchor && !this.ctx.collabGuest) {
+				manager.appendCustomEntry("completion-recap", {
+					version: 1,
+					...anchor,
+					state: "available",
+					text: recap,
+				});
+			}
 			this.ctx.present(new RecapNotice(recap));
 		} catch (error) {
 			if (!abort.signal.aborted) logger.debug("Idle recap turn failed", { error: String(error) });
