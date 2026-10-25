@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { extractMarkdownLinks } from "../index";
+import { fencedSourceContent, fencedSourceRanges } from "../chat/svg-source";
 
 /** A fenced code block extracted from assistant markdown. */
 export interface CodeBlock {
@@ -27,8 +28,6 @@ export interface LastCommand {
 	language: string;
 }
 
-const OPEN_FENCE_RE = /^```([^\n]*)$/;
-const CLOSE_FENCE_RE = /^```/;
 const QUOTE_LINE_RE = /^>(.*)$/;
 
 /**
@@ -39,42 +38,44 @@ const QUOTE_LINE_RE = /^>(.*)$/;
  */
 export function extractBlocks(text: string): MessageBlock[] {
 	const blocks: MessageBlock[] = [];
-	const lines = text.split("\n");
+	const ranges = fencedSourceRanges(text);
+	let nextFence = ranges.next();
+	let fence = nextFence.done ? undefined : nextFence.value;
 	let quote: string[] | undefined;
+	let quoteEnding = "";
 	const flushQuote = () => {
 		if (quote) {
-			blocks.push({ kind: "quote", text: quote.join("\n") });
+			blocks.push({ kind: "quote", text: quote.join("") });
 			quote = undefined;
 		}
 	};
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i]!;
-		const open = OPEN_FENCE_RE.exec(line);
-		if (open) {
-			let close = -1;
-			for (let k = i + 1; k < lines.length; k++) {
-				if (CLOSE_FENCE_RE.test(lines[k]!)) {
-					close = k;
-					break;
-				}
-			}
-			if (close !== -1) {
-				flushQuote();
-				blocks.push({ kind: "code", lang: open[1].trim(), code: lines.slice(i + 1, close).join("\n") });
-				i = close;
-				continue;
-			}
+	let lineStart = 0;
+	while (lineStart <= text.length) {
+		if (fence?.closed && fence.start === lineStart) {
+			flushQuote();
+			blocks.push({ kind: "code", lang: fence.info, code: fencedSourceContent(text, fence.body, fence.end) });
+			lineStart = fence.after;
+			nextFence = ranges.next();
+			fence = nextFence.done ? undefined : nextFence.value;
+			continue;
 		}
-
-		const quoted = QUOTE_LINE_RE.exec(line);
+		let lineEnd = lineStart;
+		while (lineEnd < text.length && text[lineEnd] !== "\n" && text[lineEnd] !== "\r") lineEnd++;
+		const next =
+			lineEnd === text.length
+				? text.length + 1
+				: lineEnd + (text[lineEnd] === "\r" && text[lineEnd + 1] === "\n" ? 2 : 1);
+		const quoted = QUOTE_LINE_RE.exec(text.slice(lineStart, lineEnd));
 		if (quoted) {
-			// Strip the `>` marker plus one optional following space.
-			quote ??= [];
+			// Keep authored separators between quote lines, but not after the run.
+			if (quote) quote.push(quoteEnding);
+			else quote = [];
 			quote.push(quoted[1].startsWith(" ") ? quoted[1].slice(1) : quoted[1]);
+			quoteEnding = text.slice(lineEnd, next);
 		} else {
 			flushQuote();
 		}
+		lineStart = next;
 	}
 	flushQuote();
 	return blocks;

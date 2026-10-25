@@ -10,9 +10,10 @@
  * block; Left/Esc ascend back to the transcript. Every block caption carries a
  * clickable `⧉ copy` control and link blocks add `↗ open`; the overlay is
  * fullscreen, so the terminal reports clicks here (SGR mouse) even though the
- * main transcript never captures the mouse. Keyboard: Enter copies, `o` opens.
- * A URL that wrapped across terminal rows therefore needs neither a careful
- * mouse selection nor cmd-click.
+ * main transcript never captures the mouse. Keyboard: Enter copies, `o` opens
+ * a link or expands Mermaid. At turn level, one diagram opens directly;
+ * several diagrams descend to the existing block selector to choose one.
+ * A wrapped URL needs neither a careful mouse selection nor cmd-click.
  */
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TspPickerColumn, TspPickerItem, TspPickerProps, TspText } from "@oh-my-pi/pi-wire";
@@ -46,6 +47,7 @@ import { code, compact, md, node, row, span, text } from "../native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, type NativeHint, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent } from "../native/picker";
+import { DiagramReader } from "./diagram-reader";
 
 /** Key of the leading list item that replays the history older than the startup tail. */
 const EARLIER_TURNS_KEY = "earlier";
@@ -314,6 +316,11 @@ export interface CopyBlock {
 	href?: string;
 }
 
+/** Match the first fence-info word, just as graphical Markdown lifting does. */
+function isMermaidBlock(block: CopyBlock | undefined): boolean {
+	return block?.kind === "code" && /^mermaid(?:[ \t]|$)/i.test(block.language?.trim() ?? "");
+}
+
 /** Preview rows shown per block in the descended view; copy always takes the full text. */
 const BLOCK_PREVIEW_LINES = 12;
 /** The copy picker's outline stroke — green, distinct from the rewind selector's accent. */
@@ -346,6 +353,7 @@ export class CopySelectorComponent implements Component {
 	#blockCache = new Map<string, CopyBlock[]>();
 	/** Click targets of the last render, keyed by composed-column line index. */
 	#controls = new Map<number, ControlRegion[]>();
+	#diagram: DiagramReader | undefined;
 
 	/** Whole branch; the picker may currently replay only its tail. */
 	#entries: TranscriptEntry[];
@@ -425,9 +433,11 @@ export class CopySelectorComponent implements Component {
 		this.#blockPreviews = undefined;
 		this.#builder.container.invalidate();
 		this.#browser.invalidate();
+		this.#diagram?.invalidate();
 	}
 
 	dispose(): void {
+		this.#diagram?.dispose();
 		this.#builder.dispose();
 	}
 
@@ -439,11 +449,32 @@ export class CopySelectorComponent implements Component {
 		return blocks;
 	}
 
+	/** Inspection is nested state: replay selection and scroll position stay untouched. */
+	#openDiagram(source: string): void {
+		this.#diagram?.dispose();
+		this.#diagram = new DiagramReader({
+			source,
+			getHeight: () => this.deps.ui.terminal?.rows || process.stdout.rows || 40,
+			requestRender: this.deps.requestRender,
+			budget: this.deps.ui.imageBudget,
+			onClose: () => {
+				this.#diagram?.dispose();
+				this.#diagram = undefined;
+				this.deps.requestRender();
+			},
+		});
+		this.deps.requestRender();
+	}
+
 	// ========================================================================
 	// Input
 	// ========================================================================
 
 	handleInput(data: string): void {
+		if (this.#diagram) {
+			this.#diagram.handleInput(data);
+			return;
+		}
 		if (data.startsWith("\x1b[<")) {
 			routeSgrMouseInput(data, event => {
 				if (event.wheel !== null) {
@@ -533,6 +564,29 @@ export class CopySelectorComponent implements Component {
 	}
 
 	#openSelectedBlock(): void {
+		if (!this.#blocks) {
+			const target = this.#targets[this.#selected];
+			if (!target) return;
+			const blocks = this.#blocksFor(target);
+			const first = blocks.findIndex(isMermaidBlock);
+			if (first < 0) return;
+			for (let index = first + 1; index < blocks.length; index++) {
+				if (!isMermaidBlock(blocks[index])) continue;
+				this.#blocks = blocks;
+				this.#blockSelected = first;
+				this.deps.requestRender();
+				return;
+			}
+			this.#openDiagram(blocks[first]!.content);
+			return;
+		}
+		const block = this.#blocks?.[this.#blockSelected];
+		if (block && isMermaidBlock(block)) {
+			this.#openDiagram(block.content);
+		} else this.#openSelectedLink();
+	}
+
+	#openSelectedLink(): void {
 		const block = this.#blocks?.[this.#blockSelected];
 		if (block?.href && this.deps.onOpen) this.deps.onOpen(block.href, block.label);
 	}
@@ -543,7 +597,7 @@ export class CopySelectorComponent implements Component {
 		this.deps.requestRender();
 	}
 
-	/** A left click at terminal (row, col): act if it lands on a caption control. */
+	/** Caption controls keep exact copy and link-opening semantics. */
 	#click(row: number, col: number): void {
 		if (!this.#blocks) return;
 		const point = this.#browser.toContentPoint(row, col);
@@ -594,10 +648,11 @@ export class CopySelectorComponent implements Component {
 
 	/** A `picker` is its own sheet: the backend mounts it in `layer` without a wrapper. */
 	nativeSheet(cx: DescribeContext): boolean {
-		return cx.supports("picker");
+		return this.#diagram === undefined && cx.supports("picker");
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
+		if (this.#diagram) return;
 		const picked = pickerEvent(event);
 		if (picked) {
 			this.#handlePickerEvent(picked);
@@ -611,7 +666,7 @@ export class CopySelectorComponent implements Component {
 		if (event.type === "action") {
 			if (event.act === "blocks") this.#descend();
 			else if (event.act === "back") this.#ascend();
-			else if (event.act === "open") this.#openSelectedBlock();
+			else if (event.act === "open") this.#openSelectedLink();
 			else if (event.act === "copy") this.#pickOutlined();
 			return;
 		}
@@ -647,7 +702,7 @@ export class CopySelectorComponent implements Component {
 					this.#descend();
 					return;
 				case "open-link":
-					this.#openSelectedBlock();
+					this.#openSelectedLink();
 					return;
 				case "earlier":
 					this.#loadFullHistory();
@@ -685,6 +740,7 @@ export class CopySelectorComponent implements Component {
 	}
 
 	describe(cx: DescribeContext): NativeNode {
+		if (this.#diagram) return this.#diagram.describe(cx);
 		return cx.supports("picker") ? this.#describePicker() : this.#describeCard();
 	}
 
@@ -791,6 +847,7 @@ export class CopySelectorComponent implements Component {
 				{ keys: ["left", ...(cancel?.keys ?? [])], label: "back" },
 				{ keys: ["enter"], label: action },
 				block?.href && this.deps.onOpen ? { keys: ["o"], label: "open" } : undefined,
+				isMermaidBlock(block) ? { keys: ["o"], label: "expand diagram" } : undefined,
 			];
 		} else {
 			const blocks = target ? this.#blocksFor(target) : [];
@@ -818,6 +875,7 @@ export class CopySelectorComponent implements Component {
 				upDown,
 				blocks.length > 0 ? { keys: ["right"], label: "blocks" } : undefined,
 				{ keys: ["enter"], label: action },
+				blocks.some(isMermaidBlock) ? { keys: ["o"], label: "expand diagram" } : undefined,
 				this.#truncated ? { keys: ["a"], label: "earlier turns" } : undefined,
 				cancel,
 			];
@@ -862,7 +920,7 @@ export class CopySelectorComponent implements Component {
 	// ========================================================================
 
 	render(width: number): readonly string[] {
-		return this.#browser.render(width);
+		return this.#diagram ? this.#diagram.render(width) : this.#browser.render(width);
 	}
 
 	#frame(contentWidth: number): TranscriptBrowserFrame {
@@ -916,14 +974,19 @@ export class CopySelectorComponent implements Component {
 		}
 
 		const selectedBlock = this.#blocks?.[this.#blockSelected];
-		const openHint = selectedBlock?.href && this.deps.onOpen ? `  ${formatKeyHint("o")} open` : "";
+		const inspectable = this.#blocks ? isMermaidBlock(selectedBlock) : blocks.some(isMermaidBlock);
+		const openHint = inspectable
+			? `  ${formatKeyHint("o")} expand diagram`
+			: selectedBlock?.href && this.deps.onOpen
+				? `  ${formatKeyHint("o")} open`
+				: "";
 		const action = this.deps.actionLabel ?? "copy";
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const enter = formatKeyHint("enter");
 		const cancel = editorKey("tui.select.cancel");
 		const hint = this.#blocks
 			? `${this.#blockSelected + 1}/${this.#blocks.length}  ${upDown} block  ${formatKeyHint("left")}/${cancel} back  ${enter} ${action}${openHint}  click ${theme.cmd.copy}/${theme.cmd.share}`
-			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : ""}${upDown} step  ${blocks.length > 0 ? `${formatKeyHint("right")} blocks  ` : ""}${enter} ${action}  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${cancel} close`;
+			: `${this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : ""}${upDown} step  ${blocks.length > 0 ? `${formatKeyHint("right")} blocks  ` : ""}${enter} ${action}${openHint}  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${cancel} close`;
 		const anchorId = target
 			? this.#blocks
 				? `copy:${target.turnId}:block:${this.#blockSelected}`

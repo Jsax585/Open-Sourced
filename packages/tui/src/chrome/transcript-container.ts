@@ -1181,11 +1181,12 @@ export class TranscriptContainer extends Container {
 					count++;
 					continue;
 				}
-				// An empty-content row matches at any offset, so the walk cannot tell it
-				// apart from a revealed row history never received; only the next
-				// archived image carries the seam on, through its own reserved rows to
-				// its row, whatever its height here.
+				// Empty-content rows may be revealed decoration rather than history.
+				// A matching archived image carries the seam through its reserved rows;
+				// plain blank separators before the graphic are not reserved image rows.
 				let index = count;
+				while (index < rendered.length && isPlainBlank(rendered[index]!)) index++;
+				const reservedStart = index;
 				while (
 					index < rendered.length &&
 					!TERMINAL.isImageLine(rendered[index]!) &&
@@ -1199,7 +1200,7 @@ export class TranscriptContainer extends Container {
 					!TERMINAL.isImageLine(imageRow) ||
 					(iterm2ImagePayload(imageRow) ?? imageRow) !== split.images[image]?.payload ||
 					consumed !== split.images[image]?.offset ||
-					index - count !== directPlacementLift(imageRow)
+					index - reservedStart !== directPlacementLift(imageRow)
 				) {
 					break;
 				}
