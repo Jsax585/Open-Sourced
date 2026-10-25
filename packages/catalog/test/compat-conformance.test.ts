@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import rules from "../src/compat/rules.json";
 import models from "../src/models.json";
 
+/** models.json keyed by provider id, then model id (the literal JSON shape has no index signature). */
+const bundledModelIds = models as unknown as Record<string, Record<string, unknown>>;
+
 /**
  * Providers referenced by rules that have no bundled models.json rows:
  * local runtimes, hosted-search facades, and routing-variant device peers.
@@ -93,6 +96,22 @@ describe("compat rules conformance", () => {
 		for (const [provider, source] of collectReferencedProviders()) {
 			if (!known.has(provider) && !RUNTIME_ONLY_PROVIDERS.has(provider)) {
 				offenders.push(`${provider} (${source})`);
+			}
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test('every bundle="always" seed row is bundled in models.json', () => {
+		// bundledSeedRows() writes every bundle="always" seed row on each
+		// regeneration, so a missing row means models.json was regenerated from
+		// a stale snapshot (#16610 lost web/deepseek that way in 18.12.2).
+		const offenders: string[] = [];
+		for (const [provider, entry] of Object.entries(rules.providers)) {
+			if (entry.seed?.bundle !== "always") continue;
+			// models.json resolves to its literal JSON shape; index it as a plain map.
+			const bundled = new Set(Object.keys(bundledModelIds[provider] ?? {}));
+			for (const seed of entry.seed.models) {
+				if (!bundled.has(seed.id)) offenders.push(`${provider}/${seed.id}`);
 			}
 		}
 		expect(offenders).toEqual([]);
