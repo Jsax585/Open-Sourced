@@ -14,7 +14,8 @@
  *   bun scripts/check-changelog-attribution.ts --base origin/main
  *   bun scripts/check-changelog-attribution.ts --base <sha> --pr 123 --author login --association CONTRIBUTOR
  *
- * Without `--pr`, only rule 1 runs (local use). CI passes the pull request
+ * Without `--pr`, only rule 1 runs (local use); the issue/PR link check needs
+ * PR context. CI passes the pull request
  * number, author, and `author_association`; MEMBER/OWNER/COLLABORATOR skip
  * rule 2 because internal fixes cite issues instead.
  */
@@ -69,29 +70,49 @@ function hasPullCredit(entry: string, repo: string, prNumber: number, author: st
 	return pull && credit;
 }
 
+/** Same item detection as `fix-changelogs.ts`: nested bullets are items too. */
+function isListItemLine(line: string): boolean {
+	return line.trimStart().startsWith("- ");
+}
+
+/**
+ * Full text of the item whose bullet `first` sits at 1-based `line`, plus its
+ * wrapped continuation lines, up to the next item, heading, or blank line.
+ */
+export function itemText(lines: readonly string[], line: number, first: string): string {
+	const parts = [first];
+	for (let index = line; index < lines.length; index++) {
+		const next = lines[index];
+		if (next.trim() === "" || isListItemLine(next) || next.trimStart().startsWith("#")) break;
+		parts.push(next);
+	}
+	return parts.map(part => part.trim()).join(" ");
+}
+
 /** Problems for one changelog file, one per offending added entry. */
 export function evaluateChangelog(args: EvaluateArgs): string[] {
 	const repo = args.repo ?? DEFAULT_REPO;
 	const lines = args.changelog.split("\n");
 	const range = unreleasedRange(lines);
+	const inPullRequest = args.prNumber !== undefined;
 	const external =
-		args.prNumber !== undefined &&
-		args.author !== undefined &&
-		!INTERNAL_ASSOCIATIONS.has((args.association ?? "").toUpperCase());
+		inPullRequest && args.author !== undefined && !INTERNAL_ASSOCIATIONS.has((args.association ?? "").toUpperCase());
 	const problems: string[] = [];
 
 	for (const added of args.added) {
-		if (!added.text.startsWith("- ")) continue;
+		if (!isListItemLine(added.text)) continue;
 		const where = `${args.path}:${added.line}`;
 		if (!range || added.line <= range.start || added.line > range.end) {
 			problems.push(`${where} adds a changelog entry outside "## [Unreleased]"; released sections are immutable`);
 			continue;
 		}
-		if (!hasAnyRepoLink(added.text, repo)) {
+		if (!inPullRequest) continue;
+		const entry = itemText(lines, added.line, added.text);
+		if (!hasAnyRepoLink(entry, repo)) {
 			problems.push(`${where} has no issue or pull request link`);
 			continue;
 		}
-		if (external && !hasPullCredit(added.text, repo, args.prNumber!, args.author!)) {
+		if (external && !hasPullCredit(entry, repo, args.prNumber!, args.author!)) {
 			problems.push(
 				`${where} must credit this PR and its author: ` +
 					`([#${args.prNumber}](https://github.com/${repo}/pull/${args.prNumber}) by [@${args.author}](https://github.com/${args.author}))`,

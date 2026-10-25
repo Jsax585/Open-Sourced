@@ -106,3 +106,57 @@ describe("parseAddedLines", () => {
 		]);
 	});
 });
+
+describe("review regressions", () => {
+	const doc = [
+		"# Changelog",
+		"",
+		"## [Unreleased]",
+		"",
+		"### Fixed",
+		"",
+		"- Fixed crash",
+		"  ([#12](https://github.com/can1357/oh-my-pi/pull/12) by [@octocat](https://github.com/octocat))",
+		"- Internal housekeeping",
+		"",
+		"## [1.0.0]",
+		"",
+		"- Old",
+		"  - Nested released",
+	].join("\n");
+	const run = (added: { line: number; text: string }[], pr = true) =>
+		evaluateChangelog({
+			path: PATH,
+			changelog: doc,
+			added,
+			repo: REPO,
+			...(pr ? { prNumber: 12, author: "octocat", association: "CONTRIBUTOR" } : {}),
+		});
+
+	it("treats an indented bullet in a released section as an entry", () => {
+		expect(run([{ line: 14, text: "  - Nested released" }])[0]).toContain("outside");
+	});
+
+	it("rejects an indented uncredited bullet under Unreleased", () => {
+		const local = doc.replace("- Internal housekeeping", "  - Internal housekeeping");
+		const problems = evaluateChangelog({
+			path: PATH,
+			changelog: local,
+			added: [{ line: 9, text: "  - Internal housekeeping" }],
+			repo: REPO,
+			prNumber: 12,
+			author: "octocat",
+			association: "CONTRIBUTOR",
+		});
+		expect(problems).toEqual([`${PATH}:9 has no issue or pull request link`]);
+	});
+
+	it("reads the credit from a wrapped continuation line", () => {
+		expect(run([{ line: 7, text: "- Fixed crash" }])).toEqual([]);
+	});
+
+	it("only checks placement without --pr", () => {
+		expect(run([{ line: 9, text: "- Internal housekeeping" }], false)).toEqual([]);
+		expect(run([{ line: 14, text: "  - Nested released" }], false)[0]).toContain("outside");
+	});
+});
