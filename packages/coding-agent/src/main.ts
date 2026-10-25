@@ -69,12 +69,13 @@ import {
 	resolveActiveProjectRegistryPath,
 } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
-import { scheduleMarketplaceAutoUpdate } from "./extensibility/plugins/marketplace-auto-update";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import type { MarketplaceAutoUpdateOptions } from "./extensibility/plugins/marketplace-auto-update";
-
+import {
+	scheduleMarketplaceAutoUpdate,
+	type MarketplaceAutoUpdateOptions,
+} from "./extensibility/plugins/marketplace-auto-update";
 import type { MCPManager } from "./mcp";
 import type { InteractiveMode } from "./modes/interactive-mode";
 import { formatSessionContinuationNotice } from "./modes/persistence-failure";
@@ -2314,11 +2315,6 @@ export async function runRootCommand(
 				: undefined;
 		daemonPresencePromise?.catch(() => {});
 
-		scheduleMarketplaceAutoUpdate({
-			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
-			resolveActiveProjectRegistryPath,
-			clearPluginRootsCache: clearPluginRootsAndCaches,
-		});
 		const sessionOptions = await logger.time(
 			"buildSessionOptions",
 			buildSessionOptions,
