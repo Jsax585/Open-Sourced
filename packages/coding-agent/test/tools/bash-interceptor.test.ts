@@ -218,9 +218,17 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("ls; echo hi > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		expect(checkBashInterception("echo hi 1> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		expect(checkBashInterception("echo hi &> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
-		expect(checkBashInterception("echo hi 2>err.txt > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(
-			true,
-		);
+		for (const command of ["echo hi 2>err.txt > out.txt", "echo hi 2>|err.txt > out.txt"]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		}
+	});
+
+	it("matches commands with many stderr sinks without exponential backtracking", () => {
+		const command = `echo hi${" 2>/dev/null 2>>/dev/null".repeat(20)}`;
+		const start = performance.now();
+		const result = checkBashInterception(command, ["write"], DEFAULT_BASH_INTERCEPTOR_RULES);
+		expect(performance.now() - start).toBeLessThan(1000);
+		expect(result.block).toBe(false);
 	});
 
 	it("routes cat heredoc and redirect writes to write, not read", () => {
