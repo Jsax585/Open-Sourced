@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
@@ -2429,10 +2430,9 @@ export class EventController {
 		this.ctx.syncRetryHintRow();
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
-		if (this.#priorMessageWasGenerated(event.messages)) {
-			this.#idleRecapPending = true;
-			this.#scheduleIdleRecap();
-		}
+		this.#idleRecapPending = this.#priorMessageWasGenerated(event.messages);
+		if (this.#idleRecapPending) this.#scheduleIdleRecap();
+		else this.#cancelIdleRecap();
 		if (this.#settledRunStatus(event).state === "done") this.composerPrediction.request();
 		this.sendErrorNotification(event);
 		this.sendCompletionNotification(event);
@@ -2878,7 +2878,6 @@ export class EventController {
 	async #runIdleRecap(): Promise<void> {
 		if (!this.#idleConditionsHold()) return;
 		if (!this.ctx.viewSession.model) return;
-		if (this.ctx.viewSession.messages.length === 0) return;
 		if (!this.#priorMessageWasGenerated(this.ctx.viewSession.messages)) return;
 
 		const promptText = prompt.render(idleRecapPrompt, {
@@ -2912,22 +2911,21 @@ export class EventController {
 	}
 
 	/**
-	 * Prior message = last of `messages`, else last of the viewed session.
-	 * Generated = assistant, stopReason not error/aborted, and content with
-	 * non-empty text, non-empty thinking, or a toolCall.
+	 * Prior message is the last message of `messages`.
+	 * Generated means that message is an assistant message whose content has
+	 * non-empty text, non-empty thinking, or a tool call. stopReason is not a
+	 * veto: an aborted or errored turn that already produced that output still
+	 * recaps. An empty `messages` array is not generated, and this does not
+	 * fall back to an older session tail.
 	 */
-	#priorMessageWasGenerated(messages?: readonly { role: string }[]): boolean {
-		const last =
-			messages && messages.length > 0 ? messages[messages.length - 1] : this.ctx.viewSession.messages.at(-1);
-		if (!last || last.role !== "assistant") return false;
-		const assistant = last as AssistantMessage;
-		if (assistant.stopReason === "error" || assistant.stopReason === "aborted") return false;
-		return assistant.content.some(
-			block =>
-				(block.type === "text" && block.text.length > 0) ||
-				(block.type === "thinking" && block.thinking.length > 0) ||
-				block.type === "toolCall",
-		);
+	#priorMessageWasGenerated(messages: readonly AgentMessage[]): boolean {
+		const last = messages.at(-1);
+		if (last?.role !== "assistant") return false;
+		return last.content.some(block => {
+			if (block.type === "text") return block.text.length > 0;
+			if (block.type === "thinking") return block.thinking.length > 0;
+			return block.type === "toolCall";
+		});
 	}
 
 	#idleRecapGoalText(): string | undefined {
