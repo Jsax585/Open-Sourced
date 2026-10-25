@@ -239,10 +239,26 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("echo hi <&0", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 	});
 
+	it("keeps separators inside a substitution out of the boundary scan", () => {
+		const tools = ["write", "read"];
+		for (const command of [
+			"echo $(printf foo; printf bar) > out.txt",
+			"echo `date; ls` > out.txt",
+			"echo ${x:-a;b} > out.txt",
+			"echo $(ls > /dev/null) > out.txt",
+		]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("write");
+		}
+		expect(checkBashInterception("echo $(ls) ; ls > f", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception("echo $(printf a; printf b)", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(
+			false,
+		);
+	});
+
 	it("matches commands with many stderr sinks without exponential backtracking", () => {
 		const start = performance.now();
 		const echo = checkBashInterception(
-			`echo hi${" 2>/dev/null 2>>/dev/null 2>&1 \\; <&0".repeat(20)}`,
+			"echo hi" + " 2>/dev/null 2>>/dev/null 2>&1 \\; <&0 $(a; b) `c; d` ${e:-f;g}".repeat(20),
 			["write"],
 			DEFAULT_BASH_INTERCEPTOR_RULES,
 		);
