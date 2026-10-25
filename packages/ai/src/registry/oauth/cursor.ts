@@ -180,6 +180,21 @@ export function cursorSessionHeaders(userId: string, accessToken: string): Recor
 	};
 }
 
+/** Unary Connect RPC call with an empty message, authenticated by `accessToken` as a bearer token. */
+export function cursorConnectRequest(accessToken: string, signal?: AbortSignal): RequestInit {
+	return {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			Authorization: `Bearer ${accessToken}`,
+			"Connect-Protocol-Version": "1",
+			"Content-Type": "application/json",
+		},
+		body: "{}",
+		signal,
+	};
+}
+
 /**
  * Email of the Cursor account that owns `accessToken`, read from Cursor's account profile.
  * Undefined when the token names no subject or the profile names another.
@@ -191,17 +206,7 @@ export async function fetchCursorAccountEmail(
 ): Promise<string | undefined> {
 	const subject = cursorAccessTokenSubject(accessToken);
 	if (!subject) return undefined;
-	const response = await fetchImpl(CURSOR_GET_ME_URL, {
-		method: "POST",
-		headers: {
-			Accept: "application/json",
-			Authorization: `Bearer ${accessToken}`,
-			"Connect-Protocol-Version": "1",
-			"Content-Type": "application/json",
-		},
-		body: "{}",
-		signal,
-	});
+	const response = await fetchImpl(CURSOR_GET_ME_URL, cursorConnectRequest(accessToken, signal));
 	if (!response.ok) {
 		throw new AIError.ProviderHttpError(`Cursor profile request failed: ${response.status}`, response.status);
 	}

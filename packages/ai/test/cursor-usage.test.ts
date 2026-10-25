@@ -2,11 +2,21 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type AuthCredentialStore, AuthStorage, SqliteAuthCredentialStore } from "../src/auth-storage";
+import {
+	type AuthCredentialStore,
+	AuthStorage,
+	SqliteAuthCredentialStore,
+	type StoredAuthCredential,
+} from "../src/auth-storage";
 import { isUsageLimitReached } from "../src/auth/usage-report";
 import * as oauthUtils from "../src/registry/oauth";
 import type { UsageFetchContext, UsageFetchParams, UsageProvider, UsageReport } from "../src/usage";
-import { cursorUsageProvider, parseCursorIndividualUsage, parseCursorUsage } from "../src/usage/cursor";
+import {
+	cursorRankingStrategy,
+	cursorUsageProvider,
+	parseCursorIndividualUsage,
+	parseCursorUsage,
+} from "../src/usage/cursor";
 import { defaultRankingStrategy } from "../src/usage/registry";
 
 function createCursorAccessToken(sub: string): string {
@@ -625,6 +635,83 @@ describe("cursor usage provider", () => {
 				store.close();
 				await fs.rm(tempDir, { recursive: true, force: true });
 			}
+		});
+
+		/** Pool blocks left on one Cursor account after a live usage fetch returns `report`. */
+		const blocksAfterLiveReport = async (report: UsageReport, blockScopes: string[]): Promise<string[]> => {
+			const row: StoredAuthCredential = {
+				id: 1,
+				provider: "cursor",
+				credential: {
+					type: "oauth",
+					access: "cursor-access",
+					refresh: "cursor-refresh",
+					expires: Date.now() + 60 * 60_000,
+					accountId: "acct-1",
+				},
+				disabledCause: null,
+			};
+			const blocks = new Map(blockScopes.map(scope => [scope, Date.now() + 60 * 60_000]));
+			const store: AuthCredentialStore = {
+				close() {},
+				listAuthCredentials: provider => (provider === undefined || provider === "cursor" ? [row] : []),
+				updateAuthCredential() {},
+				async deleteAuthCredential() {
+					return false;
+				},
+				tryDisableAuthCredentialIfMatches: () => false,
+				replaceAuthCredentials: async () => [row],
+				upsertAuthCredential: async () => [row],
+				async deleteAuthCredentials() {},
+				getCredentialBlock: (_id, _providerKey, blockScope) => blocks.get(blockScope),
+				upsertCredentialBlock: block => {
+					blocks.set(block.blockScope, block.blockedUntilMs);
+				},
+				deleteCredentialBlock: (_id, _providerKey, blockScope) => {
+					blocks.delete(blockScope);
+				},
+				getCache: () => null,
+				setCache() {},
+				cleanExpiredCache() {},
+			};
+			const liveReport: UsageReport = { ...report, metadata: { accountId: "acct-1" } };
+			const usageProvider: UsageProvider = { id: "cursor", fetchUsage: async () => liveReport };
+			const storage = new AuthStorage(store, {
+				usageProviderResolver: provider => (provider === "cursor" ? usageProvider : undefined),
+				rankingStrategyResolver: provider => (provider === "cursor" ? cursorRankingStrategy : undefined),
+				configValueResolver: async value => value,
+			});
+			try {
+				await storage.credentials.reload();
+				await storage.usage.reports();
+				return [...blocks.keys()].sort();
+			} finally {
+				storage.close();
+			}
+		};
+
+		it("on the X Subscription lifts pool blocks only while the pool has room", async () => {
+			const withCredit = xSubscriptionReport(40, { enabled: true, used: 500, limit: 5000, remaining: 4500 });
+			expect(await blocksAfterLiveReport(withCredit, ["pool:api", "pool:auto"])).toEqual([]);
+
+			// Prepaid credit off or spent: third-party models stay refused, so `pool:api` stays blocked.
+			const noCredit = xSubscriptionReport(40, { enabled: false, used: 0, limit: 0, remaining: 0 });
+			expect(await blocksAfterLiveReport(noCredit, ["pool:api"])).toEqual(["pool:api"]);
+
+			const poolSpent = xSubscriptionReport(100, { enabled: true, used: 500, limit: 5000, remaining: 4500 });
+			expect(await blocksAfterLiveReport(poolSpent, ["pool:auto"])).toEqual(["pool:auto"]);
+		});
+
+		it("does not lift pool blocks from a legacy plan's monthly dashboard percentages", async () => {
+			const legacy = parseCursorIndividualUsage({
+				billingCycleEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+				membershipType: "pro_plus",
+				individualUsage: { plan: { enabled: true, limit: 7000, autoPercentUsed: 5, apiPercentUsed: 5 } },
+			});
+			if (!legacy) throw new Error("expected Cursor usage report");
+			expect(legacy.limits.map(limit => limit.window?.id)).toEqual(["monthly", "monthly"]);
+			expect(cursorRankingStrategy.healableBlockScopes?.(legacy)).toEqual([]);
+			expect(await blocksAfterLiveReport(legacy, ["pool:api", "pool:auto"])).toEqual(["pool:api", "pool:auto"]);
 		});
 	});
 

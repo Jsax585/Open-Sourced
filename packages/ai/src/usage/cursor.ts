@@ -2,6 +2,7 @@ import { quotaTierFor } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { CURSOR_DEFAULT_BASE_URL } from "@oh-my-pi/pi-catalog/wire/cursor";
 import { toNumber } from "@oh-my-pi/pi-catalog/utils";
 import {
+	cursorConnectRequest,
 	cursorSessionHeaders,
 	extractCursorAccessTokenUserId,
 	fetchCursorAccountEmail,
@@ -68,22 +69,7 @@ async function fetchCursorWeeklyResetsAt(
 	token: string,
 	signal: AbortSignal | undefined,
 ): Promise<number | undefined> {
-	const payload = await fetchCursorJson(
-		ctx,
-		CURSOR_PLAN_INFO_URL,
-		{
-			method: "POST",
-			headers: {
-				Accept: "application/json",
-				Authorization: `Bearer ${token}`,
-				"Connect-Protocol-Version": "1",
-				"Content-Type": "application/json",
-			},
-			body: "{}",
-			signal,
-		},
-		"plan-info",
-	);
+	const payload = await fetchCursorJson(ctx, CURSOR_PLAN_INFO_URL, cursorConnectRequest(token, signal), "plan-info");
 	if (!isRecord(payload) || !isRecord(payload.planInfo)) return undefined;
 	return parseTimestamp(payload.planInfo.includedUsageResetsAt);
 }
@@ -528,11 +514,19 @@ export const cursorRankingStrategy: CredentialRankingStrategy = {
 	blockScope(context) {
 		return context?.modelId ? `pool:${quotaTierFor("cursor", context.modelId)}` : undefined;
 	},
+	// Only the X Subscription's meters are exact: its weekly pool and prepaid credit. Legacy
+	// plans' split rails are monthly dashboard percentages that lag the 429 that set the block.
 	healableBlockScopes(report) {
 		return [
-			{ blockScope: "pool:auto", limits: report.limits.filter(limit => limit.id === CURSOR_MODELS_LIMIT_ID) },
-			{ blockScope: "pool:api", limits: report.limits.filter(limit => limit.id === OTHER_MODELS_LIMIT_ID) },
-		];
+			{
+				blockScope: "pool:auto",
+				limits: report.limits.filter(limit => limit.id === CURSOR_MODELS_LIMIT_ID && limit.window?.id === "weekly"),
+			},
+			{
+				blockScope: "pool:api",
+				limits: report.limits.filter(limit => limit.id === OTHER_MODELS_LIMIT_ID && limit.window?.id === "prepaid"),
+			},
+		].filter(scope => scope.limits.length > 0);
 	},
 	windowDefaults: {
 		primaryMs: 30 * DAY_MS,
