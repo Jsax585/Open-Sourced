@@ -67,9 +67,10 @@ function runningJobs(ids: string[]): AsyncJobSnapshot {
 	} as unknown as AsyncJobSnapshot;
 }
 
-/** Stub session whose background jobs stay pending until `drain()`. */
+/** Stub session whose background jobs stay pending until `drain()`; `cancel(id)` drops one job without a wake. */
 function makeWaitingContext(jobIds: string[]) {
 	let pending = true;
+	const running = [...jobIds];
 	const settled = Promise.withResolvers<void>();
 	const abort = vi.fn(async (_options?: { reason?: string }) => {});
 	const ctx = createInteractiveModeContext({
@@ -78,7 +79,7 @@ function makeWaitingContext(jobIds: string[]) {
 			hasAdmittedSubmission: true,
 			hasPendingAsyncWork: () => pending,
 			settleAsyncWork: () => settled.promise,
-			getAsyncJobSnapshot: () => runningJobs(pending ? jobIds : []),
+			getAsyncJobSnapshot: () => runningJobs(pending ? running : []),
 			abort,
 		},
 	});
@@ -86,7 +87,17 @@ function makeWaitingContext(jobIds: string[]) {
 		pending = false;
 		settled.resolve();
 	};
-	return { ctx, drain, abort };
+	const cancel = (id: string) => {
+		running.splice(running.indexOf(id), 1);
+	};
+	return { ctx, drain, abort, cancel };
+}
+
+/** What the working row shows now, as the loader reads it on a tick. */
+function rowLabel(setWorkingMessage: { mock: { calls: unknown[][] } }): string | undefined {
+	const message = setWorkingMessage.mock.calls.at(-1)?.[0];
+	if (typeof message === "function") return message();
+	return typeof message === "string" ? message : undefined;
 }
 
 /** One macrotask hop: every microtask continuation queued so far has run. */
@@ -107,7 +118,7 @@ describe("EventController — run waiting only on background jobs", () => {
 
 		// The prompt's own completion may already have torn the loader down.
 		expect(ensureLoadingAnimation).toHaveBeenCalled();
-		const label = setWorkingMessage.mock.calls.at(-1)?.[0];
+		const label = rowLabel(setWorkingMessage);
 		expect(label).toContain("bg_1");
 		expect(label).toContain("bg_2");
 		expect(controller.isAwaitingAsyncWork()).toBe(true);
@@ -116,6 +127,23 @@ describe("EventController — run waiting only on background jobs", () => {
 		await controller.handleEvent({ type: "agent_start" } as Extract<AgentSessionEvent, { type: "agent_start" }>);
 		expect(setWorkingMessage).toHaveBeenLastCalledWith();
 		expect(controller.isAwaitingAsyncWork()).toBe(false);
+	});
+
+	it("drops a job cancelled without a wake from the row on the next tick", async () => {
+		// `/jobs kill bg_1` enqueues no wake, so no settle or agent_start refreshes
+		// the row; a label built once at the settle kept naming the dead job.
+		const { ctx, cancel } = makeWaitingContext(["bg_1", "bg_2"]);
+		const setWorkingMessage = vi.spyOn(ctx, "setWorkingMessage");
+		const controller = new EventController(ctx);
+		await controller.handleEvent(asyncWaitEnd());
+		expect(rowLabel(setWorkingMessage)).toContain("bg_1");
+
+		cancel("bg_1");
+
+		const label = rowLabel(setWorkingMessage);
+		expect(label).not.toContain("bg_1");
+		expect(label).toContain("bg_2");
+		expect(label).not.toContain("2 background jobs");
 	});
 
 	it("ends the wait with a user interrupt and tears the run down while its jobs keep running", async () => {

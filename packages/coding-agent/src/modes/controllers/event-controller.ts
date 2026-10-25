@@ -2409,16 +2409,19 @@ export class EventController {
 	/**
 	 * The run handed control back and only background work can resume it: the
 	 * working row says so and names the jobs, instead of repeating the last tool
-	 * call's intent. A user prompt's own completion tears its loader down, so
-	 * mount one for the wait; the settle watch or the next run takes it over.
+	 * call's intent. The label is live, so a job cancelled without a wake
+	 * (`/jobs kill`) leaves the row at once. A user prompt's own completion
+	 * tears its loader down, so mount one for the wait; the settle watch or the
+	 * next run takes it over.
 	 */
 	#showAsyncWait(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		const session = this.ctx.session;
 		if (this.ctx.viewSession !== session || !session.hasPendingAsyncWork()) return;
 		this.#asyncWaitEnd = event;
-		const jobIds = session.getAsyncJobSnapshot()?.running.map(job => job.id) ?? [];
 		this.ctx.ensureLoadingAnimation();
-		this.ctx.setWorkingMessage(formatAsyncWaitLabel(jobIds));
+		this.ctx.setWorkingMessage(() =>
+			formatAsyncWaitLabel(session.getAsyncJobSnapshot()?.running.map(job => job.id) ?? []),
+		);
 		this.ctx.ui.requestRender();
 	}
 
