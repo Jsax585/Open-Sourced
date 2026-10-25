@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import * as terminalCapabilities from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { Settings } from "../../src/config/settings";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -13,7 +14,9 @@ import type {
 	SessionStartEvent,
 	SessionSwitchEvent,
 	ToolApprovalRequestedEvent,
+	ToolApprovalResolvedEvent,
 } from "../../src/extensibility/extensions/types";
+import { cfgApprovalNotify } from "../../src/modes/settings";
 import { createWarpEventBridgeExtension, createWarpEventEmitter } from "../../src/modes/warp-events";
 import { SILENT_ABORT_MARKER, SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../src/session/messages";
 import { type ActiveTerminalHarness, startActiveTerminal } from "../helpers/active-terminal";
@@ -50,14 +53,14 @@ function restoreTmuxEnvironment(): void {
 	else Bun.env.TMUX = originalTmux;
 }
 
-function createHandlers(): Map<string, RegisteredHandler> {
+function createHandlers(settings: Settings = Settings.isolated({})): Map<string, RegisteredHandler> {
 	const handlers = new Map<string, RegisteredHandler>();
 	const api = {
 		on(event: string, handler: RegisteredHandler): void {
 			handlers.set(event, handler);
 		},
 	} as never as ExtensionAPI;
-	createWarpEventBridgeExtension()(api);
+	createWarpEventBridgeExtension(settings)(api);
 	return handlers;
 }
 
@@ -788,6 +791,101 @@ describe("Warp CLI-agent events", () => {
 			project,
 			plugin_version: VERSION,
 		});
+	});
+
+	it("suppresses Warp approval events when approval.notify is off", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		setTmuxSession(false);
+		const handlers = createHandlers(Settings.isolated({ "approval.notify": "off" }));
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		sessionStart({ type: "session_start" }, bridgeContext());
+		write.mockClear();
+
+		const approvalRequested = handlers.get("tool_approval_requested") as never as (
+			event: ToolApprovalRequestedEvent,
+		) => void;
+		approvalRequested({
+			type: "tool_approval_requested",
+			sessionId: "session-123",
+			toolCallId: "tool-call-123",
+			toolName: "bash",
+			approvalMode: "always-ask",
+		});
+		const approvalResolved = handlers.get("tool_approval_resolved") as never as (
+			event: ToolApprovalResolvedEvent,
+		) => void;
+		approvalResolved({
+			type: "tool_approval_resolved",
+			sessionId: "session-123",
+			toolCallId: "tool-call-123",
+			toolName: "bash",
+			approved: true,
+		});
+
+		expect(write.mock.calls).toEqual([]);
+	});
+
+	it("pairs Warp permission replies with the request that was actually emitted", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		setTmuxSession(false);
+		const settings = Settings.isolated({ "approval.notify": "on" });
+		const handlers = createHandlers(settings);
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		sessionStart({ type: "session_start" }, bridgeContext());
+
+		const approvalRequested = handlers.get("tool_approval_requested") as never as (
+			event: ToolApprovalRequestedEvent,
+		) => void;
+		const approvalResolved = handlers.get("tool_approval_resolved") as never as (
+			event: ToolApprovalResolvedEvent,
+		) => void;
+
+		// Request emitted while the setting is on; the setting is then toggled off mid-dialog.
+		approvalRequested({
+			type: "tool_approval_requested",
+			sessionId: "session-123",
+			toolCallId: "tool-call-123",
+			toolName: "bash",
+			approvalMode: "always-ask",
+		});
+		write.mockClear();
+		cfgApprovalNotify.override(settings, "off");
+		approvalResolved({
+			type: "tool_approval_resolved",
+			sessionId: "session-123",
+			toolCallId: "tool-call-123",
+			toolName: "bash",
+			approved: true,
+		});
+		expect(parseBodies(write)).toEqual([expect.objectContaining({ event: "permission_replied" })]);
+		write.mockClear();
+
+		// Request suppressed while the setting is off; a later toggle to on must not
+		// create an orphan reply for a request Warp never saw.
+		approvalRequested({
+			type: "tool_approval_requested",
+			sessionId: "session-123",
+			toolCallId: "tool-call-456",
+			toolName: "bash",
+			approvalMode: "always-ask",
+		});
+		cfgApprovalNotify.override(settings, "on");
+		approvalResolved({
+			type: "tool_approval_resolved",
+			sessionId: "session-123",
+			toolCallId: "tool-call-456",
+			toolName: "bash",
+			approved: true,
+		});
+		expect(write.mock.calls).toEqual([]);
 	});
 });
 

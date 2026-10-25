@@ -263,6 +263,8 @@ export interface ExtensionApprovalPrompt {
 	compact: string;
 	/** Label of the "approve for this session" choice; absent when the call must be approved each time. */
 	session?: string;
+	/** The tool call the prompt is for, set when the caller knows it. */
+	toolCallId?: string;
 	/**
 	 * Grants an `always-ask-cached` prompt can remember, in display order; absent otherwise. A host
 	 * that does not render them still answers `once`/`session`/`deny`.

@@ -695,14 +695,22 @@ function approvalGrantChoices(
  * subject for the rest of the session; with `grants`, both offer the `always-ask-cached` grants
  * the call can record, and the prompt lists the folder a directory grant would cover. Anything
  * but an explicit approval is `deny`.
+ * A `toolCallId` rides along on the approval prompt so a host can correlate the
+ * request with the tool call it covers.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
 	tool: ApprovalSubject,
 	args: unknown,
-	options: { reason?: string; appendix?: readonly string[]; sessionSubject?: string; grants?: boolean } = {},
+	options: {
+		reason?: string;
+		appendix?: readonly string[];
+		sessionSubject?: string;
+		grants?: boolean;
+		toolCallId?: string;
+	} = {},
 ): Promise<ExtensionApprovalAnswer> {
-	const { reason, appendix = [], sessionSubject } = options;
+	const { reason, appendix = [], sessionSubject, toolCallId } = options;
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
 	const session = sessionSubject === undefined ? undefined : `Approve ${sessionSubject} for this session`;
@@ -726,6 +734,7 @@ export async function requestApproval(
 			compact,
 			...(session ? { session } : {}),
 			...(grants.length > 0 ? { grants } : {}),
+			...(toolCallId !== undefined ? { toolCallId } : {}),
 		});
 		if (answer === "once" || (answer === "session" && session)) return answer;
 		if (typeof answer === "object" && answer !== null && grants.some(grant => grant.scope === answer.grant)) {

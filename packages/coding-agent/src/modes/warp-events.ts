@@ -5,6 +5,8 @@ import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multipl
 import { wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions/types";
+import { cfgApprovalNotify } from "./settings";
+import type { Settings } from "../config/settings";
 import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
@@ -19,6 +21,17 @@ const WARP_ATTENTION_EVENTS: Record<string, true> = {
 /** True when Warp has negotiated the structured CLI-agent OSC protocol. */
 export function isWarpCliAgentProtocolActive(): boolean {
 	return Number(process.env.WARP_CLI_AGENT_PROTOCOL_VERSION) >= WARP_CLI_AGENT_PROTOCOL_VERSION;
+}
+/**
+ * Tool calls whose `permission_request` was emitted on the installed bridge.
+ * `approval.notify` may change while a dialog is open, so the reply must pair
+ * with the request that actually went out instead of re-reading the setting.
+ */
+const emittedWarpApprovals = new Set<string>();
+
+/** True while the tool call's bridge-emitted permission request is still pending an answer. */
+export function hasWarpPendingApproval(toolCallId: string): boolean {
+	return emittedWarpApprovals.has(toolCallId);
 }
 
 export type WarpEventValue =
@@ -162,7 +175,7 @@ function messageText(content: unknown): string {
 }
 
 /** Internal event bridge installed only by the top-level interactive TUI runner. */
-export function createWarpEventBridgeExtension(): ExtensionFactory {
+export function createWarpEventBridgeExtension(settings: Settings): ExtensionFactory {
 	return api => {
 		let emitter: WarpEventEmitter | undefined;
 		let activePrompt: string | undefined;
@@ -170,6 +183,7 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 
 		const rebuildEmitter = (_event: unknown, ctx: ExtensionContext): void => {
 			activePrompt = undefined;
+			emittedWarpApprovals.clear();
 			getCwd = () => ctx.sessionManager.getCwd();
 			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId(), getCwd });
 			emitter?.emit({ event: "session_start" });
@@ -197,6 +211,12 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		});
 
 		api.on("tool_approval_requested", event => {
+			// `approval.notify` gates the legacy toast AND this Warp attention event, so the
+			// setting means the same thing on every notification surface.
+			if (cfgApprovalNotify.get(settings) !== "on") {
+				return;
+			}
+			emittedWarpApprovals.add(event.toolCallId);
 			emitter?.emit({
 				event: "permission_request",
 				tool_name: event.toolName,
@@ -204,7 +224,10 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 			});
 		});
 
-		api.on("tool_approval_resolved", () => {
+		api.on("tool_approval_resolved", event => {
+			if (!emittedWarpApprovals.delete(event.toolCallId)) {
+				return;
+			}
 			emitter?.emit({ event: "permission_replied" });
 		});
 

@@ -2374,7 +2374,10 @@ export async function runRootCommand(
 			// file — and the same result is handed to createAgentSession via
 			// `preloadedExtensions` so the discovery work is not repeated.
 			if (isInteractive && !parsedArgs.trustedExtensions?.length) {
-				sessionOptions.extensions = [...(sessionOptions.extensions ?? []), createWarpEventBridgeExtension()];
+				sessionOptions.extensions = [
+					...(sessionOptions.extensions ?? []),
+					createWarpEventBridgeExtension(settingsInstance),
+				];
 			}
 
 			const eventBus = new EventBus();

@@ -1,15 +1,29 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { stripVTControlCharacters } from "node:util";
-import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	isFocusable,
+	TERMINAL,
+	type OverlayOptions,
+	setKeybindings,
+} from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { ExtensionAskDialogQuestion, ExtensionUIContext } from "../../../src/extensibility/extensions";
+import type {
+	ExtensionAPI,
+	ToolApprovalRequestedEvent,
+	ToolApprovalResolvedEvent,
+} from "../../../src/extensibility/extensions/types";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { ExtensionUiController } from "../../../src/modes/controllers/extension-ui-controller";
 import { InputController } from "../../../src/modes/controllers/input-controller";
+import { createWarpEventBridgeExtension } from "../../../src/modes/warp-events";
 import { getEditorTheme, getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import { Settings } from "../../../src/config/settings";
 import type { InteractiveModeContext } from "../../../src/modes/types";
 
 afterEach(() => {
@@ -22,7 +36,10 @@ beforeAll(async () => {
 	setThemeInstance(dark);
 });
 
-function makeHarness() {
+function makeHarness(
+	settings: Settings = Settings.isolated({}),
+	sessionPatch: Partial<InteractiveModeContext["session"]> = {},
+) {
 	const editor = new CustomEditor(getEditorTheme());
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
@@ -65,6 +82,7 @@ function makeHarness() {
 			subscribe(listener: (event: { type: string; steering?: string[] }) => void) {
 				return agent.onQueueChange(() => listener({ type: "queue_update", steering: steeringChips() }));
 			},
+			...sessionPatch,
 		},
 		setToolUIContext(context: ExtensionUIContext, hasUI: boolean): void {
 			expect(hasUI).toBe(true);
@@ -73,6 +91,8 @@ function makeHarness() {
 		addAutocompleteProvider,
 		syncComposerShape: vi.fn(),
 		showStatus: vi.fn(),
+		settings,
+		sessionManager: { getSessionName: () => "approval-session" },
 	} as unknown as InteractiveModeContext;
 
 	const controller = new ExtensionUiController(ctx);
@@ -685,5 +705,107 @@ describe("ExtensionUiController tool approval", () => {
 		expect(body()).not.toContain("rm-rf~");
 		harness.handleInput("\x0f");
 		expect(body()).toContain("rm-rf~");
+	});
+
+	it("rings the approval notification exactly once per presented prompt, honoring approval.notify and the installed Warp bridge", async () => {
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		// A Warp shell running the suite exports the protocol variable: clear it so the
+		// legacy-route cases hold, and restore the caller's value afterwards.
+		const originalWarpProtocol = Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+		delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+		try {
+			const on = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const pending = on.controller.showCollabAwareApproval({
+				...prompt,
+				session: "Approve bash for this session",
+			});
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify).toHaveBeenCalledWith({
+				title: "approval-session",
+				body: "Waiting for approval",
+				type: "approval",
+				urgency: "normal",
+				actions: "focus",
+			});
+			// Approve it: the approve keys arm only after APPROVE_ARM_MS, and no
+			// further notification rings once the prompt is settled.
+			now.mockReturnValue(2_000);
+			on.handleInput("\x1b[B");
+			on.handleInput("\r");
+			expect(await pending).toBe("session");
+			expect(notify).toHaveBeenCalledTimes(1);
+
+			// Warp's structured protocol rings permission_request when the internal
+			// bridge represents this prompt: no legacy toast. Drive the real bridge
+			// handler so the pending Warp state matches the production wiring.
+			Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
+			const warp = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const bridgeHandlers = new Map<string, (...args: never[]) => void>();
+			createWarpEventBridgeExtension(Settings.isolated({ "approval.notify": "on" }))({
+				on(event: string, handler: (...args: never[]) => void) {
+					bridgeHandlers.set(event, handler);
+				},
+			} as never as ExtensionAPI);
+			(bridgeHandlers.get("tool_approval_requested") as (event: ToolApprovalRequestedEvent) => void)({
+				type: "tool_approval_requested",
+				sessionId: "approval-session",
+				toolCallId: "tool-call-warp",
+				toolName: "bash",
+				approvalMode: "always-ask",
+			});
+			const deniedWarp = warp.controller.showCollabAwareApproval({
+				...prompt,
+				toolCallId: "tool-call-warp",
+			});
+			warp.editor.onSubmit = text => warp.queueSteer(text);
+			for (const key of "stop") warp.handleInput(key);
+			warp.handleInput("\r");
+			expect(await deniedWarp).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(1);
+			// The steer that denied the first dialog is consumed at the batch
+			// boundary before the queued direct approval is presented.
+			warp.deliverSteering();
+			// A direct `ui.approve` prompt presented while the wrapper's request is
+			// still pending is not itself bridged: the legacy toast still rings.
+			const deniedDirect = warp.controller.showCollabAwareApproval(prompt);
+			warp.editor.onSubmit = text => warp.queueSteer(text);
+			for (const key of "stop") warp.handleInput(key);
+			warp.handleInput("\r");
+			expect(await deniedDirect).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(2);
+			// Settle the bridge's pending state for the next case.
+			(bridgeHandlers.get("tool_approval_resolved") as (event: ToolApprovalResolvedEvent) => void)({
+				type: "tool_approval_resolved",
+				sessionId: "approval-session",
+				toolCallId: "tool-call-warp",
+				toolName: "bash",
+				approved: false,
+			});
+			// A --trusted-extension launch leaves no bridge, so no Warp request is
+			// pending: the legacy toast still rings.
+			const trusted = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const deniedTrusted = trusted.controller.showCollabAwareApproval({
+				...prompt,
+				toolCallId: "tool-call-trusted",
+			});
+			trusted.editor.onSubmit = text => trusted.queueSteer(text);
+			for (const key of "stop") trusted.handleInput(key);
+			trusted.handleInput("\r");
+			expect(await deniedTrusted).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(3);
+			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
+			const denied = off.controller.showCollabAwareApproval(prompt);
+			off.editor.onSubmit = text => off.queueSteer(text);
+			for (const key of "stop") off.handleInput(key);
+			off.handleInput("\r");
+			expect(await denied).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(3);
+		} finally {
+			if (originalWarpProtocol === undefined) delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+			else Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = originalWarpProtocol;
+			notify.mockRestore();
+			now.mockRestore();
+		}
 	});
 });
