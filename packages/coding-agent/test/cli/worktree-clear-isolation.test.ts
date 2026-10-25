@@ -190,4 +190,58 @@ describe("worktree clear task-isolation ownership", () => {
 			await fs.rm(repo, { recursive: true, force: true });
 		}
 	});
+
+	it("--all leaves a worktree whose dead owner's setup was claimed after the scan", async () => {
+		const repo = path.join(base, "..", `${path.basename(base)}-repo`);
+		const result = Bun.spawnSync(
+			["git", "-c", "user.name=t", "-c", "user.email=t@t", "init", "-q", "-b", "main", repo],
+			{
+				stdout: "ignore",
+				stderr: "pipe",
+			},
+		);
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+		const commit = Bun.spawnSync(
+			["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"],
+			{ cwd: repo, stdout: "ignore", stderr: "pipe" },
+		);
+		if (commit.exitCode !== 0) throw new Error(commit.stderr.toString());
+		const branch = Bun.spawnSync(["git", "branch", "claimed"], { cwd: repo, stdout: "ignore", stderr: "pipe" });
+		if (branch.exitCode !== 0) throw new Error(branch.stderr.toString());
+		const repository = vcs.requireGit(repo);
+		const proto = Object.getPrototypeOf(repository);
+		const originalWorktrees = proto.worktrees;
+		const listing = vi.spyOn(proto, "worktrees");
+		try {
+			const claimed = path.join(base, "claimed");
+			const dead = vcs.worktreeSetupOwner().replace(/-\d+(-\d+)?$/, `-${Bun.spawnSync(["sh", "-c", "exit 0"]).pid}`);
+			await repository.worktreeAdd(claimed, "claimed", { detach: false, clone: false, setupOwner: dead });
+			const gitFile = await Bun.file(path.join(claimed, ".git")).text();
+			const gitDir = /^gitdir:\s*(.+?)\s*$/m.exec(gitFile)?.[1];
+			if (!gitDir) throw new Error("worktree .git file has no gitdir line");
+
+			// Another omp process claims the dead owner's setup right after the scan listed it.
+			let calls = 0;
+			listing.mockImplementation(async function (this: unknown, ...args: unknown[]) {
+				const listed = await originalWorktrees.apply(this, args);
+				calls += 1;
+				if (calls === 1) {
+					expect(await repository.worktreeReplaceSetupOwner(gitDir, dead, vcs.worktreeSetupOwner())).toBe(true);
+				}
+				return listed;
+			});
+
+			await clearWorktrees({ all: true, dryRun: false, json: true });
+
+			expect(
+				await fs.stat(path.join(claimed, ".git")).then(
+					() => true,
+					() => false,
+				),
+			).toBe(true);
+		} finally {
+			listing.mockRestore();
+			await fs.rm(repo, { recursive: true, force: true });
+		}
+	});
 });

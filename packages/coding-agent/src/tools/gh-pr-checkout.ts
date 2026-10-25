@@ -526,7 +526,7 @@ export async function checkoutPullRequest(
 				const hookGitDir = existingWorktree.gitDir;
 				if (await untilAborted(signal, () => vcs.worktreeSetupHookRunning(hookGitDir))) {
 					throw new ToolError(
-						`the post-checkout hook started by an omp process that is gone is still running in the worktree of ${localBranch} at ${worktreePath}; retry once it finishes (if nothing runs there, delete \`omp-setup-hook\` in its git dir: \`git -C ${worktreePath} rev-parse --git-dir\`)`,
+						`the post-checkout hook started by an omp process that is gone is still running in the worktree of ${localBranch} at ${worktreePath}; retry once it finishes (if nothing runs there, delete the \`omp-setup-hook.*\` files in its git dir: \`git -C ${worktreePath} rev-parse --git-dir\`)`,
 					);
 				}
 				// Nothing tells a finished hook from one that never started (or a failed setup whose discard failed), so a dead

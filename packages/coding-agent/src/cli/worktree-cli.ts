@@ -46,6 +46,8 @@ export interface WorktreeEntry {
 	orphanReason?: string;
 	/** Owner of a setup that is not finished yet; `clear` leaves it alone while that process is alive. */
 	setupOwner?: string;
+	/** The worktree's admin git dir (`<parent>/.git/worktrees/<name>`), for re-reading its setup mark. */
+	gitDir?: string;
 }
 
 export interface AddWorktreeOptions {
@@ -233,9 +235,16 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 
 	const results: { path: string; ok: boolean; error?: string }[] = [];
 	const parentsToPrune = new Set<string>();
+	const lateSkipped: WorktreeEntry[] = [];
 	for (const target of targets) {
 		try {
 			if (target.kind === "pr-checkout" && target.parentRepo && !target.orphanReason) {
+				// A dead owner's setup may have been claimed and the worktree recreated since the scan;
+				// re-read the mark and claim a dead owner's setup so nobody else can before we remove it.
+				if (target.gitDir && !(await claimForRemoval(target.parentRepo, target.gitDir, target.setupOwner))) {
+					lateSkipped.push(target);
+					continue;
+				}
 				// Live worktree: ask git to remove it cleanly. If git refuses (locked,
 				// dirty, etc.), fall back to fs.rm and rely on `worktree prune` to
 				// clean the bookkeeping on the parent side.
@@ -268,10 +277,15 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 	const failed = results.length - succeeded;
 
 	if (options.json) {
-		console.log(JSON.stringify({ removed: succeeded, failed, skipped: skipped.map(s => s.path), results }, null, 2));
+		const allSkipped = [...skipped, ...lateSkipped];
+		console.log(
+			JSON.stringify({ removed: succeeded, failed, skipped: allSkipped.map(s => s.path), results }, null, 2),
+		);
 		return { removed: succeeded, failed };
 	}
 
+	for (const entry of lateSkipped) console.log(`${chalk.yellow("skipped")}  ${entry.path}`);
+	if (lateSkipped.length > 0) console.log(chalk.dim("          still being set up by a running omp process"));
 	for (const result of results) {
 		if (result.ok) {
 			console.log(`${chalk.green("removed")}  ${result.path}`);
@@ -417,7 +431,21 @@ async function classifyPrCheckout(dir: string, gitEntry: string): Promise<Worktr
 		parentRepo,
 		branch,
 		setupOwner: await setupOwnerOf(parentRepo, parentGitDir),
+		gitDir: parentGitDir,
 	};
+}
+
+/**
+ * Re-checks a worktree's setup mark right before `clear` removes it. A dead owner's setup may have been
+ * claimed (and the worktree recreated) since the scan, so the mark must be unchanged or claimable by us.
+ * Returns false when another process owns it now.
+ */
+async function claimForRemoval(parentRepo: string, gitDir: string, scannedOwner: string | undefined): Promise<boolean> {
+	const current = await setupOwnerOf(parentRepo, gitDir);
+	if (current !== scannedOwner) return false;
+	if (current === undefined) return true;
+	// A live scanned owner never reaches here; a dead one is claimed so nobody else can before we remove it.
+	return (await vcs.git(parentRepo)?.worktreeReplaceSetupOwner(gitDir, current, vcs.worktreeSetupOwner())) === true;
 }
 
 /** The process still setting up the worktree registered at `gitDir`, per the parent's listing; unset when it is done or the listing fails. */

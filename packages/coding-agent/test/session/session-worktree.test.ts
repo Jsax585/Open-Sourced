@@ -843,6 +843,25 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 			expect(git(wt.path, "branch", "--show-current")).toBe(`${branch}-tmp`);
 		});
 
+		it("a hook that switches to an existing branch and then fails does not make that branch the session's", async () => {
+			const existing = `${branch}-existing`;
+			git(repo, "branch", existing);
+			let created: string | undefined;
+			try {
+				await hook(`unset GIT_DIR GIT_WORK_TREE\ngit -c core.hooksPath=/dev/null switch -q "${existing}"\nexit 1`);
+				const wt = await create();
+				created = wt.path;
+
+				expect(wt.hook?.error).toMatch(/exited with 1/);
+				expect(git(wt.path, "branch", "--show-current")).toBe(existing);
+				expect(wt.branch).toBe(branch);
+			} finally {
+				if (created) Bun.spawnSync(["git", "worktree", "remove", "--force", created], { cwd: repo });
+				Bun.spawnSync(["git", "worktree", "prune"], { cwd: repo });
+				Bun.spawnSync(["git", "branch", "-D", existing], { cwd: repo });
+			}
+		});
+
 		it("a hook that deletes the branch and switches to one it created is refused, not adopted as a rename", async () => {
 			const made = `${branch}-made`;
 			try {

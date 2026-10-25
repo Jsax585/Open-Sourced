@@ -147,8 +147,8 @@ export interface SkippedPostCheckoutHook {
  * worktree) still happens on the calling thread. A `signal` implies `detached`. `inheritOutput`:
  * the hook writes to this process's stdout/stderr, as under `git worktree add`, and `stdout`/`stderr`
  * of the result are empty; nothing is captured. `setupGitDir`, the worktree's git directory: the
- * identity of the running `git hook run` is recorded there until it exits, for
- * {@link worktreeSetupHookRunning} (a failure to write it does not fail the run).
+ * identity of the running `git hook run` is recorded there, as its own file `omp-setup-hook.<identity>`
+ * per run, until it exits, for {@link worktreeSetupHookRunning} (a failure to write it does not fail the run).
  */
 export declare function runPostCheckoutHook(
 	worktreeRoot: string,
@@ -164,9 +164,9 @@ export declare function runPostCheckoutHook(
 
 /**
  * Whether a hook recorded in the worktree git directory `gitDir` by {@link runPostCheckoutHook}
- * (`setupGitDir`) may still be running: its record exists and names a live process. `git hook run`
- * runs in its own session, so it outlives an omp that was killed meanwhile. No record is false; a
- * record that cannot be read is true, as nothing says the hook is gone.
+ * (`setupGitDir`) may still be running: an `omp-setup-hook.<identity>` file exists naming a live process.
+ * `git hook run` runs in its own session, so it outlives an omp that was killed meanwhile. No record is
+ * false; a directory that cannot be listed is true, as nothing says the hook is gone.
  */
 export declare function worktreeSetupHookRunning(gitDir: string): Promise<boolean>;
 

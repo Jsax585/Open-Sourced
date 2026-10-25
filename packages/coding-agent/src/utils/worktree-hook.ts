@@ -184,12 +184,20 @@ export async function addWorktreeWithHook(
 		}
 		current = located?.path ?? current;
 		// A hook that failed keeps its worktree with a warning, whatever state it left behind, so only a
-		// successful hook is held to the link and branch checks; its branch is whichever the worktree is on.
+		// successful hook is held to the link and branch checks. After a failure the worktree's branch is
+		// adopted only when it is proven to be ours renamed; a switch to any other branch keeps the requested one.
 		let setUpBranch = branch;
 		if (located && gitDir !== undefined && hook.error === undefined) {
 			setUpBranch = await checkedBranch(repository, branch, gitDir, located, branchesBefore, signal);
 		} else if (located && !located.detached && located.branch?.startsWith("refs/heads/")) {
-			setUpBranch = located.branch.slice("refs/heads/".length);
+			const other = located.branch.slice("refs/heads/".length);
+			if (
+				other !== branch &&
+				branchesBefore &&
+				(await provenRename(repository, branch, other, branchesBefore, signal))
+			) {
+				setUpBranch = other;
+			}
 		}
 		// The abort may also have landed as the hook finished: either way, or with a stalled `worktree.base`,
 		// the caller must not move into the worktree, so it is discarded below.
@@ -334,14 +342,29 @@ async function checkedBranch(
 	}
 	const other = entry.branch.slice(prefix.length);
 	if (other === branch) return branch;
-	const renamed =
-		!before.has(other) &&
-		!(await repository.refExists(`${prefix}${branch}`, signal)) &&
-		(await repository.branchRenamedFrom(other, branch, signal));
-	if (!renamed) {
+	if (!(await provenRename(repository, branch, other, before, signal))) {
 		throw new Error(`The post-checkout hook switched the new worktree at ${entry.path} from ${branch} to ${other}`);
 	}
 	return other;
+}
+
+/**
+ * Whether `other` is `branch` renamed by the hook: `other` is not in `before`, `refs/heads/<branch>`
+ * is gone, and the reflog of `other` shows the rename from `branch`. Anything else is a switch to a
+ * branch this setup did not create.
+ */
+async function provenRename(
+	repository: VcsGitRepo,
+	branch: string,
+	other: string,
+	before: ReadonlySet<string>,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	return (
+		!before.has(other) &&
+		!(await repository.refExists(`refs/heads/${branch}`, signal)) &&
+		(await repository.branchRenamedFrom(other, branch, signal))
+	);
 }
 
 /**

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { vcsDiscover, vcsGitClone, vcsGitDiscover, vcsGitRepoInfo } from "../native/index.js";
@@ -210,6 +210,60 @@ describe("VcsRepo", () => {
 			expect(error.message).toContain("valid: stagedDiff, revDiff");
 		}
 	});
+});
+
+describe("runPostCheckoutHook records", () => {
+	test.skipIf(process.platform === "win32")(
+		"a finished run leaves the record of a run still going in the same git dir",
+		async () => {
+			const root = await repository();
+			const fifos = await mkdtemp(join(tmpdir(), "pi-natives-hook-"));
+			roots.push(fifos);
+			const hooks = join(root, "hooks");
+			await mkdir(hooks);
+			const hook = join(hooks, "post-checkout");
+			await writeFile(hook, '#!/bin/sh\necho started > "$OMP_STARTED"\ncat "$OMP_RELEASE" > /dev/null\n', {
+				mode: 0o755,
+			});
+			// Added before `core.hooksPath` is set: `git worktree add` itself runs post-checkout.
+			const worktree = join(root, "linked");
+			await git(root, "worktree", "add", "-b", "linked", worktree);
+			await git(root, "config", "core.hooksPath", hooks);
+			const head = await git(worktree, "rev-parse", "HEAD");
+			const setupGitDir = join(root, ".git", "worktrees", "linked");
+
+			const start = async (name: string) => {
+				const started = join(fifos, `${name}-started`);
+				const release = join(fifos, `${name}-release`);
+				for (const fifo of [started, release]) {
+					const made = Bun.spawn(["mkfifo", fifo]);
+					if ((await made.exited) !== 0) throw new Error(`mkfifo ${fifo} failed`);
+				}
+				const env = {
+					PATH: process.env.PATH ?? "",
+					HOME: process.env.HOME ?? "",
+					OMP_STARTED: started,
+					OMP_RELEASE: release,
+				};
+				const run = vcs.runPostCheckoutHook(worktree, head, { setupGitDir, env, detached: true });
+				return { started, release, run };
+			};
+
+			const a = await start("a");
+			const b = await start("b");
+			// Opening a FIFO for reading blocks until the hook opens it for writing.
+			await Promise.all([readFile(a.started), readFile(b.started)]);
+			// A blocking write: Bun.write opens FIFOs non-blocking.
+			await writeFile(a.release, "go");
+			await a.run;
+			expect(await vcs.worktreeSetupHookRunning(setupGitDir)).toBe(true);
+			await writeFile(b.release, "go");
+			await b.run;
+			// Cleanup after git exits is not awaited and exposes no signal, so a bounded real-time poll is the only way to observe it.
+			for (let i = 0; i < 200 && (await vcs.worktreeSetupHookRunning(setupGitDir)); i++) await Bun.sleep(25);
+			expect(await vcs.worktreeSetupHookRunning(setupGitDir)).toBe(false);
+		},
+	);
 });
 
 describe("vcs.js on an addon older than its identity bindings", () => {

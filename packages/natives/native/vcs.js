@@ -357,47 +357,48 @@ function readCapture(file, maxBytes, { fromEnd = false, signal } = {}) {
 	return untilAborted(read(), signal);
 }
 
-/** File in a worktree's git directory naming the process of its running post-checkout hook, next to the `omp-setup` mark. */
+/** Prefix of the files in a worktree's git directory naming the processes of its running post-checkout hooks, next to the `omp-setup` mark. */
 const HOOK_RECORD = "omp-setup-hook";
 
 /**
  * Record the identity of `git hook run` in `gitDir` while it runs. Returns the `onSpawn` callback for
- * `runGitToFiles`, which starts the write and returns the removal to run once git exited. The record is
- * written to a temporary file and renamed, so a reader sees all of an identity or none. Failures are
- * ignored: the hook run does not depend on its record.
+ * `runGitToFiles`, which starts the write and returns the removal to run once git exited. Each run has its own
+ * empty file `omp-setup-hook.<identity>` (the identity is filename-safe: base36 scope tags, pid, start), created
+ * exclusively, so a reader never sees a torn identity and a run's cleanup cannot remove the record of another run
+ * that reuses the git directory (a replacement setup). Failures are ignored: the hook run does not depend on its record.
  */
 function hookRecorder(gitDir) {
 	if (!gitDir) return undefined;
-	const file = path.join(gitDir, HOOK_RECORD);
 	return child => {
 		const owner = ownerIdentity(child.pid, processStart(child.pid));
-		const temp = `${file}.${process.pid}.tmp`;
-		// shortcut: written off the JS thread after the spawn, so an omp killed in the few ms before the rename leaves no
+		const file = path.join(gitDir, `${HOOK_RECORD}.${owner}`);
+		// shortcut: written off the JS thread after the spawn, so an omp killed in the few ms before the write leaves no
 		// record and its hook can be taken over while it runs; a synchronous write would block on a stalled git dir.
-		const written = fs.promises
-			.writeFile(temp, owner)
-			.then(() => fs.promises.rename(temp, file))
-			.catch(() => fs.promises.rm(temp, { force: true }).catch(() => {}));
+		const written = fs.promises.writeFile(file, "", { flag: "wx" }).then(
+			() => true,
+			() => false,
+		);
 		return () => {
-			void written.then(() => fs.promises.rm(file, { force: true })).catch(() => {});
+			void written.then(created => created && fs.promises.rm(file, { force: true })).catch(() => {});
 		};
 	};
 }
 
 /**
  * Whether a post-checkout hook recorded in the worktree git directory `gitDir` by {@link runPostCheckoutHook}
- * (`setupGitDir`) may still be running: its record exists and names a live process (see
+ * (`setupGitDir`) may still be running: a record `omp-setup-hook.<identity>` exists naming a live process (see
  * {@link isWorktreeSetupOwnerAlive}). `git hook run` runs in its own session, so it outlives an omp that was killed
- * meanwhile. No record is false; a record that cannot be read is true, as nothing says the hook is gone.
+ * meanwhile. No record is false; a directory that cannot be listed is true, as nothing says the hook is gone.
  */
 export async function worktreeSetupHookRunning(gitDir) {
-	let owner;
+	let names;
 	try {
-		owner = (await fs.promises.readFile(path.join(gitDir, HOOK_RECORD), "utf8")).trim();
+		names = await fs.promises.readdir(gitDir);
 	} catch (error) {
 		return !(error?.code === "ENOENT" || error?.code === "ENOTDIR");
 	}
-	return isWorktreeSetupOwnerAlive(owner);
+	const prefix = `${HOOK_RECORD}.`;
+	return names.some(name => name.startsWith(prefix) && isWorktreeSetupOwnerAlive(name.slice(prefix.length)));
 }
 
 /**
@@ -685,13 +686,14 @@ function followHookWriters(held, trimAll) {
 		const alive = ({ pid, start }) => processAlive(pid) && (start === undefined || processStart(pid) === start);
 		if (!holders.length) return close();
 		pollInBackground(async () => {
-			await trimAll(true);
+			// A failed pass must not end the follow while a writer lives: it would keep writing uncapped.
+			await trimAll(true).catch(() => {});
 			return !holders.some(alive);
 		}, close);
 	};
 	if (held.pgid === undefined || !groupAlive(held.pgid)) return void followHolders();
 	pollInBackground(async () => {
-		await trimAll(true);
+		await trimAll(true).catch(() => {});
 		return !groupAlive(held.pgid);
 	}, followHolders);
 }
@@ -714,7 +716,8 @@ async function removeCaptureOnceReleased(dir, after) {
 	};
 	if (!after || !(await held())) return void removeCapture(dir);
 	pollInBackground(async () => {
-		await after.trimAll(true);
+		// A failed pass must not end the follow while the file is held.
+		await after.trimAll(true).catch(() => {});
 		if (after.exhausted()) return true;
 		if (await held()) return false;
 		await removeCapture(dir);
