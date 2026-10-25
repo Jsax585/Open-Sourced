@@ -2,9 +2,6 @@ import { describe, expect, test } from "bun:test";
 import rules from "../src/compat/rules.json";
 import models from "../src/models.json";
 
-/** models.json keyed by provider id, then model id (the literal JSON shape has no index signature). */
-const bundledModelIds = models as unknown as Record<string, Record<string, unknown>>;
-
 /**
  * Providers referenced by rules that have no bundled models.json rows:
  * local runtimes, hosted-search facades, and routing-variant device peers.
@@ -108,10 +105,9 @@ describe("compat rules conformance", () => {
 		const offenders: string[] = [];
 		for (const [provider, entry] of Object.entries(rules.providers)) {
 			if (entry.seed?.bundle !== "always") continue;
-			// models.json resolves to its literal JSON shape; index it as a plain map.
-			const bundled = new Set(Object.keys(bundledModelIds[provider] ?? {}));
+			const bundled = Object.entries(models).find(([id]) => id === provider)?.[1] ?? {};
 			for (const seed of entry.seed.models) {
-				if (!bundled.has(seed.id)) offenders.push(`${provider}/${seed.id}`);
+				if (!Object.hasOwn(bundled, seed.id)) offenders.push(`${provider}/${seed.id}`);
 			}
 		}
 		expect(offenders).toEqual([]);
