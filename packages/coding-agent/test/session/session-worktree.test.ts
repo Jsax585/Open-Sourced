@@ -566,6 +566,33 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 			expect(branchSha(repo, branch)).not.toBeNull();
 		});
 
+		it("a setup mark that can't be removed fails /wt and discards the worktree instead of handing it over", async () => {
+			await hook("touch .post-checkout-ran");
+			const repoProto = Object.getPrototypeOf(vcs.requireGit(repo));
+			const worktreeReplaceSetupOwner = repoProto.worktreeReplaceSetupOwner;
+			// Only the success path's removal fails, as when another omp's long add holds the lock past the wait.
+			let calls = 0;
+			const replaceSetupOwner = spyOn(repoProto, "worktreeReplaceSetupOwner").mockImplementation(function (
+				this: unknown,
+				...args: unknown[]
+			) {
+				calls++;
+				if (calls === 1) return Promise.reject(new Error("worktree-add lock busy"));
+				return worktreeReplaceSetupOwner.apply(this, args);
+			});
+			try {
+				await expect(createSessionWorktree(repo, Settings.isolated(), branch)).rejects.toThrow(
+					"worktree-add lock busy",
+				);
+			} finally {
+				replaceSetupOwner.mockRestore();
+			}
+
+			// Still marked, it would be deleted, work and all, by the next omp process once this one exits.
+			expect(worktreePaths(repo)).toEqual([repo]);
+			expect(branchSha(repo, branch)).toBeNull();
+		});
+
 		it("keeps a worktree its hook moved: /wt succeeds at the new path with the setup mark gone", async () => {
 			await hook(`unset GIT_DIR GIT_WORK_TREE\ngit -C "${repo}" worktree move "$PWD" "$PWD-moved"`);
 			const wt = await create();

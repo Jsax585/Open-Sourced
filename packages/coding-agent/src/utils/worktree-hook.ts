@@ -195,19 +195,14 @@ export async function addWorktreeWithHook(
 		// the caller must not move into the worktree, so it is discarded below.
 		const resolved = await resolveWorktreePath(current, signal);
 		// The commit point: with the mark gone another omp process may reuse the worktree, so an abort from
-		// here on is too late to discard it, as one just after the return would be.
+		// here on is too late to discard it, as one just after the return would be. A mark that can't be
+		// removed fails the setup instead (the catch below discards the worktree while it is still ours):
+		// once this process exits, another one recreates a marked worktree, deleting any work done in it.
 		if (gitDir === undefined) {
-			await repository.worktreeEndSetup(current).catch(error => {
-				// Set up all the same; other omp processes only wait for it until this one exits.
-				logger.warn("could not mark a new worktree as set up", { path: current, error: String(error) });
-			});
+			await repository.worktreeEndSetup(current);
 		} else {
 			// By saved identity, never by path: a replacement at this path carries another process's mark.
-			const cleared = await repository.worktreeReplaceSetupOwner(gitDir, setupOwner, null).catch(error => {
-				logger.warn("could not mark a new worktree as set up", { path: current, error: String(error) });
-				return true;
-			});
-			if (!cleared) {
+			if (!(await repository.worktreeReplaceSetupOwner(gitDir, setupOwner, null))) {
 				gone = true;
 				throw new WorktreeRemovedByHookError(worktreePath);
 			}
