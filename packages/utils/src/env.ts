@@ -156,11 +156,20 @@ function expandDotenvValues(values: Record<string, string>, env: Record<string, 
 /** Parsed values of the project dotenv file `name` (`.env`, `.env.local`, …); empty when it can't be read. */
 type DotenvFiles = (name: string) => Record<string, string>;
 
-/** Name of the NODE_ENV-specific dotenv file Bun loads for `env`. */
-function dotenvModeFile(env: Record<string, string | undefined>): string {
-	const runtimeLaunchEnvValues = env === Bun.env || env === process.env ? launchEnvValues : undefined;
-	const launchNodeEnv = runtimeLaunchEnvValues ? runtimeLaunchEnvValues.get("NODE_ENV") : env.NODE_ENV;
-	return `.env.${launchNodeEnv || "development"}`;
+/** Launch-env snapshot when `env` is the live process env; undefined for any other env. */
+function runtimeLaunchEnv(env: Record<string, string | undefined>): ReadonlyMap<string, string> | undefined {
+	return env === Bun.env || env === process.env ? launchEnvValues : undefined;
+}
+
+/**
+ * Every dotenv file name the env filter may read, in the order it needs them: `.env`, the NODE_ENV mode file,
+ * `.env.local`, `<mode>.local`, then the `.env.development` fallback pair (read only when needed).
+ */
+function dotenvFileNames(env: Record<string, string | undefined>): string[] {
+	const launchEnv = runtimeLaunchEnv(env);
+	const nodeEnv = launchEnv ? launchEnv.get("NODE_ENV") : env.NODE_ENV;
+	const mode = `.env.${nodeEnv || "development"}`;
+	return [".env", mode, ".env.local", `${mode}.local`, ".env.development", ".env.development.local"];
 }
 
 function filterChildShellEnvInternal(
@@ -168,13 +177,14 @@ function filterChildShellEnvInternal(
 	dotenv: DotenvFiles,
 	onDotenvValue?: (value: string) => void,
 ): Record<string, string> {
-	const runtimeLaunchEnvValues = env === Bun.env || env === process.env ? launchEnvValues : undefined;
+	const runtimeLaunchEnvValues = runtimeLaunchEnv(env);
 	const result = filterProcessEnv(env);
-	const projectEnv = dotenv(".env");
-	const nodeEnvName = dotenvModeFile(env);
+	const [projectName, nodeEnvName, localName, modeLocalName, fallbackModeName, fallbackModeLocalName] =
+		dotenvFileNames(env);
+	const projectEnv = dotenv(projectName);
 	const modeEnv = dotenv(nodeEnvName);
-	const localEnv = dotenv(".env.local");
-	const modeLocalEnv = dotenv(`${nodeEnvName}.local`);
+	const localEnv = dotenv(localName);
+	const modeLocalEnv = dotenv(modeLocalName);
 	const launchEnv = { ...projectEnv, ...modeEnv, ...localEnv, ...modeLocalEnv };
 	const expandedLaunchEnv = {
 		...expandDotenvValues(projectEnv, result),
@@ -185,8 +195,8 @@ function filterChildShellEnvInternal(
 	let fallbackLaunchEnv: Record<string, string> | undefined;
 	let expandedFallbackLaunchEnv: Record<string, string> | undefined;
 	if (!runtimeLaunchEnvValues && nodeEnvName !== ".env.development") {
-		const fallbackModeEnv = dotenv(".env.development");
-		const fallbackModeLocalEnv = dotenv(".env.development.local");
+		const fallbackModeEnv = dotenv(fallbackModeName);
+		const fallbackModeLocalEnv = dotenv(fallbackModeLocalName);
 		const candidate = { ...projectEnv, ...fallbackModeEnv, ...localEnv, ...fallbackModeLocalEnv };
 		const expandedCandidate = {
 			...expandDotenvValues(projectEnv, result),
@@ -268,12 +278,13 @@ export async function filterChildShellEnvAsync(
 	cwd: string = getProjectDir(),
 	signal?: AbortSignal,
 ): Promise<Record<string, string>> {
-	const mode = dotenvModeFile(env);
-	const names = new Set([".env", mode, ".env.local", `${mode}.local`, ".env.development", ".env.development.local"]);
+	const names = new Set(dotenvFileNames(env));
 	const files = await untilAborted(signal, async () => {
 		// Sequential: an abandoned stalled read pins one fs pool thread; parallel reads would pin several.
 		const parsed = new Map<string, Record<string, string>>();
 		for (const name of names) {
+			// An abandoned call stops after its in-flight read.
+			signal?.throwIfAborted();
 			parsed.set(name, parseEnvText(await fs.promises.readFile(path.join(cwd, name), "utf-8").catch(() => "")));
 		}
 		return parsed;

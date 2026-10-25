@@ -450,10 +450,25 @@ export async function checkoutPullRequest(
 			if (!repository) throw new ToolError("Current git repository is unavailable.");
 			// A hook may have renamed the branch after the add; `localBranch` follows the worktree found.
 			let localBranch = defaultBranch;
+			const keptRegistration = (worktreeDir: string) =>
+				new ToolError(
+					`the registration of the worktree of ${localBranch} at ${worktreeDir} is stale but git keeps it (locked?); run \`git worktree unlock ${worktreeDir}\` if so, then \`git worktree prune\`, and retry`,
+				);
 			const findPrWorktree = async (listed: VcsWorktreeEntry[]): Promise<VcsWorktreeEntry | undefined> => {
 				localBranch = defaultBranch;
 				const byName = listed.find(entry => entry.branch === toLocalBranchRef(defaultBranch));
-				if (byName) return byName;
+				if (byName) {
+					// The branch name `pr-<N>` is shared by every repo cloned here: another repo's PR must not reuse it.
+					if (data.url) {
+						const recorded = await repository.configGet(`branch.${defaultBranch}.ompPrUrl`, signal);
+						if (recorded && recorded !== data.url) {
+							throw new ToolError(
+								`the local branch ${defaultBranch} belongs to ${recorded}, not ${data.url}; remove that worktree and branch, or check out from that repo`,
+							);
+						}
+					}
+					return byName;
+				}
 				// `branch.<name>.ompPrUrl` moves with `git branch -m`, so it still names this PR's worktree.
 				if (!data.url) return undefined;
 				const prefix = "refs/heads/";
@@ -506,7 +521,7 @@ export async function checkoutPullRequest(
 				// `.git` no longer leads to its git dir, else refused like a live owner's, since its hook never finished.
 				if (setupOwner === ownOwner ? !stale : vcs.isWorktreeSetupOwnerAlive(setupOwner)) throw stillSettingUp();
 				// An omp killed mid-hook leaves `git hook run` running (its own session), still free to change or delete the worktree,
-				// so a dead owner's worktree is not taken over (nor reused as ready) while the process recorded there lives.
+				// so a dead owner's worktree is not taken over while the process recorded there lives.
 				const worktreePath = existingWorktree.path;
 				const hookGitDir = existingWorktree.gitDir;
 				if (await untilAborted(signal, () => vcs.worktreeSetupHookRunning(hookGitDir))) {
@@ -514,38 +529,52 @@ export async function checkoutPullRequest(
 						`the post-checkout hook started by an omp process that is gone is still running in the worktree of ${localBranch} at ${worktreePath}; retry once it finishes (if nothing runs there, delete \`omp-setup-hook\` in its git dir: \`git -C ${worktreePath} rev-parse --git-dir\`)`,
 					);
 				}
+				// Nothing tells a finished hook from one that never started (or a failed setup whose discard failed), so a dead
+				// owner's worktree is never reused: claim it, drop the checkout, and create the worktree afresh.
 				// Compare-and-swap against the listing: a process that recovered or recreated it since owns it now.
 				const claimed = await repository.worktreeReplaceSetupOwner(
 					existingWorktree.gitDir,
 					setupOwner,
-					stale ? ownOwner : null,
+					ownOwner,
 					signal,
 				);
 				if (!claimed) throw stillSettingUp();
-				if (stale) {
-					// That omp's add or rollback left a registration without a whole checkout: drop it and create the worktree afresh.
-					// The partial checkout goes first: if its removal throws, the mark and lock stay and a retry still sees it as partial.
-					if (checkoutExists && (initializing || !linkOk)) {
-						// A redirected `.git` must never reach native removal: it would delete another worktree's registration.
-						if (!linkOk || !(await repository.worktreeRemove(staleDir, true, signal))) {
-							await untilAborted(signal, () => fs.rm(staleDir, { recursive: true, force: true }));
-						}
+				// The checkout goes first: if its removal throws, the mark and lock stay and a retry still sees it as ours to redo.
+				if (checkoutExists) {
+					// A redirected `.git` must never reach native removal: it would delete another worktree's registration.
+					if (!linkOk || !(await repository.worktreeRemove(staleDir, true, signal))) {
+						await untilAborted(signal, () => fs.rm(staleDir, { recursive: true, force: true }));
 					}
-					// The tail runs without the signal: an abort or error between clearing the mark and removing the lock would
-					// leave an unmarked registration still `initializing` with no checkout, which every later call would reuse and fail on.
-					// The mark therefore stays until the lock is gone, and only then is cleared.
-					if (initializing) await fs.rm(lockPath, { force: true });
-					// Our own mark; false when git's removal already deleted the admin dir with it.
-					await repository.worktreeReplaceSetupOwner(existingWorktree.gitDir, ownOwner, null);
+				}
+				// The tail runs without the signal: an abort or error between clearing the mark and removing the lock would
+				// leave an unmarked registration still `initializing` with no checkout, which every later call would reuse and fail on.
+				// The mark therefore stays until the lock is gone, and only then is cleared.
+				if (initializing) await fs.rm(lockPath, { force: true });
+				// Our own mark; false when git's removal already deleted the admin dir with it.
+				await repository.worktreeReplaceSetupOwner(existingWorktree.gitDir, ownOwner, null);
+				await repository.worktreePrune();
+				signal?.throwIfAborted();
+				existingWorktrees = await repository.worktrees(signal);
+				existingWorktree = await findPrWorktree(existingWorktrees);
+				if (existingWorktree) throw keptRegistration(existingWorktree.path);
+			} else if (existingWorktree) {
+				// An unmarked registration whose directory was deleted by hand: prune it and create the worktree afresh.
+				const missingDir = existingWorktree.path;
+				const dirMissing = await untilAborted(signal, () =>
+					fs.stat(missingDir).then(
+						() => false,
+						error => {
+							if (isEnoent(error) || (error as NodeJS.ErrnoException).code === "ENOTDIR") return true;
+							throw error;
+						},
+					),
+				);
+				if (dirMissing) {
 					await repository.worktreePrune();
 					signal?.throwIfAborted();
 					existingWorktrees = await repository.worktrees(signal);
 					existingWorktree = await findPrWorktree(existingWorktrees);
-					if (existingWorktree) {
-						throw new ToolError(
-							`the registration of the worktree of ${localBranch} at ${existingWorktree.path} is stale but git keeps it (locked?); run \`git worktree unlock ${existingWorktree.path}\` if so, then \`git worktree prune\`, and retry`,
-						);
-					}
+					if (existingWorktree) throw keptRegistration(existingWorktree.path);
 				}
 			}
 

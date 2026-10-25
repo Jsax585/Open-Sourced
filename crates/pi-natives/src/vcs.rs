@@ -931,7 +931,8 @@ pub fn vcs_release_worktree_add_claims() -> Promise<()> {
 /// Opaque start identity of process `pid`, to tell it from a later process
 /// reusing the pid.
 ///
-/// `None` where the platform reports none, or when the process is gone.
+/// `None` where the platform reports none (neither Linux, macOS nor Windows),
+/// or when the process is gone. Windows reports the process creation time.
 #[napi]
 pub fn vcs_process_start_time(pid: u32) -> Option<String> {
 	#[cfg(target_os = "linux")]
@@ -943,7 +944,19 @@ pub fn vcs_process_start_time(pid: u32) -> Option<String> {
 		let info = pi_builtins::proc_sys::bsdinfo(i32::try_from(pid).ok()?)?;
 		Some((info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec).to_string())
 	}
-	#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+	#[cfg(windows)]
+	{
+		let process = pi_builtins::proc_sys::open_process(
+			pid,
+			pi_builtins::proc_sys::PROCESS_QUERY_LIMITED_INFORMATION,
+		)?;
+		Some(
+			pi_builtins::proc_sys::process_times(&process)?
+				.0
+				.to_string(),
+		)
+	}
+	#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 	{
 		let _ = pid;
 		None
@@ -1183,7 +1196,9 @@ impl VcsGitRepo {
 		})
 	}
 
-	/// Add worktree.
+	/// Add worktree. Aborting `signal` ends the wait for another omp process's
+	/// add in the same repository; once the worktree is registered the add runs
+	/// to completion.
 	#[napi]
 	pub fn worktree_add(
 		&self,
@@ -1192,23 +1207,37 @@ impl VcsGitRepo {
 		options: VcsWorktreeAddOptions,
 		signal: Option<Unknown>,
 	) -> Promise<VcsWorktreeAddResult> {
-		blocking("vcs.worktreeAdd", self.inner.clone(), signal, move |r| {
-			let clone = if !options.clone {
-				core::WorktreeClone::Off
-			} else if let Some(kind) = options.backend {
-				core::WorktreeClone::Prefer(from_napi_kind(kind))
-			} else {
-				core::WorktreeClone::Auto
-			};
-			r.worktree_add(Path::new(&path), &ref_name, core::WorktreeAddOptions {
-				detach: options.detach,
-				clone,
-				keep_changes: options.keep_changes.unwrap_or(false),
-				setup_owner: options.setup_owner,
-			})
-			.map(|result| VcsWorktreeAddResult {
-				cloned_with: result.cloned_with.map(to_napi_kind),
-				clone_error: result.clone_error,
+		let tag = "vcs.worktreeAdd";
+		let repo = self.inner.clone();
+		let ct = task::CancelToken::new(None, signal);
+		task::blocking_mapped(tag, ct, rich_error, canceled_error, move |ct| {
+			if ct.heartbeat().is_err() {
+				return Err(pi_vcs::Error::Canceled);
+			}
+			catch_panic(tag, || {
+				let clone = if !options.clone {
+					core::WorktreeClone::Off
+				} else if let Some(kind) = options.backend {
+					core::WorktreeClone::Prefer(from_napi_kind(kind))
+				} else {
+					core::WorktreeClone::Auto
+				};
+				repo
+					.worktree_add_cancellable(
+						Path::new(&path),
+						&ref_name,
+						core::WorktreeAddOptions {
+							detach: options.detach,
+							clone,
+							keep_changes: options.keep_changes.unwrap_or(false),
+							setup_owner: options.setup_owner,
+						},
+						&|| ct.heartbeat().is_err(),
+					)
+					.map(|result| VcsWorktreeAddResult {
+						cloned_with: result.cloned_with.map(to_napi_kind),
+						clone_error: result.clone_error,
+					})
 			})
 		})
 	}

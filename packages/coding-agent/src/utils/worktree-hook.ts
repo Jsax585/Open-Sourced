@@ -6,7 +6,7 @@
 import * as fs from "node:fs/promises";
 import type { VcsGitRepo, VcsWorktreeAddOptions, VcsWorktreeAddResult, VcsWorktreeEntry } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { filterChildShellEnvAsync, logger, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import { filterChildShellEnvAsync, logger, postmortem, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import { sanitizeDisplayWarning, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 
 /** Display lines for a new worktree's `post-checkout` hook; both unset when it ran cleanly or there is none. */
@@ -18,10 +18,23 @@ export interface WorktreeCheckoutHookResult {
 }
 
 /**
- * Width left for a hook warning after the longest lead-in a caller puts before it (`/wt` shows
- * "Warning: Worktree created, but …"), so the whole rendered line stays within one display line.
+ * Width left for a hook warning after the longer lead-in a caller puts before it (`/wt` shows
+ * "Warning: Worktree created, but …", `pr_checkout` only "Warning: …"), so both fit on one display line.
  */
 const WARNING_WIDTH = TRUNCATE_LENGTHS.LINE - Bun.stringWidth("Warning: Worktree created, but ");
+
+let worktreeAddClaimCleanupRegistered = false;
+
+/**
+ * Release this process's running worktree adds at exit, once. Ctrl-C mid-add ends the process
+ * without the add's own cleanup. `/wt`, `pr_checkout`, the bash `git worktree add` builtin,
+ * security scans and `omp worktree add` add worktrees in this process.
+ */
+export function registerWorktreeAddClaimCleanup(): void {
+	if (worktreeAddClaimCleanupRegistered) return;
+	worktreeAddClaimCleanupRegistered = true;
+	postmortem.register("worktree-add-claims", () => vcs.releaseWorktreeAddClaims(), { exitOnly: true });
+}
 
 const displayLine = (text: string, width = WARNING_WIDTH) => truncateToWidth(sanitizeDisplayWarning(text), width);
 
@@ -37,7 +50,10 @@ export function describeSkippedHook(skipped: vcs.SkippedPostCheckoutHook): strin
 	return `${lead}${displayLine(skipped.path, WARNING_WIDTH - Bun.stringWidth(`${lead} ${why}`))} ${why}`;
 }
 
-/** The hook's warnings, failure first; each completes "Worktree created, but …". */
+/**
+ * The hook's warnings, failure first. `/wt` shows each after "Warning: Worktree created, but ",
+ * `pr_checkout` after "Warning: ".
+ */
 export function worktreeHookWarnings(hook: WorktreeCheckoutHookResult | undefined): string[] {
 	return [hook?.error, hook?.skipped].filter(warning => warning !== undefined);
 }
@@ -168,11 +184,13 @@ export async function addWorktreeWithHook(
 		}
 		current = located?.path ?? current;
 		// A hook that failed keeps its worktree with a warning, whatever state it left behind, so only a
-		// successful hook is held to the link and branch checks.
-		const setUpBranch =
-			located && gitDir !== undefined && hook.error === undefined
-				? await checkedBranch(repository, branch, gitDir, located, branchesBefore, signal)
-				: branch;
+		// successful hook is held to the link and branch checks; its branch is whichever the worktree is on.
+		let setUpBranch = branch;
+		if (located && gitDir !== undefined && hook.error === undefined) {
+			setUpBranch = await checkedBranch(repository, branch, gitDir, located, branchesBefore, signal);
+		} else if (located && !located.detached && located.branch?.startsWith("refs/heads/")) {
+			setUpBranch = located.branch.slice("refs/heads/".length);
+		}
 		// The abort may also have landed as the hook finished: either way, or with a stalled `worktree.base`,
 		// the caller must not move into the worktree, so it is discarded below.
 		const resolved = await resolveWorktreePath(current, signal);

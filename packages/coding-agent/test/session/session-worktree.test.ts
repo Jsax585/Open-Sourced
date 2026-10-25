@@ -805,6 +805,17 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 			expect(branchSha(repo, branch)).not.toBeNull();
 		});
 
+		it("a hook that renames the branch and then fails keeps the worktree, reporting the branch it is on", async () => {
+			await hook(
+				`unset GIT_DIR GIT_WORK_TREE\ngit -c core.hooksPath=/dev/null branch -m "${branch}" "${branch}-tmp"\nexit 1`,
+			);
+			const wt = await create();
+
+			expect(wt.hook?.error).toMatch(/exited with 1/);
+			expect(wt.branch).toBe(`${branch}-tmp`);
+			expect(git(wt.path, "branch", "--show-current")).toBe(`${branch}-tmp`);
+		});
+
 		it("a hook that deletes the branch and switches to one it created is refused, not adopted as a rename", async () => {
 			const made = `${branch}-made`;
 			try {
@@ -1032,20 +1043,35 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 		/** Start `run` while the repository's shared config is a named pipe, which stalls whatever reads it as a stalled filesystem would; abort once it is being read. */
 		const abortWhileConfigStalls = async (run: (signal: AbortSignal) => Promise<unknown>) => {
 			const config = path.join(repo, ".git", "config");
-			await fs.rename(config, `${config}.real`);
-			expect(Bun.spawnSync(["mkfifo", config]).exitCode).toBe(0);
-			const controller = new AbortController();
-			const pending = run(controller.signal);
-			// Opening the writing end waits until the reader opened the pipe; its read then stalls.
-			const writer = await fs.open(config, "w");
+			let writer: fs.FileHandle | undefined;
 			try {
+				await fs.rename(config, `${config}.real`);
+				expect(Bun.spawnSync(["mkfifo", config]).exitCode).toBe(0);
+				const controller = new AbortController();
+				const pending = run(controller.signal);
+				const settled = pending.then(
+					() => "resolved",
+					() => "rejected",
+				);
+				// Opening the writing end waits until the reader opened the pipe; its read then stalls. A run that
+				// settles without ever reading the pipe would leave the open blocked, so the open is raced against it.
+				const opening = fs.open(config, "w");
+				const opened = await Promise.race([opening, settled]);
+				if (typeof opened === "string") {
+					// Pairing the blocked open with a reader lets it finish, so nothing stays stuck on the pipe.
+					await (await fs.open(config, "r")).close();
+					await (await opening).close();
+					throw new Error(`the run ${opened} before reading the stalled config`);
+				}
+				writer = opened;
 				controller.abort();
 				await expect(pending).rejects.toMatchObject({ name: "AbortError" });
 			} finally {
 				// The real config first: the abandoned reader may open it again after this read, and must not meet the pipe.
-				await fs.rename(`${config}.real`, config);
+				// The rename also replaces the pipe; it is tolerated to fail when the setup never got that far.
+				await fs.rename(`${config}.real`, config).catch(() => {});
 				// End of file then lets that read finish.
-				await writer.close();
+				await writer?.close();
 			}
 		};
 
@@ -1174,13 +1200,16 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 			await hook(
 				`head -c 5000000 /dev/zero | tr '\\0' x\necho LAST-LINE\necho printed > "${printed}"\ncat "${release}" > /dev/null`,
 			);
+			// Directory names are `omp-post-checkout-<scope>-<pid>-<random>`; another omp's hook run meanwhile is not ours.
+			const ownCapture = new RegExp(`^omp-post-checkout-[^-]+-${process.pid}-`);
+			const ownDirs = async () => (await fs.readdir(os.tmpdir())).filter(name => ownCapture.test(name));
 			const captureFiles = async () => {
-				const dirs = (await fs.readdir(os.tmpdir())).filter(name => name.startsWith("omp-post-checkout-"));
+				const dirs = await ownDirs();
 				return dirs
 					.filter(name => !before.has(name))
 					.flatMap(name => ["stdout", "stderr"].map(f => path.join(os.tmpdir(), name, f)));
 			};
-			const before = new Set((await fs.readdir(os.tmpdir())).filter(name => name.startsWith("omp-post-checkout-")));
+			const before = new Set(await ownDirs());
 			const pending = vcs.runPostCheckoutHook(wt.path, wt.baseCommit, { env: filterChildShellEnv(process.env) });
 			let largest = Number.POSITIVE_INFINITY;
 			try {

@@ -1230,13 +1230,13 @@ describe("github tool", () => {
 				await restoreConfig?.();
 				restoreConfig = undefined;
 			});
-			const mockPrView = (number: number) =>
+			const mockPrView = (number: number, overrides: { url?: string } = {}) =>
 				vi
 					.spyOn(github, "json")
 					.mockResolvedValueOnce({
 						number,
 						title: "Contributor fix",
-						url: `https://ghe.example.com/base/repo/pull/${number}`,
+						url: overrides.url ?? `https://ghe.example.com/base/repo/pull/${number}`,
 						baseRefName: "main",
 						headRefName: fixture.headRefName,
 						headRefOid: fixture.headRefOid,
@@ -1652,8 +1652,14 @@ describe("github tool", () => {
 					await running;
 					vi.spyOn(github, "json").mockReset();
 					mockPrView(145);
+					// The recreated worktree's own post-checkout hook must not block on the released fifos.
+					runGit(fixture.repoRoot, ["config", "core.hooksPath", path.join(fixture.baseDir, "no-hooks-145")]);
 					const outcome = await checkout(145, new AbortController().signal);
-					expect(outcome.reused).toBe(true);
+					// Nothing tells a finished hook from one that never started: the dead owner's worktree is recreated.
+					expect(outcome.reused).toBe(false);
+					expect(runGit(outcome.worktreePath, ["rev-parse", "--absolute-git-dir"])).toContain(
+						path.join(".git", "worktrees"),
+					);
 					expect(await setupOwnerOf(fixture.repoRoot, branch)).toBeUndefined();
 				} finally {
 					await releaseHook();
@@ -1661,6 +1667,58 @@ describe("github tool", () => {
 					if (previous) runGit(fixture.repoRoot, ["config", "core.hooksPath", previous]);
 					else runGit(fixture.repoRoot, ["config", "--unset", "core.hooksPath"]);
 					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", dir]);
+				}
+			});
+			it("recreates a dead owner's complete, linked worktree when no hook ever ran, instead of reusing it", async () => {
+				mockPrView(146);
+				const { dir, branch } = await deadOwnersWorktree(146);
+				await Bun.write(path.join(dir, "old-checkout-marker"), "old\n");
+
+				const outcome = await checkout(146, new AbortController().signal);
+				try {
+					expect(outcome.reused).toBe(false);
+					expect(await Bun.file(path.join(outcome.worktreePath, "old-checkout-marker")).exists()).toBe(false);
+					expect(runGit(outcome.worktreePath, ["rev-parse", "--absolute-git-dir"])).toContain(
+						path.join(".git", "worktrees"),
+					);
+					const listed = runGit(fixture.repoRoot, ["worktree", "list", "--porcelain"]);
+					expect(listed.split("\n").filter(line => line === `branch refs/heads/${branch}`)).toHaveLength(1);
+					expect(await setupOwnerOf(fixture.repoRoot, branch)).toBeUndefined();
+				} finally {
+					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", outcome.worktreePath]);
+				}
+			});
+			it("prunes and recreates an unmarked PR worktree whose directory was deleted", async () => {
+				mockPrView(147);
+				const first = await checkout(147, new AbortController().signal);
+				await fs.rm(first.worktreePath, { recursive: true, force: true });
+				vi.spyOn(github, "json").mockReset();
+				mockPrView(147);
+
+				const second = await checkout(147, new AbortController().signal);
+				try {
+					expect(second.reused).toBe(false);
+					expect(runGit(second.worktreePath, ["rev-parse", "--absolute-git-dir"])).toContain(
+						path.join(".git", "worktrees"),
+					);
+				} finally {
+					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", second.worktreePath]);
+				}
+			});
+			it("refuses a PR whose branch pr-<N> already belongs to another repository's PR, leaving its config alone", async () => {
+				mockPrView(148, { url: "https://github.com/a/x/pull/148" });
+				const first = await checkout(148, new AbortController().signal);
+				try {
+					vi.spyOn(github, "json").mockReset();
+					mockPrView(148, { url: "https://github.com/b/y/pull/148" });
+					await expect(checkout(148, new AbortController().signal)).rejects.toThrow(
+						"belongs to https://github.com/a/x/pull/148",
+					);
+					expect(runGit(fixture.repoRoot, ["config", "--get", "branch.pr-148.ompPrUrl"])).toBe(
+						"https://github.com/a/x/pull/148",
+					);
+				} finally {
+					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", first.worktreePath]);
 				}
 			});
 			it("reuses the worktree of a PR whose hook renamed the local branch instead of adding a second one", async () => {

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { clearWorktrees } from "@oh-my-pi/pi-coding-agent/cli/worktree-cli";
 import {
 	ISOLATION_OWNER_FILE,
@@ -148,5 +149,45 @@ describe("worktree clear task-isolation ownership", () => {
 
 		expect(isoStopSpy).not.toHaveBeenCalled();
 		expect(await Bun.file(path.join(retained, "m", "work.txt")).exists()).toBe(true);
+	});
+
+	it("--all leaves a worktree another live process is still setting up, and removes a finished one", async () => {
+		const repo = path.join(base, "..", `${path.basename(base)}-repo`);
+		const git = (...args: string[]) => {
+			const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+				cwd: repo,
+				stdout: "ignore",
+				stderr: "pipe",
+			});
+			if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+		};
+		await fs.mkdir(repo);
+		try {
+			git("init", "-q", "-b", "main");
+			git("commit", "-q", "--allow-empty", "-m", "init");
+			// The native add checks out an existing branch; it does not create one.
+			git("branch", "setting-up");
+			const settingUp = path.join(base, "setting-up");
+			const finished = path.join(base, "finished");
+			git("worktree", "add", "-q", "-b", "finished", finished);
+			// Marked as this (live) process's unfinished setup, as `/wt` leaves it while its hook runs.
+			await vcs.requireGit(repo).worktreeAdd(settingUp, "setting-up", {
+				detach: false,
+				clone: false,
+				setupOwner: vcs.worktreeSetupOwner(),
+			});
+
+			await clearWorktrees({ all: true, dryRun: false, json: true });
+
+			expect(
+				await fs.stat(path.join(settingUp, ".git")).then(
+					() => true,
+					() => false,
+				),
+			).toBe(true);
+			await expect(fs.stat(finished)).rejects.toThrow();
+		} finally {
+			await fs.rm(repo, { recursive: true, force: true });
+		}
 	});
 });

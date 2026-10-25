@@ -726,7 +726,11 @@ export declare class VcsGitRepo {
   remoteAdd(name: string, url: string, signal?: unknown | undefined | null): Promise<undefined>
   /** List worktrees. */
   worktrees(signal?: unknown | undefined | null): Promise<Array<VcsWorktreeEntry>>
-  /** Add worktree. */
+  /**
+   * Add worktree. Aborting `signal` ends the wait for another omp process's
+   * add in the same repository; once the worktree is registered the add runs
+   * to completion.
+   */
   worktreeAdd(path: string, refName: string, options: VcsWorktreeAddOptions, signal?: unknown | undefined | null): Promise<VcsWorktreeAddResult>
   /** Remove worktree. */
   worktreeRemove(path: string, force: boolean, signal?: unknown | undefined | null): Promise<boolean>
@@ -4134,7 +4138,8 @@ export interface VcsNumstatEntry {
  * Opaque start identity of process `pid`, to tell it from a later process
  * reusing the pid.
  *
- * `None` where the platform reports none, or when the process is gone.
+ * `None` where the platform reports none (neither Linux, macOS nor Windows),
+ * or when the process is gone. Windows reports the process creation time.
  */
 export declare function vcsProcessStartTime(pid: number): string | null
 

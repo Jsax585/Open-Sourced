@@ -962,7 +962,13 @@ export async function runPostCheckoutHook(worktreeRoot, head, options = {}) {
 		const poll = (async () => {
 			while (running) {
 				await Promise.race([Bun.sleep(HOOK_CAPTURE_POLL_MS), stopped.promise]);
-				if (running) await Promise.all([trim(outPath), trim(errPath)]);
+				if (!running) break;
+				// Best effort: a failed pass (e.g. EIO) must not end trimming while the hook keeps writing; the final tail read surfaces a real error.
+				try {
+					await Promise.all([trim(outPath), trim(errPath)]);
+				} catch (error) {
+					if (signal?.aborted) throw error;
+				}
 			}
 		})();
 		// Observed now so a failure during the run is not unhandled; it is rethrown below.

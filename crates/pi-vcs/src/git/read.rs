@@ -584,7 +584,13 @@ impl GitRepo {
 			let Some(root) = dotgit.parent().map(Path::to_owned) else {
 				continue;
 			};
-			let head = parse_head_with_refs(&dir.join("HEAD"), &self.info().common_dir)?;
+			// HEAD is missing while another process is still registering the entry
+			// or pruning it; other I/O errors are real.
+			let head = match parse_head_with_refs(&dir.join("HEAD"), &self.info().common_dir) {
+				Ok(head) => head,
+				Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => continue,
+				Err(err) => return Err(err),
+			};
 			let setup_owner = read_setup_mark(&dir)?;
 			out.push(entry_from_head(root, dir, &head, setup_owner));
 		}

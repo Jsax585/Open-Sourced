@@ -726,9 +726,39 @@ impl GitRepo {
 		ref_name: &str,
 		options: WorktreeAddOptions,
 	) -> Result<WorktreeAddResult> {
+		self.worktree_add_inner(path, ref_name, options, WORKTREE_ADD_WAIT, &never_cancelled)
+	}
+
+	/// [`Self::worktree_add`] for callers that can be aborted: `cancelled`
+	/// ends the wait for another omp's add with [`Error::Canceled`], so that
+	/// wait is bounded much longer. It is not consulted once the worktree is
+	/// registered.
+	pub fn worktree_add_cancellable(
+		&self,
+		path: &Path,
+		ref_name: &str,
+		options: WorktreeAddOptions,
+		cancelled: &dyn Fn() -> bool,
+	) -> Result<WorktreeAddResult> {
+		self.worktree_add_inner(path, ref_name, options, WORKTREE_ADD_ABORTABLE_WAIT, cancelled)
+	}
+
+	fn worktree_add_inner(
+		&self,
+		path: &Path,
+		ref_name: &str,
+		options: WorktreeAddOptions,
+		wait: std::time::Duration,
+		cancelled: &dyn Fn() -> bool,
+	) -> Result<WorktreeAddResult> {
 		// Another omp process adding the same path at once would otherwise
 		// register into the same directory.
-		let _add_lock = lock_worktree_adds(&self.info().common_dir)?;
+		let _add_lock = lock_worktree_adds_within(&self.info().common_dir, wait, cancelled)?;
+		// An abort that landed as the lock was granted must not register a
+		// worktree.
+		if cancelled() {
+			return Err(Error::Canceled);
+		}
 		let repo = self.gix()?;
 		let id = resolve_commit(&repo, ref_name)?;
 		if path.exists() && fs::read_dir(path)?.next().is_some() {
@@ -1094,8 +1124,11 @@ impl GitRepo {
 
 	/// Prune linked-worktree administration entries whose back-reference
 	/// vanished. Locked entries and entries still being set up (setup mark) are
-	/// kept: their worktree may sit on a volume that is offline.
+	/// kept: their worktree may sit on a volume that is offline. Holds the
+	/// worktree-add lock so it can't delete the entry of an add still being
+	/// registered by another process.
 	pub fn worktree_prune(&self) -> Result<()> {
+		let _add_lock = lock_worktree_adds(&self.info().common_dir)?;
 		let root = self.info().common_dir.join("worktrees");
 		let Ok(entries) = fs::read_dir(&root) else {
 			return Ok(());
@@ -2267,22 +2300,42 @@ pub fn release_worktree_add_claims(wait: std::time::Duration) {
 /// How long an add waits for another one holding the lock or claim file.
 const WORKTREE_ADD_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Sleeps one backoff step (10 ms doubling to 500 ms); false once `deadline`
-/// has passed.
-fn back_off(deadline: std::time::Instant, pause: &mut std::time::Duration) -> bool {
+/// The wait of an add that observes an abort: a long checkout by another omp
+/// must not fail it, and the abort still ends the wait within one backoff step.
+const WORKTREE_ADD_ABORTABLE_WAIT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Check for takers that cannot be aborted.
+const fn never_cancelled() -> bool {
+	false
+}
+
+/// Sleeps one backoff step (10 ms doubling to 500 ms); `Ok(false)` once
+/// `deadline` has passed, `Err(Canceled)` once `cancelled` reports an abort.
+fn back_off(
+	deadline: std::time::Instant,
+	pause: &mut std::time::Duration,
+	cancelled: &dyn Fn() -> bool,
+) -> Result<bool> {
+	if cancelled() {
+		return Err(Error::Canceled);
+	}
 	if std::time::Instant::now() >= deadline {
-		return false;
+		return Ok(false);
 	}
 	std::thread::sleep(*pause);
 	*pause = (*pause * 2).min(std::time::Duration::from_millis(500));
-	true
+	Ok(true)
 }
 
 fn lock_worktree_adds(common: &Path) -> Result<WorktreeAddLock> {
-	lock_worktree_adds_within(common, WORKTREE_ADD_WAIT)
+	lock_worktree_adds_within(common, WORKTREE_ADD_WAIT, &never_cancelled)
 }
 
-fn lock_worktree_adds_within(common: &Path, wait: std::time::Duration) -> Result<WorktreeAddLock> {
+fn lock_worktree_adds_within(
+	common: &Path,
+	wait: std::time::Duration,
+	cancelled: &dyn Fn() -> bool,
+) -> Result<WorktreeAddLock> {
 	let lock_path = common.join("omp-worktree-add.lock");
 	let file = fs::OpenOptions::new()
 		.create(true)
@@ -2294,10 +2347,10 @@ fn lock_worktree_adds_within(common: &Path, wait: std::time::Duration) -> Result
 	loop {
 		let err = match file.try_lock() {
 			Ok(()) => return Ok(WorktreeAddLock::Locked(file)),
-			// Bounded so a stalled holder cannot hang every later add, and the
-			// callers cannot be aborted.
+			// Bounded so a stalled holder cannot hang every later add; an abort
+			// ends the wait early.
 			Err(std::fs::TryLockError::WouldBlock) => {
-				if back_off(deadline, &mut pause) {
+				if back_off(deadline, &mut pause, cancelled)? {
 					continue;
 				}
 				return Err(Error::backend(
@@ -2318,14 +2371,18 @@ fn lock_worktree_adds_within(common: &Path, wait: std::time::Duration) -> Result
 		#[cfg(unix)]
 		let unsupported = unsupported || err.raw_os_error() == Some(libc::ENOLCK);
 		return if unsupported {
-			claim_worktree_adds(common, wait)
+			claim_worktree_adds(common, wait, cancelled)
 		} else {
 			Err(err.into())
 		};
 	}
 }
 
-fn claim_worktree_adds(common: &Path, wait: std::time::Duration) -> Result<WorktreeAddLock> {
+fn claim_worktree_adds(
+	common: &Path,
+	wait: std::time::Duration,
+	cancelled: &dyn Fn() -> bool,
+) -> Result<WorktreeAddLock> {
 	let claim = common.join("omp-worktree-add.claim");
 	let deadline = std::time::Instant::now() + wait;
 	let mut pause = std::time::Duration::from_millis(10);
@@ -2340,7 +2397,7 @@ fn claim_worktree_adds(common: &Path, wait: std::time::Duration) -> Result<Workt
 				return Ok(WorktreeAddLock::Claimed(claim));
 			},
 			Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-				if !back_off(deadline, &mut pause) {
+				if !back_off(deadline, &mut pause, cancelled)? {
 					// Left by a process that died mid-add without its exit cleanup,
 					// as with git's `index.lock`.
 					return Err(Error::backend(
@@ -3898,6 +3955,107 @@ mod tests {
 	}
 
 	#[test]
+	fn cancellable_worktree_add_stops_waiting_for_the_add_lock_on_abort() {
+		use std::sync::atomic::{AtomicBool, Ordering};
+
+		let (temp, repo) = fixture();
+		let linked = temp.path().join("../linked-abort-lock");
+		let _ = fs::remove_dir_all(&linked);
+		let abort = AtomicBool::new(false);
+
+		let guard = lock_worktree_adds(&repo.info().common_dir).unwrap();
+		let started = std::time::Instant::now();
+		let result = std::thread::scope(|scope| {
+			let add = scope.spawn(|| {
+				repo.worktree_add_cancellable(
+					&linked,
+					"main",
+					WorktreeAddOptions {
+						detach:       true,
+						clone:        WorktreeClone::Off,
+						keep_changes: false,
+						setup_owner:  None,
+					},
+					&|| abort.load(Ordering::Relaxed),
+				)
+			});
+			std::thread::sleep(std::time::Duration::from_millis(100));
+			assert!(!add.is_finished(), "the add ran without the worktree-add lock");
+			abort.store(true, Ordering::Relaxed);
+			add.join().unwrap()
+		});
+
+		assert!(matches!(result, Err(Error::Canceled)), "{result:?}");
+		assert!(started.elapsed() < std::time::Duration::from_secs(3));
+		drop(guard);
+		assert!(!linked.exists());
+		assert!(
+			repo
+				.worktrees()
+				.unwrap()
+				.iter()
+				.all(|entry| entry.path != linked)
+		);
+	}
+
+	#[test]
+	fn worktree_prune_waits_for_the_worktree_add_lock() {
+		let (temp, repo) = fixture();
+		let linked = temp.path().join("../linked-prune-lock");
+		let _ = fs::remove_dir_all(&linked);
+		repo
+			.worktree_add(&linked, "main", WorktreeAddOptions {
+				detach:       true,
+				clone:        WorktreeClone::Off,
+				keep_changes: false,
+				setup_owner:  None,
+			})
+			.unwrap();
+		fs::remove_dir_all(&linked).unwrap();
+		let admin_root = repo.info().common_dir.join("worktrees");
+		assert_eq!(fs::read_dir(&admin_root).unwrap().count(), 1);
+
+		let guard = lock_worktree_adds(&repo.info().common_dir).unwrap();
+		let result = std::thread::scope(|scope| {
+			let prune = scope.spawn(|| repo.worktree_prune());
+			std::thread::sleep(std::time::Duration::from_millis(200));
+			assert!(!prune.is_finished(), "worktree_prune ran without the worktree-add lock");
+			drop(guard);
+			prune.join().unwrap()
+		});
+
+		result.unwrap();
+		assert_eq!(fs::read_dir(&admin_root).unwrap().count(), 0);
+	}
+
+	#[test]
+	fn worktrees_skips_an_admin_dir_without_head() {
+		let (temp, repo) = fixture();
+		let linked = temp.path().join("../linked-half-head");
+		let _ = fs::remove_dir_all(&linked);
+		repo
+			.worktree_add(&linked, "main", WorktreeAddOptions {
+				detach:       true,
+				clone:        WorktreeClone::Off,
+				keep_changes: false,
+				setup_owner:  None,
+			})
+			.unwrap();
+		let half = repo.info().common_dir.join("worktrees/half");
+		fs::create_dir_all(&half).unwrap();
+		fs::write(half.join("gitdir"), format!("{}\n", temp.path().join(".git").display())).unwrap();
+
+		let entries = repo.worktrees().unwrap();
+		assert!(
+			entries
+				.iter()
+				.any(|entry| entry.git_dir.ends_with("linked-half-head"))
+		);
+		assert!(!entries.iter().any(|entry| entry.git_dir == half));
+		let _ = repo.worktree_remove(&linked, true);
+	}
+
+	#[test]
 	fn mutate_worktree_and_detach() {
 		let (temp, repo) = fixture();
 		let linked = temp.path().join("../linked-mut");
@@ -4295,14 +4453,17 @@ mod tests {
 	fn without_file_locks_a_second_add_waits_for_the_first_claim_and_is_refused_after_the_wait() {
 		let (_temp, repo) = fixture();
 		let common = repo.info().common_dir.clone();
-		let first = claim_worktree_adds(&common, std::time::Duration::ZERO).unwrap();
-		let refused = claim_worktree_adds(&common, std::time::Duration::ZERO)
+		let first =
+			claim_worktree_adds(&common, std::time::Duration::ZERO, &never_cancelled).unwrap();
+		let refused = claim_worktree_adds(&common, std::time::Duration::ZERO, &never_cancelled)
 			.err()
 			.unwrap();
 		assert!(refused.to_string().contains("omp-worktree-add.claim"), "{refused}");
 		std::thread::scope(|scope| {
-			let waiting = scope
-				.spawn(|| claim_worktree_adds(&common, std::time::Duration::from_secs(10)).is_ok());
+			let waiting = scope.spawn(|| {
+				claim_worktree_adds(&common, std::time::Duration::from_secs(10), &never_cancelled)
+					.is_ok()
+			});
 			// Only makes it likely the waiter already met the claim; it gets it
 			// either way.
 			std::thread::sleep(std::time::Duration::from_millis(50));
@@ -4316,10 +4477,11 @@ mod tests {
 		let (_temp, repo) = fixture();
 		let common = repo.info().common_dir.clone();
 		let claim = common.join("omp-worktree-add.claim");
-		let running = claim_worktree_adds(&common, std::time::Duration::ZERO).unwrap();
+		let running =
+			claim_worktree_adds(&common, std::time::Duration::ZERO, &never_cancelled).unwrap();
 		release_worktree_add_claims(std::time::Duration::from_millis(50));
 		assert!(claim.exists(), "exit cleanup deleted the claim of an add still writing its path");
-		let refused = claim_worktree_adds(&common, std::time::Duration::ZERO)
+		let refused = claim_worktree_adds(&common, std::time::Duration::ZERO, &never_cancelled)
 			.err()
 			.unwrap();
 		assert!(refused.to_string().contains("omp-worktree-add.claim"), "{refused}");
@@ -4332,7 +4494,8 @@ mod tests {
 		let (_temp, repo) = fixture();
 		let common = repo.info().common_dir.clone();
 		let claim = common.join("omp-worktree-add.claim");
-		let running = claim_worktree_adds(&common, std::time::Duration::ZERO).unwrap();
+		let running =
+			claim_worktree_adds(&common, std::time::Duration::ZERO, &never_cancelled).unwrap();
 		std::thread::scope(|scope| {
 			scope.spawn(|| {
 				// Only makes it likely the release already waits; it must not
@@ -4366,9 +4529,10 @@ mod tests {
 		// Detached: on a build that blocks forever this must fail the test, not
 		// hang it.
 		std::thread::spawn(move || {
-			let refused = lock_worktree_adds_within(&common, std::time::Duration::ZERO)
-				.err()
-				.map(|err| err.to_string());
+			let refused =
+				lock_worktree_adds_within(&common, std::time::Duration::ZERO, &never_cancelled)
+					.err()
+					.map(|err| err.to_string());
 			let _ = sender.send(refused);
 		});
 		let refused = receiver
@@ -4385,7 +4549,8 @@ mod tests {
 		let holder = hold_add_lock(&common);
 		std::thread::scope(|scope| {
 			let waiting = scope.spawn(|| {
-				lock_worktree_adds_within(&common, std::time::Duration::from_secs(10)).is_ok()
+				lock_worktree_adds_within(&common, std::time::Duration::from_secs(10), &never_cancelled)
+					.is_ok()
 			});
 			// Only makes it likely the waiter already met the lock; it gets it
 			// either way.

@@ -20,12 +20,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { filterChildShellEnv, getWorktreesDir, isEnoent, postmortem } from "@oh-my-pi/pi-utils";
+import { filterChildShellEnv, getWorktreesDir, isEnoent } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Settings } from "../config/settings";
 import { hasLiveIsolationOwner, ISOLATION_OWNER_FILE, readRetainedMountBackend } from "../task/isolation-ownership";
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
-import { describeSkippedHook } from "../utils/worktree-hook";
+import { describeSkippedHook, registerWorktreeAddClaimCleanup } from "../utils/worktree-hook";
 
 import { cfgIsolationBackend, cfgWorktreeClone } from "../task/settings";
 
@@ -44,6 +44,8 @@ export interface WorktreeEntry {
 	branch?: string;
 	/** When set, the entry is unhealthy and `omp worktree clear` will remove it. */
 	orphanReason?: string;
+	/** Owner of a setup that is not finished yet; `clear` leaves it alone while that process is alive. */
+	setupOwner?: string;
 }
 
 export interface AddWorktreeOptions {
@@ -148,8 +150,7 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 				: `checking out '${ref}'`;
 		console.log(`Preparing worktree (${preparation})`);
 	}
-	// Ctrl-C mid-add ends the process without the add's own cleanup.
-	postmortem.register("worktree-add-claims", () => vcs.releaseWorktreeAddClaims(), { exitOnly: true });
+	registerWorktreeAddClaimCleanup();
 	const result = await repository.worktreeAdd(worktreePath, ref, {
 		detach,
 		clone: cfgWorktreeClone.get(settings),
@@ -198,7 +199,16 @@ export async function listWorktrees(options: ListWorktreesOptions): Promise<void
 
 export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ removed: number; failed: number }> {
 	const entries = await scanWorktrees();
-	const targets = options.all ? entries : entries.filter(entry => entry.orphanReason !== undefined);
+	const candidates = options.all ? entries : entries.filter(entry => entry.orphanReason !== undefined);
+	// Another live omp process is still setting these up; removing one would pull it out from under that process.
+	const settingUp = (entry: WorktreeEntry) =>
+		entry.setupOwner !== undefined && vcs.isWorktreeSetupOwnerAlive(entry.setupOwner);
+	const skipped = candidates.filter(settingUp);
+	const targets = candidates.filter(entry => !settingUp(entry));
+	if (skipped.length > 0 && !options.json) {
+		for (const entry of skipped) console.log(`${chalk.yellow("skipped")}  ${entry.path}`);
+		console.log(chalk.dim("          still being set up by a running omp process"));
+	}
 
 	if (targets.length === 0) {
 		if (options.json) {
@@ -258,7 +268,7 @@ export async function clearWorktrees(options: ClearWorktreesOptions): Promise<{ 
 	const failed = results.length - succeeded;
 
 	if (options.json) {
-		console.log(JSON.stringify({ removed: succeeded, failed, results }, null, 2));
+		console.log(JSON.stringify({ removed: succeeded, failed, skipped: skipped.map(s => s.path), results }, null, 2));
 		return { removed: succeeded, failed };
 	}
 
@@ -401,7 +411,30 @@ async function classifyPrCheckout(dir: string, gitEntry: string): Promise<Worktr
 			orphanReason: "parent repo missing",
 		};
 	}
-	return { path: dir, kind: "pr-checkout", parentRepo, branch };
+	return {
+		path: dir,
+		kind: "pr-checkout",
+		parentRepo,
+		branch,
+		setupOwner: await setupOwnerOf(parentRepo, parentGitDir),
+	};
+}
+
+/** The process still setting up the worktree registered at `gitDir`, per the parent's listing; unset when it is done or the listing fails. */
+async function setupOwnerOf(parentRepo: string, gitDir: string): Promise<string | undefined> {
+	try {
+		const listed = await vcs.git(parentRepo)?.worktrees();
+		const wanted = await fs.realpath(gitDir);
+		for (const entry of listed ?? []) {
+			if (entry.setupOwner === undefined) continue;
+			if (entry.gitDir === gitDir || (await fs.realpath(entry.gitDir).catch(() => undefined)) === wanted) {
+				return entry.setupOwner;
+			}
+		}
+	} catch {
+		/* an unreadable listing leaves the worktree to the usual rules */
+	}
+	return undefined;
 }
 
 async function readWorktreeBranch(headFile: string): Promise<string | undefined> {
