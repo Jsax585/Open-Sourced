@@ -1414,14 +1414,34 @@ describe("startCollabHosting", () => {
 
 	it("gates guest actions on extension-hosted rooms until controller startup completes", async () => {
 		const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475" });
+		let hostPromptReceived: unknown;
+		ctx.session.promptCustomMessage = (async (msg: unknown) => {
+			hostPromptReceived = msg;
+		}) as unknown as typeof ctx.session.promptCustomMessage;
 		const controller = new CollabController(ctx);
 		ctx.collabController = controller;
 
 		const host = await startHosting(ctx, "ws://localhost:7475");
 		expect(host.areGuestActionsReady).toBe(false);
 
+		const guestHarness = makeCtx();
+		const guest = new CollabGuestLink(guestHarness.ctx);
+		await guest.join(host.link);
+
+		guest.sendPrompt("first prompt");
+		await new Promise(r => setTimeout(r, 50));
+		expect(
+			guestHarness.printed.some(msg => msg.includes("prompting is unavailable until the host finishes starting up")),
+		).toBe(true);
+		expect(hostPromptReceived).toBeUndefined();
+
 		controller.startupComplete();
 		expect(host.areGuestActionsReady).toBe(true);
+
+		guest.sendPrompt("second prompt");
+		await new Promise(r => setTimeout(r, 50));
+		expect(hostPromptReceived).toMatchObject({ content: "second prompt" });
+		await guest.leave("test done");
 	});
 
 	it("preserves the controller's process instanceId and increments generation across restarts", async () => {

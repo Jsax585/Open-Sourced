@@ -108,9 +108,16 @@ function ensureRolledBackHostReaper(ctx: InteractiveModeContext): void {
 			return;
 		}
 		provisionalHosts.delete(host);
-		void host.stop("session switch rolled back").catch(err => {
-			logger.warn("Failed to stop rolled back collab host", { error: String(err) });
-		});
+		void host
+			.stop("session switch rolled back")
+			.then(() => {
+				if (outcome.rolledBack) {
+					ctx.collabController?.autoStart();
+				}
+			})
+			.catch(err => {
+				logger.warn("Failed to stop rolled back collab host", { error: String(err) });
+			});
 	});
 }
 

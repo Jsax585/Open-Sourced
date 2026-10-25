@@ -120,7 +120,9 @@ export class InMemoryRelay {
 	/** Close the current host with fatal code 4001, as when the relay terminates the room. */
 	async closeHostFatal(): Promise<void> {
 		this.#host?.closeFatal();
-		await new Promise(r => queueMicrotask(r));
+		const { promise, resolve } = Promise.withResolvers<void>();
+		queueMicrotask(resolve);
+		await promise;
 	}
 
 	connect(ws: FakeWebSocket): void {
