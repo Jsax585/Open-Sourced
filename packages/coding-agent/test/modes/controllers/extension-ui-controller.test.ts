@@ -754,12 +754,26 @@ describe("ExtensionUiController tool approval", () => {
 				toolName: "bash",
 				approvalMode: "always-ask",
 			});
-			const deniedWarp = warp.controller.showCollabAwareApproval(prompt);
+			const deniedWarp = warp.controller.showCollabAwareApproval({
+				...prompt,
+				toolCallId: "tool-call-warp",
+			});
 			warp.editor.onSubmit = text => warp.queueSteer(text);
 			for (const key of "stop") warp.handleInput(key);
 			warp.handleInput("\r");
 			expect(await deniedWarp).toBe("deny");
 			expect(notify).toHaveBeenCalledTimes(1);
+			// The steer that denied the first dialog is consumed at the batch
+			// boundary before the queued direct approval is presented.
+			warp.deliverSteering();
+			// A direct `ui.approve` prompt presented while the wrapper's request is
+			// still pending is not itself bridged: the legacy toast still rings.
+			const deniedDirect = warp.controller.showCollabAwareApproval(prompt);
+			warp.editor.onSubmit = text => warp.queueSteer(text);
+			for (const key of "stop") warp.handleInput(key);
+			warp.handleInput("\r");
+			expect(await deniedDirect).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(2);
 			// Settle the bridge's pending state for the next case.
 			(bridgeHandlers.get("tool_approval_resolved") as (event: ToolApprovalResolvedEvent) => void)({
 				type: "tool_approval_resolved",
@@ -771,19 +785,22 @@ describe("ExtensionUiController tool approval", () => {
 			// A --trusted-extension launch leaves no bridge, so no Warp request is
 			// pending: the legacy toast still rings.
 			const trusted = makeHarness(Settings.isolated({ "approval.notify": "on" }));
-			const deniedTrusted = trusted.controller.showCollabAwareApproval(prompt);
+			const deniedTrusted = trusted.controller.showCollabAwareApproval({
+				...prompt,
+				toolCallId: "tool-call-trusted",
+			});
 			trusted.editor.onSubmit = text => trusted.queueSteer(text);
 			for (const key of "stop") trusted.handleInput(key);
 			trusted.handleInput("\r");
 			expect(await deniedTrusted).toBe("deny");
-			expect(notify).toHaveBeenCalledTimes(2);
+			expect(notify).toHaveBeenCalledTimes(3);
 			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
 			const denied = off.controller.showCollabAwareApproval(prompt);
 			off.editor.onSubmit = text => off.queueSteer(text);
 			for (const key of "stop") off.handleInput(key);
 			off.handleInput("\r");
 			expect(await denied).toBe("deny");
-			expect(notify).toHaveBeenCalledTimes(2);
+			expect(notify).toHaveBeenCalledTimes(3);
 		} finally {
 			if (originalWarpProtocol === undefined) delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 			else Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = originalWarpProtocol;

@@ -715,11 +715,14 @@ export class ExtensionUiController {
 					// A pending approval needs the human, like ask and completion:
 					// flag the terminal and the desktop so a backgrounded session
 					// is findable. Warp's structured OSC 777 bridge already rings
-					// permission_request for this prompt, so skip the second legacy
-					// toast only when the prompt was represented on the bridge; a
-					// --trusted-extension launch leaves no bridge, and direct
-					// `ui.approve` paths that emit no Warp event still ring.
-					const warpBridged = isWarpCliAgentProtocolActive() && hasWarpPendingApproval();
+					// permission_request when this prompt's tool call was
+					// represented on it, so skip the second legacy toast only for
+					// that prompt; a --trusted-extension launch leaves no bridge,
+					// and `ui.approve` prompts that emitted no Warp event still ring.
+					const warpBridged =
+						prompt.toolCallId !== undefined &&
+						isWarpCliAgentProtocolActive() &&
+						hasWarpPendingApproval(prompt.toolCallId);
 					if (cfgApprovalNotify.get(this.ctx.settings) === "on" && !warpBridged) {
 						const sessionName = this.ctx.sessionManager.getSessionName();
 						TERMINAL.sendNotification({

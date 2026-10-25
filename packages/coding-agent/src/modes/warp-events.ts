@@ -29,9 +29,9 @@ export function isWarpCliAgentProtocolActive(): boolean {
  */
 const emittedWarpApprovals = new Set<string>();
 
-/** True while a bridge-emitted permission request is still pending an answer. */
-export function hasWarpPendingApproval(): boolean {
-	return emittedWarpApprovals.size > 0;
+/** True while the tool call's bridge-emitted permission request is still pending an answer. */
+export function hasWarpPendingApproval(toolCallId: string): boolean {
+	return emittedWarpApprovals.has(toolCallId);
 }
 
 export type WarpEventValue =
