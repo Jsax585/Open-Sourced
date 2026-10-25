@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	compact,
 	DEFAULT_COMPACTION_SETTINGS,
-	getDeepSeekImportContext,
+	getImportedContext,
 	prepareCompaction,
 	type CompactionEntry,
 	type SessionMessageEntry,
@@ -23,7 +23,7 @@ function carrier(messages: AgentMessage[]): CompactionEntry {
 		summary: "transcript-only import divider",
 		firstKeptEntryId: "source",
 		tokensBefore: 0,
-		preserveData: { deepseekImportContext: { version: 1, messages }, other: "preserved" },
+		preserveData: { importedContext: { version: 1, messages }, other: "preserved" },
 	};
 }
 const settings = { ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 1, remoteEnabled: false };
@@ -145,8 +145,8 @@ describe("DeepSeek import compaction", () => {
 				}),
 			).rejects.toThrow();
 			expect(boundary).toEqual(original);
-			expect(getDeepSeekImportContext(boundary.preserveData)?.messages).toEqual(
-				getDeepSeekImportContext(original.preserveData)?.messages,
+			expect(getImportedContext(boundary.preserveData)?.messages).toEqual(
+				getImportedContext(original.preserveData)?.messages,
 			);
 		}
 	});
@@ -195,7 +195,6 @@ describe("DeepSeek import compaction", () => {
 				],
 			},
 		];
-		for (const context of invalid)
-			expect(() => getDeepSeekImportContext({ deepseekImportContext: context })).toThrow();
+		for (const context of invalid) expect(() => getImportedContext({ importedContext: context })).toThrow();
 	});
 });

@@ -57,14 +57,14 @@ describe("import context secret transformations", () => {
 		];
 		const opaque = { type: "compaction", encrypted_content: secret };
 		const original = {
-			preserveData: { deepseekImportContext: { version: 1, messages }, unrelated: secret },
+			preserveData: { importedContext: { version: 1, messages }, unrelated: secret },
 			providerPayload: { type: "openaiResponsesHistory" as const, provider: "openai", items: [opaque] },
 		};
 		const snapshot = structuredClone(original);
 		const result = obfuscateNativeReplay(obfuscator, original, new Set());
-		expect(result.preserveData.deepseekImportContext.messages).toEqual(obfuscateMessages(obfuscator, messages));
-		expect(result.preserveData.deepseekImportContext.version).toBe(1);
-		const user = result.preserveData.deepseekImportContext.messages[0];
+		expect(result.preserveData.importedContext.messages).toEqual(obfuscateMessages(obfuscator, messages));
+		expect(result.preserveData.importedContext.version).toBe(1);
+		const user = result.preserveData.importedContext.messages[0];
 		if (user?.role !== "user" || typeof user.content === "string") throw new Error("Missing user image");
 		expect(user.content[1]).toBe(image);
 		expect(result.providerPayload).toBe(original.providerPayload);
@@ -82,7 +82,7 @@ describe("import context secret transformations", () => {
 			role: "user" as const,
 			content: "replacement",
 			timestamp: 2,
-			preserveData: { deepseekImportContext: { version: 1, messages: [assistant("tok_abc123")] } },
+			preserveData: { importedContext: { version: 1, messages: [assistant("tok_abc123")] } },
 		};
 		const values = new Set<string>();
 		collectNativeReplayRegexSecretValues(obfuscator, replay, values);
@@ -100,7 +100,7 @@ describe("import context secret transformations", () => {
 			{ version: 2, messages: [] },
 			{ version: 1, messages: "invalid" },
 		]) {
-			const message = { preserveData: { deepseekImportContext: carrier } };
+			const message = { preserveData: { importedContext: carrier } };
 			expect(() => collectNativeReplayRegexSecretValues(obfuscator, message, new Set())).toThrow();
 			expect(() => obfuscateNativeReplay(obfuscator, message, new Set())).toThrow();
 		}

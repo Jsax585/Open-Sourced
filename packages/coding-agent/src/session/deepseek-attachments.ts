@@ -181,9 +181,7 @@ export class DeepSeekAttachments {
 		const entries = target.getEntries();
 		const boundary = entries.findLast(
 			entry =>
-				entry.type === "compaction" &&
-				entry.preserveData &&
-				Object.hasOwn(entry.preserveData, "deepseekImportContext"),
+				entry.type === "compaction" && entry.preserveData && Object.hasOwn(entry.preserveData, "importedContext"),
 		);
 		if (!boundary || boundary.type !== "compaction") throw new Error("Missing DeepSeek import attachment boundary");
 		const replacements = new Map<string, string>();
@@ -236,12 +234,12 @@ export class DeepSeekAttachments {
 			if (
 				entry.type === "compaction" &&
 				entry.preserveData &&
-				Object.hasOwn(entry.preserveData, "deepseekImportContext")
+				Object.hasOwn(entry.preserveData, "importedContext")
 			) {
-				const context = entry.preserveData.deepseekImportContext;
+				const context = entry.preserveData.importedContext;
 				if (!isRecord(context) || !Array.isArray(context.messages))
 					throw new Error("Invalid DeepSeek import attachment context");
-				entry.preserveData.deepseekImportContext = {
+				entry.preserveData.importedContext = {
 					...context,
 					messages: context.messages.map(message =>
 						isRecord(message) && Object.hasOwn(message, "content")
@@ -251,6 +249,6 @@ export class DeepSeekAttachments {
 				};
 			}
 		}
-		boundary.preserveData = { ...boundary.preserveData, deepseekImportAttachments: descriptors };
+		boundary.preserveData = { ...boundary.preserveData, importedAttachments: descriptors };
 	}
 }

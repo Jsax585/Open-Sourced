@@ -141,7 +141,7 @@ describe("AgentSession shake", () => {
 		};
 		const sourceId = sessionManager.appendMessage(historical);
 		sessionManager.appendCompaction("import divider", undefined, sourceId, 0, {
-			preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+			preserveData: { importedContext: { version: 1, messages: [snapshot] } },
 		});
 		const result = await session.shake("thinking");
 		expect(result.thinkingBlocksDropped).toBe(1);
@@ -448,7 +448,7 @@ describe("AgentSession shake", () => {
 			};
 			const sourceId = sessionManager.appendMessage(historical);
 			sessionManager.appendCompaction("import divider", undefined, sourceId, 0, {
-				preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+				preserveData: { importedContext: { version: 1, messages: [snapshot] } },
 			});
 			const result = await session.shake("images");
 			expect(result.imagesDropped).toBe(1);
@@ -465,7 +465,7 @@ describe("AgentSession shake", () => {
 				timestamp: 1,
 			};
 			sessionManager.appendCompaction("import divider", undefined, "", 0, {
-				preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+				preserveData: { importedContext: { version: 1, messages: [snapshot] } },
 			});
 			sessionManager.appendResetBoundary();
 			sessionManager.appendMessage({ role: "user", content: "after clear", timestamp: 2 });

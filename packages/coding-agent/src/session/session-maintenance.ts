@@ -30,7 +30,7 @@ import {
 	DEFAULT_SHAKE_CONFIG,
 	type CompactionSettings as EngineCompactionSettings,
 	effectiveReserveTokens,
-	getDeepSeekImportContext,
+	getImportedContext,
 	invalidateMessageCache,
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
@@ -45,7 +45,7 @@ import {
 	type SummaryOptions,
 	shouldCompact,
 	shouldUseProviderNativeCompaction,
-	stripDeepSeekImportContext,
+	stripImportedContext,
 	upsertFileOperations,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
@@ -280,7 +280,7 @@ function maintenanceEntries(entries: readonly SessionEntry[]): SessionEntry[] {
 	}
 	const active = resetIndex >= 0 ? entries.slice(resetIndex + 1) : entries.slice();
 	const boundary = getLatestCompactionEntry(active);
-	const context = getDeepSeekImportContext(boundary?.preserveData);
+	const context = getImportedContext(boundary?.preserveData);
 	if (!context || !boundary) return active;
 	return [
 		...context.messages.map((_, index): SessionEntry => ({
@@ -2513,7 +2513,7 @@ export class SessionMaintenance {
 		advisorResetReason: string;
 		detachExtensionEmit?: boolean;
 	}): Promise<CompactionEntry | undefined> {
-		args.preserveData = stripDeepSeekImportContext(args.preserveData);
+		args.preserveData = stripImportedContext(args.preserveData);
 		const entryId = this.#host.sessionManager.appendCompaction(
 			args.summary,
 			args.shortSummary,

@@ -245,7 +245,7 @@ describe("compact() Anthropic native lane", () => {
 				summary: "display divider",
 				firstKeptEntryId: "source",
 				tokensBefore: 0,
-				preserveData: { deepseekImportContext: { version: 1, messages: snapshot } },
+				preserveData: { importedContext: { version: 1, messages: snapshot } },
 			},
 			{
 				type: "message",
@@ -291,7 +291,7 @@ describe("compact() Anthropic native lane", () => {
 			),
 		);
 		expect(result.firstKeptEntryId).toBe("native-user");
-		expect(result.preserveData?.deepseekImportContext).toBeUndefined();
+		expect(result.preserveData?.importedContext).toBeUndefined();
 	});
 
 	test("sends only the summarized prefix with live controls and persists the signed summary", async () => {

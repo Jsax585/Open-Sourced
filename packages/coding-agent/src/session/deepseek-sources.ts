@@ -19,7 +19,7 @@ import {
 	sessionFormatCatalog,
 } from "@deepseek-ai/dsh-session-format-catalog";
 import { historicalChildCatalogSource } from "@deepseek-ai/dsh-session-format-v3-to-v4";
-import { isEnoent, isRecord } from "@oh-my-pi/pi-utils";
+import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { zstdDecompressStream } from "@oh-my-pi/pi-utils/ar/codecs/zstd";
 import { fileByteSource } from "@oh-my-pi/pi-utils/ar/source";
 import { adoptDeepSeekEventShapes, adoptDeepSeekV0SourceShapes } from "./deepseek-compat";
@@ -638,7 +638,7 @@ export class DeepSeekSources {
 		return (await optionalStat(this.#databaseFallback)) !== null ? this.#databaseFallback : undefined;
 	}
 
-	async #files(): Promise<FileSource[]> {
+	async #files(selectedPath?: string): Promise<FileSource[]> {
 		return atStage("discovery", this.#sessionsRoot, async () => {
 			const files: FileSource[] = [];
 			for (const project of await entries(this.#sessionsRoot)) {
@@ -663,57 +663,69 @@ export class DeepSeekSources {
 					}
 					if (selected === undefined) continue;
 					const filename = path.join(directory, selected.filename);
-					const value = await atStage("header decode", filename, () => boundedHeader(filename));
-					const classification = classifyHeader(value, filename);
-					if (classification.storedVersion !== selected.generation)
-						throw failure(
-							"header decode",
-							filename,
-							"header version disagrees with canonical filename generation",
-						);
-					const stat = await fs.stat(filename);
-					files.push({
-						path: filename,
-						generation: selected.generation,
-						headerValue: value,
-						...classification,
-						modified: stat.mtimeMs,
-					});
+					// One unreadable session must not hide the rest from the picker; read() of it still fails loudly.
+					try {
+						const value = await atStage("header decode", filename, () => boundedHeader(filename));
+						const classification = classifyHeader(value, filename);
+						if (classification.storedVersion !== selected.generation)
+							throw failure(
+								"header decode",
+								filename,
+								"header version disagrees with canonical filename generation",
+							);
+						const stat = await fs.stat(filename);
+						files.push({
+							path: filename,
+							generation: selected.generation,
+							headerValue: value,
+							...classification,
+							modified: stat.mtimeMs,
+						});
+					} catch (error) {
+						if (selectedPath !== undefined && path.resolve(selectedPath) === filename) throw error;
+						logger.warn("Skipping unreadable DeepSeek session", { path: filename, error: String(error) });
+					}
 				}
 			}
 			return files;
 		});
 	}
 
-	/** Header-only file discovery and indexed SQLite metadata; no transcript bodies are parsed. */
+	/** Header-only file discovery and indexed SQLite metadata; strict body/head validation runs in read(). */
 	async list(): Promise<ForeignSessionInfo[]> {
 		const database = await this.#databasePath();
 		const result = new Map<string, ForeignSessionInfo>();
 		if (database !== undefined) {
-			const sql = await withDatabase(database, db => {
-				const sessions = sqlSessions(db, database);
-				for (const session of sessions) validateHead(db, session, sqlLocator(database, session.header.id));
-				return sessions;
-			});
-			for (const session of sql) {
-				if (result.has(session.header.id)) throw failure("discovery", database, "duplicate logical session ID");
-				result.set(session.header.id, {
-					source: "deepseek",
-					id: session.header.id,
-					path: sqlLocator(database, session.header.id),
-					cwd: session.header.cwd ?? "",
-					created: new Date(session.header.createdAt),
-					modified: new Date(session.modified),
-					messageCount: session.messageCount,
-					...(session.title === undefined ? {} : { title: session.title }),
-					...(session.firstMessage === undefined ? {} : { firstMessage: session.firstMessage }),
-				});
+			try {
+				const sql = await withDatabase(database, db => sqlSessions(db, database));
+				for (const session of sql) {
+					if (result.has(session.header.id)) {
+						logger.warn("Skipping duplicate DeepSeek SQLite session", { id: session.header.id });
+						continue;
+					}
+					result.set(session.header.id, {
+						source: "deepseek",
+						id: session.header.id,
+						path: sqlLocator(database, session.header.id),
+						cwd: session.header.cwd ?? "",
+						created: new Date(session.header.createdAt),
+						modified: new Date(session.modified),
+						messageCount: session.messageCount,
+						...(session.title === undefined ? {} : { title: session.title }),
+						...(session.firstMessage === undefined ? {} : { firstMessage: session.firstMessage }),
+					});
+				}
+			} catch (error) {
+				logger.warn("Skipping unreadable DeepSeek SQLite store", { path: database, error: String(error) });
 			}
 		}
 		for (const file of await this.#files()) {
-			if (result.get(file.header.id)?.path.startsWith(SQLITE_PREFIX)) continue;
-			if (result.has(file.header.id))
-				throw failure("discovery", file.path, "duplicate logical session ID in canonical file directories");
+			const existing = result.get(file.header.id);
+			if (existing?.path.startsWith(SQLITE_PREFIX)) continue;
+			if (existing && existing.modified.getTime() >= file.modified) {
+				logger.warn("Skipping duplicate DeepSeek session file", { path: file.path });
+				continue;
+			}
 			result.set(file.header.id, {
 				source: "deepseek",
 				id: file.header.id,
@@ -884,7 +896,7 @@ export class DeepSeekSources {
 					);
 				}
 			}
-			const files = await this.#files();
+			const files = await this.#files(info.path.startsWith(SQLITE_PREFIX) ? undefined : info.path);
 			const database = await this.#databasePath();
 			if (database !== undefined) {
 				return withDatabase(database, (db, metadata) => this.#readSelected(info, files, database, db, metadata));

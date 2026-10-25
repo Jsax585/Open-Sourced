@@ -77,7 +77,7 @@ describe("AgentSession.fork(entryId)", () => {
 		const manager = session.sessionManager;
 		const sourceUser = manager.getBranch().find(entry => entry.type === "message" && entry.message.role === "user")!;
 		manager.appendCompaction("import", undefined, forkAt, 0, {
-			preserveData: { deepseekImportContext: { version: 1, messages: [] } },
+			preserveData: { importedContext: { version: 1, messages: [] } },
 		});
 		const sourceFile = session.sessionFile;
 		const sourceLeaf = manager.getLeafId();

@@ -72,7 +72,7 @@ describe("AgentSession manual retry", () => {
 		const manager = SessionManager.inMemory();
 		const sourceId = manager.appendMessage(source);
 		manager.appendCompaction("import", undefined, sourceId, 0, {
-			preserveData: { deepseekImportContext: { version: 1, messages: [source] } },
+			preserveData: { importedContext: { version: 1, messages: [source] } },
 		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",

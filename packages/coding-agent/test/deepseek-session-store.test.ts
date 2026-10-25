@@ -212,6 +212,14 @@ describe("DeepSeek discovery", () => {
 		await expect(store.load(info)).rejects.toThrow();
 	});
 
+	it("skips a session whose header disagrees with its filename while listing the rest", async () => {
+		await writeDeepSeekLog(root, { id: "healthy", cwd: root, events: [user(0, "Healthy")] });
+		const bad = await writeDeepSeekLog(root, { id: "mismatched", cwd: root, events: [user(0, "Bad")] });
+		await fs.rename(bad, path.join(path.dirname(bad), "session.v2.jsonl"));
+		const store = new DeepSeekSessionStore(root);
+		expect((await store.list()).map(info => info.id)).toEqual(["healthy"]);
+	});
+
 	it("deduplicates IDs in favor of SQLite and never falls back to stale logs after SQL corruption", async () => {
 		await writeDeepSeekLog(root, { id: "same-id", cwd: root, events: [user(0, "Stale file")] });
 		const file = await writeDeepSeekDatabase(root, [
@@ -926,8 +934,8 @@ describe("DeepSeek SQLite snapshots", () => {
 			if (fault === "schema") db.exec("PRAGMA user_version = 999");
 			db.close();
 			const before = await snapshot(root);
-			if (fault === "schema") await expect(store.list()).rejects.toThrow(/schema|version|unsupported/i);
-			else await expect(store.load(info)).rejects.toThrow();
+			if (fault === "schema") expect(await store.list()).toEqual([]);
+			await expect(store.load(info)).rejects.toThrow();
 			expect(await snapshot(root)).toEqual(before);
 		},
 	);

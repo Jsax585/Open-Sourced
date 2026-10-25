@@ -4,16 +4,16 @@ import type { AssistantStreamRecord } from "@deepseek-ai/dsh-llm/assistant-strea
 import type { Message as DeepSeekMessage } from "@deepseek-ai/dsh-llm/message";
 import type { StreamChunk } from "@deepseek-ai/dsh-llm/types";
 import { expandAssistantStream } from "@deepseek-ai/dsh-llm/assistant-stream";
-// ponytail: dsh-llm's main entry runs createRequire("../package.json") at module
-// top level (vendor bug), which breaks `bun build --compile`. Subpath imports
-// reach the same API without loading the broken modules. Upgrade: import from
-// the main entry once dsh-llm inlines its version.
+// Narrow subpath imports keep this module's own dependency surface small; the
+// compiled binary's dsh-llm `createRequire("../package.json")` vendor bug is
+// handled by scripts/dsh-llm-manifest-plugin.ts, since dsh-session imports the
+// dsh-llm main entry regardless.
 import { KNOWN_SESSION_EVENT_TYPES, Session, SessionId, SessionLogOffset } from "@deepseek-ai/dsh-session";
 import { deriveEventMessage, foldSurface, isAppendSurfaceEvent } from "@deepseek-ai/dsh-session/surface";
 import type { SessionEvent, SessionHeader } from "@deepseek-ai/dsh-session/types";
 import { currentSessionMessageProjections } from "@deepseek-ai/dsh-session-format-catalog/message-projections";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
+import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	AssistantMessage,
 	ImageContent,
@@ -113,6 +113,30 @@ function terminalReason(
 	return { stopReason: "stop" };
 }
 
+/** Canonical admission (KNOWN_SESSION_EVENT_TYPES + Session.fromRestore) validates payloads after this shape check. */
+function isSessionEvent(event: unknown): event is SessionEvent {
+	return (
+		isRecord(event) &&
+		typeof event.type === "string" &&
+		Number.isSafeInteger(event.seq) &&
+		typeof event.time === "number" &&
+		"data" in event
+	);
+}
+
+function sessionEvents(events: readonly unknown[]): SessionEvent[] {
+	const cloned: unknown[] = structuredClone([...events]);
+	return cloned.map(event => {
+		if (!isSessionEvent(event)) throw new Error("malformed session event");
+		return event;
+	});
+}
+
+/** Widen the narrowed discriminant so augmentation-only event types (title, compaction) compare without casts. */
+function eventType(event: { readonly type: string }): string {
+	return event.type;
+}
+
 function diagnostic(error: unknown): string {
 	// Decoder diagnostics can contain source values. Keep only location/category words,
 	// never JSON parser excerpts or payload strings at this trust boundary.
@@ -159,7 +183,7 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 			const interpreted =
 				snapshot.kind === "sqlite"
 					? interpretDeepSeekEvents(snapshot.events)
-					: { events: structuredClone(snapshot.events) as unknown as SessionEvent[], repairs: {} };
+					: { events: sessionEvents(snapshot.events), repairs: {} };
 			const events = interpreted.events;
 			stage = "canonical validation";
 			for (const event of events) {
@@ -391,13 +415,14 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 						append({ type: "model_change", model }, event.time);
 						lastModel = model;
 					}
-				} else if ((event.type as string) === "session/title") {
-					const data = event.data as Record<string, unknown>;
+				} else if (eventType(event) === "session/title") {
+					// `session/title` comes from the dsh-commands SessionEventMap augmentation, not dsh-session's base union.
+					const data: unknown = event.data;
 					title = isRecord(data) ? (text(data.title) ?? title) : title;
 				} else if (typeof event.surfaceOp === "object") {
 					const previous = events[event.seq - 1];
 					const rendered =
-						(previous?.type as string) === "compaction/summary"
+						previous !== undefined && eventType(previous) === "compaction/summary"
 							? ""
 							: message?.content
 									.map(block =>
@@ -410,8 +435,10 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 						{ seq: event.seq, surfaceOp: event.surfaceOp, sourceEventSeqs: event.sourceEventSeqs, message },
 						event.time,
 					);
-				} else if ((event.type as string) === "compaction/summary") {
-					const data = event.data as Record<string, unknown>;
+				} else if (eventType(event) === "compaction/summary") {
+					// `compaction/summary` comes from the dsh-compaction SessionEventMap augmentation.
+					const data: unknown = event.data;
+					if (!isRecord(data)) continue;
 					const summary = Array.isArray(data.summary)
 						? data.summary
 								.map(block =>
@@ -458,8 +485,8 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 					historicalRecovery: "disabled-before-import-boundary",
 				},
 			});
-			const preserveData = { deepseekImportContext: { version: 1, messages } };
-			getDeepSeekImportContext(preserveData);
+			const preserveData = { importedContext: { version: 1, messages } };
+			getImportedContext(preserveData);
 			manager.appendCompaction("", undefined, "", 0, { preserveData });
 			if (title) await manager.setSessionName(title, "auto");
 			this.#attachments.set(manager, attachments);

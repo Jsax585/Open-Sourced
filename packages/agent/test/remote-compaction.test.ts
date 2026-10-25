@@ -2245,7 +2245,7 @@ describe("compact() remote compaction failure handling", () => {
 					summary: "display divider",
 					firstKeptEntryId: "source",
 					tokensBefore: 0,
-					preserveData: { deepseekImportContext: { version: 1, messages } },
+					preserveData: { importedContext: { version: 1, messages } },
 				},
 				{
 					type: "message",
@@ -2287,7 +2287,7 @@ describe("compact() remote compaction failure handling", () => {
 			expect(inputs[0].match(/native tail/g)).toHaveLength(1);
 			expect(inputs[0]).not.toContain("obsolete original");
 			expect(inputs[0]).not.toContain("display divider");
-			expect(result.preserveData?.deepseekImportContext).toBeUndefined();
+			expect(result.preserveData?.importedContext).toBeUndefined();
 		});
 	}
 

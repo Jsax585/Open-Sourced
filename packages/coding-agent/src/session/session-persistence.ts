@@ -182,16 +182,9 @@ function snapcompactArchiveNeedsRewrite(archive: Record<string, unknown>): boole
  * synchronous blob-store path (`fs.writeFileSync`), so blob bytes are in the
  * kernel page cache before the JSONL line referencing them is written.
  */
-function truncateForPersistence(
-	obj: unknown,
-	blobStore: BlobStore,
-	key?: string,
-	lossless = false,
-	inlineImages = false,
-): unknown {
+function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string, lossless = false): unknown {
 	if (obj === null || obj === undefined) return obj;
 	if (
-		!inlineImages &&
 		typeof obj === "object" &&
 		"type" in obj &&
 		obj.type === "image_generation_call" &&
@@ -202,7 +195,7 @@ function truncateForPersistence(
 	) {
 		return { ...obj, result: externalizeImagePayloadSync(blobStore, obj, obj.result, undefined) };
 	}
-	if (!inlineImages && shouldExternalizeImagePayload(obj, key)) {
+	if (shouldExternalizeImagePayload(obj, key)) {
 		return { ...obj, data: externalizeImagePayloadSync(blobStore, obj, obj.data, obj.mimeType) };
 	}
 	// Signed content is bound to its exact bytes: a truncated `thinking`/`text`/
@@ -255,7 +248,7 @@ function truncateForPersistence(
 	}
 
 	if (typeof obj === "string") {
-		if (!inlineImages && key === "image_url" && isImageDataUrl(obj)) {
+		if (key === "image_url" && isImageDataUrl(obj)) {
 			return externalizeImageDataUrlSync(blobStore, obj);
 		}
 		if (!lossless && obj.length > MAX_PERSIST_CHARS) {
@@ -278,7 +271,7 @@ function truncateForPersistence(
 		const result: unknown[] = new Array(obj.length);
 		for (let i = 0; i < obj.length; i++) {
 			const item = obj[i];
-			const newItem = truncateForPersistence(item, blobStore, key, lossless, inlineImages);
+			const newItem = truncateForPersistence(item, blobStore, key, lossless);
 			if (newItem !== item) changed = true;
 			result[i] = newItem;
 		}
@@ -308,8 +301,7 @@ function truncateForPersistence(
 						value,
 						blobStore,
 						childKey,
-						lossless || (key === "preserveData" && childKey === "deepseekImportContext"),
-						inlineImages,
+						lossless || (key === "preserveData" && childKey === "importedContext"),
 					);
 			if (newValue !== value) changed = true;
 			entries.push([childKey, newValue]);
@@ -398,7 +390,7 @@ function persistenceNodeNeedsRewrite(obj: unknown, key?: string, lossless = fals
 				persistenceNodeNeedsRewrite(
 					value,
 					childKey,
-					lossless || (key === "preserveData" && childKey === "deepseekImportContext"),
+					lossless || (key === "preserveData" && childKey === "importedContext"),
 				)
 			)
 				return true;
@@ -587,18 +579,12 @@ function stripSpilledMcpStructuredContent(entry: FileEntry): FileEntry {
 export function prepareEntryForPersistence(
 	entry: FileEntry,
 	blobStore: BlobStore,
-	options?: { lossless?: boolean; inlineImages?: boolean },
+	options?: { lossless?: boolean },
 ): FileEntry {
 	// Import history and replacement snapshots retain source bytes, while image
 	// payloads still use native blob storage. Ordinary native entries stay capped.
 	const projected = options?.lossless
 		? entry
 		: stripSpilledMcpStructuredContent(stripReplayedReasoningSignatures(entry));
-	return truncateForPersistence(
-		projected,
-		blobStore,
-		undefined,
-		options?.lossless,
-		options?.inlineImages,
-	) as FileEntry;
+	return truncateForPersistence(projected, blobStore, undefined, options?.lossless) as FileEntry;
 }

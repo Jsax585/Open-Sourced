@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
+import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	ImageContent,
 	Message,
@@ -169,7 +169,7 @@ function isImportBoundary(entry: SessionEntry): entry is CompactionEntry {
 	return (
 		entry.type === "compaction" &&
 		entry.preserveData !== undefined &&
-		Object.hasOwn(entry.preserveData, "deepseekImportContext")
+		Object.hasOwn(entry.preserveData, "importedContext")
 	);
 }
 
@@ -202,7 +202,7 @@ function copyImportedArtifactsSync(
 	const required: string[] = [];
 	for (const entry of entries) {
 		if (!isImportBoundary(entry)) continue;
-		const attachments = entry.preserveData?.deepseekImportAttachments;
+		const attachments = entry.preserveData?.importedAttachments;
 		if (attachments === undefined) continue;
 		if (!Array.isArray(attachments)) throw new Error("Invalid imported attachment metadata.");
 		for (const attachment of attachments) {
@@ -1587,7 +1587,7 @@ export class SessionManager {
 	}
 
 	#lineFor(entry: FileEntry, imported = false): string {
-		const options = imported ? { lossless: true, inlineImages: true } : undefined;
+		const options = imported ? { lossless: true } : undefined;
 		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs, options)) ?? "null"}\n`;
 	}
 	#recordDurableAppend(line: string): void {
@@ -3722,7 +3722,7 @@ export class SessionManager {
 			tokensAfter?: number;
 		} = {},
 	): string {
-		getDeepSeekImportContext(options.preserveData);
+		getImportedContext(options.preserveData);
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			...this.#freshEntryFields(),
@@ -3997,7 +3997,7 @@ export class SessionManager {
 		if (!this.#entries.some(isImportBoundary)) return;
 		if (entryId !== null && this.getBranch(entryId).some(isImportBoundary)) return;
 		throw new Error(
-			"Cannot continue, branch, or fork before the DeepSeek import boundary. View or export historical entries instead.",
+			"Cannot continue, branch, or fork before the import boundary. View or export historical entries instead.",
 		);
 	}
 

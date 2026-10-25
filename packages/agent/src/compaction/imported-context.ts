@@ -2,7 +2,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import type { AgentMessage } from "../types";
 
 /** Persisted conversion snapshot; replay requires no source-provider packages. */
-export interface DeepSeekImportContext {
+export interface ImportedContext {
 	version: 1;
 	messages: AgentMessage[];
 }
@@ -77,25 +77,23 @@ function validMessage(message: unknown): message is AgentMessage {
 }
 
 /** Reject malformed or future snapshots instead of falling back to obsolete transcript history. */
-export function getDeepSeekImportContext(preserveData?: Record<string, unknown>): DeepSeekImportContext | undefined {
-	if (!preserveData || !Object.hasOwn(preserveData, "deepseekImportContext")) return undefined;
-	const context = preserveData.deepseekImportContext;
+export function getImportedContext(preserveData?: Record<string, unknown>): ImportedContext | undefined {
+	if (!preserveData || !Object.hasOwn(preserveData, "importedContext")) return undefined;
+	const context = preserveData.importedContext;
 	if (
 		!isRecord(context) ||
 		context.version !== 1 ||
 		!Array.isArray(context.messages) ||
 		!context.messages.every(validMessage)
 	) {
-		throw new Error("Invalid or unsupported DeepSeek import context (expected version 1 native messages)");
+		throw new Error("Invalid or unsupported imported context (expected version 1 native messages)");
 	}
-	return context as unknown as DeepSeekImportContext;
+	return context as unknown as ImportedContext;
 }
 
 /** A successful successor replaces the import snapshot; never mutate the original on failure. */
-export function stripDeepSeekImportContext(
-	preserveData?: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-	if (!preserveData || !Object.hasOwn(preserveData, "deepseekImportContext")) return preserveData;
-	const { deepseekImportContext: _context, ...rest } = preserveData;
+export function stripImportedContext(preserveData?: Record<string, unknown>): Record<string, unknown> | undefined {
+	if (!preserveData || !Object.hasOwn(preserveData, "importedContext")) return preserveData;
+	const { importedContext: _context, ...rest } = preserveData;
 	return Object.keys(rest).length > 0 ? rest : undefined;
 }

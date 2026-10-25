@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -169,9 +168,6 @@ export function parseSessionContent(content: string): SessionLoadResult {
 			malformedRecords++;
 		},
 	}) as FileEntry[];
-	for (const entry of entries) {
-		if (entry.type === "compaction") getDeepSeekImportContext(entry.preserveData);
-	}
 	applyTitleSlot(entries[0], slot);
 	return {
 		entries,
@@ -424,7 +420,6 @@ export async function loadEntriesFromFileStream(
 	const titleSlot = await visitEntriesFromFileStream(
 		filePath,
 		entry => {
-			if (entry.type === "compaction") getDeepSeekImportContext(entry.preserveData);
 			entries.push(entry);
 		},
 		{

@@ -67,7 +67,11 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				identifiers: options.minifyIdentifiers ?? false,
 				keepNames: true,
 			},
-			plugins: [createDshLlmManifestPlugin(), createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin()],
+			plugins: [
+				await createDshLlmManifestPlugin(),
+				createJsonParsePlugin(),
+				await createLegacyPiVirtualModulePlugin(),
+			],
 			compile: {
 				// Bun's process-wide fetch User-Agent default. Any explicit
 				// provider fingerprint (Anthropic/Codex OAuth) still wins.

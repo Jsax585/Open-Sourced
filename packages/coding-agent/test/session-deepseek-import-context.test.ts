@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
+import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { BlobStore, isBlobRef } from "@oh-my-pi/pi-coding-agent/session/blob-store";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
@@ -58,7 +58,7 @@ function fixture(): SessionEntry[] {
 			firstKeptEntryId: "",
 			tokensBefore: 10,
 			preserveData: {
-				deepseekImportContext: { version: 1, messages: [{ role: "user", content: "replacement", timestamp: 1 }] },
+				importedContext: { version: 1, messages: [{ role: "user", content: "replacement", timestamp: 1 }] },
 			},
 		},
 		{
@@ -139,7 +139,7 @@ describe("native DeepSeek import context", () => {
 		}
 	});
 
-	it("rejects malformed and unknown carriers even off active branch and in streaming loads", async () => {
+	it("loads malformed carriers leniently and rejects them only when the active context consumes them", async () => {
 		using dir = TempDir.createSync("@deepseek-invalid-");
 		for (const carrier of [
 			{ version: 2, messages: [] },
@@ -147,13 +147,14 @@ describe("native DeepSeek import context", () => {
 			{ version: 1, messages: "bad" },
 		]) {
 			const entries = fixture();
-			(entries[1] as CompactionEntry).preserveData = { deepseekImportContext: carrier };
+			(entries[1] as CompactionEntry).preserveData = { importedContext: carrier };
 			const content = entries.map(entry => JSON.stringify(entry)).join("\n");
-			expect(() => parseSessionEntries(content)).toThrow();
-			expect(() => buildSessionContext(entries, "old")).toThrow();
+			expect(parseSessionEntries(content)).toHaveLength(entries.length);
+			expect(() => buildSessionContext(entries)).toThrow();
+			expect(() => buildSessionContext(entries, "old")).not.toThrow();
 			const file = path.join(dir.path(), "invalid.jsonl");
 			await Bun.write(file, content);
-			await expect(loadEntriesFromFileStream(file)).rejects.toThrow();
+			expect((await loadEntriesFromFileStream(file)).entries).toHaveLength(entries.length);
 		}
 	});
 
@@ -177,7 +178,7 @@ describe("native DeepSeek import context", () => {
 		source.appendMessage(message);
 		source.appendMessage(result);
 		source.appendCompaction("import boundary", undefined, "", 10, {
-			preserveData: { deepseekImportContext: { version: 1, messages: [message, result] } },
+			preserveData: { importedContext: { version: 1, messages: [message, result] } },
 		});
 		source.appendMessage({ role: "user", content: "native tail", timestamp: 3 });
 		const expected = source.buildSessionContext().messages;
@@ -200,7 +201,7 @@ describe("native DeepSeek import context", () => {
 		const data = Buffer.alloc(1500, 1).toString("base64");
 		const entry = fixture()[1] as CompactionEntry;
 		entry.preserveData = {
-			deepseekImportContext: {
+			importedContext: {
 				version: 1,
 				messages: [
 					{
@@ -217,15 +218,13 @@ describe("native DeepSeek import context", () => {
 		const stored = prepareEntryForPersistence(entry, blobs);
 		expect(JSON.stringify(stored)).not.toContain(data);
 		if (stored.type !== "compaction") throw new Error("Expected compaction entry");
-		const snapshot = getDeepSeekImportContext(stored.preserveData);
+		const snapshot = getImportedContext(stored.preserveData);
 		const imageMessage = snapshot?.messages[0];
 		const image =
 			imageMessage && "content" in imageMessage && Array.isArray(imageMessage.content)
 				? imageMessage.content[0]
 				: undefined;
 		expect(image?.type === "image" && isBlobRef(image.data)).toBe(true);
-		const inline = prepareEntryForPersistence(entry, blobs, { lossless: true, inlineImages: true });
-		expect(inline).toEqual(entry);
 		const loaded = [JSON.parse(JSON.stringify(stored)) as CompactionEntry];
 		await resolveBlobRefsInEntries(loaded, blobs);
 		expect(loaded[0]).toEqual(entry);

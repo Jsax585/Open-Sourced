@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
+import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	AnthropicCompactionPayload,
 	AssistantMessage,
@@ -442,7 +442,7 @@ export function collectNativeReplayRegexSecretValues(
 	values: Set<string>,
 ): void {
 	if (!obfuscator.hasSecrets()) return;
-	const context = getDeepSeekImportContext(message.preserveData);
+	const context = getImportedContext(message.preserveData);
 	if (context !== undefined) {
 		for (const value of collectMessageRegexSecretValues(obfuscator, context.messages as Message[])) values.add(value);
 	}
@@ -468,13 +468,13 @@ export function obfuscateNativeReplay<
 	T extends { providerPayload?: ProviderPayload; preserveData?: Record<string, unknown> },
 >(obfuscator: SecretObfuscator, message: T, sharedRegexSecretValues: ReadonlySet<string>): T {
 	if (!obfuscator.hasSecrets()) return message;
-	const context = getDeepSeekImportContext(message.preserveData);
+	const context = getImportedContext(message.preserveData);
 	if (context !== undefined) {
 		const messages = obfuscateMessageBatch(obfuscator, context.messages as Message[], sharedRegexSecretValues);
 		if (messages !== context.messages) {
 			message = {
 				...message,
-				preserveData: { ...message.preserveData, deepseekImportContext: { ...context, messages } },
+				preserveData: { ...message.preserveData, importedContext: { ...context, messages } },
 			};
 		}
 	}

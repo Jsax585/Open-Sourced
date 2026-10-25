@@ -22,7 +22,7 @@ describe("SessionAnonymizer", () => {
 			parentId: null,
 			summary: "Imported context",
 			preserveData: {
-				deepseekImportContext: {
+				importedContext: {
 					version: 1,
 					messages: [
 						{
@@ -41,7 +41,7 @@ describe("SessionAnonymizer", () => {
 		const original = structuredClone(record);
 		const anonymized = new SessionAnonymizer().entry(record);
 		expect(JSON.stringify(anonymized)).not.toContain(secret);
-		expect(JSON.stringify(anonymized)).not.toContain("deepseekImportContext");
+		expect(JSON.stringify(anonymized)).not.toContain("importedContext");
 		expect(at(anonymized, "preserveData")).toMatch(/^\[redacted #\d+: \d+ chars, 1 line\]$/);
 		expect(record).toEqual(original);
 	});

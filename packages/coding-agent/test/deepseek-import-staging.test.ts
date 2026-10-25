@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
+import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -35,7 +35,7 @@ function detached(cwd: string) {
 	const historical = manager.appendMessage({ role: "user", content: sourceReference, timestamp: 1 });
 	const boundary = manager.appendCompaction("DeepSeek import", undefined, "", 0, {
 		preserveData: {
-			deepseekImportContext: {
+			importedContext: {
 				version: 1,
 				messages: [{ role: "user", content: sourceReference, timestamp: 2 }],
 			},
@@ -79,14 +79,14 @@ async function stageAttachment(target: SessionManager): Promise<string> {
 		}
 	}
 	const boundary = boundaryEntry(target);
-	const context = getDeepSeekImportContext(boundary.preserveData);
+	const context = getImportedContext(boundary.preserveData);
 	if (!context) throw new Error("Expected import context");
 	for (const message of context.messages) {
 		if (message.role === "user" && message.content === sourceReference) message.content = reference;
 	}
 	boundary.preserveData = {
 		...boundary.preserveData,
-		deepseekImportAttachments: [
+		importedAttachments: [
 			{
 				id: allocated.id,
 				sourceId,
@@ -136,7 +136,7 @@ function expectHistoricalNavigationBlocked(manager: SessionManager, historical: 
 	const state = structuredClone(manager.captureState());
 	const leaf = manager.getLeafId();
 	for (const action of guardedNavigation) {
-		expect(() => action.run(manager, historical)).toThrow(/before the DeepSeek import boundary/);
+		expect(() => action.run(manager, historical)).toThrow(/before the import boundary/);
 		expect(manager.captureState()).toEqual(state);
 		expect(manager.getLeafId()).toBe(leaf);
 	}

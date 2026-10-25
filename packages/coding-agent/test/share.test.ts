@@ -123,7 +123,7 @@ describe("buildShareSnapshot", () => {
 			firstKeptEntryId: "boundary",
 			tokensBefore: 0,
 			preserveData: {
-				deepseekImportContext: {
+				importedContext: {
 					version: 1,
 					messages: [
 						{
@@ -149,7 +149,7 @@ describe("buildShareSnapshot", () => {
 			obfuscator: new SecretObfuscator([{ type: "plain", content: secret }]),
 		});
 		expect(JSON.stringify(snapshot)).not.toContain(secret);
-		expect(JSON.stringify(snapshot)).not.toContain("deepseekImportContext");
+		expect(JSON.stringify(snapshot)).not.toContain("importedContext");
 		expect(entry).toEqual(original);
 		expect(buildShareSnapshot(sm).entries).toEqual([original]);
 	});

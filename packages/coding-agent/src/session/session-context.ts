@@ -2,7 +2,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { customMessageEntryMessage, isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	getAnthropicCompactionPayload,
-	getDeepSeekImportContext,
+	getImportedContext,
 	isTurnStartEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
@@ -248,10 +248,6 @@ export function buildSessionContext(
 	options?: BuildSessionContextOptions,
 ): SessionContext {
 	// Build uuid index if not available
-	// Validate every carrier, including superseded and off-branch boundaries.
-	for (const entry of entries) {
-		if (entry.type === "compaction") getDeepSeekImportContext(entry.preserveData);
-	}
 	if (!byId) {
 		byId = new Map<string, SessionEntry>();
 		for (const entry of entries) {
@@ -448,7 +444,7 @@ export function buildSessionContext(
 		}
 	};
 
-	const importContext = compaction ? getDeepSeekImportContext(compaction.preserveData) : undefined;
+	const importContext = compaction ? getImportedContext(compaction.preserveData) : undefined;
 	const importBoundaryIdx = importContext ? path.findIndex(entry => entry.id === compaction?.id) : -1;
 	if (
 		options?.transcript &&

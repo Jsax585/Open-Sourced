@@ -5,15 +5,14 @@ import type { SessionEntry } from "./session-entries";
 export const TOOL_EXECUTION_START_CUSTOM_TYPE = "tool_execution_start";
 export const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
-/** Native recovery never crosses imported context or an explicit conversation reset. */
+/** Native recovery never crosses an imported-context boundary. */
 export function nativeTurnEntries(entries: readonly SessionEntry[]): readonly SessionEntry[] {
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index]!;
 		if (
-			entry.type === "reset_boundary" ||
-			(entry.type === "compaction" &&
-				entry.preserveData !== undefined &&
-				Object.hasOwn(entry.preserveData, "deepseekImportContext"))
+			entry.type === "compaction" &&
+			entry.preserveData !== undefined &&
+			Object.hasOwn(entry.preserveData, "importedContext")
 		) {
 			return entries.slice(index + 1);
 		}

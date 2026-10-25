@@ -62,7 +62,7 @@ import {
 	storeCompactionV2PreserveData,
 	V2_RETAINED_MESSAGE_TOKEN_BUDGET,
 } from "./compaction-v2-streaming";
-import { getDeepSeekImportContext, stripDeepSeekImportContext } from "./deepseek-import";
+import { getImportedContext, stripImportedContext } from "./imported-context";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { NativeCompactionError } from "./errors";
 import {
@@ -1394,7 +1394,7 @@ export function prepareCompaction(
 	if (
 		lastEntry?.type === "compaction" &&
 		!lastEntry.providerReplayThroughEntryId &&
-		!getDeepSeekImportContext(lastEntry.preserveData)
+		!getImportedContext(lastEntry.preserveData)
 	) {
 		return undefined;
 	}
@@ -1415,7 +1415,7 @@ export function prepareCompaction(
 	}
 	const previousCompaction =
 		prevCompactionIndex >= 0 ? (pathEntries[prevCompactionIndex] as CompactionEntry) : undefined;
-	const importContext = getDeepSeekImportContext(previousCompaction?.preserveData);
+	const importContext = getImportedContext(previousCompaction?.preserveData);
 	let boundaryStart = Math.max(prevCompactionIndex, resetBoundaryIndex) + 1;
 	if (
 		previousCompaction &&
@@ -1737,7 +1737,7 @@ export async function compact(
 			: undefined;
 
 	let preserveData = withAnthropicCompactionPreserveData(
-		withOpenAiRemoteCompactionPreserveData(stripDeepSeekImportContext(previousPreserveData), undefined),
+		withOpenAiRemoteCompactionPreserveData(stripImportedContext(previousPreserveData), undefined),
 		undefined,
 	);
 	const remotePrefixMessages: AgentMessage[] = [
@@ -2270,7 +2270,7 @@ export async function compact(
 		});
 	}
 
-	if (!firstKeptEntryId && !getDeepSeekImportContext(previousPreserveData)) {
+	if (!firstKeptEntryId && !getImportedContext(previousPreserveData)) {
 		throw new Error("First kept entry has no ID - session may need migration");
 	}
 
