@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed TTSR rule matching slowing down quadratically on long tool calls such as `bash`, `eval` or `task` arguments: their streamed JSON escapes newlines, so every delta rescanned the whole argument (a 64 KB call with 10 rules took 120 ms of matching, now 4.5 ms). A long unterminated line is now rescanned as it grows by a quarter, and the final check still scans all of it ([#14248](https://github.com/can1357/oh-my-pi/issues/14248))
 - Fixed `omp gc --compress` exiting with "the event loop drained while it was still pending" on Bun 1.3.14 when a session artifact is pretty-printed JSON larger than 1 MiB, and session header probes (gc, session move and transfer) reading whole artifacts on Windows ([#15745](https://github.com/can1357/oh-my-pi/issues/15745), [#16754](https://github.com/can1357/oh-my-pi/pull/16754) by [@wolfiesch](https://github.com/wolfiesch))
 - `/resume` into another session now cancels the previous session's background jobs, as `/new` does, instead of delivering their results into the resumed session and starting a turn there ([#16760](https://github.com/can1357/oh-my-pi/pull/16760) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the models config migration writing `models.yml` readable by other users on the machine, and dropping every custom provider when the write was interrupted; the migrated file is now published atomically with owner-only permissions ([#16654](https://github.com/can1357/oh-my-pi/pull/16654) by [@adi-IL](https://github.com/adi-IL))
