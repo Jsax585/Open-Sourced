@@ -204,6 +204,43 @@ fn rejects_a_leading_keeper_echo_when_the_payload_cannot_fill_the_widened_range(
 	assert!(error.to_string().contains("body opens by restating"));
 }
 
+/// A body that restates the line above the range and is shorter than the
+/// range must not delete the range rows it never restates. A parsed language
+/// used to apply it (the duplicate broke the parse, so the syntax-probed
+/// repair dropped the echo and the rest of the range with it) while an
+/// unparsed one refused the same bytes.
+#[test]
+fn refuses_a_too_short_leading_echo_the_same_way_with_or_without_a_parser() {
+	let file = "import time\n\ndef run(a=None, b=None):\n    \"\"\"Time each phase: reap, \
+	            collect,\n    grade, so the part outside the cap is\n    measured, not \
+	            assumed.\"\"\"\n    rs, wd = a or 1, b or 2\n    t0 = time.monotonic()\n    return \
+	            rs, wd, t0\n";
+	let edits = replacement(
+		5,
+		8,
+		&[
+			"    \"\"\"Time each phase: reap, collect,",
+			"    collect_objects, grade, so the part outside the cap is",
+			"    measured, not assumed.\"\"\"",
+		],
+		1,
+	);
+	for path in ["server.py", "server.txt"] {
+		let error = apply_edits(file, &edits, ApplyOptions {
+			clipboard:      None,
+			path:           Some(path),
+			on_empty_paste: EmptyPaste::Throw,
+		})
+		.expect_err(path);
+		assert!(
+			error
+				.to_string()
+				.contains("body opens by restating the 1 line(s) just above the range"),
+			"{path}: {error}"
+		);
+	}
+}
+
 #[test]
 fn drops_a_trailing_attribute_echo_in_a_single_line_replacement() {
 	let file = "/// Old summary.\n#[napi]\npub fn f() {}";

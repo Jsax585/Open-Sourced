@@ -560,6 +560,17 @@ fn group_variants(
 				{
 					continue;
 				}
+				// Dropping a one-sided echo from a body shorter than the range is
+				// the reading `normalize_echoes` rejects as ambiguous:
+				// the echo may mean the range is shifted, so the
+				// uncovered rows may be distinct content the body never
+				// restates. Parsing cannot tell those readings apart.
+				if kept == 0
+					&& (drop_l == 0) != (drop_t == 0)
+					&& payload.len() < group.delete_indices.len()
+				{
+					continue;
+				}
 				let mut kept_inserts = inserts[drop_l..inserts.len() - drop_t].to_vec();
 				if let Some(line) = before {
 					let cursor = if line as usize >= lines.len() {

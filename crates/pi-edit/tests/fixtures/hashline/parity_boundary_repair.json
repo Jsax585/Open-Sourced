@@ -77,7 +77,7 @@
 			]
 		},
 		{
-			"name": "drops a duplicated multi-line closing block (the Root.tsx incident)",
+			"name": "rejects a duplicated multi-line closing block whose body cannot fill the range (the Root.tsx incident)",
 			"parse": [
 				{
 					"input": "PUT 7-16:\n+\treturn (\n+\t\t<>\n+\t\t\t<Composition\n+\t\t\t\tid=\"Sizzle\"\n+\t\t\t\tcomponent={Sizzle}\n+\t\t\t\tdurationInFrames={durationInFrames}\n+\t\t\t\twidth={1920}\n+\t\t\t\tdefaultProps={{ layout: \"landscape\" } satisfies SizzleProps}\n+\t\t\t/>\n+\t\t</>\n+\t);",
@@ -92,13 +92,7 @@
 					"text": "import type React from \"react\";\nimport { Composition } from \"remotion\";\nimport { Sizzle, type SizzleProps } from \"./compositions/Sizzle\";\nimport { FPS, totalDurationInFrames } from \"./lib/scenes\";\n\nexport const RemotionRoot: React.FC = () => {\n\tconst durationInFrames = totalDurationInFrames();\n\treturn (\n\t\t<>\n\t\t\t<Composition\n\t\t\t\tid=\"Sizzle\"\n\t\t\t\tcomponent={Sizzle}\n\t\t\t\tdurationInFrames={durationInFrames}\n\t\t\t\twidth={1920}\n\t\t\t\tdefaultProps={{ layout: \"landscape\" }}\n\t\t\t/>\n\t\t</>\n\t);\n};",
 					"input": "PUT 7-16:\n+\treturn (\n+\t\t<>\n+\t\t\t<Composition\n+\t\t\t\tid=\"Sizzle\"\n+\t\t\t\tcomponent={Sizzle}\n+\t\t\t\tdurationInFrames={durationInFrames}\n+\t\t\t\twidth={1920}\n+\t\t\t\tdefaultProps={{ layout: \"landscape\" } satisfies SizzleProps}\n+\t\t\t/>\n+\t\t</>\n+\t);",
 					"path": "fixture.tsx",
-					"expect": {
-						"text": "import type React from \"react\";\nimport { Composition } from \"remotion\";\nimport { Sizzle, type SizzleProps } from \"./compositions/Sizzle\";\nimport { FPS, totalDurationInFrames } from \"./lib/scenes\";\n\nexport const RemotionRoot: React.FC = () => {\n\treturn (\n\t\t<>\n\t\t\t<Composition\n\t\t\t\tid=\"Sizzle\"\n\t\t\t\tcomponent={Sizzle}\n\t\t\t\tdurationInFrames={durationInFrames}\n\t\t\t\twidth={1920}\n\t\t\t\tdefaultProps={{ layout: \"landscape\" } satisfies SizzleProps}\n\t\t\t/>\n\t\t</>\n\t);\n};",
-						"firstChangedLine": 7,
-						"warnings": [
-							"Auto-repaired replacement boundaries at line 7: dropped 2 body row(s) duplicated just outside the range. The result was verified by the syntax probe — re-issue with the range covering exactly the changed lines and the body as their complete final content."
-						]
-					}
+					"error": "Error: `PUT 7.=16:` rejected: the body ends by restating the 2 line(s) just below the range, but is too short to be the full final content of the selected range. Re-issue with the range covering exactly the lines that change and the body as their complete final content."
 				}
 			]
 		},
