@@ -3481,7 +3481,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			pendingSubmissionDispose?.();
 			this.#optimisticUserMessageComponents = [];
 			this.#pendingWorkingMessage = undefined;
-			if (this.loadingAnimation) {
+			// A run that only waits on background jobs keeps its working row, which
+			// names the wait; the settle watch or the next run tears it down.
+			if (this.loadingAnimation && !this.#eventController.isAwaitingAsyncWork()) {
 				this.#stopLoadingAnimation(true);
 			}
 		}
