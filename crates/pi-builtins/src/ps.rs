@@ -661,9 +661,10 @@ fn parse_ps_flag_group(
 }
 
 /// Appended to every unsupported-option error: this `ps` covers a subset of
-/// procps, and the host's own `ps` is still reachable by path.
-const SYSTEM_PS_HINT: &str = "this ps supports a subset of procps options (see 'ps --help'); the \
-                              system ps (for example /usr/bin/ps) supports more";
+/// procps. In the embedded shell `command ps` and `env ps` still run this
+/// builtin, so only a full path reaches a host `ps`, and not every host has one.
+const SYSTEM_PS_HINT: &str = "this ps supports a subset of procps options (see 'ps --help'); a \
+                              system ps, if installed, may support more when run by its full path";
 
 fn unsupported_option(message: &str) -> (u8, String) {
 	(1, format!("{message}; {SYSTEM_PS_HINT}"))
