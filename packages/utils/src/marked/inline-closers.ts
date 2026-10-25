@@ -175,7 +175,8 @@ class EmphasisDelimiters {
  * before that closing backtick is content and still closes the span.
  */
 class CodeRuns {
-	// Per run, in order: where it starts and ends; the starts are the binary search `endOf` and `startsRunAt` need.
+	readonly #src: string;
+	// Per run, in order: where it starts and ends; the starts are the binary search `endOf` and `startsStringAt` need.
 	readonly #starts: number[] = [];
 	readonly #ends: number[] = [];
 	// Run starts by width, each list ascending: a closer must have the opener's exact width, so finding one is a
@@ -183,6 +184,7 @@ class CodeRuns {
 	readonly #byWidth = new Map<number, number[]>();
 
 	constructor(src: string) {
+		this.#src = src;
 		for (let at = src.indexOf("`"); at !== -1;) {
 			let end = at + 1;
 			while (src.charCodeAt(end) === 0x60 /* ` */) end++;
@@ -201,9 +203,17 @@ class CodeRuns {
 		return this.#ends[lowerBound(this.#starts, at + 1) - 1]!;
 	}
 
-	/** Whether a run of backticks starts at `at`: a code span opens at a backtick string, never inside one. */
-	startsRunAt(at: number): boolean {
-		return this.#starts[lowerBound(this.#starts, at + 1) - 1] === at;
+	/**
+	 * Whether a backtick string starts at `at`, which is where a code span may open. A run starts at its first
+	 * backtick, and at the one after it once a backslash escapes that first backtick: the escape takes the backslash
+	 * and one backtick, so what is left of the run is a string of its own. A retry deeper inside a run is not a string,
+	 * which keeps a run whose opener found no closer from opening a narrower span one backtick later.
+	 */
+	startsStringAt(at: number): boolean {
+		const run = lowerBound(this.#starts, at + 1) - 1;
+		const start = this.#starts[run];
+		if (start === undefined) return false;
+		return start === at || (start + 1 === at && escapedAt(this.#src, start));
 	}
 
 	/** Where the closer of a code span opened by `width` backticks that end at `from` starts, or -1. */
@@ -370,13 +380,14 @@ export class InlineClosers {
 	}
 
 	/**
-	 * How many backticks start `rest`, which starts with one, or 0 where no code span opens because the backtick is
-	 * inside a longer run: the opener is a whole backtick string, so the rest of a run that found no closer is text.
+	 * How many backticks start `rest`, which starts with one, or 0 where no code span opens because no backtick string
+	 * starts there: the opener is a whole string, so the rest of a run whose opener found no closer is text, while the
+	 * backticks left after a backslash escaped the run's first one do open a span.
 	 */
 	codeOpenerWidth(rest: string): number {
 		const pos = this.end - rest.length;
 		const runs = this.#indexes.codeRuns;
-		if (!runs.startsRunAt(pos)) return 0;
+		if (!runs.startsStringAt(pos)) return 0;
 		return Math.min(runs.endOf(pos), this.end) - pos;
 	}
 

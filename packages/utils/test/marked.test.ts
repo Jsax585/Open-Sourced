@@ -558,6 +558,40 @@ describe("marked compatibility", () => {
 		]);
 	});
 
+	// An escape takes the backslash and exactly one backtick, so the backticks left in a run whose first one a
+	// backslash escaped are a backtick string of their own, and a span opens there. A run whose opener found no closer
+	// still cannot be retried as a narrower opener, and an escaped backtick that is the whole run is just text.
+	test("opens a code span at the backticks left after an escape, and only there inside a run", () => {
+		expect(shape(Lexer.lexInline("\\``a`"))).toEqual([
+			["escape", "\\`"],
+			["codespan", "`a`"],
+		]);
+		expect(shape(Lexer.lexInline("\\``a` b"))).toEqual([
+			["escape", "\\`"],
+			["codespan", "`a`"],
+			["text", " b"],
+		]);
+		expect(shape(Lexer.lexInline("\\```a`` b"))).toEqual([
+			["escape", "\\`"],
+			["codespan", "``a``"],
+			["text", " b"],
+		]);
+		expect(shape(Lexer.lexInline("a \\``b` c"))).toEqual([
+			["text", "a "],
+			["escape", "\\`"],
+			["codespan", "`b`"],
+			["text", " c"],
+		]);
+		expect(shape(Lexer.lexInline("\\`a` b"))).toEqual([
+			["escape", "\\`"],
+			["text", "a` b"],
+		]);
+		expect(shape(Lexer.lexInline("```d`` then `e`"))).toEqual([
+			["text", "```d`` then "],
+			["codespan", "`e`"],
+		]);
+	});
+
 	// Backslash escapes do not apply inside a code span, so a backtick a backslash precedes still closes the span. When
 	// the escaped-run rule was applied to the closer search, an opener whose closer a backslash precedes ran on to the
 	// next span's opener, which left the prose between two spans paired as span content one delimiter out of step, and
