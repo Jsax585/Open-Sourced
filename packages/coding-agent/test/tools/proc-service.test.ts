@@ -99,6 +99,32 @@ function steeringContext(steeringSignal: AbortSignal): AgentToolContext {
 	} as unknown as AgentToolContext;
 }
 
+/**
+ * Agent `Quick` finished its first run and was woken: its new turn's job asks for
+ * the id `Quick`, but the settled first job still holds it, so the turn runs as `Quick-2`.
+ */
+async function wokenAgentSession(): Promise<{ manager: AsyncJobManager; session: ToolSession }> {
+	const manager = new AsyncJobManager({});
+	const registry = new AgentRegistry();
+	registry.register({ id: "Quick", displayName: "Quick", kind: "sub", parentId: "Main", session: null });
+	const session = toolSession(process.cwd(), manager, { launch: false });
+	session.agentRegistry = registry;
+	manager.register("task", "Quick", async () => "READY", { id: "Quick", agentId: "Quick", ownerId: "Main" });
+	await manager.getJob("Quick")?.promise;
+	const turn = Promise.withResolvers<string>();
+	const turnJobId = manager.register(
+		"task",
+		"Quick",
+		async ({ signal }) => {
+			signal.addEventListener("abort", () => turn.resolve("cancelled"), { once: true });
+			return turn.promise;
+		},
+		{ id: "Quick", agentId: "Quick", ownerId: "Main" },
+	);
+	expect(turnJobId).toBe("Quick-2");
+	return { manager, session };
+}
+
 describe("proc:// background jobs", () => {
 	it("lists owned jobs, preserves delivery on read, and scopes kill to the owner", async () => {
 		const manager = new AsyncJobManager({});
@@ -294,6 +320,34 @@ describe("proc:// background jobs", () => {
 			expect(registry.get("Worker")).toBeUndefined();
 		} finally {
 			await manager?.dispose();
+		}
+	});
+
+	it("finds a woken agent by its own id once its first job row is gone", async () => {
+		const { manager, session } = await wokenAgentSession();
+		const protocol = new ProcProtocolHandler();
+		try {
+			manager.evictCompletedJobs({ ownerId: "Main" });
+			const running = await protocol.resolve(parseInternalUrl("proc://Quick"), { session });
+			expect(running.details?.proc?.job).toMatchObject({ id: "Quick-2", status: "running" });
+
+			const killed = await protocol.write(parseInternalUrl("proc://Quick/kill"), "", { session });
+			await manager.getJob("Quick-2")?.promise;
+			expect(killed.details?.proc).toMatchObject({ cancelled: [{ id: "Quick-2", status: "cancelled" }] });
+			expect(manager.getJob("Quick-2")?.status).toBe("cancelled");
+		} finally {
+			await manager.dispose();
+		}
+	});
+
+	it("names the running job of a woken agent when its settled first job is read", async () => {
+		const { manager, session } = await wokenAgentSession();
+		try {
+			const settled = await new ProcProtocolHandler().resolve(parseInternalUrl("proc://Quick"), { session });
+			expect(settled.details?.proc?.job).toMatchObject({ id: "Quick", status: "completed" });
+			expect(settled.content).toContain("running again as job Quick-2");
+		} finally {
+			await manager.dispose();
 		}
 	});
 

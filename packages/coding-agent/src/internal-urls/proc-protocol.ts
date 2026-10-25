@@ -55,6 +55,14 @@ function ownerJobs(session: ToolSession): AsyncJob[] {
 	return session.asyncJobManager?.getAllJobs({ ownerId: session.getAgentId?.() ?? undefined }) ?? [];
 }
 
+/**
+ * The running job of agent `agentId` under another id: a woken agent's turn job
+ * takes a `-N` suffix while the agent's earlier job row is still retained.
+ */
+function runningJobOfAgent(jobs: readonly AsyncJob[], agentId: string): AsyncJob | undefined {
+	return jobs.find(job => job.status === "running" && job.agentId === agentId && job.id !== agentId);
+}
+
 function textResource(
 	url: InternalUrl,
 	content: string,
@@ -142,7 +150,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				daemons: services,
 			});
 		}
-		const job = jobs.find(item => item.id === id);
+		const job = jobs.find(item => item.id === id) ?? runningJobOfAgent(jobs, id);
 		const service = services.find(item => item.name === id);
 		if (job && service) throw new Error(`proc://${id} is ambiguous: both job ${id} and service ${id} exist.`);
 		if (service) {
@@ -167,6 +175,10 @@ export class ProcProtocolHandler implements ProtocolHandler {
 				if (job.type === "task") lines.push(`agent://${job.agentId ?? job.id}`);
 				const artifact = details?.meta?.truncation?.artifactId;
 				if (artifact) lines.push(`artifact://${artifact}`);
+			} else if (job.type === "task") {
+				const agentId = job.agentId ?? job.id;
+				const successor = runningJobOfAgent(jobs, agentId);
+				if (successor) lines.push(`${agentId} is running again as job ${successor.id} (proc://${successor.id})`);
 			}
 			return textResource(url, lines.join("\n"), undefined, false, {
 				job: snapshotJobs(session, [job], { includeResults: true })[0],
@@ -193,7 +205,8 @@ export class ProcProtocolHandler implements ProtocolHandler {
 		const { id, action } = target(url);
 		if (!id) throw new Error("Write requires proc://<id>, proc://<id>/kill, or proc://<id>/mode");
 		const ownerId = session.getAgentId?.() ?? undefined;
-		const job = ownerJobs(session).find(item => item.id === id);
+		const jobs = ownerJobs(session);
+		const job = jobs.find(item => item.id === id) ?? runningJobOfAgent(jobs, id);
 		const agent = runningAgentsOutsideJobs(session).find(item => item.id === id);
 		let service: DaemonSnapshot | undefined;
 		if (cfgLaunchEnabled.get(session.settings)) {
@@ -241,7 +254,7 @@ export class ProcProtocolHandler implements ProtocolHandler {
 			};
 		}
 		if ((job || agent) && session.asyncJobManager) {
-			const result = await executeCancel(session, session.asyncJobManager, ownerId, [id]);
+			const result = await executeCancel(session, session.asyncJobManager, ownerId, [job?.id ?? id]);
 			return { content: result.content, details: { proc: result.details } };
 		}
 		if (agent) {
