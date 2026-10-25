@@ -110,7 +110,10 @@ async function canonicalOrigin(remote: string, repoRoot: string): Promise<string
 		}
 		if (url.hostname) {
 			const remotePath = url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
-			return remotePath ? `remote:${url.host.toLowerCase()}/${remotePath}` : undefined;
+			if (!remotePath) return undefined;
+			const isSsh = url.protocol === "ssh:" || url.protocol === "git+ssh:" || url.protocol === "ssh+git:";
+			const user = isSsh && url.username ? `${url.username}@` : "";
+			return `remote:${user}${url.host.toLowerCase()}/${remotePath}`;
 		}
 	} catch {
 		// A local path or scp-style Git URL is not a WHATWG URL.
@@ -118,10 +121,11 @@ async function canonicalOrigin(remote: string, repoRoot: string): Promise<string
 	if (path.isAbsolute(value) || value.startsWith(".")) {
 		return `file:${await canonicalPath(path.resolve(repoRoot, value))}`;
 	}
-	const scp = value.match(/^(?:[^@:\s]+@)?([^:/\s]+):(.+)$/);
+	const scp = value.match(/^(?:([^@:\s]+)@)?([^:/\s]+):(.+)$/);
 	if (scp) {
-		const remotePath = scp[2].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
-		return remotePath ? `remote:${scp[1].toLowerCase()}/${remotePath}` : undefined;
+		const user = scp[1] ? `${scp[1]}@` : "";
+		const remotePath = scp[3].replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "");
+		return remotePath ? `remote:${user}${scp[2].toLowerCase()}/${remotePath}` : undefined;
 	}
 	return `literal:${value}`;
 }

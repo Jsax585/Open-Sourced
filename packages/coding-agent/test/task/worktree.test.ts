@@ -1164,6 +1164,40 @@ describe("captureIsolationBaseline", () => {
 			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
 		}
 	});
+
+	it("distinguishes SCP origins with different usernames", async () => {
+		const repo = await createGitRepo();
+		await runGit(repo, ["config", "user.email", "src@example.com"]);
+		await runGit(repo, ["config", "user.name", "Source User"]);
+		await fs.mkdir(path.join(repo, "ignored"), { recursive: true });
+		await Promise.all([
+			fs.writeFile(path.join(repo, "README.md"), "source\n"),
+			fs.writeFile(path.join(repo, ".gitignore"), "ignored/\n"),
+		]);
+		await runGit(repo, ["add", "README.md", ".gitignore"]);
+		await runGit(repo, ["commit", "-q", "-m", "base"]);
+		await runGit(repo, ["remote", "add", "origin", "alice@example.invalid:team/repo.git"]);
+
+		const sameUser = path.join(repo, "ignored", "same-user");
+		const sameUserSshUrl = path.join(repo, "ignored", "same-user-ssh-url");
+		const differentUser = path.join(repo, "ignored", "different-user");
+		const differentUserSshUrl = path.join(repo, "ignored", "different-user-ssh-url");
+
+		await runGit(repo, ["clone", "-q", repo, sameUser]);
+		await runGit(sameUser, ["remote", "set-url", "origin", "alice@example.invalid:team/repo.git"]);
+
+		await runGit(repo, ["clone", "-q", repo, sameUserSshUrl]);
+		await runGit(sameUserSshUrl, ["remote", "set-url", "origin", "ssh://alice@example.invalid/team/repo.git"]);
+
+		await runGit(repo, ["clone", "-q", repo, differentUser]);
+		await runGit(differentUser, ["remote", "set-url", "origin", "bob@example.invalid:team/repo.git"]);
+
+		await runGit(repo, ["clone", "-q", repo, differentUserSshUrl]);
+		await runGit(differentUserSshUrl, ["remote", "set-url", "origin", "ssh://bob@example.invalid/team/repo.git"]);
+
+		const plan = await prepareIsolationCopyPlan(repo);
+		expect([...plan].sort()).toEqual(["ignored/same-user", "ignored/same-user-ssh-url"].sort());
+	});
 });
 
 describe("applyNestedPatches", () => {
