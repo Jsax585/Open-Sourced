@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added an `Omp-Session: <id>` trailer to the commits omp writes itself (autoresearch `init_experiment`/`log_experiment`, `omp commit`, isolated task merges and branch commits, the git TUI) when `OMP_SESSION_ID` holds a session id, so those commits trace back to their session like commits made through `git commit --trailer`
+- Added `PI_COMMIT_TRAILERS`: trailers (one `Key: value` per line) that omp appends to the commits it writes itself — autoresearch `init_experiment`/`log_experiment`, `omp commit`, isolated task merges and branch commits, the git TUI. Those commits never run the `git` binary, so a `git commit --trailer` wrapper or a `prepare-commit-msg` hook cannot reach them; an embedding harness can now attribute them the same way
 
 ### Fixed
 

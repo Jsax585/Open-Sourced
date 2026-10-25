@@ -320,7 +320,7 @@ describe("init_experiment", () => {
 		expect(message).toContain("autoresearch: harness setup");
 	});
 
-	it("gives the harness commit the session's Omp-Session trailer", async () => {
+	it("gives the harness commit the configured trailers", async () => {
 		const { dir } = freshRepo();
 		await checkoutBranch(dir, "autoresearch/trailer-test");
 		await writeHarnessStub(dir);
@@ -330,8 +330,8 @@ describe("init_experiment", () => {
 			getRuntime: () => runtime,
 			pi: createPiHarness().api,
 		});
-		const previous = process.env.OMP_SESSION_ID;
-		process.env.OMP_SESSION_ID = "01a13dca-e979-7264-af32-f654ef57a6f5";
+		const previous = process.env.PI_COMMIT_TRAILERS;
+		process.env.PI_COMMIT_TRAILERS = "Omp-Session: 01a13dca-e979-7264-af32-f654ef57a6f5";
 		try {
 			await tool.execute(
 				"call-1",
@@ -341,8 +341,8 @@ describe("init_experiment", () => {
 				createCtx(dir),
 			);
 		} finally {
-			if (previous === undefined) delete process.env.OMP_SESSION_ID;
-			else process.env.OMP_SESSION_ID = previous;
+			if (previous === undefined) delete process.env.PI_COMMIT_TRAILERS;
+			else process.env.PI_COMMIT_TRAILERS = previous;
 		}
 		const format = "--format=%(trailers:key=Omp-Session,valueonly)";
 		const trailer = (await $`git log -1 ${format}`.cwd(dir).text()).trim();
