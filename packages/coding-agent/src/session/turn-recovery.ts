@@ -2277,6 +2277,11 @@ export class TurnRecovery {
 				// on the refusal with every Anthropic entry of the chain untried.
 				// While the refusal's fallback credit can still be redeemed, only its
 				// targets pass, so an earlier non-target entry cannot forfeit the credit.
+				// An Anthropic-compatible proxy that will not verify a sibling model's
+				// signature is covered by the transport, not by skipping the hop: the
+				// `Invalid signature in thinking block` 400 escalates to a retry that
+				// replays no thinking and succeeds, and the session stops replaying it
+				// afterwards.
 				const creditLive =
 					creditHandle !== undefined && creditTargets.length > 0 && Date.now() < creditHandle.expiresAt;
 				const refusalMayReplay = options?.refusalWalk === true && !creditLive;
