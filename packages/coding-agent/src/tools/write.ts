@@ -23,7 +23,14 @@ import {
 } from "@oh-my-pi/pi-utils/ar";
 import { normalizeToLF } from "../edit/normalize";
 
-import { extractUriScheme, InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
+import {
+	extractUriScheme,
+	InternalUrlRouter,
+	resolveLocalRoot,
+	sessionLocalProtocolOptions,
+	sessionResolveContext,
+	sessionWriteContext,
+} from "../internal-urls";
 import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../lsp";
 
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
@@ -406,6 +413,11 @@ interface ResolvedSqliteWritePath {
 function isArchivePathNotFound(error: unknown): boolean {
 	if (isEnoent(error)) return true;
 	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOTDIR";
+}
+
+/** On-disk form of `local://<name>` for this session, for messages that point a caller at the file. */
+function localFileDiskPathHint(session: ToolSession): string {
+	return path.join(resolveLocalRoot(sessionLocalProtocolOptions(session)), "<name>");
 }
 
 function normalizeArchiveWriteSubPath(rawPath: string): string {
@@ -825,7 +837,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					? " To deliver results to the caller, return the content in `yield` instead."
 					: "";
 			throw new ToolError(
-				"This `write` tool is limited to the xd:// device transport and local:// session scratch: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices), or write a `local://<name>` file. Filesystem writes are not available elsewhere." +
+				"This `write` tool is limited to the xd:// device transport and local:// session scratch: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices), or write a `local://<name>` file. Other filesystem paths are refused, but a `local://<name>` file is a real file on disk at " +
+					localFileDiskPathHint(this.session) +
+					", so give that path to whoever needs to read or copy it." +
 					yieldFallback,
 			);
 		}

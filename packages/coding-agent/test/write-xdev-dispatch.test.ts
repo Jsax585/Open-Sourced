@@ -796,7 +796,7 @@ describe("device-only write transport for explicit lists omitting write", () => 
 			// Filesystem writes are rejected before any handler or guard runs.
 			await expect(
 				write!.execute("write-device-only-fs", { path: path.join(tempDir, "nope.txt"), content: "x" }),
-			).rejects.toThrow("Filesystem writes are not available");
+			).rejects.toThrow("Other filesystem paths are refused");
 
 			// Device dispatch still flows: an unknown device reaches the router and
 			// fails there, not at the transport guard.
@@ -898,7 +898,7 @@ describe("device-only write transport for explicit lists omitting write", () => 
 			expect(write!.description).not.toBe(restrictedDescription);
 			await expect(
 				write!.execute("write-pending-full-fs", { path: path.join(tempDir, "nope.txt"), content: "x" }),
-			).rejects.toThrow("Filesystem writes are not available");
+			).rejects.toThrow("Other filesystem paths are refused");
 			expect(await Bun.file(path.join(tempDir, "nope.txt")).exists()).toBe(false);
 
 			session.pendingFullWriteDescription = undefined;
@@ -935,9 +935,13 @@ describe("device-only write transport for explicit lists omitting write", () => 
 			});
 			expect(reportRead.content.find(entry => entry.type === "text")?.text).toContain("report draft");
 
-			await expect(
-				write!.execute("write-device-only-fs", { path: path.join(tempDir, "nope.txt"), content: "x" }),
-			).rejects.toThrow("Filesystem writes are not available");
+			// The refusal names the on-disk location of local:// files, so the
+			// agent can hand its caller a real path; the file written above is there.
+			const localRoot = path.join(tempDir, "artifacts", "local");
+			const refusal = write!.execute("write-device-only-fs", { path: path.join(tempDir, "nope.txt"), content: "x" });
+			await expect(refusal).rejects.toThrow("Other filesystem paths are refused");
+			await expect(refusal).rejects.toThrow(path.join(localRoot, "<name>"));
+			expect(await Bun.file(path.join(localRoot, "report.md")).text()).toBe("report draft\n");
 
 			// conflict:// resolves to a recorded working-tree file. Device-only
 			// access must reject it before the conflict resolver can mutate it.
@@ -946,7 +950,7 @@ describe("device-only write transport for explicit lists omitting write", () => 
 					path: "conflict://1",
 					content: "@ours",
 				}),
-			).rejects.toThrow("Filesystem writes are not available");
+			).rejects.toThrow("Other filesystem paths are refused");
 		} finally {
 			await removeWithRetries(tempDir);
 		}
