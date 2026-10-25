@@ -201,6 +201,40 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("printf 'use 2>&1'", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 		expect(checkBashInterception('echo "err" >&2', tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 	});
+
+	it("does not attribute a later command's stderr redirect to echo", () => {
+		const tools = ["write", "read"];
+		for (const command of [
+			'echo "hi"; gcloud auth print-access-token 2>/tmp/tok.err',
+			'echo "hi" && ls 2>/tmp/e.err',
+			"echo start\nmake 2>build.err",
+			"echo x > /dev/null; ls > listing.txt",
+			"echo x 2>err.log",
+			"echo x 2>>err.log",
+		]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		}
+		expect(checkBashInterception("ls; echo hi > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo hi 1> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo hi &> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
+		expect(checkBashInterception("echo hi 2>err.txt > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(
+			true,
+		);
+	});
+
+	it("routes cat heredoc and redirect writes to write, not read", () => {
+		const tools = ["write", "read"];
+		for (const command of ["cat > /tmp/f <<'EOF'\nx\nEOF", "cat <<'EOF' > /tmp/f\nx\nEOF", "cat >> log.txt"]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("write");
+		}
+		expect(checkBashInterception("cat <<'EOF'\nx\nEOF", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception("cat file.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("read");
+	});
+
+	it("points appends at a tool that keeps the existing file", () => {
+		const result = checkBashInterception("echo line >> log.txt", ["write"], DEFAULT_BASH_INTERCEPTOR_RULES);
+		expect(result.message).toContain("`edit`");
+	});
 });
 
 describe("default grep rule and pipeline stdin", () => {

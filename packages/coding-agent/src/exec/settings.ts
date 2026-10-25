@@ -16,7 +16,9 @@ export interface BashInterceptorRule {
 const EMPTY_STRING_ARRAY: string[] = [];
 export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
-		pattern: "^\\s*(cat|head|tail|less|more)\\s+",
+		// `cat` whose first argument is a redirect or heredoc writes rather than
+		// reads; the write rule below owns those forms.
+		pattern: "^\\s*(?:(?:head|tail|less|more)\\s+|cat\\s+(?!\\s|<<|\\d*>))",
 		tool: "read",
 		message: "Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files.",
 	},
@@ -48,14 +50,17 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		// `>` must sit outside quoted regions (so `echo "a -> b"` passes) and be
 		// followed by a plausible filename — including `$VAR` targets; `>|`
-		// (clobber) counts as a redirect; `>&2`/`2>&1` style fd duplication is
-		// not matched. Allowed device sinks are consumed while looking for later
-		// real file redirects because the write tool cannot replace shell
-		// output/discard targets.
+		// (clobber) counts as a redirect; `>&2`/`2>&1` style fd duplication and
+		// redirects of fds other than stdout (`2>err.log`) are not matched. The
+		// scan stops at `;`, `&&`, `|` and newlines, so a redirect in a later
+		// command or a heredoc body is not attributed to the echo/cat. Allowed
+		// device sinks are consumed while looking for later real file redirects
+		// because the write tool cannot replace shell output/discard targets.
 		pattern:
-			"^\\s*(echo|printf|cat\\s*<<)\\s+(?:(?:[^\"'>]|\"[^\"]*\"|'[^']*')|(?<!\\|)>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))*(?<!\\|)>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]",
+			"^\\s*(?:(?:echo|printf)\\s+|cat\\s*<<|cat(?=\\s+\\d*>)\\s+)(?:(?:[^\"'>;&|\\n]|&(?=>)|(?<=(?:^|\\s)[02-9])>{1,2}|\"[^\"]*\"|'[^']*')|(?<!\\|)>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?=[\\s;&|]|$))*(?<!\\||>|(?:^|\\s)[02-9])>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]",
 		tool: "write",
-		message: "Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.",
+		message:
+			"Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation. `write` replaces the whole file; to append to an existing file, use `edit` to insert after its last line.",
 	},
 	{
 		pattern: "^\\s*nohup\\s+|(?<!&)\\&\\s*$",
