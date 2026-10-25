@@ -627,6 +627,45 @@ describe("marked compatibility", () => {
 		]);
 	});
 
+	// The `del` and `url` tokenizer overrides consume a raw of their own, so one that ends inside a backtick run leaves
+	// the scan where a code span opens, exactly as an inline extension's raw does.
+	test("opens a code span in the backticks a tokenizer override's raw resumed inside", () => {
+		const viaUrl = (source: string) =>
+			shape(
+				Lexer.lexInline(source, {
+					tokenizerOverrides: {
+						url: src =>
+							src.startsWith("x`") ? { type: "link", raw: "x`", text: "x`", href: "x`", tokens: [] } : false,
+					},
+				}),
+			);
+		expect(viaUrl("x```a``")).toEqual([
+			["link", "x`", []],
+			["codespan", "``a``"],
+		]);
+		expect(viaUrl("x```a`")).toEqual([
+			["link", "x`", []],
+			["text", "``a`"],
+		]);
+		expect(viaUrl("x``a`` b `c` d")).toEqual([
+			["link", "x`", []],
+			["codespan", "`a`` b `"],
+			["text", "c` d"],
+		]);
+		expect(
+			shape(
+				Lexer.lexInline("~~```a``", {
+					tokenizerOverrides: {
+						del: src => (src.startsWith("~~`") ? { type: "del", raw: "~~`", text: "~~`", tokens: [] } : false),
+					},
+				}),
+			),
+		).toEqual([
+			["del", "~~`", []],
+			["codespan", "``a``"],
+		]);
+	});
+
 	// Backslash escapes do not apply inside a code span, so a backtick a backslash precedes still closes the span. When
 	// the escaped-run rule was applied to the closer search, an opener whose closer a backslash precedes ran on to the
 	// next span's opener, which left the prose between two spans paired as span content one delimiter out of step, and

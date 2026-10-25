@@ -655,45 +655,48 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 	// The context is shared with the sources nested in this one, which move its end while they are lexed.
 	context.end = closers.end;
 	let rest = lex.rest;
-	// Set when a tokenizer's raw ended right where the scan resumes: the backticks left there are a string of their own
-	// even though the run they belong to started earlier, so a code span may open inside that run.
-	let resumedByExtension = false;
+	// A token the lexer consumed ends the walk, so the backticks left where the next token starts are a string of their
+	// own even when the run they belong to began earlier: an extension, an override or an escape token may leave the
+	// scan inside a run, and a code span opens there. Only the text step's own advance leaves the scan inside a run
+	// without consuming a token, and no span opens at such a position.
+	let resumed = false;
+	/** Pushes `token` and moves past its raw, which is where the next token starts. */
+	const consumeToken = (token: Token): void => {
+		output.push(token);
+		rest = rest.slice(token.raw.length);
+		resumed = true;
+	};
 	while (rest !== "") {
+		const resumedHere = resumed;
+		resumed = false;
 		let custom: Tokens.Generic | undefined;
 		for (const extension of lexer.extensions.inline) {
 			custom = extension.tokenizer.call(context, rest, output);
 			if (custom?.raw) break;
 		}
 		if (custom?.raw) {
-			output.push(custom);
-			rest = rest.slice(custom.raw.length);
-			resumedByExtension = true;
+			consumeToken(custom);
 			continue;
 		}
-		const afterExtension = resumedByExtension;
-		resumedByExtension = false;
 
 		const escaped = /^\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/.exec(rest);
 		if (escaped) {
-			output.push({ type: "escape", raw: escaped[0], text: escaped[1]! });
-			rest = rest.slice(2);
+			consumeToken({ type: "escape", raw: escaped[0], text: escaped[1]! });
 			continue;
 		}
 		const br = lexer.options.breaks ? /^(?: {2,}|\\)?\n/.exec(rest) : /^(?: {2,}|\\)\n/.exec(rest);
 		if (br) {
-			output.push({ type: "br", raw: br[0] });
-			rest = rest.slice(br[0].length);
+			consumeToken({ type: "br", raw: br[0] });
 			continue;
 		}
 		if (rest[0] === "`") {
-			const width = closers.codeOpenerWidth(rest, afterExtension);
+			const width = closers.codeOpenerWidth(rest, resumedHere);
 			const end = closers.closeCode(rest, width);
 			if (end !== -1) {
 				const raw = rest.slice(0, end + width);
 				let text = rest.slice(width, end).replace(/\n/g, " ");
 				if (/^ .* $/.test(text) && text.trim() !== "") text = text.slice(1, -1);
-				output.push({ type: "codespan", raw, text });
-				rest = rest.slice(raw.length);
+				consumeToken({ type: "codespan", raw, text });
 				continue;
 			}
 		}
@@ -701,14 +704,12 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 		if (auto) {
 			const text = auto.slice(1, -1);
 			const href = text.includes("@") && !/^[a-z][a-z+.-]*:\/\//i.test(text) ? `mailto:${text}` : text;
-			output.push({ type: "link", raw: auto, text, href, tokens: [{ type: "text", raw: text, text }] });
-			rest = rest.slice(auto.length);
+			consumeToken({ type: "link", raw: auto, text, href, tokens: [{ type: "text", raw: text, text }] });
 			continue;
 		}
 		const html = inlineHtmlPrefix(rest, closers);
 		if (html) {
-			output.push({ type: "html", raw: html, inLink: false, inRawBlock: false, block: false, text: html });
-			rest = rest.slice(html.length);
+			consumeToken({ type: "html", raw: html, inLink: false, inRawBlock: false, block: false, text: html });
 			continue;
 		}
 		const nested = matchLink(rest, lexer, closers) ?? matchEmphasis(rest, output, closers);
@@ -722,8 +723,7 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 			if (override) del = override.call(lexer.tokenizer, rest, rest);
 			if (del === false || !override) del = lexer.tokenizer.del(rest);
 			if (del) {
-				output.push(del);
-				rest = rest.slice(del.raw.length);
+				consumeToken(del);
 				continue;
 			}
 		}
@@ -750,8 +750,7 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 			}
 		}
 		if (url) {
-			output.push(url);
-			rest = rest.slice(url.raw.length);
+			consumeToken(url);
 			continue;
 		}
 
