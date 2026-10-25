@@ -12,6 +12,9 @@
  *   P4 persistence       close + reopen reproduces the same leaf and branch
  *
  * Usage: bun .omp/skills/session-leaf-verification/verify.ts [depth]
+ *        VERIFY_SEQUENCE='append user|append answer' bun .../verify.ts   (replay one sequence)
+ * `packages/coding-agent/test/session/session-leaf-exhaustive.test.ts` runs
+ * `explore(3)` in CI so this harness stays in sync with the session modules.
  * Exit code 0 = every sequence held; 1 = a counterexample, printed as the
  * shortest operation sequence that broke the property.
  *
@@ -24,9 +27,6 @@ import * as path from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { resolveSessionLeafId } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { TempDir } from "@oh-my-pi/pi-utils";
-
-const depth = Number.parseInt(process.argv[2] ?? "4", 10);
-if (!Number.isInteger(depth) || depth < 1) throw new Error(`invalid depth: ${process.argv[2]}`);
 
 const user = (text: string) => ({ role: "user" as const, content: text, timestamp: 0 });
 const answer = (text: string) => ({
@@ -61,6 +61,7 @@ interface Step {
 }
 
 const OFF_BRANCH_STEP = "off-branch result on first answer";
+const OFF_BRANCH_USAGE_STEP = "off-branch usage on first answer";
 
 const STEPS: Step[] = [
 	{
@@ -87,6 +88,23 @@ const STEPS: Step[] = [
 		name: OFF_BRANCH_STEP,
 		run: state => {
 			if (state.firstAnswer) state.manager.appendMessageToBranch(user("late result"), state.firstAnswer);
+		},
+	},
+	{
+		name: OFF_BRANCH_USAGE_STEP,
+		run: state => {
+			if (!state.firstAnswer) return;
+			state.manager.appendModelUsage(
+				{
+					purpose: "verify",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-20250514",
+					usage: answer("").usage,
+					stopReason: "stop",
+				},
+				{ sessionId: state.manager.getSessionId(), parentId: state.firstAnswer },
+			);
 		},
 	},
 	{
@@ -121,10 +139,7 @@ function checklist(state: State, sequence: string[], options: { replayAgreement:
 		const replayed = resolveSessionLeafId(entries);
 		if (replayed !== leaf) {
 			const dump = entries
-				.map(
-					entry =>
-						`${entry.id}/${entry.type}/${entry.parentId ?? "-"}/${(entry as { activeLeafId?: string | null }).activeLeafId ?? ""}`,
-				)
+				.map(entry => `${entry.id}/${entry.type}/${entry.parentId ?? "-"}/${entry.activeLeafId ?? ""}`)
 				.join(" ");
 			return `${prefix}\nP1 replay disagreement: live leaf ${leaf}, replayed leaf ${replayed} from ${entries.length} entries\nentries: ${dump}\nbranch: ${manager
 				.getBranch()
@@ -147,30 +162,41 @@ function checklist(state: State, sequence: string[], options: { replayAgreement:
 	return undefined;
 }
 
-async function runSequence(names: string[]): Promise<string | undefined> {
+const STEP_NAMES = STEPS.map(step => step.name);
+
+function stepNamed(name: string): Step {
+	const step = STEPS.find(candidate => candidate.name === name);
+	if (!step) throw new Error(`unknown step "${name}"; valid steps: ${STEP_NAMES.join(", ")}`);
+	return step;
+}
+
+async function runSequence(names: string[], trace: boolean): Promise<string | undefined> {
 	const dir = TempDir.createSync("@omp-leaf-verify-");
 	const root = dir.path();
 	const state: State = {
 		manager: SessionManager.create(root, path.join(root, "sessions")),
 		root,
 	};
+	let managerOpen = true;
 	try {
 		const applied: string[] = [];
 		let lastStepAppended = false;
 		for (const name of names) {
-			const step = STEPS.find(candidate => candidate.name === name)!;
+			const step = stepNamed(name);
 			const before = state.manager.getEntries().length;
 			const leafBefore = state.manager.getLeafId();
 			await step.run(state);
 			lastStepAppended = state.manager.getEntries().length > before;
-			if (name === OFF_BRANCH_STEP && state.manager.getEntries().length > before) {
+			const offBranch =
+				name === OFF_BRANCH_STEP || (name === OFF_BRANCH_USAGE_STEP && leafBefore !== state.firstAnswer);
+			if (offBranch && state.manager.getEntries().length > before) {
 				const leafAfter = state.manager.getLeafId();
 				if (leafAfter !== leafBefore) {
 					return `${[...applied, name].join(" -> ")}\nP0 off-branch append moved the leaf: ${leafBefore} -> ${leafAfter}`;
 				}
 			}
 			applied.push(name);
-			if (only) {
+			if (trace) {
 				const dump = state.manager
 					.getEntries()
 					.map(entry => `${entry.id}/${entry.type}/${entry.parentId ?? "-"}`)
@@ -190,6 +216,7 @@ async function runSequence(names: string[]): Promise<string | undefined> {
 		if (!file || !(await Bun.file(file).exists())) return undefined;
 		const liveLeaf = state.manager.getLeafId();
 		const liveBranch = state.manager.getBranch().map(entry => entry.type);
+		managerOpen = false;
 		await state.manager.close();
 		const reopened = await SessionManager.open(file);
 		try {
@@ -208,27 +235,43 @@ async function runSequence(names: string[]): Promise<string | undefined> {
 		}
 		return undefined;
 	} finally {
+		// Every exit releases the session lease and writer before the dir goes.
+		if (managerOpen) await state.manager.close();
 		await dir.remove();
 	}
 }
 
-const only = process.env.VERIFY_SEQUENCE?.split("|");
-let explored = 0;
-const queue: string[][] = only ? [only] : [[]];
-while (queue.length > 0) {
-	const sequence = queue.shift()!;
-	if (sequence.length > 0) {
-		explored++;
-		const failure = await runSequence(sequence);
-		if (failure) {
-			console.error(failure);
-			console.error(`\nFAIL after ${explored} sequences (depth ${sequence.length})`);
-			process.exit(1);
+/** Breadth-first over every sequence up to `depth`, or a single replay of `only`. */
+export async function explore(
+	depth: number,
+	only?: string[],
+): Promise<{ explored: number; failure?: string; depth?: number }> {
+	if (only) for (const name of only) stepNamed(name);
+	let explored = 0;
+	const queue: string[][] = only ? [only] : [[]];
+	while (queue.length > 0) {
+		const sequence = queue.shift()!;
+		if (sequence.length > 0) {
+			explored++;
+			const failure = await runSequence(sequence, only !== undefined);
+			if (failure) return { explored, failure, depth: sequence.length };
+		}
+		// A replay runs exactly the printed sequence, never its extensions.
+		if (!only && sequence.length < depth) {
+			for (const step of STEPS) queue.push([...sequence, step.name]);
 		}
 	}
-	if (sequence.length < depth) {
-		for (const step of STEPS) queue.push([...sequence, step.name]);
-	}
+	return { explored };
 }
 
-console.log(`OK: ${explored} operation sequences up to depth ${depth} held P0-P4`);
+if (import.meta.main) {
+	const depth = Number.parseInt(process.argv[2] ?? "4", 10);
+	if (!Number.isInteger(depth) || depth < 1) throw new Error(`invalid depth: ${process.argv[2]}`);
+	const result = await explore(depth, process.env.VERIFY_SEQUENCE?.split("|"));
+	if (result.failure) {
+		console.error(result.failure);
+		console.error(`\nFAIL after ${result.explored} sequences (depth ${result.depth})`);
+		process.exit(1);
+	}
+	console.log(`OK: ${result.explored} operation sequences up to depth ${depth} held P0-P4`);
+}

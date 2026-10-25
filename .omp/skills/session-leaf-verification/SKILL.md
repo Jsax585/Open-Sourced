@@ -24,8 +24,8 @@ pins the one reported case; this check covers the interleavings around it.
 From the repository root:
 
 ```sh
-bun .omp/skills/session-leaf-verification/verify.ts        # depth 4, ~2 s, 780 sequences
-bun .omp/skills/session-leaf-verification/verify.ts 6      # depth 6, ~22 s, 19530 sequences
+bun .omp/skills/session-leaf-verification/verify.ts        # depth 4, ~2 s, 1554 sequences
+bun .omp/skills/session-leaf-verification/verify.ts 6      # depth 6, 55986 sequences
 ```
 
 Exit 0 prints `OK: N operation sequences up to depth D held ...`. Exit 1 prints
@@ -42,7 +42,7 @@ VERIFY_SEQUENCE='append user|append answer|branch to first user|off-branch resul
 ## How it works
 
 The script drives the real `SessionManager` (no model of it) through every
-sequence of five operations up to the requested depth, replayed from scratch in
+sequence of six operations up to the requested depth, replayed from scratch in
 a fresh temp directory:
 
 | Step | Call |
@@ -51,6 +51,7 @@ a fresh temp directory:
 | append answer | `appendMessage(assistant)` |
 | branch to first user | `branch(firstUser)` |
 | off-branch result on first answer | `appendMessageToBranch(late, firstAnswer)` |
+| off-branch usage on first answer | `appendModelUsage(usage, { sessionId, parentId: firstAnswer })` |
 | reopen | `ensureOnDisk()`, `close()`, `SessionManager.open(file)` |
 
 After every step it asserts:
@@ -58,7 +59,9 @@ After every step it asserts:
 - **P0 off-branch write** an `appendMessageToBranch()` without
   `preserveActiveLeaf: false` leaves `getLeafId()` unchanged. This is the
   reported bug class. `preserveActiveLeaf: false` is the re-answered `ask` path
-  and is intentionally not exercised here.
+  and is intentionally not exercised here. The same holds for an
+  `appendModelUsage()` whose parent is not the current leaf (usage recorded on
+  its initiating branch after the user moved on).
 - **P1 replay agreement** `resolveSessionLeafId(getEntries())` equals
   `getLeafId()` after any step that appended an entry.
 - **P2 no dangling leaf** the leaf is null or names a stored entry.
@@ -80,12 +83,13 @@ Deliberate non-goals:
 
 ## Proven able to fail
 
-Both checks were run against a deliberately broken tree and failed as expected,
+Each check was run against a deliberately broken tree and failed as expected,
 then the tree was restored:
 
 | Break | Result |
 | --- | --- |
 | `appendMessageToBranch` stops recording `activeLeafId` (the pre-#16483 shape) | P0 fails at depth 2: `off-branch append moved the leaf: c719a85e -> 3657a0a7` |
+| `appendModelUsage` stops recording `activeLeafId` | P1 fails at depth 3: `append answer -> append user -> off-branch usage on first answer` |
 | `resolveSessionLeafId` ignores the captured leaf | P1 fails at depth 2: `live leaf bf16ee5c, replayed leaf f4fea7cd` |
 
 P2 and P3 are structural assertions on the same data. They guard against an
@@ -96,13 +100,15 @@ no separate break was staged for them.
 
 | Code | Role |
 | --- | --- |
-| `packages/coding-agent/src/session/session-manager.ts` | `appendMessage`, `appendMessageToBranch`, `branch`, `ensureOnDisk`, `close`, `getLeafId`, `getBranch`, `getEntries` |
+| `packages/coding-agent/src/session/session-manager.ts` | `appendMessage`, `appendMessageToBranch`, `appendModelUsage`, `branch`, `ensureOnDisk`, `close`, `getLeafId`, `getBranch`, `getEntries` |
 | `packages/coding-agent/src/session/session-entries.ts` | `sessionEntryLeafId`, `resolveSessionLeafId`, `SessionEntryBase.activeLeafId` |
 | `packages/coding-agent/src/session/session-index.ts` | `insert`, `rebuild`, leaf tracking |
 | `packages/coding-agent/src/session/session-loader.ts` | the reopen path used by `SessionManager.open` |
 
-Last confirmed to describe the code at commit `0b5c27ab24` (origin/main,
-2026-10-25).
+`packages/coding-agent/test/session/session-leaf-exhaustive.test.ts` runs the
+harness at depth 3 under `bun test`, and the package typecheck compiles
+`verify.ts` through that import, so a rename or signature change in the session
+modules fails CI instead of waiting for a manual run.
 
 ## When the code changes
 
@@ -115,5 +121,4 @@ Last confirmed to describe the code at commit `0b5c27ab24` (origin/main,
    and P4 stay scoped to real writes.
 4. Intended behavior change (for example a new durable rewind marker) updates
    the non-goals in this file in the same commit.
-5. After confirming the harness still describes the code, move the sync commit
-   in Coverage forward and commit that line with the change.
+5. Keep the depth-3 `bun test` green; it is the sync check for this file.
