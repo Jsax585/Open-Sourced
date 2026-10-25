@@ -33,7 +33,7 @@ This document describes operator-visible behavior for session export, sharing, c
 | `/fork pane`, `/fork window`, `/fork tab` | Interactive slash command  | No (parent session retained)                   | Opens a child OMP process from the flushed current transcript in a multiplexer pane/group (tmux window, Zellij/Herdr/Orca tab, or CMUX workspace) | Child receives a separate forked session                                            |
 | `--fork <id\|path>`                     | CLI startup                  | Yes after session creation                    | Creates a new session fork from the selected source into current cwd/session dir           | Copies source artifacts recursively by default                                      |
 | `/seance [id\|path] [--model sel]`      | Interactive slash command    | No (active session and model unchanged)       | Forks the source transcript into a read-only consultant subagent under the current session  | None; the consultant reads the source's artifacts in place                          |
-| `/resume [id\|@claude\|@codex]`         | Interactive slash command    | Yes (active in-memory state replaced)         | Switches to a selected/matched session, or imports a selected foreign session              | None                                                                                |
+| `/resume [id\|@claude\|@codex\|@deepseek]` | Interactive slash command    | Yes (active in-memory state replaced)         | Switches to a selected/matched session, or imports a selected foreign session              | None                                                                                |
 | `--resume`                              | CLI startup picker           | Yes after session creation                    | Opens selected existing session file (picker opens in current-folder scope; the global list is preloaded only for the empty-everything early exit and instant Tab switching) | None                |
 | `--resume <id\|path>`                   | CLI startup                  | Yes after session creation                    | Opens existing session; a missing recorded cwd may be re-rooted into the current directory | None                                                                                |
 | `/restart`                              | Interactive slash command    | Yes (process relaunches)                      | Keeps configuration flags; resumes a materialized session, otherwise starts fresh          | None                                                                                |
@@ -430,7 +430,41 @@ Without an argument:
 With an argument:
 
 - `/resume <id>` resolves an id/filename prefix with local-first, then global fallback and switches directly to the matched file; an unknown value reports `Session "<value>" not found`.
-- `/resume @claude` and `/resume @codex` open a foreign-session picker. Selecting one converts and persists it under a fresh OMP session identity, then switches to that new session.
+- `/resume @claude`, `/resume @codex`, and `/resume @deepseek` open a foreign-session picker. Selecting one converts and persists it under a fresh OMP session identity, then switches to that new session. Repeated selections create independent imports; source storage stays unchanged.
+
+### DeepSeek Harness import
+
+Use `omp --from-deepseek` at startup or `/resume @deepseek` inside OMP. Discovery
+uses nonblank `DSH_HOME`, otherwise `~/.dsh`. The picker shows recorded source cwd;
+when that directory is unavailable, normal OMP cwd fallback applies. There is no
+public flag for a different source path (the store constructor accepts a root for
+embedding and deterministic fixtures).
+
+Supported sources are nested first-party `sessions/<project>/<session>/session.jsonl`
+and `session.vN.jsonl` logs, including `.zstd` variants, with released logical
+formats v0 through v4, plus local `sessions.sqlite` using the
+`@morlay/session-rdb` 0.1.5 schema (including mixed logical v0/v4 sessions). SQLite
+is authoritative when both stores contain the same logical ID. Projection caches,
+historical flat layouts, PostgreSQL, arbitrary persistence plugins, future logical
+formats, and unknown required events are not supported. Unsafe or inconsistent
+SQLite/WAL snapshots fail explicitly rather than writing sidecars or ignoring WAL
+records. Import never boots dsh, reads source credentials, executes historical
+tools, or calls a model.
+
+OMP copies required attachments before publishing its native session. The saved
+import can be resumed without the source directory. Historical timestamps, model
+attribution, available usage, tool names, and transcript are preserved; source
+system prompts, capability changes, headers, permissions, jobs, and provider-private
+state remain inert history, not active OMP configuration. Continuation model
+selection uses normal OMP restoration/fallback, not an assumed dsh provider route.
+
+DeepSeek replacements, pruning, compaction, and image offload determine the exact
+imported continuation context, independently of the visible historical transcript.
+History remains viewable/exportable, but continuing, branching, or forking from a
+pre-import transcript entry is refused: exact historical DeepSeek context at old
+positions is unavailable. Whole-session forks and post-import branches remain
+supported. `/clear` starts fresh context. Before a new OMP turn, `/retry` and
+`--restore` cannot execute a historical DeepSeek turn.
 
 ## CLI `--resume`
 

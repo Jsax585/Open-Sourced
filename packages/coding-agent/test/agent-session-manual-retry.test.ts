@@ -46,6 +46,58 @@ describe("AgentSession manual retry", () => {
 		tempDir.removeSync();
 	});
 
+	it("refuses imported snapshot retry and restore but retries a failed new native turn", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const mock = createMockModel({
+			responses: [{ throw: "native failure" }, { content: ["native recovered"], stopReason: "stop" }],
+		});
+		const source: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			stopReason: "aborted",
+			errorMessage: "historical interruption",
+			timestamp: 1,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+		const manager = SessionManager.inMemory();
+		const sourceId = manager.appendMessage(source);
+		manager.appendCompaction("import", undefined, sourceId, 0, {
+			preserveData: { deepseekImportContext: { version: 1, messages: [source] } },
+		});
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [source] },
+			streamFn: mock.stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			settings: Settings.isolated({ "compaction.enabled": false, "retry.enabled": false }),
+			modelRegistry,
+		});
+		session.subscribe(() => {});
+		await expect(session.retry()).resolves.toBe(false);
+		await expect(session.restoreInterruptedTurn()).resolves.toBe(false);
+		expect(mock.calls).toHaveLength(0);
+
+		await session.prompt("new native turn");
+		await session.waitForIdle();
+		await expect(session.retry()).resolves.toBe(true);
+		await session.waitForIdle();
+		expect(mock.calls).toHaveLength(2);
+		expect(lastAgentMessage(session).stopReason).toBe("stop");
+	});
+
 	it("removes the failed assistant turn and continues with a fresh attempt", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) {

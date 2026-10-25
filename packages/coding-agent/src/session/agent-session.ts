@@ -10870,6 +10870,7 @@ export class AgentSession implements SettingsScope {
 		this.#assertVibeSessionTransitionAllowed("fork the session");
 		const requireIdleFor = entryId !== undefined || options?.requireIdle ? "fork the session" : undefined;
 		if (entryId !== undefined) {
+			this.sessionManager.assertImportBoundaryNavigation(entryId);
 			if (this.sessionManager.getEntry(entryId)?.type !== "message") {
 				throw new Error(`Invalid entry ID for forking: ${entryId}`);
 			}
@@ -12773,6 +12774,8 @@ export class AgentSession implements SettingsScope {
 		if (selectedEntry?.type !== "message" || selectedEntry.message.role !== "user") {
 			throw new Error("Invalid entry ID for branching");
 		}
+		this.sessionManager.assertImportBoundaryNavigation(entryId);
+		this.sessionManager.assertImportBoundaryNavigation(selectedEntry.parentId);
 
 		const selectedText = this.#extractUserMessageText(selectedEntry.message.content);
 		const selectedImages = this.#extractUserMessageImages(selectedEntry.message.content);
@@ -12794,6 +12797,8 @@ export class AgentSession implements SettingsScope {
 		leafId: string | null,
 		options?: { copyArtifacts?: boolean; requireIdleFor?: string },
 	): Promise<boolean> {
+		this.sessionManager.assertImportBoundaryNavigation(entryId);
+		this.sessionManager.assertImportBoundaryNavigation(leafId);
 		const previousSessionFile = this.sessionFile;
 		const requireIdleFor = options?.requireIdleFor;
 		if (requireIdleFor) this.#assertIdleForSnapshot(requireIdleFor);

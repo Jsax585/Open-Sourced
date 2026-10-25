@@ -7,7 +7,7 @@ import {
 	validateRestorePrompt,
 	validateToolNames,
 } from "../src/cli/args";
-import { OPTIONAL_VALUE_FLAGS, restartArgv, STRING_VALUE_FLAGS } from "../src/cli/flag-tables";
+import { OPTIONAL_VALUE_FLAGS, restartArgv, STRING_VALUE_FLAGS, VALUELESS_FLAGS } from "../src/cli/flag-tables";
 import { CliUsageError } from "../src/cli/usage-error";
 
 /**
@@ -227,6 +227,7 @@ describe("foreign session import flags", () => {
 	it("parses each source flag without consuming the initial message", () => {
 		const claude = parseArgs(["--from-claude", "continue this session"]);
 		const codex = parseArgs(["--from-codex", "continue this session"]);
+		const deepseek = parseArgs(["--from-deepseek", "continue this session"]);
 
 		expect(claude.fromClaude).toBe(true);
 		expect(claude.messages).toEqual(["continue this session"]);
@@ -234,6 +235,10 @@ describe("foreign session import flags", () => {
 		expect(codex.fromCodex).toBe(true);
 		expect(codex.messages).toEqual(["continue this session"]);
 		expect(codex.unrecognizedFlags).toEqual([]);
+		expect(deepseek.fromDeepseek).toBe(true);
+		expect(deepseek.messages).toEqual(["continue this session"]);
+		expect(deepseek.unrecognizedFlags).toEqual([]);
+		expect(VALUELESS_FLAGS.has("--from-deepseek")).toBe(true);
 	});
 });
 
@@ -249,7 +254,21 @@ describe("restartArgv (/restart relaunch argv)", () => {
 
 	it("drops every session-source flag, including inline = and value forms", () => {
 		expect(
-			restartArgv(["--resume=old", "-r", "old2", "--continue", "-c", "--fork", "xyz", "--from-claude"], "sid"),
+			restartArgv(
+				[
+					"--resume=old",
+					"-r",
+					"old2",
+					"--continue",
+					"-c",
+					"--fork",
+					"xyz",
+					"--from-claude",
+					"--from-codex",
+					"--from-deepseek",
+				],
+				"sid",
+			),
 		).toEqual(["--resume", "sid"]);
 	});
 
@@ -310,6 +329,9 @@ describe("--restore", () => {
 		expect(() => validateRestoreLaunch(parseArgs(["--restore", "a"]), false)).toThrow(CliUsageError);
 		expect(() => validateRestoreLaunch(parseArgs(["--restore", "a", "--fork", "b"]), true)).toThrow(CliUsageError);
 		expect(() => validateRestoreLaunch(parseArgs(["--restore", "a", "--no-session"]), true)).toThrow(CliUsageError);
+		expect(() => validateRestoreLaunch(parseArgs(["--restore", "a", "--from-deepseek"]), true)).toThrow(
+			CliUsageError,
+		);
 		expect(() => validateRestorePrompt(parseArgs(["--restore", "a", "keep going"]))).toThrow(CliUsageError);
 		validateRestoreLaunch(parseArgs(["--restore", "a"]), true);
 		validateRestorePrompt(parseArgs(["--resume", "a", "keep going"]));

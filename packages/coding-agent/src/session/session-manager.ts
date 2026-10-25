@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	ImageContent,
 	Message,
@@ -162,6 +163,80 @@ function fileSafeTimestamp(iso: string): string {
 function artifactsDirectoryFor(sessionFile: string | undefined): string | null {
 	if (!sessionFile?.endsWith(".jsonl")) return null;
 	return sessionFile.slice(0, -JSONL_SUFFIX_LENGTH);
+}
+
+function isImportBoundary(entry: SessionEntry): entry is CompactionEntry {
+	return (
+		entry.type === "compaction" &&
+		entry.preserveData !== undefined &&
+		Object.hasOwn(entry.preserveData, "deepseekImportContext")
+	);
+}
+
+/** Source transcript and its boundary persist losslessly, including after native compaction. */
+function importedHistoryEntryIds(entries: readonly SessionEntry[]): Set<string> | undefined {
+	const boundaries = entries.filter(isImportBoundary);
+	if (boundaries.length === 0) return undefined;
+	const byId = new Map(entries.map(entry => [entry.id, entry]));
+	const ids = new Set<string>();
+	for (const boundary of boundaries) {
+		let entry: SessionEntry | undefined = boundary;
+		while (entry && !ids.has(entry.id)) {
+			ids.add(entry.id);
+			entry = entry.parentId ? byId.get(entry.parentId) : undefined;
+		}
+	}
+	return ids;
+}
+
+/** Required imported artifacts must exist before a fork becomes discoverable. */
+function copyImportedArtifactsSync(
+	entries: readonly SessionEntry[],
+	sourceFile: string,
+	targetFile: string,
+	targetReserved = false,
+): void {
+	const source = artifactsDirectoryFor(fs.realpathSync(sourceFile));
+	const target = artifactsDirectoryFor(targetFile);
+	if (!source || !target) throw new Error("Cannot preserve imported attachments without session artifact storage.");
+	const required: string[] = [];
+	for (const entry of entries) {
+		if (!isImportBoundary(entry)) continue;
+		const attachments = entry.preserveData?.deepseekImportAttachments;
+		if (attachments === undefined) continue;
+		if (!Array.isArray(attachments)) throw new Error("Invalid imported attachment metadata.");
+		for (const attachment of attachments) {
+			if (
+				typeof attachment !== "object" ||
+				attachment === null ||
+				!("id" in attachment) ||
+				typeof attachment.id !== "string" ||
+				!/^\d+$/.test(attachment.id)
+			) {
+				throw new Error("Invalid imported attachment identifier.");
+			}
+			required.push(attachment.id);
+		}
+	}
+	let files: string[];
+	try {
+		files = fs.readdirSync(source);
+	} catch (error) {
+		if (isEnoent(error) && required.length === 0) return;
+		throw new Error("Cannot fork imported session: required attachment storage is unavailable.", { cause: error });
+	}
+	for (const id of required) {
+		if (!files.some(file => file.startsWith(`${id}.`) && fs.statSync(path.join(source, file)).isFile())) {
+			throw new Error(`Cannot fork imported session: required artifact ${id} is unavailable.`);
+		}
+	}
+	if (!targetReserved) fs.mkdirSync(target);
+	try {
+		fs.cpSync(source, target, { recursive: true, force: false, errorOnExist: true });
+	} catch (error) {
+		fs.rmSync(target, { recursive: true, force: true });
+		throw new Error("Cannot fork imported session: attachment copy failed.", { cause: error });
+	}
 }
 
 /**
@@ -928,6 +1003,10 @@ export class SessionManager {
 	#deferredPublishGen = 0;
 	/** Lazy gate crossed (ensureOnDisk / loaded file): every entry must persist from now on. */
 	#forceFileCreation = false;
+	/** Detached import hooks may rewrite entries but cannot publish a partial journal. */
+	#publicationStaged = false;
+	/** A fresh copy must never adopt an existing destination after a write conflict. */
+	#publicationFresh = false;
 	/**
 	 * Armed only when this manager observed a draft sidecar lifecycle that
 	 * materialized an otherwise metadata-only session file. Explicit
@@ -1507,8 +1586,9 @@ export class SessionManager {
 		return this.#writer;
 	}
 
-	#lineFor(entry: FileEntry): string {
-		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs)) ?? "null"}\n`;
+	#lineFor(entry: FileEntry, imported = false): string {
+		const options = imported ? { lossless: true, inlineImages: true } : undefined;
+		return `${stringifyJson(prepareEntryForPersistence(entry, this.#blobs, options)) ?? "null"}\n`;
 	}
 	#recordDurableAppend(line: string): void {
 		this.#expectedDiskSize = (this.#expectedDiskSize ?? 0) + Buffer.byteLength(line, "utf8");
@@ -1569,10 +1649,11 @@ export class SessionManager {
 		const titleLine = this.#titleSlotLine();
 		const headerLine = this.#lineFor(this.#header);
 		const entries = this.#entries;
+		const importedIds = importedHistoryEntryIds(entries);
 		const lines = [titleLine, headerLine];
 		let bytes = Buffer.byteLength(titleLine, "utf8") + Buffer.byteLength(headerLine, "utf8");
 		for (const entry of entries) {
-			const line = this.#lineFor(entry);
+			const line = this.#lineFor(entry, importedIds?.has(entry.id));
 			bytes += Buffer.byteLength(line, "utf8");
 			lines.push(line);
 		}
@@ -1621,12 +1702,14 @@ export class SessionManager {
 	 */
 	#rewriteSynchronously(): void {
 		if (this.#released) return;
+		if (this.#publicationStaged) return;
 		if (!this.#persist || !this.#shouldHaveSessionFile()) return;
 		let targetPath = this.#liveRelocationWritePath() ?? this.#sessionFile;
 		if (!targetPath) return;
 
 		try {
-			if (this.#sessionOwnedElsewhere()) targetPath = this.#moveOffSessionFile("open-elsewhere");
+			if (!this.#publicationFresh && this.#sessionOwnedElsewhere())
+				targetPath = this.#moveOffSessionFile("open-elsewhere");
 			let body = this.#serializeBody();
 			this.#diskEpoch++;
 			this.#diskTail = Promise.resolve();
@@ -1638,6 +1721,7 @@ export class SessionManager {
 					else this.#storage.writeTextSync(targetPath, body.lines.join(""), options);
 					break;
 				} catch (err) {
+					if (this.#publicationFresh) throw err;
 					const retryPath = this.#recoverFromWriteConflictSync(err, recoveries);
 					if (!retryPath) throw err;
 					targetPath = retryPath;
@@ -1726,6 +1810,7 @@ export class SessionManager {
 	async #rewriteAtomically(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		if (this.#released) return;
+		if (this.#publicationStaged) return;
 
 		const startEpoch = this.#diskEpoch;
 		await this.#scheduleDiskWork(
@@ -1758,7 +1843,7 @@ export class SessionManager {
 			do {
 				this.#atomicRewriteDirty = false;
 				await this.#closeWriterHandle();
-				if (this.#sessionOwnedElsewhere()) this.#moveOffSessionFile("open-elsewhere");
+				if (!this.#publicationFresh && this.#sessionOwnedElsewhere()) this.#moveOffSessionFile("open-elsewhere");
 				const sessionFile = this.#sessionFile;
 				if (!sessionFile) return false;
 				if (this.#diskEpoch !== epoch) return false;
@@ -1772,6 +1857,7 @@ export class SessionManager {
 						? this.#storage.writeLinesAtomic(sessionFile, body.lines, options)
 						: this.#storage.writeTextAtomic(sessionFile, body.lines.join(""), options));
 				} catch (error) {
+					if (this.#publicationFresh) throw error;
 					if (await this.#recoverFromWriteConflict(error, recoveries)) {
 						recoveries++;
 						// Publish the whole transcript against what the recovery found on the next pass.
@@ -1812,6 +1898,7 @@ export class SessionManager {
 	}
 
 	#appendToSessionFile(entry: SessionEntry): void {
+		if (this.#publicationStaged) return;
 		if (this.#released || !this.#persist || !this.#sessionFile) return;
 		if (this.#atomicEntryBatch) {
 			this.#fileIsCurrent = false;
@@ -2450,6 +2537,25 @@ export class SessionManager {
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
 		this.#reconcileSessionDirForFallback();
+		if (this.#entries.some(isImportBoundary)) {
+			const forked = await this.persistCopy(
+				{
+					sessionDir: this.#sessionDir,
+					suppressBreadcrumb: true,
+					beforePublish: async (_source, target) => {
+						target.#header.parentSession = parentSessionId;
+						target.#header.providerPromptCacheKey = SessionManager.getInheritedProviderPromptCacheKey(
+							this.#header,
+						);
+						copyImportedArtifactsSync(this.#entries, oldSessionFile, target.#sessionFile!, true);
+					},
+				},
+				this.#storage,
+			);
+			await forked.close();
+			this.restoreState(forked.captureState());
+			return { oldSessionFile, newSessionFile: this.#sessionFile! };
+		}
 
 		const timestamp = nowIso();
 		this.#sessionId = mintSessionId();
@@ -2704,14 +2810,19 @@ export class SessionManager {
 		await this.#rewriteAtomically();
 	}
 
-	/** Persist this session's transcript as a newly identified OMP session. */
+	/** Persist a detached transcript only after required destination attachments are ready. */
 	async persistCopy(
-		options?: { sessionDir?: string; suppressBreadcrumb?: boolean },
+		options?: {
+			sessionDir?: string;
+			suppressBreadcrumb?: boolean;
+			beforePublish?: (source: SessionManager, target: SessionManager) => Promise<void>;
+		},
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionManager> {
 		const sessionDir = options?.sessionDir ?? SessionManager.getDefaultSessionDir(this.#cwd, undefined, storage);
 		const manager = new SessionManager(this.#cwd, sessionDir, true, storage);
-		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		manager.#suppressBreadcrumb = true;
+		manager.#publicationStaged = true;
 		manager.#resetToNewSession({ taskPromptCacheKey: this.#header.taskPromptCacheKey });
 		manager.#sessionName = this.#sessionName;
 		manager.#titleSource = this.#titleSource;
@@ -2723,9 +2834,50 @@ export class SessionManager {
 			manager.#additionalDirectories.length > 0 ? [...manager.#additionalDirectories] : undefined;
 		manager.#entries = structuredClone(this.#entries);
 		manager.#index.rebuild(manager.#entries);
-		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
-		return manager;
+		const sessionFile = manager.#sessionFile!;
+		const artifactDir = manager.getArtifactsDir()!;
+		let ownsArtifacts = false;
+		if (await storage.exists(sessionFile))
+			throw new Error("Import destination already exists; nothing was overwritten.");
+		try {
+			if (options?.beforePublish) {
+				await fs.promises.mkdir(artifactDir);
+				ownsArtifacts = true;
+				await options.beforePublish(this, manager);
+				manager.#index.rebuild(manager.#entries);
+			}
+			// Validate replay before publication, even when a hook changed the carrier.
+			manager.buildSessionContext();
+			manager.#publicationStaged = false;
+			manager.#publicationFresh = true;
+			manager.#forceFileCreation = true;
+			await manager.#rewriteAtomically();
+			await storage.drain();
+			manager.#publicationFresh = false;
+			manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+			manager.#rememberBreadcrumb(manager.#cwd, sessionFile);
+			return manager;
+		} catch (error) {
+			manager.#released = true;
+			manager.#sessionClaim?.release?.();
+			await manager.#closeWriterHandle().catch(() => undefined);
+			try {
+				try {
+					const partial = parseSessionContent(await storage.readText(sessionFile));
+					const header = partial.entries[0];
+					if (header?.type === "session" && header.id === manager.#sessionId) await storage.unlink(sessionFile);
+				} catch (cleanupError) {
+					if (!isEnoent(cleanupError)) throw cleanupError;
+				}
+				if (ownsArtifacts) await fs.promises.rm(artifactDir, { recursive: true, force: true });
+			} catch (cleanupError) {
+				throw new AggregateError(
+					[error, cleanupError],
+					`Import failed; could not remove staged destination ${sessionFile}.`,
+				);
+			}
+			throw error;
+		}
 	}
 
 	/**
@@ -3444,6 +3596,7 @@ export class SessionManager {
 		options?: { preserveActiveLeaf?: boolean },
 	): string {
 		if (parentId !== null && !this.#index.has(parentId)) throw new Error(`Entry ${parentId} not found`);
+		this.assertImportBoundaryNavigation(parentId);
 		const activeLeafId = this.#index.leafId();
 		const entry: SessionMessageEntry = {
 			type: "message",
@@ -3569,6 +3722,7 @@ export class SessionManager {
 			tokensAfter?: number;
 		} = {},
 	): string {
+		getDeepSeekImportContext(options.preserveData);
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			...this.#freshEntryFields(),
@@ -3838,17 +3992,28 @@ export class SessionManager {
 		return this.#index.tree(this.#entries);
 	}
 
+	/** Historical source positions lack an exact recoverable OMP continuation context. */
+	assertImportBoundaryNavigation(entryId: string | null): void {
+		if (!this.#entries.some(isImportBoundary)) return;
+		if (entryId !== null && this.getBranch(entryId).some(isImportBoundary)) return;
+		throw new Error(
+			"Cannot continue, branch, or fork before the DeepSeek import boundary. View or export historical entries instead.",
+		);
+	}
+
 	/**
 	 * Move the leaf to an earlier entry so the next append forms a new branch.
 	 * Existing entries are never modified or deleted.
 	 */
 	branch(branchFromId: string): void {
 		if (!this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
+		this.assertImportBoundaryNavigation(branchFromId);
 		this.#setLeaf(branchFromId);
 	}
 
 	/** Reset the leaf to null so the next append creates a new root entry. */
 	resetLeaf(): void {
+		this.assertImportBoundaryNavigation(null);
 		this.#setLeaf(null);
 	}
 
@@ -3886,6 +4051,7 @@ export class SessionManager {
 	/** Like branch(), but also records a branch_summary of the abandoned path. */
 	branchWithSummary(branchFromId: string | null, summary: string, details?: unknown, fromExtension?: boolean): string {
 		if (branchFromId !== null && !this.#index.has(branchFromId)) throw new Error(`Entry ${branchFromId} not found`);
+		this.assertImportBoundaryNavigation(branchFromId);
 
 		this.#setLeaf(branchFromId);
 		const entry: BranchSummaryEntry = {
@@ -3911,6 +4077,7 @@ export class SessionManager {
 	 * Returns the new file path, or undefined when not persisting.
 	 */
 	createBranchedSession(leafId: string, options?: { copyArtifacts?: boolean }): string | undefined {
+		this.assertImportBoundaryNavigation(leafId);
 		const sourceSessionFile = this.#sessionFile;
 		const branchPath = this.getBranch(leafId);
 		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
@@ -3960,6 +4127,16 @@ export class SessionManager {
 			labels.push(labelEntry);
 			parentId = labelEntry.id;
 		}
+		const imported = branchPath.some(isImportBoundary);
+		const previousState = imported ? this.captureState() : undefined;
+		const previousSuppressBreadcrumb = this.#suppressBreadcrumb;
+		if (imported) this.#suppressBreadcrumb = true;
+		if (imported && this.#storage.existsSync(newSessionFile)) {
+			throw new Error("Fork destination already exists; nothing was overwritten.");
+		}
+		if (imported && this.#persist && sourceSessionFile) {
+			copyImportedArtifactsSync(branchPath, sourceSessionFile, newSessionFile);
+		}
 
 		this.#header = header;
 		this.#entries = [...entriesToKeep, ...labels];
@@ -3981,14 +4158,37 @@ export class SessionManager {
 		}
 
 		this.#sessionFile = newSessionFile;
-		if (options?.copyArtifacts && sourceSessionFile) {
+		if (!imported && options?.copyArtifacts && sourceSessionFile) {
 			this.#pendingArtifactCopy = {
 				sessionFile: newSessionFile,
 				done: copySessionArtifacts(sourceSessionFile, newSessionFile),
 			};
 		}
 		this.#expectedDiskSize = null;
+		this.#publicationFresh = imported;
 		this.#rewriteSynchronously();
+		this.#publicationFresh = false;
+		this.#suppressBreadcrumb = previousSuppressBreadcrumb;
+		if (imported && this.#diskFailure) {
+			const error = this.#diskFailure;
+			this.#sessionClaim?.release?.();
+			this.#sessionClaim = undefined;
+			this.restoreState(previousState!);
+			const published = this.#storage.readTextSync?.(newSessionFile);
+			if (published) {
+				const header = parseSessionContent(published).entries[0];
+				if (header?.type === "session" && header.id === newSessionId) {
+					void this.#storage.unlink(newSessionFile).catch(cleanupError => {
+						logger.warn("Failed to remove unpublished imported fork", {
+							sessionFile: newSessionFile,
+							error: String(cleanupError),
+						});
+					});
+				}
+			}
+			fs.rmSync(artifactsDirectoryFor(newSessionFile)!, { recursive: true, force: true });
+			throw error;
+		}
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
 		return newSessionFile;
 	}
@@ -4083,6 +4283,8 @@ export class SessionManager {
 
 		const sourceHeader = sourceEntries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
+		const importedSource = history.some(isImportBoundary);
+		if (importedSource) manager.#suppressBreadcrumb = true;
 		normalizeLoadedUsage(history);
 		if (options?.resetInheritedCost) SessionManager.#resetInheritedUsageCost(history);
 		manager.#resetToNewSession(
@@ -4093,6 +4295,9 @@ export class SessionManager {
 			},
 			options?.sessionFile,
 		);
+		if (importedSource && storage.existsSync(manager.#sessionFile!)) {
+			throw new Error("Fork destination already exists; nothing was overwritten.");
+		}
 		manager.#header.title = sourceHeader?.title;
 		manager.#header.titleSource = sourceHeader?.titleSource;
 		manager.#additionalDirectories = options?.seance
@@ -4116,10 +4321,39 @@ export class SessionManager {
 			manager.#index.rebuild(history);
 		}
 		manager.#forceFileCreation = true;
-		await manager.#rewriteAtomically();
-		if (!options?.seance && options?.copyArtifacts !== false) {
-			await copySessionArtifacts(sourcePath, manager.#sessionFile!);
+		const imported = history.some(isImportBoundary);
+		const copyArtifacts = !options?.seance && (imported || options?.copyArtifacts !== false);
+		const originalSuppressBreadcrumb = manager.#suppressBreadcrumb;
+		if (imported) manager.#suppressBreadcrumb = true;
+		if (imported && copyArtifacts) copyImportedArtifactsSync(history, sourcePath, manager.#sessionFile!);
+		manager.#publicationFresh = imported;
+		try {
+			await manager.#rewriteAtomically();
+			await storage.drain();
+		} catch (error) {
+			if (imported && copyArtifacts) {
+				await fs.promises.rm(manager.getArtifactsDir()!, { recursive: true, force: true });
+			}
+			if (imported) {
+				try {
+					const partial = parseSessionContent(await storage.readText(manager.#sessionFile!));
+					const header = partial.entries[0];
+					if (header?.type === "session" && header.id === manager.#sessionId)
+						await storage.unlink(manager.#sessionFile!);
+				} catch (cleanupError) {
+					if (!isEnoent(cleanupError))
+						throw new AggregateError([error, cleanupError], "Imported fork cleanup failed.");
+				}
+			}
+			manager.#released = true;
+			manager.#sessionClaim?.release?.();
+			throw error;
+		} finally {
+			manager.#publicationFresh = false;
 		}
+		manager.#suppressBreadcrumb = originalSuppressBreadcrumb;
+		if (imported && manager.#sessionFile) manager.#rememberBreadcrumb(manager.#cwd, manager.#sessionFile);
+		if (!imported && copyArtifacts) await copySessionArtifacts(sourcePath, manager.#sessionFile!);
 		return manager;
 	}
 

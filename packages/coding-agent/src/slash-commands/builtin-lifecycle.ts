@@ -384,12 +384,19 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "resume",
 		icon: "history",
 		description: "Resume a different session",
-		inlineHint: "[session id|@claude|@codex]",
+		inlineHint: "[session id|@claude|@codex|@deepseek]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const sessionArg = command.args.trim();
 			clearSubmittedText(runtime);
-			const foreignSource = sessionArg === "@claude" ? "claude" : sessionArg === "@codex" ? "codex" : undefined;
+			const foreignSource =
+				sessionArg === "@claude"
+					? "claude"
+					: sessionArg === "@codex"
+						? "codex"
+						: sessionArg === "@deepseek"
+							? "deepseek"
+							: undefined;
 			if (foreignSource) {
 				runtime.ctx.showSessionSelector(foreignSource);
 				return;

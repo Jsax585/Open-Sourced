@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { getDeepSeekImportContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
 	AnthropicCompactionPayload,
 	AssistantMessage,
@@ -441,6 +442,10 @@ export function collectNativeReplayRegexSecretValues(
 	values: Set<string>,
 ): void {
 	if (!obfuscator.hasSecrets()) return;
+	const context = getDeepSeekImportContext(message.preserveData);
+	if (context !== undefined) {
+		for (const value of collectMessageRegexSecretValues(obfuscator, context.messages as Message[])) values.add(value);
+	}
 	const payload = message.providerPayload;
 	const remote = message.preserveData?.openaiRemoteCompaction;
 	if (payload?.type !== "openaiResponsesHistory" && !isRecord(remote)) return;
@@ -463,6 +468,16 @@ export function obfuscateNativeReplay<
 	T extends { providerPayload?: ProviderPayload; preserveData?: Record<string, unknown> },
 >(obfuscator: SecretObfuscator, message: T, sharedRegexSecretValues: ReadonlySet<string>): T {
 	if (!obfuscator.hasSecrets()) return message;
+	const context = getDeepSeekImportContext(message.preserveData);
+	if (context !== undefined) {
+		const messages = obfuscateMessageBatch(obfuscator, context.messages as Message[], sharedRegexSecretValues);
+		if (messages !== context.messages) {
+			message = {
+				...message,
+				preserveData: { ...message.preserveData, deepseekImportContext: { ...context, messages } },
+			};
+		}
+	}
 	const payload = message.providerPayload;
 	const remote = message.preserveData?.openaiRemoteCompaction;
 	if (payload?.type !== "openaiResponsesHistory" && !isRecord(remote)) return message;
@@ -610,7 +625,7 @@ function anthropicCompactionFilesText(message: Message): string | undefined {
 function obfuscateAnthropicCompactionFiles(
 	obfuscator: SecretObfuscator,
 	payload: AnthropicCompactionPayload,
-	sharedRegexSecretValues: SecretValueSet,
+	sharedRegexSecretValues: ReadonlySet<string>,
 ): AnthropicCompactionPayload {
 	const filesText =
 		payload.filesText === undefined ? undefined : obfuscator.obfuscate(payload.filesText, sharedRegexSecretValues);
@@ -688,8 +703,11 @@ export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Messag
 	return obfuscator.batch(() => obfuscateMessageBatch(obfuscator, messages));
 }
 
-function obfuscateMessageBatch(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
-	const sharedRegexSecretValues = collectMessageRegexSecretValues(obfuscator, messages);
+function obfuscateMessageBatch(
+	obfuscator: SecretObfuscator,
+	messages: Message[],
+	sharedRegexSecretValues: ReadonlySet<string> = collectMessageRegexSecretValues(obfuscator, messages),
+): Message[] {
 	let changed = false;
 	const result = messages.map((message): Message => {
 		let current = message;

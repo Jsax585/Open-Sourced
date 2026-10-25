@@ -62,6 +62,7 @@ export interface Args {
 	restore?: boolean;
 	fromClaude?: boolean;
 	fromCodex?: boolean;
+	fromDeepseek?: boolean;
 	help?: boolean;
 	version?: boolean;
 	mode?: Mode;
@@ -132,7 +133,7 @@ export function validateGoalLaunch(args: Args, interactive: boolean): void {
 	if (!interactive) {
 		throw new CliUsageError("--goal requires an interactive terminal (not --print or --mode).");
 	}
-	if (args.continue || args.resume || args.fork || args.fromClaude || args.fromCodex) {
+	if (args.continue || args.resume || args.fork || args.fromClaude || args.fromCodex || args.fromDeepseek) {
 		throw new CliUsageError("--goal requires a fresh session (no resume, continue, fork, or import).");
 	}
 }
@@ -147,7 +148,15 @@ export function validateRestoreLaunch(args: Args, interactive: boolean): void {
 	if (!interactive) {
 		throw new CliUsageError("--restore requires an interactive terminal (not --print or --mode).");
 	}
-	if (args.continue || args.fork || args.fromClaude || args.fromCodex || args.noSession || args.goal !== undefined) {
+	if (
+		args.continue ||
+		args.fork ||
+		args.fromClaude ||
+		args.fromCodex ||
+		args.fromDeepseek ||
+		args.noSession ||
+		args.goal !== undefined
+	) {
 		throw new CliUsageError(
 			"--restore resumes one existing session (no continue, fork, import, goal, or --no-session).",
 		);
@@ -348,6 +357,8 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 			result.fromClaude = true;
 		} else if (arg === "--from-codex") {
 			result.fromCodex = true;
+		} else if (arg === "--from-deepseek") {
+			result.fromDeepseek = true;
 		} else if (arg === "--no-session") {
 			result.noSession = true;
 		} else if (arg === "--no-tools") {

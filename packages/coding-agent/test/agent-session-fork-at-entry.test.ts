@@ -67,6 +67,27 @@ describe("AgentSession.fork(entryId)", () => {
 		return { session, artifactId, forkAt };
 	}
 
+	it("refuses pre-import entry forks and branches before hooks or session replacement", async () => {
+		const emit = vi.fn(async () => undefined);
+		const extensionRunner = {
+			hasHandlers: () => true,
+			emit,
+		} as unknown as ExtensionRunner;
+		const { session, forkAt } = await createSeededSession(extensionRunner);
+		const manager = session.sessionManager;
+		const sourceUser = manager.getBranch().find(entry => entry.type === "message" && entry.message.role === "user")!;
+		manager.appendCompaction("import", undefined, forkAt, 0, {
+			preserveData: { deepseekImportContext: { version: 1, messages: [] } },
+		});
+		const sourceFile = session.sessionFile;
+		const sourceLeaf = manager.getLeafId();
+		await expect(session.fork(forkAt)).rejects.toThrow(/import/i);
+		await expect(session.branch(sourceUser.id)).rejects.toThrow(/import/i);
+		expect(emit).not.toHaveBeenCalled();
+		expect(session.sessionFile).toBe(sourceFile);
+		expect(manager.getLeafId()).toBe(sourceLeaf);
+	});
+
 	it("keeps cited artifacts resolvable and allocates fresh ids after the cut", async () => {
 		const { session, artifactId, forkAt } = await createSeededSession();
 		const sourceFile = session.sessionFile;

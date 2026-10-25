@@ -142,7 +142,7 @@ Flow:
    - cancel -> hide overlay, restore editor focus, rerender
    - exit -> hide overlay, then `ctx.shutdown()`
 
-`/resume <id-prefix>` resolves local then global matches and switches directly. `/resume @claude` and `/resume @codex` instead open read-only-source import pickers: the selected foreign transcript is persisted as an OMP session, then switched to; deletion, history augmentation, and all-project scope are not offered in those pickers.
+`/resume <id-prefix>` resolves local then global matches and switches directly. `/resume @claude`, `/resume @codex`, and `/resume @deepseek` instead open read-only-source import pickers: the selected foreign transcript is persisted as a fresh OMP session, then switched to; deletion, history augmentation, and all-project scope are not offered in those pickers. Startup equivalents are `--from-claude`, `--from-codex`, and `--from-deepseek`. Cancellation and empty source lists leave the current session unchanged. See [DeepSeek supported sources and historical-navigation limits](./session-operations-export-share-fork-resume.md#deepseek-harness-import).
 
 ## Session selector component behavior
 

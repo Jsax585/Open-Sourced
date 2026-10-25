@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added local DeepSeek Harness import through `--from-deepseek` and `/resume @deepseek`, supporting nested v0–v4 JSONL/zstd logs and the local `@morlay/session-rdb` 0.1.5 SQLite schema, portable attachments, and replacement-aware continuation without activating source runtime state.
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 

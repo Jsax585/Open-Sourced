@@ -223,6 +223,77 @@ describe("shouldUseAnthropicNativeCompaction", () => {
 });
 
 describe("compact() Anthropic native lane", () => {
+	test("import replacement snapshot is summarized fully without obsolete transcript or fabricated keep IDs", async () => {
+		const model = makeAnthropicModel();
+		const snapshot: AgentMessage[] = [
+			{ role: "user", content: "replacement current context", timestamp: 1 },
+			assistantMessage(model, { content: [{ type: "text", text: "replacement answer" }], timestamp: 2 }),
+		];
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "source",
+				parentId: null,
+				timestamp: new Date(0).toISOString(),
+				message: { role: "user", content: "obsolete source", timestamp: 0 },
+			},
+			{
+				type: "compaction",
+				id: "import",
+				parentId: "source",
+				timestamp: new Date(3).toISOString(),
+				summary: "display divider",
+				firstKeptEntryId: "source",
+				tokensBefore: 0,
+				preserveData: { deepseekImportContext: { version: 1, messages: snapshot } },
+			},
+			{
+				type: "message",
+				id: "native-user",
+				parentId: "import",
+				timestamp: new Date(4).toISOString(),
+				message: { role: "user", content: "native request", timestamp: 4 },
+			},
+			{
+				type: "message",
+				id: "native-answer",
+				parentId: "native-user",
+				timestamp: new Date(5).toISOString(),
+				message: assistantMessage(model, { content: [{ type: "text", text: "native answer" }], timestamp: 5 }),
+			},
+		];
+		const preparation = prepareCompaction(
+			entries,
+			{ ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 100_000 },
+			model,
+		)!;
+		const { calls, completeImpl } = recordingCompleteImpl(() =>
+			assistantMessage(model, {
+				providerPayload: {
+					type: "anthropicCompaction",
+					provider: "anthropic",
+					content: NATIVE_SUMMARY,
+					signature: "signed-import-successor",
+				},
+				stopDetails: { type: "compaction" },
+			}),
+		);
+		const result = await compact(preparation, model, "test-key", undefined, undefined, { completeImpl });
+		expect(calls).toHaveLength(1);
+		expect(
+			JSON.stringify(calls[0].ctx.messages.map(message => ({ role: message.role, content: message.content }))),
+		).toEqual(
+			JSON.stringify(
+				snapshot.map(message => ({
+					role: message.role,
+					content: "content" in message ? message.content : undefined,
+				})),
+			),
+		);
+		expect(result.firstKeptEntryId).toBe("native-user");
+		expect(result.preserveData?.deepseekImportContext).toBeUndefined();
+	});
+
 	test("sends only the summarized prefix with live controls and persists the signed summary", async () => {
 		const completeSimple = vi.spyOn(ai, "completeSimple");
 		const model = makeAnthropicModel();

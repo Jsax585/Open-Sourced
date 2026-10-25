@@ -1,7 +1,7 @@
 import type { SessionManager } from "./session-manager";
 
 /** External coding-agent session source supported by OMP imports. */
-export type ForeignSessionSource = "claude" | "codex";
+export type ForeignSessionSource = "claude" | "codex" | "deepseek";
 
 /** Lightweight source metadata used to choose a foreign session before loading its transcript. */
 export interface ForeignSessionInfo {
@@ -23,4 +23,6 @@ export interface ForeignSessionStore {
 	list(): Promise<ForeignSessionInfo[]>;
 	/** Converts one source session into a non-persistent OMP session. */
 	load(session: ForeignSessionInfo): Promise<SessionManager>;
+	/** Stages detached attachments into the unpublished destination and rewrites its references. */
+	preparePersist?(source: SessionManager, target: SessionManager): Promise<void>;
 }

@@ -62,6 +62,44 @@ describe("session exit diagnostics", () => {
 		tempDir = undefined;
 	});
 
+	it("never restores imported pending calls, even after a newer native compaction", () => {
+		const manager = SessionManager.inMemory();
+		const source = manager.appendMessage(pendingAssistant);
+		manager.appendCompaction("import", undefined, source, 0, {
+			preserveData: { deepseekImportContext: { version: 1, messages: [pendingAssistant] } },
+		});
+		manager.appendCompaction("native", undefined, source, 0);
+		const entries = manager.getBranch();
+		expect(hasRestorableTurn(entries)).toBe(false);
+		expect(createInterruptedTurnAbortMessage(entries, pendingAssistant, { assumeExit: true })).toBeUndefined();
+		expect(createInterruptedToolResults(entries)).toEqual([]);
+		expect(collectPendingToolCalls(entries)).toEqual([]);
+
+		manager.appendMessage({ role: "user", content: "native turn", timestamp: Date.now() });
+		manager.appendMessage({ ...pendingAssistant, timestamp: Date.now() + 1 });
+		expect(hasRestorableTurn(manager.getBranch())).toBe(true);
+		expect(
+			createInterruptedTurnAbortMessage(manager.getBranch(), pendingAssistant, { assumeExit: true })?.stopReason,
+		).toBe("aborted");
+		expect(collectPendingToolCalls(manager.getBranch())).toHaveLength(1);
+	});
+
+	it("does not restore a turn before a clear boundary", () => {
+		const entries = [
+			{
+				type: "message" as const,
+				id: "source",
+				parentId: null,
+				timestamp: new Date().toISOString(),
+				message: pendingAssistant,
+			},
+			{ type: "reset_boundary" as const, id: "clear", parentId: "source", timestamp: new Date().toISOString() },
+		];
+		expect(hasRestorableTurn(entries)).toBe(false);
+		expect(createInterruptedToolResults(entries)).toEqual([]);
+		expect(collectPendingToolCalls(entries)).toEqual([]);
+	});
+
 	it("records a durable tool start marker and shutdown diagnostic before a pending result exists", async () => {
 		tempDir = TempDir.createSync("@pi-session-exit-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));

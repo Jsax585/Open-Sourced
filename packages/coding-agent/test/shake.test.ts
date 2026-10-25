@@ -122,6 +122,34 @@ describe("AgentSession shake", () => {
 			.map(e => (e as { message: ToolResultMessage }).message);
 	}
 
+	it("thinking maintenance mutates imported context rather than obsolete transcript", async () => {
+		const historical: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "obsolete reasoning" }],
+			...apiInfo,
+			usage,
+			stopReason: "stop",
+			timestamp: 1,
+		};
+		const snapshot: AssistantMessage = {
+			...historical,
+			content: [
+				{ type: "thinking", thinking: "current reasoning" },
+				{ type: "text", text: "current answer" },
+			],
+			timestamp: 2,
+		};
+		const sourceId = sessionManager.appendMessage(historical);
+		sessionManager.appendCompaction("import divider", undefined, sourceId, 0, {
+			preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+		});
+		const result = await session.shake("thinking");
+		expect(result.thinkingBlocksDropped).toBe(1);
+		expect(historical.content).toEqual([{ type: "thinking", thinking: "obsolete reasoning" }]);
+		expect(snapshot.content).toEqual([{ type: "text", text: "current answer" }]);
+		expect(JSON.stringify(session.messages)).not.toContain("obsolete reasoning");
+	});
+
 	describe("elide", () => {
 		it("drops the tool result, offloads to an artifact, and embeds the recovery link", async () => {
 			seedHeavyToolResult("X".repeat(4000));
@@ -406,6 +434,50 @@ describe("AgentSession shake", () => {
 	});
 
 	describe("images", () => {
+		it("drops images from interpreted import snapshot without replaying or mutating obsolete source", async () => {
+			const image: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
+			const historical: UserMessage = {
+				role: "user",
+				content: [{ type: "text", text: "obsolete source" }, image],
+				timestamp: 1,
+			};
+			const snapshot: UserMessage = {
+				role: "user",
+				content: [{ type: "text", text: "current replacement" }, image],
+				timestamp: 2,
+			};
+			const sourceId = sessionManager.appendMessage(historical);
+			sessionManager.appendCompaction("import divider", undefined, sourceId, 0, {
+				preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+			});
+			const result = await session.shake("images");
+			expect(result.imagesDropped).toBe(1);
+			expect(historical.content).toEqual([{ type: "text", text: "obsolete source" }, image]);
+			expect(snapshot.content).toEqual([{ type: "text", text: "current replacement" }]);
+			expect(JSON.stringify(session.messages)).not.toContain("obsolete source");
+			expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain("obsolete source");
+		});
+
+		it("clear prevents image maintenance from reviving or mutating imported snapshot", async () => {
+			const snapshot: UserMessage = {
+				role: "user",
+				content: [{ type: "image", data: "iVBORw0KGgo", mimeType: "image/png" }],
+				timestamp: 1,
+			};
+			sessionManager.appendCompaction("import divider", undefined, "", 0, {
+				preserveData: { deepseekImportContext: { version: 1, messages: [snapshot] } },
+			});
+			sessionManager.appendResetBoundary();
+			sessionManager.appendMessage({ role: "user", content: "after clear", timestamp: 2 });
+			expect((await session.shake("images")).imagesDropped).toBe(0);
+			expect(snapshot.content).toHaveLength(1);
+			expect(
+				sessionManager
+					.buildSessionContext()
+					.messages.map(message => (message.role === "user" ? message.content : undefined)),
+			).toEqual(["after clear"]);
+		});
+
 		it("mirrors dropImages and reports the removed image count", async () => {
 			const png: ImageContent = { type: "image", data: "iVBORw0KGgo", mimeType: "image/png" };
 			sessionManager.appendMessage({

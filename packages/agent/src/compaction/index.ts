@@ -5,6 +5,7 @@
 export * from "./anthropic";
 export * from "./branch-summarization";
 export * from "./compaction";
+export * from "./deepseek-import";
 export * from "./entries";
 export * from "./errors";
 export * from "./message-cache";

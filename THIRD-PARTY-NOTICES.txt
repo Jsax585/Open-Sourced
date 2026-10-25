@@ -22899,3 +22899,154 @@ the following restrictions:
     misrepresented as being the original software.
 
 3.  This notice may not be removed or altered from any source distribution.
+
+
+DEEPSEEK SESSION DECODER DEPENDENCY NOTICES
+===========================================
+
+The following notices cover the DeepSeek session decoder dependency graph,
+including installed runtime peers, and adapted session backend helper code.
+
+-------------------------------------------------------------------------------
+License: MIT License (MIT)
+Used by:
+- @deepseek-ai/dsh-agent@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-attachment@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-brand@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-commands@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-compaction@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-compaction-image-offload@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-invariants@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-llm@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-scope@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format-catalog@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format-v0-to-v1@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format-v1-to-v2@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format-v2-to-v3@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-format-v3-to-v4@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-session-projection@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-system-prompt@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-timeout@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-typert-protocol@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-util-crypto@0.2.0-rc.2: LICENSE
+- @deepseek-ai/dsh-util-values@0.2.0-rc.2: LICENSE
+
+Full license text:
+
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+License: MIT License (MIT)
+Used by:
+- @deepseek-ai/cordis@4.0.5: LICENSE
+- @deepseek-ai/cosmokit@1.8.6: LICENSE
+- @deepseek-ai/schemastery@3.18.5: LICENSE
+
+Full license text:
+
+MIT License
+
+Copyright (c) 2021-present Shigma
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+License: MIT License (MIT)
+Used by:
+- @standard-schema/spec@1.1.0: LICENSE (2024 copyright)
+- zod@4.6.7: LICENSE (2025 copyright)
+
+Full license text:
+
+MIT License
+
+Copyright (c) 2024 Colin McDonnell
+Copyright (c) 2025 Colin McDonnell
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+License: MIT License (MIT)
+Used by:
+- @morlay/session-rdb@0.1.5: LICENSE
+
+Attribution for adapted session backend helper code; not a bundled dependency
+on the original package or its database drivers.
+
+Full license text:
+
+MIT License
+
+Copyright (c) 2025 morlay
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

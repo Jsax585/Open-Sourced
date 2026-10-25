@@ -62,6 +62,7 @@ import {
 	storeCompactionV2PreserveData,
 	V2_RETAINED_MESSAGE_TOKEN_BUDGET,
 } from "./compaction-v2-streaming";
+import { getDeepSeekImportContext, stripDeepSeekImportContext } from "./deepseek-import";
 import type { CompactionEntry, SessionEntry } from "./entries";
 import { NativeCompactionError } from "./errors";
 import {
@@ -1390,7 +1391,11 @@ export function prepareCompaction(
 ): CompactionPreparation | undefined {
 	const lastEntry = pathEntries[pathEntries.length - 1];
 	// A speculative native record may leave uncovered messages before the record.
-	if (lastEntry?.type === "compaction" && !lastEntry.providerReplayThroughEntryId) {
+	if (
+		lastEntry?.type === "compaction" &&
+		!lastEntry.providerReplayThroughEntryId &&
+		!getDeepSeekImportContext(lastEntry.preserveData)
+	) {
 		return undefined;
 	}
 
@@ -1410,6 +1415,7 @@ export function prepareCompaction(
 	}
 	const previousCompaction =
 		prevCompactionIndex >= 0 ? (pathEntries[prevCompactionIndex] as CompactionEntry) : undefined;
+	const importContext = getDeepSeekImportContext(previousCompaction?.preserveData);
 	let boundaryStart = Math.max(prevCompactionIndex, resetBoundaryIndex) + 1;
 	if (
 		previousCompaction &&
@@ -1426,7 +1432,7 @@ export function prepareCompaction(
 				boundaryStart = Math.max(replayThroughIndex, resetBoundaryIndex) + 1;
 			}
 		}
-	} else if (previousCompaction) {
+	} else if (previousCompaction && !importContext) {
 		// Local and Anthropic summaries exclude the retained tail, whose
 		// original entries precede the compaction record.
 		for (let i = resetBoundaryIndex + 1; i < prevCompactionIndex; i++) {
@@ -1457,7 +1463,10 @@ export function prepareCompaction(
 		compactionMessages.push(message);
 	}
 
-	const lastUsage = getLastAssistantUsage(pathEntries);
+	const lastUsage = importContext
+		? (compactionMessages.map(getAssistantUsage).findLast(usage => usage !== undefined) ??
+			importContext.messages.map(getAssistantUsage).findLast(usage => usage !== undefined))
+		: getLastAssistantUsage(pathEntries);
 	const tokensBefore = lastUsage ? calculateContextTokens(lastUsage) : 0;
 	let keepRecentTokens = settings.keepRecentTokens;
 	if (lastUsage) {
@@ -1473,14 +1482,15 @@ export function prepareCompaction(
 
 	// Get ID of first kept entry
 	const firstKeptEntry = compactionEntries[cutPoint.firstKeptEntryIndex];
-	if (!firstKeptEntry?.id) {
+	if (!firstKeptEntry?.id && !importContext) {
 		return undefined; // Session needs migration
 	}
-	const firstKeptEntryId = firstKeptEntry.id;
+	const firstKeptEntryId = firstKeptEntry?.id ?? "";
 
 	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
 
-	const messagesToSummarize = compactionMessages.slice(0, historyEnd);
+	// Snapshot messages have no journal IDs: summarize all, retain only native entries.
+	const messagesToSummarize = [...(importContext?.messages ?? []), ...compactionMessages.slice(0, historyEnd)];
 	const turnPrefixMessages = cutPoint.isSplitTurn
 		? compactionMessages.slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex)
 		: [];
@@ -1511,11 +1521,13 @@ export function prepareCompaction(
 		turnPrefixMessages,
 		recentMessages,
 		recentEntryIds,
-		lastSummarizedEntryId: compactionEntries[cutPoint.firstKeptEntryIndex - 1]?.id,
+		lastSummarizedEntryId:
+			compactionEntries[cutPoint.firstKeptEntryIndex - 1]?.id ??
+			(importContext ? previousCompaction?.id : undefined),
 		isSplitTurn: cutPoint.isSplitTurn,
 		tokensBefore,
-		previousSummary: previousCompaction?.summary,
-		previousSummaryTimestamp: previousCompaction?.timestamp,
+		previousSummary: importContext ? undefined : previousCompaction?.summary,
+		previousSummaryTimestamp: importContext ? undefined : previousCompaction?.timestamp,
 		previousPreserveData: previousCompaction?.preserveData,
 		fileOps,
 		settings,
@@ -1725,7 +1737,7 @@ export async function compact(
 			: undefined;
 
 	let preserveData = withAnthropicCompactionPreserveData(
-		withOpenAiRemoteCompactionPreserveData(previousPreserveData, undefined),
+		withOpenAiRemoteCompactionPreserveData(stripDeepSeekImportContext(previousPreserveData), undefined),
 		undefined,
 	);
 	const remotePrefixMessages: AgentMessage[] = [
@@ -2258,7 +2270,7 @@ export async function compact(
 		});
 	}
 
-	if (!firstKeptEntryId) {
+	if (!firstKeptEntryId && !getDeepSeekImportContext(previousPreserveData)) {
 		throw new Error("First kept entry has no ID - session may need migration");
 	}
 
