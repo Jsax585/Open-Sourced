@@ -229,6 +229,16 @@ describe("manage_skill execute", () => {
 		await t.execute("u2", { action: "update", name: "dup", description: "Global v2.", body: "# global2" });
 		expect(await Bun.file(globalFile).text()).toContain("# global2");
 	});
+
+	it("an unscoped update ignores a project directory that holds no SKILL.md", async () => {
+		const cwd = path.join(tempHome, "work");
+		const t = ManageSkillTool.createIf(makeSession({ "autolearn.enabled": true }, { cwd }))!;
+		await t.execute("g", { action: "create", name: "stray", description: "Global.", body: "# global" });
+		// e.g. an interrupted project create left an empty directory behind.
+		await fs.mkdir(path.join(getProjectManagedSkillsDir(cwd), "stray"), { recursive: true });
+		await t.execute("u", { action: "update", name: "stray", description: "Global v2.", body: "# global2" });
+		expect(await Bun.file(path.join(getManagedSkillsDir(), "stray", "SKILL.md")).text()).toContain("# global2");
+	});
 });
 
 describe("learn execute", () => {
@@ -309,6 +319,25 @@ describe("learn execute", () => {
 		).rejects.toThrow(/Lesson stored, but the managed skill could not be written/);
 		// The memory half still ran.
 		expect(remembered).toHaveLength(1);
+	});
+
+	it("reports the stored lesson when resolving an unscoped skill update fails", async () => {
+		const cwd = path.join(tempHome, "work");
+		await fs.mkdir(cwd, { recursive: true });
+		const store = getProjectManagedSkillsDir(cwd);
+		await fs.mkdir(store, { recursive: true });
+		await fs.chmod(store, 0o000); // lstat inside the store fails with EACCES
+		try {
+			await expect(
+				new LearnTool(learnSession(cwd)).execute("3r", {
+					memory: "lesson",
+					skill: { action: "update", name: "demo", description: "d", body: "b" },
+				}),
+			).rejects.toThrow(/Lesson stored, but the managed skill could not be written/);
+			expect(remembered).toHaveLength(1);
+		} finally {
+			await fs.chmod(store, 0o755);
+		}
 	});
 
 	it("reports Hindsight lessons as queued rather than stored", async () => {

@@ -43,9 +43,10 @@ export function managedSkillLocation(scope: ManagedSkillScope | undefined, cwd: 
 /**
  * Scope a mutation targets. An explicit scope wins; `create` defaults to
  * global. An unscoped `update`/`delete` targets the copy discovery shows: the
- * project store when it holds the skill (it shadows a same-named global one),
- * else global. Skill listings omit scope, so this keeps an edit from landing
- * on a hidden global copy.
+ * project store when it holds a real skill directory with a `SKILL.md` file
+ * (it shadows a same-named global one), else global. Skill listings omit
+ * scope, so this keeps an edit from landing on a hidden global copy. A stray
+ * empty or symlinked project directory is not a skill and does not redirect.
  */
 export async function resolveManagedSkillScope(
 	action: "create" | "update" | "delete",
@@ -54,13 +55,18 @@ export async function resolveManagedSkillScope(
 	cwd: string,
 ): Promise<ManagedSkillScope> {
 	if (scope) return scope;
-	if (action === "create" || !isValidManagedSkillName(name.trim().toLowerCase())) return "global";
-	const projectSkill = path.join(getProjectManagedSkillsDir(cwd), name.trim().toLowerCase());
-	const stat = await fs.lstat(projectSkill).catch(err => {
-		if (isEnoent(err)) return null;
-		throw err;
-	});
-	return stat ? "project" : "global";
+	const normalized = name.trim().toLowerCase();
+	if (action === "create" || !isValidManagedSkillName(normalized)) return "global";
+	const skillDir = path.join(getProjectManagedSkillsDir(cwd), normalized);
+	const lstatOrNull = (p: string) =>
+		fs.lstat(p).catch(err => {
+			if (isEnoent(err) || (err instanceof Error && "code" in err && err.code === "ENOTDIR")) return null;
+			throw err;
+		});
+	const dirStat = await lstatOrNull(skillDir);
+	if (!dirStat?.isDirectory()) return "global";
+	const fileStat = await lstatOrNull(path.join(skillDir, "SKILL.md"));
+	return fileStat?.isFile() ? "project" : "global";
 }
 
 /** Resolve the isolated global managed-skills directory (`~/.omp/agent/managed-skills`). */
