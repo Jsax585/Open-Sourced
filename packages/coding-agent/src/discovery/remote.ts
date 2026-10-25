@@ -19,7 +19,7 @@ import {
 	loadRemoteSkillDescriptors,
 	remoteSkillCachePath,
 	REMOTE_SKILL_PROVIDER_ID,
-	type RemoteSkillIndexEntry,
+	type RemoteSkillDescriptorLoad,
 } from "../skills/remote/store";
 import { createSourceMeta } from "./helpers";
 
@@ -32,15 +32,15 @@ function repositoryNamespace(repository: string): string {
 
 async function loadRemoteSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 	const agentDir = ctx.agentDir ?? getAgentDir();
-	const warnings: string[] = [];
-	let entries: RemoteSkillIndexEntry[];
+	let loaded: RemoteSkillDescriptorLoad;
 	try {
-		entries = await loadRemoteSkillDescriptors(ctx.cwd, agentDir);
+		loaded = await loadRemoteSkillDescriptors(ctx.cwd, agentDir);
 	} catch (error) {
 		return { items: [], warnings: [`[remote] ${error instanceof Error ? error.message : String(error)}`] };
 	}
+	const warnings = loaded.warnings.map(message => `[remote] ${message}`);
 
-	const items: Skill[] = entries.map(({ descriptor, level }) => {
+	const items: Skill[] = loaded.entries.map(({ descriptor, level }) => {
 		const skillPath = remoteSkillCachePath(descriptor, "SKILL.md", agentDir);
 		return {
 			name: descriptor.name,

@@ -17,7 +17,7 @@ import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
-import { ensureRemoteSkillResource } from "../skills/remote/store";
+import { ensureRemoteSkillFileAt } from "../skills/remote/store";
 import {
 	buildDirectoryResource,
 	contentTypeForPath,
@@ -138,7 +138,9 @@ async function materializeRemoteSkill(
 		await fs.mkdir(baseDir, { recursive: true });
 		return true;
 	}
-	await ensureRemoteSkillResource(remote, relative.split(path.sep).join("/"), { signal });
+	// Materialize at the path the skill object already addresses, so a session with a
+	// custom agent dir (SDK) does not fetch into a different cache root.
+	await ensureRemoteSkillFileAt(remote, targetPath, relative.split(path.sep).join("/"), { signal });
 	return true;
 }
 

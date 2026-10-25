@@ -3,6 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { buildSkillPromptMessage } from "../src/extensibility/skills";
+import { parseInternalUrl } from "../src/internal-urls";
+import { SkillProtocolHandler } from "../src/internal-urls/skill-protocol";
 import {
 	assertSkillRelativePath,
 	listRemoteSkillFiles,
@@ -10,13 +13,14 @@ import {
 	type FetchFn,
 } from "../src/skills/remote/source";
 import {
+	__setRemoteSkillFetchForTests,
 	ensureRemoteSkillResource,
 	loadRemoteSkillDescriptors,
 	readRemoteSkillIndex,
 	remoteSkillCachePath,
 } from "../src/skills/remote/store";
 import { addRemoteSkills, removeRemoteSkills, syncRemoteSkills } from "../src/skills/remote/sync";
-import { RemoteSkillError } from "../src/skills/remote/types";
+import { RemoteSkillError, type RemoteSkillDescriptor } from "../src/skills/remote/types";
 
 const REPO = "acme/skills";
 const COMMIT = "a".repeat(40);
@@ -44,9 +48,10 @@ interface Stub {
 function stubFetch(routes: Record<string, () => Response | Promise<Response>>): Stub {
 	const calls: string[] = [];
 	const fetch: FetchFn = async input => {
-		calls.push(input);
+		const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+		calls.push(url);
 		for (const [needle, respond] of Object.entries(routes)) {
-			if (input.includes(needle)) return await respond();
+			if (url.includes(needle)) return await respond();
 		}
 		return new Response("not found", { status: 404 });
 	};
@@ -61,18 +66,36 @@ function text(value: string): Response {
 	return new Response(value);
 }
 
-function githubTreeStub(commit: string, docs: Record<string, string>): Stub {
+function githubTreeStub(commit: string, docs: Record<string, string>, tree?: unknown): Stub {
+	const listing = tree ?? {
+		tree: Object.keys(docs).map(name => ({ path: `skills/${name}/SKILL.md`, type: "blob" })),
+	};
 	const routes: Record<string, () => Response | Promise<Response>> = {
 		"/commits/": () => json({ sha: commit }),
-		"/git/trees/": () =>
-			json({
-				tree: Object.keys(docs).map(name => ({ path: `skills/${name}/SKILL.md`, type: "blob" })),
-			}),
+		"/git/trees/": () => json(listing),
 	};
 	for (const [name, body] of Object.entries(docs)) {
 		routes[`/skills/${name}/SKILL.md`] = () => text(body);
 	}
 	return stubFetch(routes);
+}
+
+/** The object the loader publishes: cache path plus the pinned source. */
+function remoteSkillFixture(descriptor: RemoteSkillDescriptor, agentDir: string) {
+	const filePath = remoteSkillCachePath(descriptor, "SKILL.md", agentDir);
+	return {
+		name: descriptor.name,
+		description: descriptor.description,
+		filePath,
+		baseDir: path.dirname(filePath),
+		source: "remote:project",
+		remote: {
+			origin: descriptor.origin,
+			repository: descriptor.repository,
+			directory: descriptor.directory,
+			commit: descriptor.commit,
+		},
+	};
 }
 
 describe("remote skill sources", () => {
@@ -89,6 +112,7 @@ describe("remote skill sources", () => {
 	});
 
 	afterEach(() => {
+		__setRemoteSkillFetchForTests(undefined);
 		removeSyncWithRetries(root);
 	});
 
@@ -124,6 +148,33 @@ describe("remote skill sources", () => {
 		]);
 	});
 
+	test("accepts a repository-root SKILL.md when no directory is given", async () => {
+		const rootTree = { tree: [{ path: "SKILL.md", type: "blob" }] };
+		const stub = githubTreeStub(COMMIT, {}, rootTree);
+		stub.fetch = stubFetch({
+			"/commits/": () => json({ sha: COMMIT }),
+			"/git/trees/": () => json(rootTree),
+			[`/${COMMIT}/SKILL.md`]: () => text(skillDoc("skills", "Root-level skill.")),
+		}).fetch;
+		const result = await addRemoteSkills(REPO, { cwd, global: false, fetch: stub.fetch });
+		expect(result.added).toEqual(["skills"]);
+		const index = await readRemoteSkillIndex(path.join(cwd, ".omp", "remote-skills.json"));
+		expect(index.skills.skills).toMatchObject({ directory: "", name: "skills" });
+		expect(remoteSkillCachePath(index.skills.skills!, "SKILL.md", agentDir)).toContain(
+			path.join("acme", "skills", COMMIT, "SKILL.md"),
+		);
+	});
+
+	test("fails loudly on a truncated tree listing", async () => {
+		const stub = stubFetch({
+			"/commits/": () => json({ sha: COMMIT }),
+			"/git/trees/": () => json({ tree: [], truncated: true }),
+		});
+		await expect(addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch })).rejects.toMatchObject({
+			code: "RESOURCE_LIMIT_EXCEEDED",
+		});
+	});
+
 	test("add pins the resolved commit and records frontmatter descriptions", async () => {
 		const stub = githubTreeStub(COMMIT, {
 			pdf: skillDoc("pdf", "Use for PDF work."),
@@ -149,6 +200,110 @@ describe("remote skill sources", () => {
 		);
 	});
 
+	test("a hostile checked-in index cannot escape the cache root", async () => {
+		const indexFile = path.join(cwd, ".omp", "remote-skills.json");
+		fs.mkdirSync(path.dirname(indexFile), { recursive: true });
+		fs.writeFileSync(
+			indexFile,
+			JSON.stringify({
+				version: 1,
+				skills: {
+					pdf: {
+						name: "pdf",
+						description: "Escape.",
+						origin: "github",
+						repository: "acme/skills",
+						directory: "../../../../escaped",
+						ref: "main",
+						commit: COMMIT,
+					},
+				},
+			}),
+		);
+
+		// Strict readers reject; discovery skips the descriptor with a warning.
+		await expect(readRemoteSkillIndex(indexFile)).rejects.toMatchObject({ code: "INVALID_SKILL" });
+		const { entries, warnings } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries).toEqual([]);
+		expect(warnings.join("\n")).toContain("unsafe directory");
+		expect(() =>
+			remoteSkillCachePath(
+				{ origin: "github", repository: "acme/skills", directory: "../../../../escaped", commit: COMMIT },
+				"SKILL.md",
+				agentDir,
+			),
+		).toThrow(RemoteSkillError);
+	});
+
+	test("one invalid descriptor does not hide valid ones from the other scope", async () => {
+		const userFile = path.join(agentDir, "remote-skills.json");
+		fs.writeFileSync(
+			userFile,
+			JSON.stringify({
+				version: 1,
+				skills: {
+					broken: {
+						name: "broken",
+						description: "x",
+						origin: "github",
+						repository: "acme/skills",
+						directory: "..",
+						ref: "main",
+						commit: COMMIT,
+					},
+				},
+			}),
+		);
+		const project = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Project copy.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: project.fetch });
+
+		const { entries, warnings } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries.map(entry => entry.descriptor.name)).toEqual(["pdf"]);
+		expect(warnings.length).toBeGreaterThan(0);
+	});
+
+	test("skill:// materializes a remote skill through the protocol handler", async () => {
+		const doc = skillDoc("pdf", "Use for PDF work.");
+		const stub = githubTreeStub(COMMIT, { pdf: doc });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const skill = remoteSkillFixture(entries[0]!.descriptor, agentDir);
+
+		const fetches = stubFetch({
+			[`/${COMMIT}/skills/pdf/SKILL.md`]: () => text(doc),
+			[`/${COMMIT}/skills/pdf/REFERENCE.md`]: () => text("# Reference\n"),
+		});
+		__setRemoteSkillFetchForTests(fetches.fetch);
+
+		const handler = new SkillProtocolHandler();
+		const bare = await handler.resolve(parseInternalUrl("skill://pdf"), { skills: [skill] });
+		expect(bare.content).toContain("Use for PDF work.");
+
+		const nested = await handler.resolve(parseInternalUrl("skill://pdf/REFERENCE.md"), { skills: [skill] });
+		expect(nested.content).toBe("# Reference\n");
+
+		const cached = await handler.resolve(parseInternalUrl("skill://pdf/REFERENCE.md"), { skills: [skill] });
+		expect(cached.content).toBe("# Reference\n");
+		expect(fetches.calls.length).toBe(2);
+	});
+
+	test("building a /skill: prompt materializes the body first", async () => {
+		const doc = skillDoc("pdf", "Use for PDF work.");
+		const stub = githubTreeStub(COMMIT, { pdf: doc });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const skill = remoteSkillFixture(entries[0]!.descriptor, agentDir);
+
+		const fetches = stubFetch({ [`/${COMMIT}/skills/pdf/SKILL.md`]: () => text(doc) });
+		__setRemoteSkillFetchForTests(fetches.fetch);
+
+		const built = await buildSkillPromptMessage(skill, { args: "" }, "user");
+		expect(built.message).toContain("# pdf");
+		expect(built.details.path).toBe(skill.filePath);
+		expect(await Bun.file(skill.filePath).text()).toContain("name: pdf");
+		expect(fetches.calls.length).toBe(1);
+	});
+
 	test("sync repins a moving ref and keeps an explicit commit untouched", async () => {
 		const first = githubTreeStub(COMMIT, {
 			pdf: skillDoc("pdf", "Old description."),
@@ -160,7 +315,8 @@ describe("remote skill sources", () => {
 			pdf: skillDoc("pdf", "New description."),
 			writing: skillDoc("writing", "Use for prose."),
 		});
-		const synced = await syncRemoteSkills({ cwd, agentDir, fetch: moved.fetch });
+		// An empty selection means every skill (CLI `remote sync` without names).
+		const synced = await syncRemoteSkills({ cwd, agentDir, names: [], fetch: moved.fetch });
 		expect(synced.changes.sort((a, b) => a.name.localeCompare(b.name))).toEqual([
 			{ name: "pdf", from: COMMIT, to: NEXT_COMMIT },
 			{ name: "writing", from: COMMIT, to: NEXT_COMMIT },
@@ -190,20 +346,20 @@ describe("remote skill sources", () => {
 			writing: skillDoc("writing", "Use for prose."),
 		});
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
-		const [entry] = await loadRemoteSkillDescriptors(cwd, agentDir);
-		expect(entry?.descriptor.name).toBe("pdf");
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries[0]?.descriptor.name).toBe("pdf");
 
 		const withResource = stubFetch({
 			"/skills/pdf/REFERENCE.md": () => text("# Reference\n"),
 		});
-		const file = await ensureRemoteSkillResource(entry!.descriptor, "REFERENCE.md", {
+		const file = await ensureRemoteSkillResource(entries[0]!.descriptor, "REFERENCE.md", {
 			fetch: withResource.fetch,
 			agentDir,
 		});
 		expect(await Bun.file(file).text()).toBe("# Reference\n");
-		expect(file).toBe(remoteSkillCachePath(entry!.descriptor, "REFERENCE.md", agentDir));
+		expect(file).toBe(remoteSkillCachePath(entries[0]!.descriptor, "REFERENCE.md", agentDir));
 
-		const again = await ensureRemoteSkillResource(entry!.descriptor, "REFERENCE.md", {
+		const again = await ensureRemoteSkillResource(entries[0]!.descriptor, "REFERENCE.md", {
 			fetch: withResource.fetch,
 			agentDir,
 		});
@@ -211,11 +367,39 @@ describe("remote skill sources", () => {
 		expect(withResource.calls.length).toBe(1);
 	});
 
+	test("one cancelled reader does not cancel the shared download", async () => {
+		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const descriptor = entries[0]!.descriptor;
+
+		const gate = Promise.withResolvers<void>();
+		const slow = stubFetch({
+			"/skills/pdf/REFERENCE.md": async () => {
+				await gate.promise;
+				return text("# Shared\n");
+			},
+		});
+		const controller = new AbortController();
+		const cancelled = ensureRemoteSkillResource(descriptor, "REFERENCE.md", {
+			fetch: slow.fetch,
+			agentDir,
+			signal: controller.signal,
+		});
+		controller.abort();
+		await expect(cancelled).rejects.toBeDefined();
+
+		gate.resolve();
+		const file = await ensureRemoteSkillResource(descriptor, "REFERENCE.md", { fetch: slow.fetch, agentDir });
+		expect(await Bun.file(file).text()).toBe("# Shared\n");
+		expect(slow.calls.length).toBe(1);
+	});
+
 	test("a moved ref does not change where an already-bound task reads from", async () => {
 		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
-		const [entry] = await loadRemoteSkillDescriptors(cwd, agentDir);
-		const bound = entry!.descriptor;
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const bound = entries[0]!.descriptor;
 
 		const moved = githubTreeStub(NEXT_COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
 		await syncRemoteSkills({ cwd, agentDir, fetch: moved.fetch });
@@ -228,16 +412,16 @@ describe("remote skill sources", () => {
 	test("a missing resource and an unreachable source surface distinct errors", async () => {
 		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
-		const [entry] = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
 
 		await expect(
-			ensureRemoteSkillResource(entry!.descriptor, "MISSING.md", { fetch: stub.fetch, agentDir }),
+			ensureRemoteSkillResource(entries[0]!.descriptor, "MISSING.md", { fetch: stub.fetch, agentDir }),
 		).rejects.toMatchObject({ code: "NOT_FOUND" });
 
 		const offline: FetchFn = async () => {
 			throw new TypeError("fetch failed");
 		};
-		const error = await ensureRemoteSkillResource(entry!.descriptor, "REFERENCE.md", {
+		const error = await ensureRemoteSkillResource(entries[0]!.descriptor, "REFERENCE.md", {
 			fetch: offline,
 			agentDir,
 		}).catch(err => err);
@@ -249,11 +433,11 @@ describe("remote skill sources", () => {
 	test("oversized resources are rejected before reaching the cache", async () => {
 		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
-		const [entry] = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
 
 		const big = stubFetch({ "/skills/pdf/big.bin": () => text("x".repeat(2048)) });
 		await expect(
-			ensureRemoteSkillResource(entry!.descriptor, "big.bin", {
+			ensureRemoteSkillResource(entries[0]!.descriptor, "big.bin", {
 				fetch: big.fetch,
 				agentDir,
 				maxBytes: 1024,
@@ -261,16 +445,24 @@ describe("remote skill sources", () => {
 		).rejects.toMatchObject({ code: "RESOURCE_LIMIT_EXCEEDED" });
 	});
 
-	test("remove unregisters only the named skills", async () => {
+	test("remove unregisters only the requested scope", async () => {
 		const stub = githubTreeStub(COMMIT, {
 			pdf: skillDoc("pdf", "Use for PDF work."),
 			writing: skillDoc("writing", "Use for prose."),
 		});
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
-		const removed = await removeRemoteSkills({ cwd, agentDir, names: ["pdf"] });
-		expect(removed.removed).toEqual(["pdf"]);
-		const index = await readRemoteSkillIndex(path.join(cwd, ".omp", "remote-skills.json"));
-		expect(Object.keys(index.skills)).toEqual(["writing"]);
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: true, agentDir, fetch: stub.fetch });
+
+		const projectRemoved = await removeRemoteSkills({ cwd, agentDir, names: ["pdf"] });
+		expect(projectRemoved.removed).toEqual(["pdf"]);
+		const projectIndex = await readRemoteSkillIndex(path.join(cwd, ".omp", "remote-skills.json"));
+		expect(Object.keys(projectIndex.skills)).toEqual(["writing"]);
+		// The user copy is untouched by a project scoped removal.
+		const userIndex = await readRemoteSkillIndex(path.join(agentDir, "remote-skills.json"));
+		expect(Object.keys(userIndex.skills).sort()).toEqual(["pdf", "writing"]);
+
+		const userRemoved = await removeRemoteSkills({ cwd, agentDir, names: ["pdf"], global: true });
+		expect(userRemoved.removed).toEqual(["pdf"]);
 		await expect(removeRemoteSkills({ cwd, agentDir, names: ["pdf"] })).rejects.toMatchObject({
 			code: "NOT_FOUND",
 		});
@@ -282,7 +474,7 @@ describe("remote skill sources", () => {
 		const user = githubTreeStub(NEXT_COMMIT, { pdf: skillDoc("pdf", "User copy.") });
 		await addRemoteSkills(`${REPO}#skills`, { cwd, global: true, agentDir, fetch: user.fetch });
 
-		const entries = await loadRemoteSkillDescriptors(cwd, agentDir);
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
 		expect(entries).toHaveLength(1);
 		expect(entries[0]).toMatchObject({ level: "project", descriptor: { description: "Project copy." } });
 	});

@@ -20,6 +20,7 @@ import { allowsSkillTokens, SKILL_TOKEN_RE } from "@oh-my-pi/pi-tui/prompt/skill
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
+import { ensureRemoteSkillFileAt } from "../skills/remote/store";
 import type { RemoteSkillSource } from "../skills/remote/types";
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
@@ -265,7 +266,6 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: options.source,
 			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-			...(capSkill.remote !== undefined && { remote: capSkill.remote }),
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 			_source: capSkill._source,
 		})),
@@ -508,7 +508,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 					source: "custom:user",
 					...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-					...(capSkill.remote !== undefined && { remote: capSkill.remote }),
 					hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},
@@ -592,7 +591,6 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: `${capSkill._source.provider}:${capSkill.level}`,
 			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-			...(capSkill.remote !== undefined && { remote: capSkill.remote }),
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 			_source: capSkill._source,
 		});
@@ -676,11 +674,16 @@ export type SkillInvocationKind = "user" | "autoload";
 export type SkillPromptInput = Pick<ParsedSkillInvocation, "args"> & Partial<Pick<ParsedSkillInvocation, "prompt">>;
 
 /** Read a skill's instruction body before rendering user-provided arguments. */
-export async function loadSkillPromptBody(skill: Pick<Skill, "filePath">): Promise<string> {
-	const content = await Bun.file(skill.filePath).text();
+export async function loadSkillPromptBody(skill: Pick<Skill, "filePath" | "remote">): Promise<string> {
+	// A remote skill's cache file only exists after its first read; `/skill:<name>`,
+	// RPC, and autoload go straight to the path, so materialize it here.
+	const filePath = skill.remote
+		? await ensureRemoteSkillFileAt(skill.remote, skill.filePath, "SKILL.md")
+		: skill.filePath;
+	const content = await Bun.file(filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.
-	return parseFrontmatter(content, { source: skill.filePath, repair: false, level: "off" }).body.trim();
+	return parseFrontmatter(content, { source: filePath, repair: false, level: "off" }).body.trim();
 }
 
 /** Render a loaded skill with user arguments substituted by its static template. */
@@ -712,7 +715,7 @@ export function renderSkillPromptMessage(
 		message = prompt
 			.render(autoloadTemplate, {
 				body,
-				filePath: skill.filePath,
+				filePath,
 				userArgs: trimmedArgs || undefined,
 			})
 			.trim();
@@ -721,7 +724,7 @@ export function renderSkillPromptMessage(
 		message,
 		details: {
 			name: skill.name,
-			path: skill.filePath,
+			path: filePath,
 			args: trimmedArgs || undefined,
 			prompt: input.prompt,
 			lineCount: body ? body.split("\n").length : 0,

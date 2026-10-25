@@ -494,16 +494,17 @@ async function handleRemote(cmd: SkillCommandArgs): Promise<number> {
 			return 0;
 		}
 		case "list": {
-			const skills = await listRemoteSkills({ cwd: cmd.cwd });
+			const { entries, warnings } = await listRemoteSkills({ cwd: cmd.cwd });
+			for (const warning of warnings) process.stderr.write(`${chalk.yellow("warn")} ${warning}\n`);
 			if (cmd.flags.json === true) {
-				process.stdout.write(`${JSON.stringify(skills, null, 2)}\n`);
+				process.stdout.write(`${JSON.stringify({ entries, warnings }, null, 2)}\n`);
 				return 0;
 			}
-			if (skills.length === 0) {
+			if (entries.length === 0) {
 				process.stdout.write("No remote skills registered.\n");
 				return 0;
 			}
-			for (const { descriptor, level } of skills) {
+			for (const { descriptor, level } of entries) {
 				const where = descriptor.directory === "" ? "." : descriptor.directory;
 				process.stdout.write(
 					`${chalk.bold.cyan(descriptor.name)} ${descriptor.repository}#${where} @ ${descriptor.ref} → ${descriptor.commit.slice(0, 7)} ${chalk.dim(`(${level})`)}\n`,
@@ -514,7 +515,7 @@ async function handleRemote(cmd: SkillCommandArgs): Promise<number> {
 		case "sync": {
 			const { changes } = await syncRemoteSkills({
 				cwd: cmd.cwd,
-				names: rest,
+				...(rest.length > 0 ? { names: rest } : {}),
 				...(cmd.flags.global === undefined ? {} : { global: cmd.flags.global }),
 			});
 			if (changes.length === 0) {

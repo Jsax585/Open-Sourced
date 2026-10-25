@@ -12,6 +12,7 @@ import {
 	listRemoteSkillFiles,
 	parseRemoteSourceSpec,
 	readRemoteFile,
+	repositorySkillPath,
 	resolveRemoteCommit,
 	type FetchFn,
 } from "./source";
@@ -63,6 +64,17 @@ export interface RemoteAddResult {
 	commit: string;
 }
 
+/** Directory the spec compares a skill's `name` against: its own dir, or the repository at the root. */
+function expectedDirName(repository: string, directory: string): string {
+	return directory === "" ? repository.split("/")[1]! : path.posix.basename(directory);
+}
+
+/** Repository directory of a listed `SKILL.md`; `""` for a root-level skill. */
+function skillDirectory(file: string): string {
+	const dir = path.posix.dirname(file);
+	return dir === "." ? "" : dir;
+}
+
 /**
  * Register every skill in one GitHub subdirectory.
  *
@@ -90,7 +102,7 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 	const added: string[] = [];
 	const updated: string[] = [];
 	for (const file of files) {
-		const directory = path.posix.dirname(file);
+		const directory = skillDirectory(file);
 		const bytes = await readRemoteFile(parsed.repository, commit, file, {
 			fetch: options.fetch,
 			signal: options.signal,
@@ -111,7 +123,7 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		} catch (error) {
 			throw new RemoteSkillError("INVALID_SKILL", `${file}: malformed YAML frontmatter (${String(error)})`);
 		}
-		const violation = validateAgentSkillFrontmatter(frontmatter, path.posix.basename(directory));
+		const violation = validateAgentSkillFrontmatter(frontmatter, expectedDirName(parsed.repository, directory));
 		if (violation !== null) throw new RemoteSkillError("INVALID_SKILL", `${file}: ${violation}`);
 		const name = frontmatter.name as string;
 		const existing = skills[name];
@@ -145,8 +157,9 @@ export interface RemoteSkillChange {
 /**
  * Re-resolve the configured ref of each registered skill and repin it.
  *
- * A skill whose `ref` is already a commit is skipped: an explicit commit is a
- * request for that exact revision, not a pointer to follow.
+ * An empty `names` list means every skill, matching the CLI's `remote sync
+ * [name...]`. A skill whose `ref` is already a commit is skipped: an explicit
+ * commit is a request for that exact revision, not a pointer to follow.
  */
 export async function syncRemoteSkills(options: {
 	cwd: string;
@@ -169,13 +182,12 @@ export async function syncRemoteSkills(options: {
 	}
 	if (targets.length === 0) throw new RemoteSkillError("NOT_FOUND", "no remote skill index found");
 
-	const selected = options.names === undefined ? undefined : new Set(options.names);
+	const selected = options.names && options.names.length > 0 ? new Set(options.names) : undefined;
 	const changes: RemoteSkillChange[] = [];
-	let lastFile = targets[0]!.file;
 	for (const target of targets) {
-		lastFile = target.file;
 		const index = await readRemoteSkillIndex(target.file);
 		const skills: Record<string, RemoteSkillDescriptor> = { ...index.skills };
+		let targetChanges = 0;
 		for (const [name, descriptor] of Object.entries(index.skills)) {
 			if (selected && !selected.has(name)) continue;
 			const commit = await resolveRemoteCommit(descriptor.repository, descriptor.ref, {
@@ -183,7 +195,7 @@ export async function syncRemoteSkills(options: {
 				signal: options.signal,
 			});
 			if (commit === descriptor.commit) continue;
-			const bytes = await readRemoteFile(descriptor.repository, commit, `${descriptor.directory}/SKILL.md`, {
+			const bytes = await readRemoteFile(descriptor.repository, commit, repositorySkillPath(descriptor), {
 				fetch: options.fetch,
 				signal: options.signal,
 				maxBytes: MAX_SKILL_DOCUMENT_BYTES,
@@ -191,16 +203,19 @@ export async function syncRemoteSkills(options: {
 			if (bytes === null) {
 				throw new RemoteSkillError(
 					"NOT_FOUND",
-					`${descriptor.repository}@${commit}:${descriptor.directory}/SKILL.md`,
+					`${descriptor.repository}@${commit}:${repositorySkillPath(descriptor)}`,
 				);
 			}
 			const { frontmatter } = parseFrontmatter(new TextDecoder().decode(bytes), {
-				source: `${descriptor.repository}:${descriptor.directory}/SKILL.md`,
+				source: `${descriptor.repository}:${repositorySkillPath(descriptor)}`,
 				level: "fatal",
 				repair: false,
 				rawKeys: true,
 			});
-			const violation = validateAgentSkillFrontmatter(frontmatter, path.posix.basename(descriptor.directory));
+			const violation = validateAgentSkillFrontmatter(
+				frontmatter,
+				expectedDirName(descriptor.repository, descriptor.directory),
+			);
 			if (violation !== null) throw new RemoteSkillError("INVALID_SKILL", `${name}: ${violation}`);
 			skills[name] = {
 				...descriptor,
@@ -208,13 +223,19 @@ export async function syncRemoteSkills(options: {
 				description: (frontmatter.description as string).trim(),
 			};
 			changes.push({ name, from: descriptor.commit, to: commit });
+			targetChanges++;
 		}
-		if (changes.length > 0) await writeRemoteSkillIndex(target.file, { version: 1, skills });
+		if (targetChanges > 0) await writeRemoteSkillIndex(target.file, { version: 1, skills });
 	}
-	return { file: lastFile, changes };
+	return { file: targets[targets.length - 1]!.file, changes };
 }
 
-/** Remove skills from the index by name; returns the names actually removed. */
+/**
+ * Remove skills from one index by name; returns the names actually removed.
+ *
+ * Scope matches the CLI flag: `-g` addresses the user index only, otherwise the
+ * project index only, so a project removal never unregisters a user copy.
+ */
 export async function removeRemoteSkills(options: {
 	cwd: string;
 	global?: boolean;
@@ -222,42 +243,32 @@ export async function removeRemoteSkills(options: {
 	agentDir?: string;
 }): Promise<{ removed: string[]; files: string[] }> {
 	if (options.names.length === 0) throw new RemoteSkillError("INVALID_SOURCE", "no skill names given");
-	const targets: RemoteIndexTarget[] = [];
-	if (options.global === true) {
-		targets.push({ file: userRemoteSkillIndexPath(options.agentDir), level: "user" });
-	} else {
-		const projectFile = await findProjectRemoteSkillIndex(options.cwd);
-		if (projectFile) targets.push({ file: projectFile, level: "project" });
-		const userFile = userRemoteSkillIndexPath(options.agentDir);
-		if (await fileExists(userFile)) targets.push({ file: userFile, level: "user" });
-	}
-	const removed: string[] = [];
-	const files: string[] = [];
+	const file =
+		options.global === true
+			? userRemoteSkillIndexPath(options.agentDir)
+			: await findProjectRemoteSkillIndex(options.cwd);
+	if (!file) throw new RemoteSkillError("NOT_FOUND", "no project remote skill index found");
+	const index = await readRemoteSkillIndex(file);
 	const wanted = new Set(options.names);
-	for (const target of targets) {
-		const index = await readRemoteSkillIndex(target.file);
-		const skills: Record<string, RemoteSkillDescriptor> = {};
-		let changed = false;
-		for (const [name, descriptor] of Object.entries(index.skills)) {
-			if (wanted.has(name)) {
-				changed = true;
-				removed.push(name);
-				continue;
-			}
-			skills[name] = descriptor;
+	const skills: Record<string, RemoteSkillDescriptor> = {};
+	const removed: string[] = [];
+	for (const [name, descriptor] of Object.entries(index.skills)) {
+		if (wanted.has(name)) {
+			removed.push(name);
+			continue;
 		}
-		if (!changed) continue;
-		await writeRemoteSkillIndex(target.file, { version: 1, skills });
-		files.push(target.file);
+		skills[name] = descriptor;
 	}
 	const missing = options.names.filter(name => !removed.includes(name));
-	if (missing.length > 0) {
-		throw new RemoteSkillError("NOT_FOUND", `not registered: ${missing.join(", ")}`);
-	}
-	return { removed, files };
+	if (missing.length > 0) throw new RemoteSkillError("NOT_FOUND", `not registered: ${missing.join(", ")}`);
+	await writeRemoteSkillIndex(file, { version: 1, skills });
+	return { removed, files: [file] };
 }
 
-/** Registered descriptors, project shadowing user. */
-export async function listRemoteSkills(options: { cwd: string; agentDir?: string }): Promise<RemoteSkillIndexEntry[]> {
+/** Registered descriptors, project shadowing user, plus warnings for skipped entries. */
+export async function listRemoteSkills(options: {
+	cwd: string;
+	agentDir?: string;
+}): Promise<{ entries: RemoteSkillIndexEntry[]; warnings: string[] }> {
 	return await loadRemoteSkillDescriptors(options.cwd, options.agentDir ?? getAgentDir());
 }

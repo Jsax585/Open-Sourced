@@ -8,7 +8,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
-import { assertSkillRelativePath, MAX_RESOURCE_BYTES, readRemoteFile, type FetchFn } from "./source";
+import {
+	assertSkillRelativePath,
+	isValidRepositoryName,
+	MAX_RESOURCE_BYTES,
+	normalizeRelativeDirectory,
+	readRemoteFile,
+	type FetchFn,
+} from "./source";
 import {
 	EMPTY_REMOTE_SKILL_INDEX,
 	RemoteSkillError,
@@ -21,8 +28,17 @@ export const REMOTE_SKILL_INDEX_FILE = "remote-skills.json";
 export const REMOTE_SKILL_INDEX_VERSION = 1;
 export const REMOTE_SKILL_PROVIDER_ID = "remote";
 
+const SKILL_NAME_RE = /^[\p{L}\p{N}-]+$/u;
+
 /** In-flight fetches keyed by cache path: concurrent reads share one download. */
 const inFlight = new Map<string, Promise<string>>();
+
+/** Test seam: a fetch used when a caller supplies none (the protocol handler does not). */
+let testFetch: FetchFn | undefined;
+
+export function __setRemoteSkillFetchForTests(fetch: FetchFn | undefined): void {
+	testFetch = fetch;
+}
 
 /** Project index path: nearest `<dir>/.omp/remote-skills.json` walking up from `cwd`. */
 export async function findProjectRemoteSkillIndex(cwd: string): Promise<string | undefined> {
@@ -56,33 +72,64 @@ export async function fileExists(file: string): Promise<boolean> {
 	}
 }
 
-function validateDescriptor(name: string, value: unknown, file: string): RemoteSkillDescriptor {
-	if (!isRecord(value)) throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" is not an object`);
-	const { origin, repository, directory, commit, ref, description } = value;
-	if (origin !== "github") throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has an unknown origin`);
-	if (typeof repository !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repository)) {
-		throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has an invalid repository`);
-	}
-	if (typeof directory !== "string")
-		throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has no directory`);
-	if (typeof commit !== "string" || !/^[0-9a-f]{40}$/.test(commit)) {
-		throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has no pinned commit`);
-	}
-	if (typeof ref !== "string") throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has no ref`);
-	if (typeof description !== "string")
-		throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" has no description`);
-	return { name, origin: "github", repository, directory, commit, ref, description };
+/** Directory name the spec requires `name` to match: the skill dir, or the repository at the root. */
+function expectedSkillDirName(descriptor: Pick<RemoteSkillDescriptor, "repository" | "directory">): string {
+	return descriptor.directory === ""
+		? descriptor.repository.split("/")[1]!
+		: path.posix.basename(descriptor.directory);
 }
 
-/** Read an index file. A missing file is an empty index; malformed JSON throws. */
-export async function readRemoteSkillIndex(file: string): Promise<RemoteSkillIndex> {
-	let text: string;
+/**
+ * Validate one persisted descriptor.
+ *
+ * The index is committed to a repository and therefore untrusted input: the
+ * same traversal and shape rules as `omp skill remote add` apply, because
+ * `remoteSkillCachePath` turns these strings into filesystem paths.
+ */
+function validateDescriptor(name: string, value: unknown, file: string): RemoteSkillDescriptor {
+	const fail = (reason: string): never => {
+		throw new RemoteSkillError("INVALID_SKILL", `${file}: "${name}" ${reason}`);
+	};
+	if (!isRecord(value)) return fail("is not an object");
+	const { origin, repository, directory, commit, ref, description } = value;
+	if (origin !== "github") return fail("has an unknown origin");
+	if (typeof repository !== "string" || !isValidRepositoryName(repository)) return fail("has an invalid repository");
+	if (typeof directory !== "string") return fail("has no directory");
+	let normalizedDirectory: string;
 	try {
-		text = await Bun.file(file).text();
-	} catch (error) {
-		if (isEnoent(error)) return EMPTY_REMOTE_SKILL_INDEX;
-		throw error;
+		normalizedDirectory = normalizeRelativeDirectory(directory);
+	} catch {
+		return fail(`has an unsafe directory "${directory}"`);
 	}
+	if (normalizedDirectory !== directory) return fail(`has a non-canonical directory "${directory}"`);
+	if (typeof commit !== "string" || !/^[0-9a-f]{40}$/.test(commit)) return fail("has no pinned commit");
+	if (typeof ref !== "string") return fail("has no ref");
+	if (typeof description !== "string") return fail("has no description");
+	const descriptor: RemoteSkillDescriptor = {
+		name,
+		origin: "github",
+		repository,
+		directory,
+		commit,
+		ref,
+		description,
+	};
+	if (name.length === 0 || name.length > 64 || name !== name.toLowerCase() || !SKILL_NAME_RE.test(name)) {
+		return fail("is not a lowercase skill name");
+	}
+	if (name !== expectedSkillDirName(descriptor)) {
+		return fail(`does not match its directory (${expectedSkillDirName(descriptor)})`);
+	}
+	return descriptor;
+}
+
+interface ParsedIndex {
+	index: RemoteSkillIndex;
+	warnings: string[];
+}
+
+/** Parse an index body, collecting per-descriptor violations instead of dropping the file. */
+function parseRemoteSkillIndex(text: string, file: string): ParsedIndex {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(text);
@@ -93,10 +140,45 @@ export async function readRemoteSkillIndex(file: string): Promise<RemoteSkillInd
 		throw new RemoteSkillError("INVALID_SKILL", `${file}: unsupported remote skill index`);
 	}
 	const skills: Record<string, RemoteSkillDescriptor> = {};
+	const warnings: string[] = [];
 	for (const [name, value] of Object.entries(parsed.skills)) {
-		skills[name] = validateDescriptor(name, value, file);
+		try {
+			skills[name] = validateDescriptor(name, value, file);
+		} catch (error) {
+			warnings.push(error instanceof Error ? error.message : String(error));
+		}
 	}
-	return { version: REMOTE_SKILL_INDEX_VERSION, skills };
+	return { index: { version: REMOTE_SKILL_INDEX_VERSION, skills }, warnings };
+}
+
+/** Read an index file strictly. A missing file is an empty index; anything invalid throws. */
+export async function readRemoteSkillIndex(file: string): Promise<RemoteSkillIndex> {
+	let text: string;
+	try {
+		text = await Bun.file(file).text();
+	} catch (error) {
+		if (isEnoent(error)) return EMPTY_REMOTE_SKILL_INDEX;
+		throw error;
+	}
+	const { index, warnings } = parseRemoteSkillIndex(text, file);
+	if (warnings.length > 0) throw new RemoteSkillError("INVALID_SKILL", warnings[0]!);
+	return index;
+}
+
+/** Read an index leniently: a bad file or descriptor is skipped and reported. */
+async function readRemoteSkillIndexLenient(file: string): Promise<ParsedIndex> {
+	let text: string;
+	try {
+		text = await Bun.file(file).text();
+	} catch (error) {
+		if (isEnoent(error)) return { index: EMPTY_REMOTE_SKILL_INDEX, warnings: [] };
+		return { index: EMPTY_REMOTE_SKILL_INDEX, warnings: [`${file}: ${String(error)}`] };
+	}
+	try {
+		return parseRemoteSkillIndex(text, file);
+	} catch (error) {
+		return { index: EMPTY_REMOTE_SKILL_INDEX, warnings: [error instanceof Error ? error.message : String(error)] };
+	}
 }
 
 /** Write an index atomically; sorted keys keep diffs stable. */
@@ -126,7 +208,9 @@ export function remoteSkillCacheRoot(agentDir: string = getAgentDir()): string {
 
 /**
  * Cached path of one resource. The commit segment makes a task's reads
- * independent of later `sync` runs.
+ * independent of later `sync` runs. Refuses a result outside the cache root,
+ * so a hostile descriptor cannot address another file even if it slipped past
+ * validation.
  */
 export function remoteSkillCachePath(
 	source: RemoteSkillSource,
@@ -134,13 +218,19 @@ export function remoteSkillCachePath(
 	agentDir: string = getAgentDir(),
 ): string {
 	const safeRelative = assertSkillRelativePath(relativePath);
-	return path.join(
-		remoteSkillCacheRoot(agentDir),
+	const root = remoteSkillCacheRoot(agentDir);
+	const target = path.join(
+		root,
 		...source.repository.split("/"),
 		source.commit,
 		...source.directory.split("/").filter(Boolean),
 		...safeRelative.split("/"),
 	);
+	const relative = path.relative(root, target);
+	if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+		throw new RemoteSkillError("PATH_DENIED", `cache path escapes the cache root: ${source.repository}`);
+	}
+	return target;
 }
 
 export interface EnsureRemoteResourceOptions {
@@ -150,57 +240,83 @@ export interface EnsureRemoteResourceOptions {
 	maxBytes?: number;
 }
 
+/** Reject like the caller's abort as soon as its signal fires, without touching the shared download. */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(signal.reason);
+	const aborted = Promise.withResolvers<never>();
+	const onAbort = () => aborted.reject(signal.reason);
+	signal.addEventListener("abort", onAbort, { once: true });
+	return Promise.race([promise, aborted.promise]).finally(() => signal.removeEventListener("abort", onAbort));
+}
+
 /**
  * Return a local path for one resource of a remote skill, fetching it on first
  * use. Concurrent requests for the same revision/path share one download, and
  * a failed download never leaves a cache hit behind.
+ *
+ * The shared download is independent of any single caller: one cancelled reader
+ * only cancels its own wait.
  */
 export function ensureRemoteSkillResource(
 	source: RemoteSkillSource,
 	relativePath: string,
 	options: EnsureRemoteResourceOptions = {},
 ): Promise<string> {
-	const target = remoteSkillCachePath(source, relativePath, options.agentDir);
-	const pending = inFlight.get(target);
-	if (pending) return pending;
-	const run = (async () => {
-		if (await fileExists(target)) return target;
-		const repositoryPath = source.directory === "" ? relativePath : `${source.directory}/${relativePath}`;
-		let bytes: Uint8Array | null;
-		try {
-			bytes = await readRemoteFile(source.repository, source.commit, repositoryPath, {
-				fetch: options.fetch,
-				signal: options.signal,
-				maxBytes: options.maxBytes ?? MAX_RESOURCE_BYTES,
-			});
-		} catch (error) {
-			if (error instanceof RemoteSkillError && (error.code === "NETWORK" || error.code === "RATE_LIMITED")) {
-				throw new RemoteSkillError(
-					"OFFLINE_RESOURCE_MISSING",
-					`${source.repository}@${source.commit}:${repositoryPath} is not cached and the source is unreachable (${error.message})`,
-					{ cause: error },
-				);
+	return ensureRemoteSkillFileAt(
+		source,
+		remoteSkillCachePath(source, relativePath, options.agentDir),
+		relativePath,
+		options,
+	);
+}
+
+/**
+ * Materialize one resource at a caller-chosen cache path.
+ *
+ * Used when the target is already known — `Skill.filePath` was computed by the
+ * provider against that session's agent dir, which the prompt builder does not
+ * see — so both sides agree on one location.
+ */
+export function ensureRemoteSkillFileAt(
+	source: RemoteSkillSource,
+	target: string,
+	relativePath: string,
+	options: EnsureRemoteResourceOptions = {},
+): Promise<string> {
+	let shared = inFlight.get(target);
+	if (!shared) {
+		shared = (async () => {
+			if (await fileExists(target)) return target;
+			const repositoryPath = source.directory === "" ? relativePath : `${source.directory}/${relativePath}`;
+			let bytes: Uint8Array | null;
+			try {
+				bytes = await readRemoteFile(source.repository, source.commit, repositoryPath, {
+					fetch: options.fetch ?? testFetch,
+					maxBytes: options.maxBytes ?? MAX_RESOURCE_BYTES,
+				});
+			} catch (error) {
+				if (error instanceof RemoteSkillError && (error.code === "NETWORK" || error.code === "RATE_LIMITED")) {
+					throw new RemoteSkillError(
+						"OFFLINE_RESOURCE_MISSING",
+						`${source.repository}@${source.commit}:${repositoryPath} is not cached and the source is unreachable (${error.message})`,
+						{ cause: error },
+					);
+				}
+				throw error;
 			}
-			throw error;
-		}
-		if (bytes === null) {
-			throw new RemoteSkillError("NOT_FOUND", `${source.repository}@${source.commit}:${repositoryPath}`);
-		}
-		await fs.mkdir(path.dirname(target), { recursive: true });
-		const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-		try {
-			await Bun.write(tmp, bytes);
-			await fs.rename(tmp, target);
-		} catch (error) {
-			await fs.rm(tmp, { force: true }).catch(() => {});
-			throw error;
-		}
-		return target;
-	})().finally(() => {
-		inFlight.delete(target);
-	});
-	inFlight.set(target, run);
-	return run;
+			if (bytes === null) {
+				throw new RemoteSkillError("NOT_FOUND", `${source.repository}@${source.commit}:${repositoryPath}`);
+			}
+			await writeFileAtomic(target, bytes);
+			return target;
+		})().finally(() => {
+			if (inFlight.get(target) === shared) inFlight.delete(target);
+		});
+		// A caller that aborts leaves this reference unobserved; keep it handled.
+		shared.catch(() => {});
+		inFlight.set(target, shared);
+	}
+	return options.signal ? raceAbort(shared, options.signal) : shared;
 }
 
 /** One registered descriptor plus the scope it came from. */
@@ -210,33 +326,43 @@ export interface RemoteSkillIndexEntry {
 	indexFile: string;
 }
 
-/** Merge project and user indexes; the project entry wins a name collision. */
+export interface RemoteSkillDescriptorLoad {
+	entries: RemoteSkillIndexEntry[];
+	warnings: string[];
+}
+
+/**
+ * Merge project and user indexes; the project entry wins a name collision.
+ *
+ * A broken file or descriptor is skipped with a warning instead of hiding every
+ * valid skill from the other scope.
+ */
 export async function loadRemoteSkillDescriptors(
 	cwd: string,
 	agentDir: string = getAgentDir(),
-): Promise<RemoteSkillIndexEntry[]> {
-	const out: RemoteSkillIndexEntry[] = [];
+): Promise<RemoteSkillDescriptorLoad> {
+	const entries: RemoteSkillIndexEntry[] = [];
+	const warnings: string[] = [];
 	const projectFile = await findProjectRemoteSkillIndex(cwd);
 	const userFile = userRemoteSkillIndexPath(agentDir);
 	const [project, user] = await Promise.all([
-		projectFile ? readRemoteSkillIndex(projectFile).catch(rethrowWithLog) : EMPTY_REMOTE_SKILL_INDEX,
-		readRemoteSkillIndex(userFile).catch(rethrowWithLog),
+		projectFile ? readRemoteSkillIndexLenient(projectFile) : { index: EMPTY_REMOTE_SKILL_INDEX, warnings: [] },
+		readRemoteSkillIndexLenient(userFile),
 	]);
-	for (const descriptor of Object.values(user.skills)) {
-		out.push({ descriptor, level: "user", indexFile: userFile });
+	warnings.push(...project.warnings, ...user.warnings);
+	for (const descriptor of Object.values(user.index.skills)) {
+		entries.push({ descriptor, level: "user", indexFile: userFile });
 	}
 	if (projectFile) {
-		for (const [name, descriptor] of Object.entries(project.skills)) {
-			const existing = out.findIndex(entry => entry.descriptor.name === name);
+		for (const descriptor of Object.values(project.index.skills)) {
+			const existing = entries.findIndex(entry => entry.descriptor.name === descriptor.name);
 			const entry = { descriptor, level: "project" as const, indexFile: projectFile };
-			if (existing === -1) out.push(entry);
-			else out[existing] = entry;
+			if (existing === -1) entries.push(entry);
+			else entries[existing] = entry;
 		}
 	}
-	return out;
-}
-
-function rethrowWithLog(error: unknown): never {
-	logger.warn("remote skill index is invalid and was skipped", { error: String(error) });
-	throw error;
+	if (warnings.length > 0) {
+		logger.warn("remote skill index entries were skipped", { warnings: warnings.join("; ") });
+	}
+	return { entries, warnings };
 }

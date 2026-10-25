@@ -5,16 +5,16 @@
  * `store.ts`, so this module stays usable from the CLI and from tests with an
  * injected `fetch`.
  */
-import { isRecord } from "@oh-my-pi/pi-utils";
+import { fetchWithRetry, isRecord } from "@oh-my-pi/pi-utils";
 import { RemoteSkillError } from "./types";
 
-export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+export type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-/** Default per-request deadline (doc §14: 15 s). */
+/** Per-attempt deadline; a stalled provider fails the attempt instead of hanging the read. */
 export const REMOTE_REQUEST_TIMEOUT_MS = 15_000;
-/** Default retries beyond the first attempt (doc §14: at most 2). */
+/** Retries beyond the first attempt. */
 export const REMOTE_MAX_RETRIES = 2;
-/** `SKILL.md` cap (doc §14). */
+/** `SKILL.md` cap, applied before the document is parsed. */
 export const MAX_SKILL_DOCUMENT_BYTES = 256 * 1024;
 /** Single resource cap. */
 export const MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
@@ -27,6 +27,11 @@ export interface RemoteSourceSpec {
 	readonly ref: string;
 	/** Skill root inside the repository; empty means the repository root. */
 	readonly directory: string;
+}
+
+/** `owner/repo` with provider-safe characters; shared by source parsing and index validation. */
+export function isValidRepositoryName(repository: string): boolean {
+	return REPOSITORY_RE.test(repository);
 }
 
 /**
@@ -49,7 +54,7 @@ export function parseRemoteSourceSpec(spec: string): RemoteSourceSpec {
 	const at = rest.indexOf("@");
 	const repository = (at === -1 ? rest : rest.slice(0, at)).trim();
 	const ref = at === -1 ? "" : rest.slice(at + 1).trim();
-	if (!REPOSITORY_RE.test(repository)) {
+	if (!isValidRepositoryName(repository)) {
 		throw new RemoteSkillError("INVALID_SOURCE", `expected owner/repo, got "${repository}"`);
 	}
 	return { repository, ref, directory: normalizeRelativeDirectory(directory) };
@@ -105,9 +110,9 @@ export async function resolveRemoteCommit(
 /**
  * List `SKILL.md` files under `directory` at `commit`.
  *
- * Uses one recursive tree listing. A skill is a directory containing
- * `SKILL.md`; the spec requires the frontmatter name to equal the directory
- * name, so no repository-side manifest is needed.
+ * A skill is a directory containing `SKILL.md`; the spec requires the
+ * frontmatter name to equal the directory name, so no repository-side manifest
+ * is needed. A repository-root `SKILL.md` is accepted when `directory` is empty.
  */
 export async function listRemoteSkillFiles(
 	repository: string,
@@ -117,16 +122,29 @@ export async function listRemoteSkillFiles(
 ): Promise<string[]> {
 	const endpoint = `https://api.github.com/repos/${repository}/git/trees/${commit}?recursive=1`;
 	const payload = await githubJson(endpoint, options);
-	const tree = isRecord(payload) && Array.isArray(payload.tree) ? payload.tree : undefined;
-	if (!tree) throw new RemoteSkillError("NETWORK", `tree API returned no tree for ${repository}@${commit}`);
+	if (!isRecord(payload) || !Array.isArray(payload.tree)) {
+		throw new RemoteSkillError("NETWORK", `tree API returned no tree for ${repository}@${commit}`);
+	}
+	if (payload.truncated === true) {
+		throw new RemoteSkillError(
+			"RESOURCE_LIMIT_EXCEEDED",
+			`${repository}@${commit} has a truncated tree listing; register a narrower source with #<directory>`,
+		);
+	}
 	const prefix = directory === "" ? "" : `${directory}/`;
 	const files: string[] = [];
-	for (const entry of tree) {
+	for (const entry of payload.tree) {
 		if (!isRecord(entry) || typeof entry.path !== "string" || entry.type !== "blob") continue;
-		if (!entry.path.startsWith(prefix) || !entry.path.endsWith("/SKILL.md")) continue;
+		const isRootSkill = prefix === "" && entry.path === "SKILL.md";
+		if (!isRootSkill && (!entry.path.startsWith(prefix) || !entry.path.endsWith("/SKILL.md"))) continue;
 		files.push(entry.path);
 	}
 	return files.sort();
+}
+
+/** Path of a skill's instruction file inside its repository. */
+export function repositorySkillPath(source: { repository: string; directory: string }): string {
+	return source.directory === "" ? "SKILL.md" : `${source.directory}/SKILL.md`;
 }
 
 /** Read one file at an exact commit. Returns `null` when the path does not exist. */
@@ -139,7 +157,13 @@ export async function readRemoteFile(
 	if (!isCommitId(commit)) throw new RemoteSkillError("INVALID_SOURCE", `not a commit id: ${commit}`);
 	const maxBytes = options.maxBytes ?? MAX_RESOURCE_BYTES;
 	const raw = `https://raw.githubusercontent.com/${repository}/${commit}/${file}`;
-	const response = await requestWithRetry(raw, options.fetch ?? fetch, options.signal);
+	let response: Response;
+	try {
+		response = await requestWithRetry(raw, options.fetch ?? fetch, options.signal);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new RemoteSkillError("NETWORK", `${repository}@${commit}:${file} failed: ${detail}`, { cause: error });
+	}
 	if (response.status === 404) return null;
 	assertStatus(response, `${repository}@${commit}:${file}`);
 	const declared = Number(response.headers.get("content-length") ?? "");
@@ -159,56 +183,45 @@ export async function readRemoteFile(
 // ─── HTTP plumbing ──────────────────────────────────────────────────────────
 
 async function githubJson(endpoint: string, options: { fetch?: FetchFn; signal?: AbortSignal }): Promise<unknown> {
-	const response = await requestWithRetry(endpoint, options.fetch ?? fetch, options.signal, {
-		Accept: "application/vnd.github+json",
-	});
+	let response: Response;
+	try {
+		response = await requestWithRetry(endpoint, options.fetch ?? fetch, options.signal, {
+			Accept: "application/vnd.github+json",
+		});
+	} catch (error) {
+		if (options.signal?.aborted) throw error;
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new RemoteSkillError("NETWORK", `${endpoint} failed: ${detail}`, { cause: error });
+	}
 	assertStatus(response, endpoint);
 	return await response.json();
 }
 
-async function requestWithRetry(
+/**
+ * Shared retry policy for every provider call: three attempts, 15 s each,
+ * abortable backoff, and `Retry-After` hints capped so one throttled request
+ * cannot stall a read for a minute.
+ */
+function requestWithRetry(
 	url: string,
 	run: FetchFn,
 	signal: AbortSignal | undefined,
 	extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
 	const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-	let lastError: unknown;
-	for (let attempt = 0; attempt <= REMOTE_MAX_RETRIES; attempt++) {
-		let response: Response | undefined;
-		try {
-			response = await run(url, {
-				signal: signal
-					? AbortSignal.any([signal, AbortSignal.timeout(REMOTE_REQUEST_TIMEOUT_MS)])
-					: AbortSignal.timeout(REMOTE_REQUEST_TIMEOUT_MS),
-				headers: {
-					"User-Agent": "oh-my-pi",
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
-					...extraHeaders,
-				},
-			});
-		} catch (error) {
-			if (signal?.aborted) throw error;
-			lastError = error;
-		}
-		if (response && response.status !== 429 && response.status < 500) return response;
-		lastError ??= new RemoteSkillError("RATE_LIMITED", `${url} responded ${response?.status ?? "no response"}`);
-		await Bun.sleep(response ? (retryAfterMs(response) ?? backoffMs(attempt)) : backoffMs(attempt));
-	}
-	const detail = lastError instanceof Error ? lastError.message : String(lastError);
-	throw new RemoteSkillError("NETWORK", `${url} failed after ${REMOTE_MAX_RETRIES + 1} attempts: ${detail}`);
-}
-
-/** Exponential backoff for retriable provider errors, capped well below the request timeout. */
-function backoffMs(attempt: number): number {
-	return Math.min(2_000, 250 * 2 ** attempt);
-}
-
-function retryAfterMs(response: Response): number | undefined {
-	const header = response.headers.get("retry-after");
-	if (!header) return undefined;
-	const seconds = Number(header);
-	return Number.isFinite(seconds) && seconds >= 0 ? Math.min(5_000, seconds * 1_000) : undefined;
+	return fetchWithRetry(url, {
+		maxAttempts: REMOTE_MAX_RETRIES + 1,
+		maxDelayMs: 5_000,
+		defaultDelayMs: attempt => Math.min(2_000, 250 * 2 ** attempt),
+		timeout: REMOTE_REQUEST_TIMEOUT_MS,
+		fetch: run,
+		...(signal ? { signal } : {}),
+		headers: {
+			"User-Agent": "oh-my-pi",
+			...(token ? { Authorization: `Bearer ${token}` } : {}),
+			...extraHeaders,
+		},
+	});
 }
 
 function assertStatus(response: Response, what: string): void {
