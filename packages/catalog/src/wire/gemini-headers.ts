@@ -1,6 +1,10 @@
 import type { FetchImpl } from "@oh-my-pi/pi-utils";
 import type { AntigravityModelWireProfile } from "../types";
 
+// The profile type moved to `../types` with `Model.antigravityWireProfiles`;
+// keep this public subpath exporting it.
+export type { AntigravityModelWireProfile } from "../types";
+
 /**
  * Build a User-Agent string that identifies as Gemini CLI to unlock higher rate limits.
  * Uses the same format as the official Gemini CLI (v0.35+):
