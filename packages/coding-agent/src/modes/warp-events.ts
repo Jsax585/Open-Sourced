@@ -22,6 +22,17 @@ const WARP_ATTENTION_EVENTS: Record<string, true> = {
 export function isWarpCliAgentProtocolActive(): boolean {
 	return Number(process.env.WARP_CLI_AGENT_PROTOCOL_VERSION) >= WARP_CLI_AGENT_PROTOCOL_VERSION;
 }
+/**
+ * Tool calls whose `permission_request` was emitted on the installed bridge.
+ * `approval.notify` may change while a dialog is open, so the reply must pair
+ * with the request that actually went out instead of re-reading the setting.
+ */
+const emittedWarpApprovals = new Set<string>();
+
+/** True while a bridge-emitted permission request is still pending an answer. */
+export function hasWarpPendingApproval(): boolean {
+	return emittedWarpApprovals.size > 0;
+}
 
 export type WarpEventValue =
 	| string
@@ -169,14 +180,10 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 		let emitter: WarpEventEmitter | undefined;
 		let activePrompt: string | undefined;
 		let getCwd: (() => string) | undefined;
-		// Tool calls whose `permission_request` was emitted. `approval.notify` may change
-		// while a dialog is open, so the reply must pair with the request that actually
-		// went out instead of re-reading the setting.
-		const emittedPermissionRequests = new Set<string>();
 
 		const rebuildEmitter = (_event: unknown, ctx: ExtensionContext): void => {
 			activePrompt = undefined;
-			emittedPermissionRequests.clear();
+			emittedWarpApprovals.clear();
 			getCwd = () => ctx.sessionManager.getCwd();
 			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId(), getCwd });
 			emitter?.emit({ event: "session_start" });
@@ -209,7 +216,7 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 			if (cfgApprovalNotify.get(settings) !== "on") {
 				return;
 			}
-			emittedPermissionRequests.add(event.toolCallId);
+			emittedWarpApprovals.add(event.toolCallId);
 			emitter?.emit({
 				event: "permission_request",
 				tool_name: event.toolName,
@@ -218,7 +225,7 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 		});
 
 		api.on("tool_approval_resolved", event => {
-			if (!emittedPermissionRequests.delete(event.toolCallId)) {
+			if (!emittedWarpApprovals.delete(event.toolCallId)) {
 				return;
 			}
 			emitter?.emit({ event: "permission_replied" });

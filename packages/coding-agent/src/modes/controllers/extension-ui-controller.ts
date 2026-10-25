@@ -4,7 +4,7 @@ import { Container, Spacer, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
 import type { CollabHost } from "../../collab/host";
 import { cfgApprovalNotify } from "../settings";
-import { isWarpCliAgentProtocolActive } from "../warp-events";
+import { hasWarpPendingApproval, isWarpCliAgentProtocolActive } from "../warp-events";
 import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type {
 	CompactOptions,
@@ -715,11 +715,11 @@ export class ExtensionUiController {
 					// A pending approval needs the human, like ask and completion:
 					// flag the terminal and the desktop so a backgrounded session
 					// is findable. Warp's structured OSC 777 bridge already rings
-					// permission_request when it is installed, so skip the second
-					// legacy toast only then; a --trusted-extension launch leaves no
-					// bridge, so the legacy toast still rings there.
-					const warpBridged =
-						isWarpCliAgentProtocolActive() && this.ctx.session.hasExtensionHandlers("tool_approval_requested");
+					// permission_request for this prompt, so skip the second legacy
+					// toast only when the prompt was represented on the bridge; a
+					// --trusted-extension launch leaves no bridge, and direct
+					// `ui.approve` paths that emit no Warp event still ring.
+					const warpBridged = isWarpCliAgentProtocolActive() && hasWarpPendingApproval();
 					if (cfgApprovalNotify.get(this.ctx.settings) === "on" && !warpBridged) {
 						const sessionName = this.ctx.sessionManager.getSessionName();
 						TERMINAL.sendNotification({
