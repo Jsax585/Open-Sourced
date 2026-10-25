@@ -265,9 +265,15 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("cat file.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("read");
 	});
 
-	it("keeps cat with a leading stderr redirect on read unless stdout is redirected", () => {
+	it("keeps cat on read unless its stdout goes to a file", () => {
 		const tools = ["write", "read"];
-		for (const command of ["cat 2>/dev/null file.txt", "cat 2>err.log file.txt", "cat 2>&1 file.txt"]) {
+		for (const command of [
+			"cat 2>/dev/null file.txt",
+			"cat 2>err.log file.txt",
+			"cat 2>&1 file.txt",
+			"cat >&2 file.txt",
+			"cat 1>&2 file.txt",
+		]) {
 			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("read");
 		}
 		for (const command of [

@@ -247,7 +247,7 @@ Choose the setting by the desired outcome:
 - Interceptor configuration syntax is unchanged. It handles common flat command lists, not full shell parsing: heredocs, parameter expansion, command substitution, backticks, grouping, and malformed quoting only receive the existing whole-input check. This is best-effort routing toward dedicated tools, not a security boundary.
 - `bash.direnv` defaults to `"auto"` and honors direnv's allow list; an unallowed `.envrc` is not executed. Set it to `"off"` to bypass preflight. `bash.direnvLoadTimeoutMs` controls the cold-load budget.
 - Default interceptor rules come from `DEFAULT_BASH_INTERCEPTOR_RULES` in `packages/coding-agent/src/exec/settings.ts`:
-  - `cat|head|tail|less|more` -> `read` (not `cat` that redirects stdout or reads a heredoc, such as `cat > f` or `cat 2>err > f`)
+  - `cat|head|tail|less|more` -> `read` (not `cat` that sends stdout to a file or reads a heredoc, such as `cat > f` or `cat 2>err > f`)
   - `grep|rg|ripgrep|ag|ack` -> `grep`
   - `find|fd|locate` with name/type/glob flags -> `glob`
   - `sed -i`, `perl -i`, `awk -i inplace` -> `edit`

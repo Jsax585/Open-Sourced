@@ -18,11 +18,12 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 	{
 		// `cat` that sends stdout to a file or reads a heredoc writes rather than
 		// reads, also after leading redirects of other fds (`cat 2>err > out`);
-		// the write rule below owns those forms. `cat 2>err file` still reads.
+		// the write rule below owns those forms. `cat 2>err file` and
+		// `cat >&2 file` (stdout duplicated, not sent to a file) still read.
 		// A redirect target cannot start with `>` or `|`, so each leading
 		// redirect is consumed one way and matching stays linear.
 		pattern:
-			"^\\s*(?:(?:head|tail|less|more)\\s+|cat\\s+(?!\\s|(?:[02-9]>{1,2}\\|?\\s*[^\\s>|]\\S*\\s+)*(?:<<|1?>|&>)))",
+			"^\\s*(?:(?:head|tail|less|more)\\s+|cat\\s+(?!\\s|(?:[02-9]>{1,2}\\|?\\s*[^\\s>|]\\S*\\s+)*(?:<<|1?>(?!&)|&>)))",
 		tool: "read",
 		message: "Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files.",
 	},
