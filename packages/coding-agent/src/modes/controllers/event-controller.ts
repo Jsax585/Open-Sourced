@@ -2429,8 +2429,10 @@ export class EventController {
 		this.ctx.syncRetryHintRow();
 		this.ctx.ui.requestRender();
 		this.#scheduleIdleCompaction();
-		this.#idleRecapPending = true;
-		this.#scheduleIdleRecap();
+		if (this.#priorMessageWasGenerated(event.messages)) {
+			this.#idleRecapPending = true;
+			this.#scheduleIdleRecap();
+		}
 		if (this.#settledRunStatus(event).state === "done") this.composerPrediction.request();
 		this.sendErrorNotification(event);
 		this.sendCompletionNotification(event);
@@ -2877,6 +2879,7 @@ export class EventController {
 		if (!this.#idleConditionsHold()) return;
 		if (!this.ctx.viewSession.model) return;
 		if (this.ctx.viewSession.messages.length === 0) return;
+		if (!this.#priorMessageWasGenerated(this.ctx.viewSession.messages)) return;
 
 		const promptText = prompt.render(idleRecapPrompt, {
 			goal: this.#idleRecapGoalText() ?? "",
@@ -2906,6 +2909,25 @@ export class EventController {
 		if (this.ctx.viewSession.isCompacting) return false;
 		if (this.ctx.editor.getText().trim()) return false;
 		return true;
+	}
+
+	/**
+	 * Prior message = last of `messages`, else last of the viewed session.
+	 * Generated = assistant, stopReason not error/aborted, and content with
+	 * non-empty text, non-empty thinking, or a toolCall.
+	 */
+	#priorMessageWasGenerated(messages?: readonly { role: string }[]): boolean {
+		const last =
+			messages && messages.length > 0 ? messages[messages.length - 1] : this.ctx.viewSession.messages.at(-1);
+		if (!last || last.role !== "assistant") return false;
+		const assistant = last as AssistantMessage;
+		if (assistant.stopReason === "error" || assistant.stopReason === "aborted") return false;
+		return assistant.content.some(
+			block =>
+				(block.type === "text" && block.text.length > 0) ||
+				(block.type === "thinking" && block.thinking.length > 0) ||
+				block.type === "toolCall",
+		);
 	}
 
 	#idleRecapGoalText(): string | undefined {
