@@ -624,12 +624,12 @@ const GITLAB_DUO_WORKFLOW_TAG_PATTERNS = GITLAB_DUO_WORKFLOW_DANGEROUS_TAGS.map(
  * (removals before tag encoding, iterated to a fixed point) so its validator finds
  * nothing to change.
  */
-export function sanitizeGitLabDuoWorkflowFlowPrompt(prompt: string): string {
+function sanitizeGitLabDuoWorkflowFlowPrompt(prompt: string): string {
 	let text = prompt.toWellFormed();
 	const maxPasses = text.length + 2;
 	for (let pass = 0; pass < maxPasses; pass++) {
 		let next = text
-			// Unicode tag characters U+E0000–E007F and U+E0100–E01EF, as UTF-16 surrogate pairs.
+			// Unicode tag characters (U+E0000–U+E007F) and Variation Selectors Supplement (U+E0100–U+E01EF), as UTF-16 surrogate pairs.
 			.replace(/\uDB40[\uDC00-\uDC7F\uDD00-\uDDEF]/g, "")
 			.replace(/\\udb40\\ud[c-f][0-9a-f]{2}/gi, "")
 			.replace(/<!--[\s\S]*?-->/g, "")
