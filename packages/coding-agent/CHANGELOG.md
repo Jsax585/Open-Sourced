@@ -32,7 +32,7 @@
 - Fixed reading `proc://<id>/kill` or `proc://<id>/mode` answering only "writable only", so agents often moved on with the job still running; the error now names the `write` call that cancels the job or sets the mode, with the real id ([#16580](https://github.com/can1357/oh-my-pi/pull/16580) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `history://<id>` failing with "has no transcript: session is gone" for a worker that is still running but has not created its session or transcript file yet; it now answers "No transcript has been written yet". ([#16645](https://github.com/can1357/oh-my-pi/pull/16645) by [@Komzpa](https://github.com/Komzpa))
 - Fixed the `eval` tool telling sessions with only the Python runtime to call `tool.<name>(args)` without `await`, which returns a coroutine and never runs the tool ([#16578](https://github.com/can1357/oh-my-pi/pull/16578) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed a turn that ended with background jobs still running looking stuck: the working row now says it is waiting for those jobs and names them instead of repeating the last tool call, and Esc ends the wait, so the jobs keep running and their results land in context for your next prompt instead of starting a new turn
+- Fixed a turn that ended with background jobs still running looking stuck: the working row now says it is waiting for those jobs and names them instead of repeating the last tool call, and Esc ends the wait, so the jobs keep running and their results land in context for your next prompt instead of starting a new turn ([#17032](https://github.com/can1357/oh-my-pi/pull/17032) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.12.6] - 2026-10-21
 
