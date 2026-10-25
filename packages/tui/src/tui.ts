@@ -3695,7 +3695,10 @@ export class TUI extends Container {
 					width,
 					newTop + index,
 					this.#osc66SpacerGlyphWidth(prepared.lines, index),
-					{ imagePlacements: this.#screenImagePlacements, imageAvailableRows: index + 1 },
+					{
+						imagePlacements: index < replayViewportRows ? undefined : this.#screenImagePlacements,
+						imageAvailableRows: index < replayViewportRows ? undefined : index - replayViewportRows + 1,
+					},
 				)}`;
 			}
 			if (this.#providerWindow.length > rows && newTop + rows < height) {

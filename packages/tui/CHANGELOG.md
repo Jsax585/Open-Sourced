@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- Fixed inline images leaving stale strips or overlapping chat text when the viewport moves or reflows in iTerm2 ([#16977](https://github.com/can1357/oh-my-pi/pull/16977) by [@kiendle](https://github.com/kiendle))
+- Fixed inline images leaving stale strips, overlapping chat text, or erasing replayed history during iTerm2 viewport updates ([#16977](https://github.com/can1357/oh-my-pi/pull/16977) by [@kiendle](https://github.com/kiendle))
 - Expanding a Mermaid preview in `/copy` now reuses its existing diagram layout ([#16977](https://github.com/can1357/oh-my-pi/pull/16977) by [@kiendle](https://github.com/kiendle))
 - Fixed long URLs in fenced code blocks opening only their first visual line on ctrl/cmd-click; each wrapped fragment now carries the full OSC 8 hyperlink when the terminal supports it ([#16740](https://github.com/can1357/oh-my-pi/pull/16740) by [@OriginalByteMe](https://github.com/OriginalByteMe))
 - Fixed the newest inline charts and images at the bottom of the screen showing as text placeholders while older ones stayed rendered once a session (or a resumed one) holds more than `tui.maxInlineImages` images ([#16660](https://github.com/can1357/oh-my-pi/issues/16660))

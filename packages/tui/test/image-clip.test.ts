@@ -303,6 +303,50 @@ describe("iTerm2 direct placement boundaries", () => {
 		});
 	}
 
+	it("keeps replayed history visible when a partially visible image tail changes", async () => {
+		terminal.imageProtocol = ImageProtocol.Iterm2;
+		terminal.id = "iterm2";
+		const term = new VirtualTerminal(40, 4);
+		const placements = trackItermRaster(term);
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+		const graphic = image(tui.imageBudget);
+		let replay = false;
+		let acknowledged = false;
+		tui.setFrameProvider({
+			renderFrame: size => {
+				const live = graphic.render(size.columns).slice(-2);
+				return {
+					history:
+						replay && !acknowledged ? { id: 1, kind: "replay", rows: ["history A", "history B"] } : undefined,
+					viewport: [
+						"",
+						"",
+						// Rewriting the image tail must not borrow the replay-owned leading rows.
+						...live.map((line, index) => (replay && index === live.length - 1 ? `${line}\x1b[0m` : line)),
+					],
+				};
+			},
+			acknowledgeHistory() {
+				acknowledged = true;
+			},
+		});
+		try {
+			tui.start();
+			await scheduler.settle(term);
+			expect(placements).toEqual([{ row: 0, col: 0, columns: 4, rows: 4 }]);
+
+			replay = true;
+			tui.requestRender();
+			await scheduler.settle(term);
+			expect(acknowledged).toBe(true);
+			expect(term.getViewport().map(line => line.trimEnd())).toEqual(["history A", "history B", "", ""]);
+			expect(placements).toHaveLength(1);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	for (const archivedImage of [false, true]) {
 		it(`drops an unpaintable live image tail without overwriting ${archivedImage ? "its complete visible history copy" : "the following unchanged prose"}`, async () => {
 			terminal.imageProtocol = ImageProtocol.Iterm2;
