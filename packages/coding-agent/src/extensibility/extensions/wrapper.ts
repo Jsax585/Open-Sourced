@@ -8,6 +8,7 @@ import {
 	type AgentToolUpdateCallback,
 	isNonBlankContext,
 	type ToolLoadMode,
+	validateAgentToolArguments,
 } from "@oh-my-pi/pi-agent-core";
 import type { ComputerSafetyCheck, ImageContent, Static, TextContent, TSchema } from "@oh-my-pi/pi-ai";
 import { prompt, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
@@ -313,12 +314,15 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				if (isNonBlankContext(callResult?.additionalContext)) {
 					pendingAdditionalContext = callResult.additionalContext;
 				}
-				// A non-blocking handler may replace the execution input. The returned object is the raw
-				// input passed to `execute` (handler-owned; not re-normalized). Skipped for `computer`
-				// tool calls, whose event input is a synthetic {actions,pendingSafetyChecks} view
-				// (see toolEventArgs) rather than the real execution params.
+				// Revalidate hook replacements before preflight and approval, as the agent loop does.
+				// Skipped for `computer` calls, whose event input is a synthetic
+				// {actions,pendingSafetyChecks} view rather than the real execution params.
 				if (callResult?.input !== undefined && context?.toolCall?.providerMetadata?.type !== "computer") {
-					effectiveParams = callResult.input as typeof params;
+					effectiveParams = validateAgentToolArguments(
+						this.tool,
+						{ type: "toolCall", id: toolCallId, name: this.tool.name, arguments: callResult.input },
+						"payload",
+					) as typeof params;
 				}
 			} catch (err) {
 				if (err instanceof Error) {

@@ -196,6 +196,24 @@ describe("extension command MCP dispatch", () => {
 		expect(new Set(callIds).size).toBe(2);
 	});
 
+	it("rejects invalid hook-revised arguments before any native effect", async () => {
+		const { tool, effectsPath } = await nativeTool();
+		const extension: ExtensionFactory = pi => {
+			pi.on("tool_call", event => {
+				if (event.toolName === tool.name) return { input: { crash: "invalid" } };
+			});
+		};
+		const { ctx } = await commandSession([tool], { extensions: [extension] });
+
+		const error = await ctx.callMCPTool("side-effect", TOOL_NAME, { crash: false }).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+
+		expect(await effects(effectsPath)).toEqual([]);
+		expect(error).toBeInstanceOf(Error);
+	});
+
 	it("does not reconnect or replay an auth-challenged native call from a command", async () => {
 		const { connection, effectsPath } = await nativeTool();
 		const reconnect = vi.fn(async () => connection);

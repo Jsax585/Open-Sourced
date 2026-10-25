@@ -455,6 +455,8 @@ Use command context for session-control flows; these methods are intentionally s
 
 The call retains the normal tool approval policy, ACP permission decoration where applicable, `tool_call` input revisions and blocks, preflight rules, progress updates, and `tool_result` transformations. A command does not inherit a blanket approval or expose an unwrapped executable tool.
 
+Hook-revised arguments are schema-validated before preflight, approval, or backend execution.
+
 ```ts
 pi.registerCommand("server-status", {
   description: "Read the configured MCP server status",
