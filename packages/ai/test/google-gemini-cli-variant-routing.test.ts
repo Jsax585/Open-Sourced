@@ -339,6 +339,74 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 		}
 	});
 
+	it("sends a lone discovered Gemini 3.8 Flash tier the thinking budget its SKU advertises", async () => {
+		const result = await fetchAntigravityDiscoveryModels({
+			token: "token",
+			userAgent: "test",
+			fetcher: async () =>
+				Response.json({
+					models: {
+						"gemini-3.8-flash-low": {
+							supportsThinking: true,
+							maxTokens: 1_048_576,
+							maxOutputTokens: 65_536,
+							model: "MODEL_TEST_FLASH_low",
+							thinkingBudget: 1000,
+						},
+					},
+				}),
+		});
+		if (!result || result.rejectedStatus !== undefined) throw new Error("discovery failed");
+		expect(result.models.map(spec => spec.id)).toEqual(["gemini-3.8-flash"]);
+		const request = await captureRequest(buildModel(result.models[0]), Effort.Low);
+		expect(request.body.model).toBe("gemini-3.8-flash-low");
+		expect(request.body.request?.generationConfig).toEqual({
+			maxOutputTokens: 65_536,
+			thinkingConfig: { includeThoughts: true, thinkingBudget: 1000 },
+		});
+	});
+
+	it("caps a discovered Claude 4.6 output limit at the 64000 the backend accepts", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-claude46-cap-"));
+		const fetcher = Object.assign(
+			(input: string | URL | Request) =>
+				Promise.resolve(
+					String(input).includes(":fetchAvailableModels")
+						? Response.json({
+								models: {
+									"claude-sonnet-4-6": {
+										supportsThinking: true,
+										maxTokens: 1_000_000,
+										maxOutputTokens: 65_536,
+										model: "MODEL_TEST_SONNET_46",
+									},
+								},
+							})
+						: new Response("version: 2.26.0\n"),
+				),
+			{ preconnect: fetch.preconnect },
+		);
+		try {
+			const options = googleAntigravityModelManagerOptions({
+				resolveAccounts: async () => [{ accessToken: "token", accountKey: "a@example.com" }],
+				endpoint: "https://cca.test",
+				fetch: fetcher,
+			});
+			const result = await resolveProviderModels({ ...options, cacheDbPath: path.join(dir, "models.db") }, "online");
+			const model = result.models.find(model => model.id === "claude-sonnet-4-6");
+			if (!model) throw new Error("missing claude-sonnet-4-6");
+			// With the serving account's profile and with the row's own.
+			for (const email of ["a@example.com", undefined]) {
+				const request = await captureRequest(model, undefined, { email });
+				expect(request.body.model).toBe("claude-sonnet-4-6");
+				expect(request.body.request?.labels?.model_enum).toBe("MODEL_TEST_SONNET_46");
+				expect(request.body.request?.generationConfig?.maxOutputTokens).toBe(64_000);
+			}
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps per-effort budgets when every effort routes to one thinking SKU", async () => {
 		const result = await fetchAntigravityDiscoveryModels({
 			token: "token",

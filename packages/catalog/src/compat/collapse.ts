@@ -758,6 +758,31 @@ export function isCursorMaxModeWireId(wireModelId: string): boolean {
 }
 
 /**
+ * Whether `wireModelId` is one tier of a reviewed `provider` family that serves
+ * different efforts from distinct sibling SKUs (`-low`/`-medium`/`-high`), so
+ * the SKU, not the effort, fixes the thinking strength. Decided from the
+ * declared family routes, not a collapsed row's routing: an account roster
+ * listing one tier collapses to a row routing every effort to it, yet that SKU
+ * still advertises its own fixed thinking. Families routing every effort to
+ * one `-thinking` SKU keep the effort's own budget or level.
+ */
+export function isReviewedTierVariantWireId(provider: string, wireModelId: string): boolean {
+	const table = reviewedCollapseTable(provider);
+	if (table === undefined) return false;
+	const id = wireModelId.trim();
+	const family =
+		table.families.find(candidate => candidate.members.includes(id)) ??
+		(table.templates === undefined ? undefined : templateFamilyFor(table.templates, id));
+	if (family === undefined) return false;
+	const tiers = new Set<string>();
+	for (const key of VARIANT_ROUTING_KEYS) {
+		const target = family.routing[key];
+		if (key !== "off" && target !== undefined) tiers.add(target);
+	}
+	return tiers.size > 1 && tiers.has(id);
+}
+
+/**
  * Recover Cursor's max-mode marker for a bundled collapsed row. The bundled
  * snapshot may contain only the logical row, but its effort routing still
  * records the wire ids, so {@link isCursorMaxModeWireId} preserves the

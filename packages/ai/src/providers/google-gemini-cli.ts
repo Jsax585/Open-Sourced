@@ -7,6 +7,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { scheduler } from "node:timers/promises";
 import { type } from "@oh-my-pi/omptype";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
+import { isReviewedTierVariantWireId } from "@oh-my-pi/pi-catalog/compat/collapse";
 import {
 	ensureAntigravityVersion,
 	getAntigravityHeaders,
@@ -1234,22 +1235,6 @@ interface AntigravityRequestEnvelope {
 }
 
 /**
- * Whether `wireModelId` is one tier of a family that routes efforts to two or
- * more distinct SKUs (`-low`/`-medium`/`-high`). There the SKU, not the effort,
- * sets the thinking strength, as in the native client. Families routing every
- * effort to one `-thinking` SKU keep the effort's own budget or level.
- */
-function isAntigravityTierSku(model: Model<"google-gemini-cli">, wireModelId: string): boolean {
-	const routing = model.thinking?.effortRouting;
-	if (routing === undefined) return false;
-	const tiers = new Set<string>();
-	for (const [effort, target] of Object.entries(routing)) {
-		if (effort !== "off" && target !== undefined) tiers.add(target);
-	}
-	return tiers.size > 1 && tiers.has(wireModelId);
-}
-
-/**
  * Build the Antigravity request envelope (sessionId, structured requestId,
  * labels) advancing the per-conversation session state. Mirrors the real
  * `antigravity/hub` client: `requestId` is `agent/<agentId>/<ts>/<trajectoryId>/<step>`
@@ -1431,7 +1416,12 @@ export function buildRequest(
 			generationConfig.maxOutputTokens = profile.maxOutputTokens;
 		}
 		const thinkingConfig = generationConfig.thinkingConfig;
-		if (profile && thinkingConfig && options.thinking?.enabled && isAntigravityTierSku(model, wireModelId)) {
+		if (
+			profile &&
+			thinkingConfig &&
+			options.thinking?.enabled &&
+			isReviewedTierVariantWireId(model.provider, wireModelId)
+		) {
 			// A tier SKU fixes its own thinking strength; the effort only chose
 			// the SKU. Send it the way the SKU advertises: a level when it has
 			// one, else its budget (`-1` is dynamic).
