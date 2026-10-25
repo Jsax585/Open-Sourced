@@ -844,6 +844,41 @@ await runWorktreeCheckoutHook(${JSON.stringify(wt.path)}, ${JSON.stringify(wt.ba
 			}
 		});
 
+		it("an abort leaves the worktree and branch alone when the rollback cannot read who owns it", async () => {
+			const repoProto = Object.getPrototypeOf(vcs.requireGit(repo));
+			const realWorktrees = repoProto.worktrees;
+			let aborted = false;
+			// Only the rollback's lookup, after the abort, fails; the setup's own listing is the real one.
+			const listing = spyOn(repoProto, "worktrees").mockImplementation(function (this: unknown, ...args: unknown[]) {
+				if (aborted) return Promise.reject(new Error("replacement metadata half written"));
+				return realWorktrees.apply(this, args);
+			});
+			let leftover: string | undefined;
+			try {
+				const signalPipe = path.join(root, "hook-unreadable-started");
+				expect(Bun.spawnSync(["mkfifo", signalPipe]).exitCode).toBe(0);
+				await hook(`echo started > "${signalPipe}"\nsleep 600`);
+				const controller = new AbortController();
+				const pending = createSessionWorktree(repo, Settings.isolated(), branch, { signal: controller.signal });
+				await Bun.file(signalPipe).text();
+				aborted = true;
+				controller.abort();
+				await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+			} finally {
+				listing.mockRestore();
+				leftover = (await vcs.requireGit(repo).worktrees()).find(e => e.branch === `refs/heads/${branch}`)?.path;
+			}
+
+			try {
+				expect(leftover).toBeDefined();
+				expect(worktreePaths(repo)).toContain(leftover!);
+				expect(await exists(leftover!)).toBe(true);
+				expect(branchSha(repo, branch)).not.toBeNull();
+			} finally {
+				if (leftover) git(repo, "worktree", "remove", "--force", leftover);
+			}
+		});
+
 		it("a discard leaves the mark of a worktree another process added at the freed path", async () => {
 			const repoProto = Object.getPrototypeOf(vcs.requireGit(repo));
 			const realRemove = repoProto.worktreeRemove;

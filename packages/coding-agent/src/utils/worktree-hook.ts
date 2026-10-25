@@ -46,16 +46,18 @@ export function worktreeHookWarnings(hook: WorktreeCheckoutHookResult | undefine
  * Run a new linked worktree's `post-checkout` hook, as `git worktree add` does, without the
  * agent's own `GIT_DIR`-family variables and in its own session, so a prompt on the terminal
  * fails instead of writing into the TUI. Lines are sanitized, home-shortened and truncated for
- * display. Aborting `signal` stops the hook and rejects.
+ * display. Aborting `signal` stops the hook and rejects. With `setupGitDir`, the worktree's git
+ * directory, the hook's process is recorded there while it runs (see `vcs.worktreeSetupHookRunning`).
  */
 export async function runWorktreeCheckoutHook(
 	worktreeRoot: string,
 	head: string,
 	signal?: AbortSignal,
+	setupGitDir?: string,
 ): Promise<WorktreeCheckoutHookResult> {
 	// Its dotenv reads off the JS thread, raced against the abort like the hook itself.
 	const env = await filterChildShellEnvAsync(process.env, undefined, signal);
-	const hook = await vcs.runPostCheckoutHook(worktreeRoot, head, { signal, env, detached: true });
+	const hook = await vcs.runPostCheckoutHook(worktreeRoot, head, { signal, env, detached: true, setupGitDir });
 	const result: WorktreeCheckoutHookResult = {};
 	if (hook.skipped) result.skipped = describeSkippedHook(hook.skipped);
 	if (hook.exitCode !== 0) {
@@ -152,7 +154,7 @@ export async function addWorktreeWithHook(
 		signal?.throwIfAborted();
 		head = await repository.resolveRef(`refs/heads/${branch}`, signal);
 		branchesBefore = new Set(await untilAborted(signal, () => repository.listBranches(false)));
-		const hook = head ? await runWorktreeCheckoutHook(worktreePath, head, signal) : {};
+		const hook = head ? await runWorktreeCheckoutHook(worktreePath, head, signal, gitDir) : {};
 		// Raced like the path lookup below, so an abort rejects with its reason.
 		const located = await currentWorktreeEntry(repository, gitDir, signal);
 		if (located === undefined) {
@@ -195,6 +197,8 @@ export async function addWorktreeWithHook(
 		return { added, path: resolved, hook, branch: setUpBranch };
 	} catch (error) {
 		let hookBranch: string | undefined;
+		// Set when the ownership lookup fails: without it a replacement at our git dir cannot be told from our worktree.
+		let unverified = false;
 		if (!gone) {
 			// The hook may have moved the worktree before it was cut short; discard where it is now.
 			try {
@@ -208,13 +212,17 @@ export async function addWorktreeWithHook(
 					}
 				}
 			} catch (lookupError) {
-				logger.warn("could not locate a new worktree its hook may have moved", {
+				unverified = true;
+				logger.warn("could not verify who owns a new worktree; leaving its path and branch alone", {
 					path: current,
+					branch,
 					error: String(lookupError),
 				});
 			}
 		}
-		if (gone) {
+		if (unverified) {
+			// Already warned above; nothing is discarded, deleted or restored.
+		} else if (gone) {
 			logger.warn("a new worktree was removed by its post-checkout hook; leaving its path and branch alone", {
 				path: worktreePath,
 				branch,

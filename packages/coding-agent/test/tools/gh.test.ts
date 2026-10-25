@@ -1608,6 +1608,61 @@ describe("github tool", () => {
 					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", dir]);
 				}
 			});
+			it("pr_checkout refuses a dead owner's worktree while the post-checkout hook it started still runs", async () => {
+				mockPrView(145);
+				const { dir, gitDir, branch } = await deadOwnersWorktree(145);
+				const hooks = path.join(fixture.baseDir, "hooks-145");
+				const started = path.join(fixture.baseDir, "145-started");
+				const release = path.join(fixture.baseDir, "145-release");
+				for (const fifo of [started, release]) expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+				await Bun.write(
+					path.join(hooks, "post-checkout"),
+					`#!/bin/sh\necho started > "${started}"\ncat "${release}" > /dev/null\n`,
+				);
+				await fs.chmod(path.join(hooks, "post-checkout"), 0o755);
+				const previous = Bun.spawnSync(["git", "config", "--get", "core.hooksPath"], { cwd: fixture.repoRoot })
+					.stdout.toString()
+					.trim();
+				runGit(fixture.repoRoot, ["config", "core.hooksPath", hooks]);
+				let released = false;
+				const releaseHook = async () => {
+					if (released) return;
+					released = true;
+					await fs.writeFile(release, "go\n");
+				};
+				let running: Promise<unknown> | undefined;
+				try {
+					running = vcs.runPostCheckoutHook(dir, fixture.headRefOid, { setupGitDir: gitDir, detached: true });
+					running.catch(() => {});
+					await fs.readFile(started, "utf8");
+					// The hook-process record is written just after the spawn, so `started` can arrive before it exists.
+					const deadline = Date.now() + 5000;
+					while (!(await vcs.worktreeSetupHookRunning(gitDir))) {
+						if (Date.now() > deadline) throw new Error("post-checkout hook record never became visible");
+						await Bun.sleep(10);
+					}
+
+					await expect(checkout(145, new AbortController().signal)).rejects.toThrow(
+						"post-checkout hook started by an omp process that is gone is still running",
+					);
+					expect(await setupOwnerOf(fixture.repoRoot, branch)).not.toBeUndefined();
+					expect(await setupOwnerOf(fixture.repoRoot, branch)).not.toBe(vcs.worktreeSetupOwner());
+
+					await releaseHook();
+					await running;
+					vi.spyOn(github, "json").mockReset();
+					mockPrView(145);
+					const outcome = await checkout(145, new AbortController().signal);
+					expect(outcome.reused).toBe(true);
+					expect(await setupOwnerOf(fixture.repoRoot, branch)).toBeUndefined();
+				} finally {
+					await releaseHook();
+					await running?.catch(() => {});
+					if (previous) runGit(fixture.repoRoot, ["config", "core.hooksPath", previous]);
+					else runGit(fixture.repoRoot, ["config", "--unset", "core.hooksPath"]);
+					runGit(fixture.repoRoot, ["worktree", "remove", "--force", "--force", dir]);
+				}
+			});
 			it("reuses the worktree of a PR whose hook renamed the local branch instead of adding a second one", async () => {
 				const hooks = path.join(fixture.baseDir, "hooks-rename-139");
 				await Bun.write(path.join(hooks, "post-checkout"), "#!/bin/sh\ngit branch -m pr-139 renamed-139\n");

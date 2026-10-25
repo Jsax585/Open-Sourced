@@ -505,6 +505,15 @@ export async function checkoutPullRequest(
 				// earlier attempt of this process: recovered only when its checkout is missing, still initializing, or its
 				// `.git` no longer leads to its git dir, else refused like a live owner's, since its hook never finished.
 				if (setupOwner === ownOwner ? !stale : vcs.isWorktreeSetupOwnerAlive(setupOwner)) throw stillSettingUp();
+				// An omp killed mid-hook leaves `git hook run` running (its own session), still free to change or delete the worktree,
+				// so a dead owner's worktree is not taken over (nor reused as ready) while the process recorded there lives.
+				const worktreePath = existingWorktree.path;
+				const hookGitDir = existingWorktree.gitDir;
+				if (await untilAborted(signal, () => vcs.worktreeSetupHookRunning(hookGitDir))) {
+					throw new ToolError(
+						`the post-checkout hook started by an omp process that is gone is still running in the worktree of ${localBranch} at ${worktreePath}; retry once it finishes (if nothing runs there, delete \`omp-setup-hook\` in its git dir: \`git -C ${worktreePath} rev-parse --git-dir\`)`,
+					);
+				}
 				// Compare-and-swap against the listing: a process that recovered or recreated it since owns it now.
 				const claimed = await repository.worktreeReplaceSetupOwner(
 					existingWorktree.gitDir,

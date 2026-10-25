@@ -436,7 +436,7 @@ impl GitRepo {
 		}
 		// `git branch -D` also drops the branch's config; the ref is already
 		// gone, so a config failure must not report the deletion as failed.
-		let _ = remove_config_sections(&self.info().common_dir.join("config"), "branch", name);
+		self.remove_branch_config(name);
 		Ok(true)
 	}
 
@@ -452,6 +452,9 @@ impl GitRepo {
 	/// the no-op "make it absent": `Ok(true)` when already absent, else
 	/// `Ok(false)`. An unparsable `expected` or unresolvable `target` is an
 	/// error.
+	///
+	/// A symbolic ref at `refs/heads/<name>` is itself updated or deleted
+	/// (`--no-deref`), never the branch it points to.
 	///
 	/// The git binary is required: `update-ref` takes the ref lock first and
 	/// verifies the old value under it, so a concurrent git writer is never
@@ -492,13 +495,20 @@ impl GitRepo {
 		let args: Vec<String> = match new {
 			Some(id) => vec![
 				"update-ref".to_owned(),
+				"--no-deref".to_owned(),
 				"-m".to_owned(),
 				"omp: restore branch".to_owned(),
 				full.clone(),
 				id.to_hex().to_string(),
 				old,
 			],
-			None => vec!["update-ref".to_owned(), "-d".to_owned(), full.clone(), old],
+			None => vec![
+				"update-ref".to_owned(),
+				"--no-deref".to_owned(),
+				"-d".to_owned(),
+				full.clone(),
+				old,
+			],
 		};
 		let output = super::cli::run_sync_write(
 			self.root(),
@@ -517,9 +527,28 @@ impl GitRepo {
 			output.into_checked(&args)?;
 		}
 		if new.is_none() {
-			let _ = remove_config_sections(&self.info().common_dir.join("config"), "branch", name);
+			self.remove_branch_config(name);
 		}
 		Ok(true)
+	}
+
+	/// Drop every `[branch "<name>"]` section from the shared config after the
+	/// branch ref was deleted, under [`edit_config_locked`]; nothing is
+	/// rewritten when none matches. The ref is re-read once `config.lock` is
+	/// held: a branch another process recreated while this call waited for the
+	/// lock keeps the settings it just wrote. Failures are ignored, since the
+	/// deletion has already happened and must not be reported as failed.
+	fn remove_branch_config(&self, name: &str) {
+		let _ = edit_config_locked(&self.info().common_dir.join("config"), |config| {
+			if branch_exists_now(self, name) {
+				return Ok(false);
+			}
+			let mut removed = false;
+			while config.remove_section("branch", Some(name.into())).is_some() {
+				removed = true;
+			}
+			Ok(removed)
+		});
 	}
 
 	/// Create a branch at HEAD and switch to it without touching files.
@@ -2012,19 +2041,12 @@ fn edit_config_locked(
 	published.map(|_| ())
 }
 
-/// Drop every `[<section> "<subsection>"]` section from a config file, under
-/// [`edit_config_locked`]; nothing is rewritten when none matches.
-fn remove_config_sections(path: &Path, section: &str, subsection: &str) -> Result<()> {
-	edit_config_locked(path, |config| {
-		let mut removed = false;
-		while config
-			.remove_section(section, Some(subsection.into()))
-			.is_some()
-		{
-			removed = true;
-		}
-		Ok(removed)
-	})
+/// Whether `refs/heads/<name>` currently exists, as a direct or symbolic ref.
+/// Read from disk on every call, so it reflects writers that ran since the
+/// repo was opened. A read error counts as existing: the caller then leaves
+/// config alone.
+fn branch_exists_now(repo: &GitRepo, name: &str) -> bool {
+	!matches!(repo.resolve_ref(&format!("refs/heads/{name}")), Ok(None))
 }
 
 fn set_config_file(path: &Path, key: &str, value: &str) -> Result<()> {
@@ -3636,6 +3658,39 @@ mod tests {
 		assert_eq!(fs::read_to_string(&lock).unwrap(), "[other]\n\twriter = busy\n");
 	}
 
+	#[test]
+	fn delete_branch_keeps_the_config_of_a_branch_recreated_before_it_takes_config_lock() {
+		let (temp, repo) = fixture();
+		git(temp.path(), &["branch", "feature"]);
+		repo.config_set("branch.feature.remote", "origin").unwrap();
+		let sha = git(temp.path(), &["rev-parse", "--verify", "refs/heads/feature"]);
+		let live = temp.path().join(".git/refs/heads/feature");
+		let lock = temp.path().join(".git/config.lock");
+		fs::write(&lock, "[other]\n\twriter = busy\n").unwrap();
+
+		let deleted = std::thread::scope(|scope| {
+			// Another process recreates the branch while the delete waits for the
+			// config lock, then releases the lock.
+			let writer = scope.spawn(|| {
+				let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+				while live.exists() && std::time::Instant::now() < deadline {
+					std::thread::sleep(std::time::Duration::from_millis(1));
+				}
+				if !live.exists() {
+					fs::write(&live, format!("{sha}\n")).unwrap();
+				}
+				fs::remove_file(&lock).unwrap();
+			});
+			let deleted = repo.delete_branch("feature", true);
+			writer.join().unwrap();
+			deleted
+		});
+
+		assert!(deleted.unwrap());
+		assert!(live.exists(), "the branch was recreated");
+		assert_eq!(git(temp.path(), &["config", "--get", "branch.feature.remote"]), "origin");
+	}
+
 	#[cfg(unix)]
 	#[test]
 	fn delete_branch_keeps_the_config_files_permissions() {
@@ -3800,6 +3855,23 @@ mod tests {
 		git(temp.path(), &["branch", "here", &a]);
 		assert!(!repo.swap_branch("here", None, None).unwrap());
 		assert_eq!(git(temp.path(), &["rev-parse", "--verify", "here"]), a);
+	}
+
+	#[test]
+	fn swap_branch_never_moves_or_deletes_the_branch_a_symbolic_ref_points_to() {
+		let (temp, repo) = fixture();
+		let a = git(temp.path(), &["rev-parse", "HEAD"]);
+		git(temp.path(), &["branch", "target", &a]);
+		git(temp.path(), &["symbolic-ref", "refs/heads/restored", "refs/heads/target"]);
+		git(temp.path(), &["symbolic-ref", "refs/heads/deleted", "refs/heads/target"]);
+		let b = commit_file(temp.path(), "b");
+
+		// Whether git accepts the update of the symbolic ref itself is not under
+		// test; only that the branch it points to is left alone.
+		let _ = repo.swap_branch("restored", Some(&a), Some(&b));
+		let _ = repo.swap_branch("deleted", Some(&a), None);
+
+		assert_eq!(git(temp.path(), &["rev-parse", "--verify", "refs/heads/target"]), a);
 	}
 
 	#[test]

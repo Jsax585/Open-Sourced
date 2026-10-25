@@ -224,6 +224,11 @@ function processStart(pid) {
 let ownStart;
 let ownStartRead = false;
 
+/** Process `pid` as a setup owner names it: scope, pid and, when known, start time (see `isWorktreeSetupOwnerAlive`). */
+function ownerIdentity(pid, start) {
+	return start === undefined ? `${PID_SCOPE}-${pid}` : `${PID_SCOPE}-${pid}-${start}`;
+}
+
 /**
  * This process as the owner of a worktree setup (`setupOwner` of `worktreeAdd`): scope, pid and,
  * where the platform reports it, start time.
@@ -233,7 +238,7 @@ export function worktreeSetupOwner() {
 		ownStart = processStart(process.pid);
 		ownStartRead = true;
 	}
-	return ownStart === undefined ? `${PID_SCOPE}-${process.pid}` : `${PID_SCOPE}-${process.pid}-${ownStart}`;
+	return ownerIdentity(process.pid, ownStart);
 }
 
 /**
@@ -352,6 +357,49 @@ function readCapture(file, maxBytes, { fromEnd = false, signal } = {}) {
 	return untilAborted(read(), signal);
 }
 
+/** File in a worktree's git directory naming the process of its running post-checkout hook, next to the `omp-setup` mark. */
+const HOOK_RECORD = "omp-setup-hook";
+
+/**
+ * Record the identity of `git hook run` in `gitDir` while it runs. Returns the `onSpawn` callback for
+ * `runGitToFiles`, which starts the write and returns the removal to run once git exited. The record is
+ * written to a temporary file and renamed, so a reader sees all of an identity or none. Failures are
+ * ignored: the hook run does not depend on its record.
+ */
+function hookRecorder(gitDir) {
+	if (!gitDir) return undefined;
+	const file = path.join(gitDir, HOOK_RECORD);
+	return child => {
+		const owner = ownerIdentity(child.pid, processStart(child.pid));
+		const temp = `${file}.${process.pid}.tmp`;
+		// shortcut: written off the JS thread after the spawn, so an omp killed in the few ms before the rename leaves no
+		// record and its hook can be taken over while it runs; a synchronous write would block on a stalled git dir.
+		const written = fs.promises
+			.writeFile(temp, owner)
+			.then(() => fs.promises.rename(temp, file))
+			.catch(() => fs.promises.rm(temp, { force: true }).catch(() => {}));
+		return () => {
+			void written.then(() => fs.promises.rm(file, { force: true })).catch(() => {});
+		};
+	};
+}
+
+/**
+ * Whether a post-checkout hook recorded in the worktree git directory `gitDir` by {@link runPostCheckoutHook}
+ * (`setupGitDir`) may still be running: its record exists and names a live process (see
+ * {@link isWorktreeSetupOwnerAlive}). `git hook run` runs in its own session, so it outlives an omp that was killed
+ * meanwhile. No record is false; a record that cannot be read is true, as nothing says the hook is gone.
+ */
+export async function worktreeSetupHookRunning(gitDir) {
+	let owner;
+	try {
+		owner = (await fs.promises.readFile(path.join(gitDir, HOOK_RECORD), "utf8")).trim();
+	} catch (error) {
+		return !(error?.code === "ENOENT" || error?.code === "ENOTDIR");
+	}
+	return isWorktreeSetupOwnerAlive(owner);
+}
+
 /**
  * Run `git <args>` with output to the files `stdout`/`stderr` (paths, or "ignore") and resolve with
  * its exit code. `readStdout(stream, exited)` / `readStderr(stream, exited)` instead pipe that stream to
@@ -365,8 +413,9 @@ function readCapture(file, maxBytes, { fromEnd = false, signal } = {}) {
  */
 async function runGitToFiles(
 	args,
-	{ cwd, env, stdout = "ignore", stderr = "ignore", signal, detached = false, append = false, readStdout, readStderr, retain },
+	{ cwd, env, stdout = "ignore", stderr = "ignore", signal, detached = false, append = false, readStdout, readStderr, retain, onSpawn },
 ) {
+	let afterRun;
 	const posix = process.platform !== "win32";
 	const handles = [];
 	let keep = false;
@@ -394,6 +443,7 @@ async function runGitToFiles(
 			// terminal a prompt on /dev/tty fails instead of writing into the caller's TUI.
 			detached: ownGroup,
 		});
+		afterRun = onSpawn?.(child);
 		if (retain) {
 			retain.start = processStart(child.pid);
 			if (ownGroup) retain.pgid = child.pid;
@@ -434,6 +484,8 @@ async function runGitToFiles(
 		keep = retain !== undefined;
 		return exitCode;
 	} finally {
+		// Once git exited (or the run failed); not awaited, like the capture cleanup.
+		afterRun?.();
 		// Our copies only; the child (and anything it left running) holds its own. Not awaited, like the capture cleanup.
 		if (!keep) {
 			for (const handle of handles) void handle.close().catch(() => {});
@@ -749,9 +801,12 @@ async function readPipeTail(stream, exited) {
  * and nothing is written to disk.
  * With `options.inheritOutput` the hook writes to this process's stdout/stderr instead, nothing is
  * captured and the result's `stdout`/`stderr` are empty.
+ * With `options.setupGitDir`, the worktree's git directory, the identity of the running `git hook run` is recorded
+ * there until it exits, for {@link worktreeSetupHookRunning}.
  */
 export async function runPostCheckoutHook(worktreeRoot, head, options = {}) {
-	const { signal, env, detached, inheritOutput } = options;
+	const { signal, env, detached, inheritOutput, setupGitDir } = options;
+	const onSpawn = hookRecorder(setupGitDir);
 	signal?.throwIfAborted();
 	const notRun = { exitCode: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
 	const posix = process.platform !== "win32";
@@ -828,6 +883,7 @@ export async function runPostCheckoutHook(worktreeRoot, head, options = {}) {
 				stderr: "inherit",
 				signal,
 				detached,
+				onSpawn,
 			});
 			return { ...notRun, exitCode };
 		}
@@ -845,6 +901,7 @@ export async function runPostCheckoutHook(worktreeRoot, head, options = {}) {
 				env,
 				signal,
 				detached,
+				onSpawn,
 				readStdout: async (stream, exited) => {
 					stdout = await readPipeTail(stream, exited);
 				},
@@ -921,6 +978,7 @@ export async function runPostCheckoutHook(worktreeRoot, head, options = {}) {
 				detached,
 				append: TRUNCATE_HOOK_CAPTURE,
 				retain: posix ? held : undefined,
+				onSpawn,
 			});
 		} finally {
 			running = false;
