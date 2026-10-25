@@ -66,11 +66,13 @@ export function collabHostLinks(host: CollabHost): CollabHostLinks {
 export function activeCollabHostLinks(ctx: InteractiveModeContext): CollabHostLinks | undefined {
 	const host = ctx.collabHost;
 	if (!host) return undefined;
+	if (host.waitForStart() || !host.link) return undefined;
 	if (host.sessionId && host.sessionId !== ctx.sessionManager.getSessionId()) return undefined;
 	return collabHostLinks(host);
 }
 
 const rolledBackHostReapers = new WeakSet<InteractiveModeContext>();
+const provisionalHosts = new WeakSet<CollabHost>();
 
 /**
  * Stop a room whose session did not survive the transition that created it.
@@ -97,7 +99,15 @@ function ensureRolledBackHostReaper(ctx: InteractiveModeContext): void {
 	ctx.session.registerSessionTransitionSettledCallback(outcome => {
 		const host = ctx.collabHost;
 		if (!host?.sessionId) return;
-		if (!outcome.rolledBack && host.sessionId === ctx.sessionManager.getSessionId()) return;
+		const isCurrentSession = host.sessionId === ctx.sessionManager.getSessionId();
+		const isProvisional = provisionalHosts.has(host);
+		if (outcome.rolledBack) {
+			if (isCurrentSession && !isProvisional) return;
+		} else if (isCurrentSession) {
+			provisionalHosts.delete(host);
+			return;
+		}
+		provisionalHosts.delete(host);
 		void host.stop("session switch rolled back").catch(err => {
 			logger.warn("Failed to stop rolled back collab host", { error: String(err) });
 		});
@@ -185,19 +195,15 @@ export async function startCollabHosting(
 		}
 
 		const existing = ctx.collabHost ?? ctx.collabController?.host;
-		if (existing && ctx.collabController && !existing.relayConnected) {
-			const startPromise = existing.waitForStart();
-			if (startPromise) {
-				try {
-					await startPromise;
-				} catch (err) {
-					if (err instanceof CollabStartSuperseded) continue;
-					throw err;
-				}
-			} else {
-				await ctx.collabController.idle();
+		const existingStartPromise = existing?.waitForStart();
+		if (existingStartPromise) {
+			try {
+				await existingStartPromise;
+				continue;
+			} catch (err) {
+				if (err instanceof CollabStartSuperseded) continue;
+				throw err;
 			}
-			continue;
 		}
 		const staleExisting =
 			existing && existing.sessionId && existing.sessionId !== currentSessionId ? existing : undefined;
@@ -227,6 +233,10 @@ export async function startCollabHosting(
 			guestActionsReady,
 			deferStatus: true,
 		});
+		if (ctx.session.isSessionTransitioning) {
+			provisionalHosts.add(host);
+			void ctx.session.waitForSessionTransition().then(() => provisionalHosts.delete(host));
+		}
 		const inFlight: InFlightStart = {
 			host,
 			relayOrigin: normalized.origin,

@@ -39,7 +39,8 @@ import type {
 	ExtensionContextActions,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { SessionTransitionOutcome } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { AgentSession, type SessionTransitionOutcome } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -711,32 +712,209 @@ describe("startCollabHosting", () => {
 		// `reload()` calls switchSession() on the current file, so a rollback
 		// restores the transcript under an unchanged id. An observer comparing
 		// ids sees nothing; only the settled outcome reports it.
-		let fireSettled: ((outcome: SessionTransitionOutcome) => void) | undefined;
-		const { ctx } = makeCtx({
-			onTransitionSettledRegistered: fire => {
-				fireSettled = fire;
-			},
-		});
-		ctx.sessionManager.getSessionId = () => "sess-1";
+		using tempDir = TempDir.createSync();
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		await sessionManager.ensureOnDisk();
+		const initialSessionId = sessionManager.getSessionId();
+		const auth = await AuthStorage.create(":memory:");
+		try {
+			const modelRegistry = new ModelRegistry(auth);
+			const runtime = new ExtensionRuntime();
+			let host: CollabHost | undefined;
+
+			const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475" });
+			ctx.sessionManager = sessionManager;
+
+			const extension: Extension = {
+				path: "test-collab-ext",
+				resolvedPath: "/test-collab-ext",
+				handlers: new Map([
+					[
+						"session_switch",
+						[
+							async () => {
+								host = await startHosting(ctx, "ws://localhost:7475");
+							},
+						],
+					],
+				]),
+				tools: new Map(),
+				assistantThinkingRenderers: [],
+				fileWriteFallbackHandlers: [],
+				fileDeleteFallbackHandlers: [],
+				messageRenderers: new Map(),
+				composerShapes: new Map(),
+				commands: new Map(),
+				flags: new Map(),
+				shortcuts: new Map(),
+			};
+
+			const extensionRunner = new ExtensionRunner(
+				[extension],
+				runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+			extensionRunner.initialize({} as unknown as ExtensionActions, {} as unknown as ExtensionContextActions);
+
+			const agent = new Agent({
+				initialState: {
+					model: undefined,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			});
+
+			const session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry,
+				extensionRunner,
+			});
+			ctx.session = session as unknown as InteractiveModeContext["session"];
+
+			let failedOnce = false;
+			const origReplace = agent.replaceMessages.bind(agent);
+			agent.replaceMessages = (...args) => {
+				if (!failedOnce) {
+					failedOnce = true;
+					throw new Error("post-commit reload failure");
+				}
+				return origReplace(...args);
+			};
+
+			const stopped = Promise.withResolvers<string>();
+			const realStop = CollabHost.prototype.stop;
+			const spy = vi.spyOn(CollabHost.prototype, "stop").mockImplementation(async function (
+				this: CollabHost,
+				reason: string,
+			) {
+				await realStop.call(this, reason);
+				stopped.resolve(reason);
+			});
+
+			try {
+				const sessionFile = sessionManager.getSessionFile()!;
+				await expect(session.switchSession(sessionFile)).rejects.toThrow("post-commit reload failure");
+				expect(await stopped.promise).toBe("session switch rolled back");
+				expect(host?.sessionId).toBe(initialSessionId);
+				expect(sessionManager.getSessionId()).toBe(initialSessionId);
+				expect(host?.stopped).toBe(true);
+				expect(activeCollabHostLinks(ctx)).toBeUndefined();
+			} finally {
+				spy.mockRestore();
+				await session.dispose();
+			}
+		} finally {
+			auth.close();
+		}
+	});
+
+	it("keeps pre-transition hosts alive when a resume rolls back", async () => {
+		using tempDir = TempDir.createSync();
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.path());
+		await sessionManager.ensureOnDisk();
+		const auth = await AuthStorage.create(":memory:");
+		try {
+			const modelRegistry = new ModelRegistry(auth);
+			const { ctx } = makeCtx({ relayUrl: "ws://localhost:7475" });
+			ctx.sessionManager = sessionManager;
+
+			const agent = new Agent({
+				initialState: {
+					model: undefined,
+					systemPrompt: ["Test"],
+					tools: [],
+					messages: [],
+				},
+			});
+
+			const session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry,
+			});
+			ctx.session = session as unknown as InteractiveModeContext["session"];
+
+			const initialSessionId = sessionManager.getSessionId();
+			const host = await startHosting(ctx, "ws://localhost:7475");
+			expect(host.sessionId).toBe(initialSessionId);
+			expect(activeCollabHostLinks(ctx)).toEqual(collabHostLinks(host));
+
+			const stoppedReasons: string[] = [];
+			const realStop = CollabHost.prototype.stop;
+			const spy = vi.spyOn(CollabHost.prototype, "stop").mockImplementation(async function (
+				this: CollabHost,
+				reason: string,
+			) {
+				await realStop.call(this, reason);
+				stoppedReasons.push(reason);
+			});
+
+			let failedOnce = false;
+			const origReplace = agent.replaceMessages.bind(agent);
+			agent.replaceMessages = (...args) => {
+				if (!failedOnce) {
+					failedOnce = true;
+					throw new Error("post-commit switch failure");
+				}
+				return origReplace(...args);
+			};
+
+			try {
+				const sessionFile = sessionManager.getSessionFile()!;
+				await expect(session.switchSession(sessionFile)).rejects.toThrow("post-commit switch failure");
+				expect(stoppedReasons).toEqual([]);
+				expect(host.stopped).toBe(false);
+				expect(sessionManager.getSessionId()).toBe(initialSessionId);
+				expect(activeCollabHostLinks(ctx)).toEqual(collabHostLinks(host));
+			} finally {
+				spy.mockRestore();
+				await session.dispose();
+			}
+		} finally {
+			auth.close();
+		}
+	});
+
+	it("hides links until the initial relay handshake succeeds", async () => {
+		const { ctx } = makeCtx();
+		const host = new CollabHost(ctx, { deferStatus: true });
+		ctx.collabHost = host;
+		startedHosts.push(host);
+
+		expect(activeCollabHostLinks(ctx)).toBeUndefined();
+
+		const startPromise = host.start("ws://localhost:7475");
+		expect(host.waitForStart()).not.toBeNull();
+		expect(activeCollabHostLinks(ctx)).toBeUndefined();
+
+		await startPromise;
+		expect(host.waitForStart()).toBeNull();
+		expect(activeCollabHostLinks(ctx)).toEqual(collabHostLinks(host));
+	});
+
+	it("reuses settled hosts during relay reconnects when relayConnected is false", async () => {
+		const { ctx } = makeCtx();
+		const controller = new CollabController(ctx);
+		ctx.collabController = controller;
 
 		const host = await startHosting(ctx, "ws://localhost:7475");
-		expect(host.sessionId).toBe("sess-1");
-		const stopped = Promise.withResolvers<string>();
-		const realStop = CollabHost.prototype.stop;
-		const spy = vi.spyOn(CollabHost.prototype, "stop").mockImplementation(async function (
-			this: CollabHost,
-			reason: string,
-		) {
-			await realStop.call(this, reason);
-			if (this === host) stopped.resolve(reason);
+		controller.adoptHost(host);
+		expect(ctx.collabHost).toBe(host);
+
+		Object.defineProperty(host, "relayConnected", {
+			get: () => false,
+			configurable: true,
 		});
-		try {
-			if (!fireSettled) throw new Error("publishing must register a transition-settled callback");
-			fireSettled({ rolledBack: true });
-			expect(await stopped.promise).toBe("session switch rolled back");
-		} finally {
-			spy.mockRestore();
-		}
+		expect(host.waitForStart()).toBeNull();
+
+		const reused = await startCollabHosting(ctx, { relayUrl: "ws://localhost:7475" });
+		expect(reused).toBe(host);
 	});
 
 	it("link reads hide a room left over from the previous session", async () => {
