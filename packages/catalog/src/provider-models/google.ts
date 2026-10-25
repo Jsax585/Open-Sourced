@@ -143,7 +143,15 @@ export function googleAntigravityModelManagerOptions(
 						return unionAccountCatalogs(
 							catalogs.map(({ accountKey, models }) =>
 								tagAccess && accountKey !== undefined
-									? models.map(model => ({ ...model, accountAccess: { [accountKey]: {} } }))
+									? models.map(model => ({
+											...model,
+											accountAccess: {
+												[accountKey]:
+													model.antigravityWireProfiles === undefined
+														? {}
+														: { antigravityWireProfiles: model.antigravityWireProfiles },
+											},
+										}))
 									: models,
 							),
 						);

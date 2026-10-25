@@ -15,6 +15,7 @@ import {
 } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { extractHttpStatusFromError, fetchWithRetry, readSseJson } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
+import { oauthAccountKey } from "../auth/types";
 import type {
 	AntigravityModelWireProfile,
 	Api,
@@ -40,7 +41,6 @@ import { StreamMarkupHealing, type StreamMarkupHealingEvent } from "../utils/str
 import { prepareAnthropicImageContext } from "./anthropic-images";
 import forcedToolDirective from "./google-antigravity-forced-tool.md" with { type: "text" };
 import type { Content, FunctionCallingConfigMode, ThinkingConfig } from "./google-shared";
-import type { ThinkingLevel } from "./google-types";
 import {
 	convertMessages,
 	convertTools,
@@ -345,6 +345,7 @@ const innerCredentialsSchema = type({
 	"refreshToken?": optionalCredentialString,
 	"refresh?": optionalCredentialString,
 	"email?": optionalCredentialString,
+	"accountId?": optionalCredentialString,
 	"expiresAt?": "unknown",
 	"expires?": "unknown",
 });
@@ -360,6 +361,7 @@ interface ParsedGeminiCliCredentials {
 	refreshToken?: string;
 	expiresAt?: number;
 	email?: string;
+	accountId?: string;
 }
 
 function normalizeExpiryMs(value: unknown): number | undefined {
@@ -393,6 +395,7 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 	const refreshToken = parsed.refreshToken ?? parsed.refresh;
 	const expiresAt = normalizeExpiryMs(parsed.expiresAt ?? parsed.expires);
 	const email = parsed.email && parsed.email.length > 0 ? parsed.email : undefined;
+	const accountId = parsed.accountId && parsed.accountId.length > 0 ? parsed.accountId : undefined;
 
 	return {
 		accessToken: parsed.token,
@@ -400,6 +403,7 @@ export function parseGeminiCliCredentials(apiKeyRaw: string): ParsedGeminiCliCre
 		refreshToken,
 		expiresAt,
 		email,
+		accountId,
 	};
 }
 
@@ -588,7 +592,12 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				model.compat.maxImageDimension !== undefined || model.compat.maxImagePayloadBytes !== undefined
 					? await prepareAnthropicImageContext(context, model)
 					: context;
-			let requestBody = buildRequest(model, requestContext, projectId, options, isAntigravity);
+			// Multi-account discovery keys per-account request constants by this
+			// credential's identity; see `Model.accountAccess`.
+			const accountKey = isAntigravity
+				? oauthAccountKey({ accountId: parsedCredentials.accountId, email: parsedCredentials.email, projectId })
+				: undefined;
+			let requestBody = buildRequest(model, requestContext, projectId, options, isAntigravity, accountKey);
 			const replacementPayload = await options?.onPayload?.(requestBody, model);
 			if (replacementPayload !== undefined) {
 				requestBody = replacementPayload as typeof requestBody;
@@ -1296,6 +1305,8 @@ export function buildRequest(
 	projectId: string,
 	options: GoogleGeminiCliOptions = {},
 	isAntigravity = false,
+	/** Serving credential's account key; selects its discovered Antigravity request constants. */
+	accountKey?: string,
 ): CloudCodeAssistRequest {
 	const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const contents = convertMessages(model, context);
@@ -1411,7 +1422,11 @@ export function buildRequest(
 		// roster: a fixed output cap independent of the thinking budget
 		// (reassigned so it keeps its slot ahead of thinkingConfig) and the
 		// `model_enum` label.
-		const profile = getAntigravityModelWireProfile(wireModelId, model.antigravityWireProfiles);
+		const profile = getAntigravityModelWireProfile(
+			wireModelId,
+			accountKey === undefined ? undefined : model.accountAccess?.[accountKey]?.antigravityWireProfiles,
+			model.antigravityWireProfiles,
+		);
 		if (profile?.maxOutputTokens !== undefined) {
 			generationConfig.maxOutputTokens = profile.maxOutputTokens;
 		}
@@ -1423,7 +1438,7 @@ export function buildRequest(
 			if (profile.thinkingLevel !== undefined) {
 				generationConfig.thinkingConfig = {
 					includeThoughts: thinkingConfig.includeThoughts,
-					thinkingLevel: profile.thinkingLevel as ThinkingLevel,
+					thinkingLevel: profile.thinkingLevel,
 				};
 			} else if (profile.thinkingBudget !== undefined) {
 				generationConfig.thinkingConfig = {

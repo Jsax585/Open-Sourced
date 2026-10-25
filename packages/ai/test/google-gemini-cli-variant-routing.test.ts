@@ -1,10 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import type { Context, Model } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import { fetchAntigravityDiscoveryModels } from "@oh-my-pi/pi-catalog/discovery/antigravity";
+import { resolveProviderModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { googleAntigravityModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/google";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 
 interface CapturedRequestBody {
@@ -106,7 +111,7 @@ function unroutedModel(): Model<"google-gemini-cli"> {
 async function captureRequest(
 	model: Model<"google-gemini-cli">,
 	reasoning: Effort | undefined,
-	options: { forceReasoningOff?: boolean } = {},
+	options: { forceReasoningOff?: boolean; email?: string } = {},
 ): Promise<{ body: CapturedRequestBody; attributedModel: string }> {
 	let requestBody: string | undefined;
 	const fetchMock: FetchImpl = (_input, init) => {
@@ -114,7 +119,7 @@ async function captureRequest(
 		return Promise.resolve(new Response('{"error":{"message":"bad request"}}', { status: 400 }));
 	};
 	const stream = streamSimple(model, context, {
-		apiKey: JSON.stringify({ token: "token", projectId: "proj-123" }),
+		apiKey: JSON.stringify({ token: "token", projectId: "proj-123", email: options.email }),
 		reasoning,
 		forceReasoningOff: options.forceReasoningOff,
 		fetch: fetchMock,
@@ -184,6 +189,63 @@ describe("google-gemini-cli effort-tier variant routing", () => {
 					thinkingLevel: "LOW",
 				});
 			}
+		}
+	});
+
+	it("sends each account the request constants its own roster advertised when accounts share a model", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "antigravity-account-profiles-"));
+		const rosters: Record<string, { model: string; maxOutputTokens: number }> = {
+			"Bearer token-a": { model: "MODEL_ACCOUNT_A", maxOutputTokens: 64_000 },
+			"Bearer token-b": { model: "MODEL_ACCOUNT_B", maxOutputTokens: 128_000 },
+		};
+		const fetcher = Object.assign(
+			(input: string | URL | Request, init?: RequestInit) => {
+				if (!String(input).includes(":fetchAvailableModels"))
+					return Promise.resolve(new Response("version: 2.26.0\n"));
+				const roster = rosters[new Headers(init?.headers).get("Authorization") ?? ""];
+				return Promise.resolve(
+					Response.json({
+						models: Object.fromEntries(
+							(["low", "medium", "high"] as const).map((tier, index) => [
+								`claude-sonnet-5-5-${tier}`,
+								{
+									supportsThinking: true,
+									maxTokens: 1_000_000,
+									maxOutputTokens: roster?.maxOutputTokens,
+									model: `${roster?.model}_${tier}`,
+									thinkingLevel: index + 1,
+								},
+							]),
+						),
+					}),
+				);
+			},
+			{ preconnect: fetch.preconnect },
+		);
+		try {
+			const options = googleAntigravityModelManagerOptions({
+				resolveAccounts: async () => [
+					{ accessToken: "token-a", accountKey: "a@example.com" },
+					{ accessToken: "token-b", accountKey: "b@example.com" },
+				],
+				endpoint: "https://cca.test",
+				fetch: fetcher,
+			});
+			const result = await resolveProviderModels({ ...options, cacheDbPath: path.join(dir, "models.db") }, "online");
+			const model = result.models.find(model => model.id === "claude-sonnet-5-5");
+			if (!model) throw new Error("missing claude-sonnet-5-5");
+
+			for (const [email, expected] of [
+				["a@example.com", rosters["Bearer token-a"]],
+				["b@example.com", rosters["Bearer token-b"]],
+			] as const) {
+				const request = await captureRequest(model, Effort.Medium, { email });
+				expect(request.body.model).toBe("claude-sonnet-5-5-medium");
+				expect(request.body.request?.labels?.model_enum).toBe(`${expected?.model}_medium`);
+				expect(request.body.request?.generationConfig?.maxOutputTokens).toBe(expected?.maxOutputTokens);
+			}
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
 

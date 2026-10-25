@@ -1494,6 +1494,13 @@ export interface ModelAccountAccess {
 	 * Absent when the backend reported no program metadata.
 	 */
 	cyberPrograms?: readonly string[];
+	/**
+	 * Antigravity request constants this account's `fetchAvailableModels`
+	 * roster advertised, keyed by upstream SKU id. Takes precedence over
+	 * {@link Model.antigravityWireProfiles}, which keeps only the first
+	 * account's values when multi-account rosters are unioned.
+	 */
+	antigravityWireProfiles?: Readonly<Record<string, AntigravityModelWireProfile>>;
 }
 
 /** One Cursor `RequestedModel.parameters` entry recovered from rich discovery. */
