@@ -720,6 +720,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			db = new Database(resolvedSqlitePath.absolutePath, { create: false, strict: true });
 			db.run("PRAGMA busy_timeout = 3000");
+			db.run("PRAGMA foreign_keys = ON");
 
 			const trimmedContent = content.trim();
 			let resultText: string;
