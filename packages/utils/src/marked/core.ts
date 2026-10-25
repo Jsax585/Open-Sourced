@@ -655,6 +655,9 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 	// The context is shared with the sources nested in this one, which move its end while they are lexed.
 	context.end = closers.end;
 	let rest = lex.rest;
+	// Set when a tokenizer's raw ended right where the scan resumes: the backticks left there are a string of their own
+	// even though the run they belong to started earlier, so a code span may open inside that run.
+	let resumedByExtension = false;
 	while (rest !== "") {
 		let custom: Tokens.Generic | undefined;
 		for (const extension of lexer.extensions.inline) {
@@ -664,8 +667,11 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 		if (custom?.raw) {
 			output.push(custom);
 			rest = rest.slice(custom.raw.length);
+			resumedByExtension = true;
 			continue;
 		}
+		const afterExtension = resumedByExtension;
+		resumedByExtension = false;
 
 		const escaped = /^\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/.exec(rest);
 		if (escaped) {
@@ -680,7 +686,7 @@ function lexToNested(lex: InlineLex): NestedMatch | undefined {
 			continue;
 		}
 		if (rest[0] === "`") {
-			const width = closers.codeOpenerWidth(rest);
+			const width = closers.codeOpenerWidth(rest, afterExtension);
 			const end = closers.closeCode(rest, width);
 			if (end !== -1) {
 				const raw = rest.slice(0, end + width);

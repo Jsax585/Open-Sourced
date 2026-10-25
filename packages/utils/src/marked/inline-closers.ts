@@ -204,10 +204,11 @@ class CodeRuns {
 	}
 
 	/**
-	 * Whether a backtick string starts at `at`, which is where a code span may open. A run starts at its first
-	 * backtick, and at the one after it once a backslash escapes that first backtick: the escape takes the backslash
-	 * and one backtick, so what is left of the run is a string of its own. A retry deeper inside a run is not a string,
-	 * which keeps a run whose opener found no closer from opening a narrower span one backtick later.
+	 * Whether a backtick string starts at `at` for a scan that walked to `at`: a run starts at its first backtick, and
+	 * at the one after it once a backslash escaped that first backtick, since the escape takes the backslash and one
+	 * backtick and leaves the rest of the run a string of its own. A retry deeper inside a run is not a string, which
+	 * keeps a run whose opener found no closer from opening a narrower span one backtick later. Where a tokenizer
+	 * resumed the scan is not a walked position; `InlineClosers.codeOpenerWidth` takes that case on its own.
 	 */
 	startsStringAt(at: number): boolean {
 		const run = lowerBound(this.#starts, at + 1) - 1;
@@ -382,12 +383,13 @@ export class InlineClosers {
 	/**
 	 * How many backticks start `rest`, which starts with one, or 0 where no code span opens because no backtick string
 	 * starts there: the opener is a whole string, so the rest of a run whose opener found no closer is text, while the
-	 * backticks left after a backslash escaped the run's first one do open a span.
+	 * backticks left after a backslash escaped the run's first one do open a span. `resumed` says the scan resumed at
+	 * `rest` after a tokenizer consumed a raw that ended here, where the backticks are a string wherever they sit.
 	 */
-	codeOpenerWidth(rest: string): number {
+	codeOpenerWidth(rest: string, resumed = false): number {
 		const pos = this.end - rest.length;
 		const runs = this.#indexes.codeRuns;
-		if (!runs.startsStringAt(pos)) return 0;
+		if (!resumed && !runs.startsStringAt(pos)) return 0;
 		return Math.min(runs.endOf(pos), this.end) - pos;
 	}
 

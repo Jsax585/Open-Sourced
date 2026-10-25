@@ -592,6 +592,41 @@ describe("marked compatibility", () => {
 		]);
 	});
 
+	// A tokenizer's raw may end inside a backtick run, which is where the scan resumes: the backticks left there are a
+	// string of their own and open a span, while a run whose own opener found no closer stays text.
+	test("opens a code span in the backticks a tokenizer's raw resumed inside", () => {
+		const marked = new Marked().use({
+			extensions: [
+				{
+					name: "eatX",
+					level: "inline",
+					// Consumes "x`" and reports it, so the lexer resumes one backtick into the run.
+					tokenizer: src => (src.startsWith("x`") ? { type: "eatX", raw: "x`" } : undefined),
+				},
+			],
+		});
+		const inlineShape = (source: string) => {
+			const [paragraph] = marked.lexer(source);
+			if (!paragraph || !("tokens" in paragraph) || !paragraph.tokens) {
+				throw new Error(`no inline tokens for ${JSON.stringify(source)}`);
+			}
+			return shape(paragraph.tokens);
+		};
+		expect(inlineShape("x```a``")).toEqual([
+			["eatX", "x`"],
+			["codespan", "``a``"],
+		]);
+		expect(inlineShape("x```a`")).toEqual([
+			["eatX", "x`"],
+			["text", "``a`"],
+		]);
+		expect(inlineShape("x``a`` b `c` d")).toEqual([
+			["eatX", "x`"],
+			["codespan", "`a`` b `"],
+			["text", "c` d"],
+		]);
+	});
+
 	// Backslash escapes do not apply inside a code span, so a backtick a backslash precedes still closes the span. When
 	// the escaped-run rule was applied to the closer search, an opener whose closer a backslash precedes ran on to the
 	// next span's opener, which left the prose between two spans paired as span content one delimiter out of step, and
