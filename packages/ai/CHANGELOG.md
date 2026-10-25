@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed an Anthropic stream that fails with an in-band `error` frame after `message_start` — the shape gateways and proxies send when they cut the upstream stream — being reported as a completed-turn provider failure that ended the turn; it is now the stream-envelope truncation it actually is, and the provider `type`/`code` (e.g. `code=upstream_stream_truncated`) stay in the diagnostic
 - Fixed Xiaomi MiMo API-key login failing with `Unsupported model mimo-v2.5` after the V2.5 retirement ([#16727](https://github.com/can1357/oh-my-pi/pull/16727) by [@LiPu-jpg](https://github.com/LiPu-jpg))
 - Fixed non-streaming requests reporting a missing API key when the credential resolver actually failed, hiding auth broker, OAuth and network outages behind "No API key" ([#16655](https://github.com/can1357/oh-my-pi/pull/16655) by [@adi-IL](https://github.com/adi-IL))
 - Fixed auth-gateway requests failing when a client requests an unsupported thinking effort; the gateway now uses the nearest supported tier ([#16671](https://github.com/can1357/oh-my-pi/pull/16671) by [@codyw912](https://github.com/codyw912))
