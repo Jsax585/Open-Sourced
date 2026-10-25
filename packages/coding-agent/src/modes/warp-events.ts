@@ -169,9 +169,14 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 		let emitter: WarpEventEmitter | undefined;
 		let activePrompt: string | undefined;
 		let getCwd: (() => string) | undefined;
+		// Tool calls whose `permission_request` was emitted. `approval.notify` may change
+		// while a dialog is open, so the reply must pair with the request that actually
+		// went out instead of re-reading the setting.
+		const emittedPermissionRequests = new Set<string>();
 
 		const rebuildEmitter = (_event: unknown, ctx: ExtensionContext): void => {
 			activePrompt = undefined;
+			emittedPermissionRequests.clear();
 			getCwd = () => ctx.sessionManager.getCwd();
 			emitter = createWarpEventEmitter({ sessionId: ctx.sessionManager.getSessionId(), getCwd });
 			emitter?.emit({ event: "session_start" });
@@ -204,6 +209,7 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 			if (cfgApprovalNotify.get(settings) !== "on") {
 				return;
 			}
+			emittedPermissionRequests.add(event.toolCallId);
 			emitter?.emit({
 				event: "permission_request",
 				tool_name: event.toolName,
@@ -211,8 +217,8 @@ export function createWarpEventBridgeExtension(settings: Settings): ExtensionFac
 			});
 		});
 
-		api.on("tool_approval_resolved", () => {
-			if (cfgApprovalNotify.get(settings) !== "on") {
+		api.on("tool_approval_resolved", event => {
+			if (!emittedPermissionRequests.delete(event.toolCallId)) {
 				return;
 			}
 			emitter?.emit({ event: "permission_replied" });
