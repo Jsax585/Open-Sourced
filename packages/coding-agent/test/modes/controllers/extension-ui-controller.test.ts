@@ -700,6 +700,10 @@ describe("ExtensionUiController tool approval", () => {
 	it("rings the approval notification exactly once while presented, and never when approval.notify is off", async () => {
 		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		// A Warp shell running the suite exports the protocol variable: clear it so the
+		// legacy-route cases hold, and restore the caller's value afterwards.
+		const originalWarpProtocol = Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+		delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 		try {
 			const on = makeHarness(Settings.isolated({ "approval.notify": "on" }));
 			const pending = on.controller.showCollabAwareApproval({
@@ -731,7 +735,6 @@ describe("ExtensionUiController tool approval", () => {
 			warp.handleInput("\r");
 			expect(await deniedWarp).toBe("deny");
 			expect(notify).toHaveBeenCalledTimes(1);
-			delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
 			const denied = off.controller.showCollabAwareApproval(prompt);
 			off.editor.onSubmit = text => off.queueSteer(text);
@@ -740,6 +743,8 @@ describe("ExtensionUiController tool approval", () => {
 			expect(await denied).toBe("deny");
 			expect(notify).toHaveBeenCalledTimes(1);
 		} finally {
+			if (originalWarpProtocol === undefined) delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+			else Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = originalWarpProtocol;
 			notify.mockRestore();
 			now.mockRestore();
 		}
