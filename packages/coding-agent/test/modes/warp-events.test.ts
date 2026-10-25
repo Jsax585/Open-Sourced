@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import * as terminalCapabilities from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { Settings } from "../../src/config/settings";
 import type {
 	AgentEndEvent,
 	AgentStartEvent,
@@ -50,14 +51,14 @@ function restoreTmuxEnvironment(): void {
 	else Bun.env.TMUX = originalTmux;
 }
 
-function createHandlers(): Map<string, RegisteredHandler> {
+function createHandlers(settings: Settings = Settings.isolated({})): Map<string, RegisteredHandler> {
 	const handlers = new Map<string, RegisteredHandler>();
 	const api = {
 		on(event: string, handler: RegisteredHandler): void {
 			handlers.set(event, handler);
 		},
 	} as never as ExtensionAPI;
-	createWarpEventBridgeExtension()(api);
+	createWarpEventBridgeExtension(settings)(api);
 	return handlers;
 }
 
@@ -788,6 +789,34 @@ describe("Warp CLI-agent events", () => {
 			project,
 			plugin_version: VERSION,
 		});
+	});
+
+	it("suppresses Warp approval events when approval.notify is off", () => {
+		enableWarpProtocol();
+		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		setTmuxSession(false);
+		const handlers = createHandlers(Settings.isolated({ "approval.notify": "off" }));
+		const sessionStart = handlers.get("session_start") as never as (
+			event: SessionStartEvent,
+			context: ExtensionContext,
+		) => void;
+		sessionStart({ type: "session_start" }, bridgeContext());
+		write.mockClear();
+
+		const approvalRequested = handlers.get("tool_approval_requested") as never as (
+			event: ToolApprovalRequestedEvent,
+		) => void;
+		approvalRequested({
+			type: "tool_approval_requested",
+			sessionId: "session-123",
+			toolCallId: "tool-call-123",
+			toolName: "bash",
+			approvalMode: "always-ask",
+		});
+		const approvalResolved = handlers.get("tool_approval_resolved") as never as () => void;
+		approvalResolved();
+
+		expect(write.mock.calls).toEqual([]);
 	});
 });
 

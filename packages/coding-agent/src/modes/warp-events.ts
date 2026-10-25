@@ -5,6 +5,8 @@ import { hasTerminalMultiplexerSession } from "@oh-my-pi/pi-tui/terminal-multipl
 import { wrapTmuxPassthrough } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions/types";
+import { cfgApprovalNotify } from "./settings";
+import type { Settings } from "../config/settings";
 import { isSilentAbort, isUserInterruptAbort, SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 
 const WARP_CLI_AGENT_PROTOCOL_VERSION = 1;
@@ -162,7 +164,7 @@ function messageText(content: unknown): string {
 }
 
 /** Internal event bridge installed only by the top-level interactive TUI runner. */
-export function createWarpEventBridgeExtension(): ExtensionFactory {
+export function createWarpEventBridgeExtension(settings: Settings): ExtensionFactory {
 	return api => {
 		let emitter: WarpEventEmitter | undefined;
 		let activePrompt: string | undefined;
@@ -197,6 +199,11 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		});
 
 		api.on("tool_approval_requested", event => {
+			// `approval.notify` gates the legacy toast AND this Warp attention event, so the
+			// setting means the same thing on every notification surface.
+			if (cfgApprovalNotify.get(settings) !== "on") {
+				return;
+			}
 			emitter?.emit({
 				event: "permission_request",
 				tool_name: event.toolName,
@@ -205,6 +212,9 @@ export function createWarpEventBridgeExtension(): ExtensionFactory {
 		});
 
 		api.on("tool_approval_resolved", () => {
+			if (cfgApprovalNotify.get(settings) !== "on") {
+				return;
+			}
 			emitter?.emit({ event: "permission_replied" });
 		});
 
