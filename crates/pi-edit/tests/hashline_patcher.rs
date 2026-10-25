@@ -606,3 +606,32 @@ async fn refuses_echo_shapes_that_lost_rows_and_leaves_the_file_unchanged() {
 		assert_eq!(workspace.read(path).as_deref(), Some(text), "{path}");
 	}
 }
+
+/// A repair that keeps a source row outside the restated copy: the copy then
+/// sits inside the rows the patch writes, where a check at their edges does
+/// not see it. This `PUT 2.=4:` restates the `{children}` line just below the
+/// range and is a row short of it. The repair kept the range's `>` row, so
+/// the result wrote `{children}` twice and deleted the `style=` attribute,
+/// and it parsed, so only this check stops it.
+#[tokio::test]
+async fn refuses_a_repair_whose_kept_row_hides_a_restated_copy() {
+	const GRID: &str = "\t\t<div\n\t\t\tclassName=\"stat-grid \
+	                    rise\"\n\t\t\tstyle={min}\n\t\t>\n\t\t\t{children}\n\t\t</div>\n";
+	let workspace = common::Workspace::new(EditMode::Hashline);
+	workspace.write("Stat.tsx", GRID);
+	let tag = workspace.snapshot("Stat.tsx", GRID, None);
+	let error = workspace
+		.apply_json(
+			&json!({
+				"input": format!(
+					"[Stat.tsx#{tag}]\nPUT 2.=4:\n+\t\t\tclassName=\"stat-grid rise\"\n+\t\t\t{{children}}\n"
+				)
+			}),
+			&common::DiskWriter::default(),
+		)
+		.await
+		.expect_err("a repair that keeps a row must not hide the restated copy")
+		.to_string();
+	assert!(error.contains("`PUT 2.=4:` rejected"), "{error}");
+	assert_eq!(workspace.read("Stat.tsx").as_deref(), Some(GRID));
+}

@@ -10,7 +10,7 @@ use regex::Regex;
 use super::{
 	clipboard::resolve_clipboard_edits,
 	messages::{
-		BoundarySide, REPLACEMENT_INDENT_AUTO_SHIFT_WARNING, UNRESOLVED_BLOCK_INTERNAL,
+		BoundarySide, REPLACEMENT_INDENT_AUTO_SHIFT_WARNING, Restated, UNRESOLVED_BLOCK_INTERNAL,
 		UNRESOLVED_CLIPBOARD_INTERNAL, after_insert_landing_shift_warning,
 		after_insert_opener_escape_warning, ambiguous_boundary_echo_message,
 		ambiguous_boundary_placement_message, block_insert_landing_shift_warning,
@@ -1421,8 +1421,34 @@ fn lossy_echo_outcome(
 		if deleted(group.end + 1) {
 			below = 0;
 		}
-		let supplied = rows.len().saturating_sub(above + below);
-		if above == 0 && below == 0 && supplied >= range_len {
+		// A repair can keep a source row outside an echo copy, which hides the
+		// copy from the edge check above: also count the neighbour's copies
+		// anywhere in the written rows, beyond those the range already had.
+		let extra = |line: u32| -> usize {
+			if line == 0 || deleted(line) {
+				return 0;
+			}
+			let Some(text) = lines
+				.get((line - 1) as usize)
+				.filter(|text| has_content(text))
+			else {
+				return 0;
+			};
+			let had = lines[(group.start - 1) as usize..group.end as usize]
+				.iter()
+				.filter(|row| *row == text)
+				.count();
+			rows
+				.iter()
+				.filter(|row| row.as_str() == *text)
+				.count()
+				.saturating_sub(had)
+		};
+		let (extra_above, extra_below) = (extra(group.start - 1), extra(group.end + 1));
+		let supplied = rows
+			.len()
+			.saturating_sub(above.max(extra_above) + below.max(extra_below));
+		if above == 0 && below == 0 && extra_above == 0 && extra_below == 0 && supplied >= range_len {
 			continue;
 		}
 		if let Some(ambiguity) = recorded
@@ -1432,11 +1458,20 @@ fn lossy_echo_outcome(
 			return Some(ambiguity.refusal(false));
 		}
 		let (start, end) = (group.start, group.end);
+		// Word each side from the copy at the edge where there is one, else
+		// from the count of extra copies of the neighbouring line.
+		let side = |edge: usize, span: (u32, u32), line: u32, extra: usize| {
+			if edge > 0 {
+				Some(Restated::Span(span.0, span.1))
+			} else {
+				(extra > 0).then_some(Restated::Copies(line, extra as u32))
+			}
+		};
 		return Some(EditError::apply(boundary_echo_outcome_message(
 			start,
 			end,
-			(above > 0).then(|| (start - above as u32, start - 1)),
-			(below > 0).then(|| (end + 1, end + below as u32)),
+			side(above, (start.saturating_sub(above as u32), start - 1), start - 1, extra_above),
+			side(below, (end + 1, end + below as u32), end + 1, extra_below),
 			(supplied < range_len).then(|| (start + supplied as u32, end)),
 		)));
 	}

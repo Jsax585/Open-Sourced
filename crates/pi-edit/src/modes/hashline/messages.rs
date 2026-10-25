@@ -514,25 +514,47 @@ pub fn two_sided_boundary_echo_message(
 	)
 }
 
+/// How a patch would repeat a neighbouring line.
+///
+/// Either the span of neighbouring lines whose copy sits at the edge of the
+/// written rows, or a count of extra copies of one neighbouring line found
+/// elsewhere in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restated {
+	Span(u32, u32),
+	Copies(u32, u32),
+}
+
 /// What a patch would do to a range whose body restates a neighbouring line,
 /// judged on the rows it would write there.
 ///
-/// `above` / `below` are the spans of neighbouring lines the result would
-/// hold a second copy of; `left_out` is the span of range rows past the rows
-/// the body supplies once those copies are set aside. At least one is set.
+/// `above` / `below` say how the result would repeat the neighbouring lines;
+/// `left_out` is the span of range rows past the rows the body supplies once
+/// those copies are set aside. At least one is set.
 pub fn boundary_echo_outcome_message(
 	start_line: u32,
 	end_line: u32,
-	above: Option<(u32, u32)>,
-	below: Option<(u32, u32)>,
+	above: Option<Restated>,
+	below: Option<Restated>,
 	left_out: Option<(u32, u32)>,
 ) -> String {
+	let restated = |restated: Restated, place: &str| match restated {
+		Restated::Span(first, last) => {
+			format!("write {} ({place} the range) a second time", line_span((first, last)))
+		},
+		Restated::Copies(line, 1) => {
+			format!("write line {line} ({place} the range) a second time")
+		},
+		Restated::Copies(line, extra) => {
+			format!("write line {line} ({place} the range) {extra} more times")
+		},
+	};
 	let mut effects = Vec::new();
-	if let Some(span) = above {
-		effects.push(format!("write {} (just above the range) a second time", line_span(span)));
+	if let Some(above) = above {
+		effects.push(restated(above, "just above"));
 	}
-	if let Some(span) = below {
-		effects.push(format!("write {} (just below the range) a second time", line_span(span)));
+	if let Some(below) = below {
+		effects.push(restated(below, "just below"));
 	}
 	if let Some(span) = left_out {
 		effects.push(format!("leave out {} of the range, deleting it", line_span(span)));
