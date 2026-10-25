@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic refusal fallbacks from Claude Opus 5.5, Opus 5 and Sonnet 5.5 now redeem their fallback credit on the documented target models (Opus 4.8 and Opus 5, Opus 4.8, and Sonnet 5), instead of paying the full cache write on the retry
+
 ## [18.12.2] - 2026-10-18
 
 ### Changed
