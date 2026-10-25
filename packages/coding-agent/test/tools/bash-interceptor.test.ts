@@ -212,23 +212,33 @@ describe("default echo/printf redirect rule", () => {
 			"echo x > /dev/null; ls > listing.txt",
 			"echo x 2>err.log",
 			"echo x 2>>err.log",
+			"echo x 2>&1 && ls > listing.txt",
 		]) {
 			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
 		}
 		expect(checkBashInterception("ls; echo hi > out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		expect(checkBashInterception("echo hi 1> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		expect(checkBashInterception("echo hi &> out.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
-		for (const command of ["echo hi 2>err.txt > out.txt", "echo hi 2>|err.txt > out.txt"]) {
+		for (const command of ["echo hi 2>err.txt > out.txt", "echo hi 2>|err.txt > out.txt", "echo hi 2>&1 > out.txt"]) {
 			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(true);
 		}
 	});
 
 	it("matches commands with many stderr sinks without exponential backtracking", () => {
-		const command = `echo hi${" 2>/dev/null 2>>/dev/null".repeat(20)}`;
 		const start = performance.now();
-		const result = checkBashInterception(command, ["write"], DEFAULT_BASH_INTERCEPTOR_RULES);
+		const echo = checkBashInterception(
+			`echo hi${" 2>/dev/null 2>>/dev/null 2>&1".repeat(20)}`,
+			["write"],
+			DEFAULT_BASH_INTERCEPTOR_RULES,
+		);
+		const cat = checkBashInterception(
+			`cat${" 2>>/dev/null 2>|e.log".repeat(20)} file.txt`,
+			["write", "read"],
+			DEFAULT_BASH_INTERCEPTOR_RULES,
+		);
 		expect(performance.now() - start).toBeLessThan(1000);
-		expect(result.block).toBe(false);
+		expect(echo.block).toBe(false);
+		expect(cat.suggestedTool).toBe("read");
 	});
 
 	it("routes cat heredoc and redirect writes to write, not read", () => {
@@ -240,9 +250,23 @@ describe("default echo/printf redirect rule", () => {
 		expect(checkBashInterception("cat file.txt", tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("read");
 	});
 
-	it("points appends at a tool that keeps the existing file", () => {
-		const result = checkBashInterception("echo line >> log.txt", ["write"], DEFAULT_BASH_INTERCEPTOR_RULES);
-		expect(result.message).toContain("`edit`");
+	it("keeps cat with a leading stderr redirect on read unless stdout is redirected", () => {
+		const tools = ["write", "read"];
+		for (const command of ["cat 2>/dev/null file.txt", "cat 2>err.log file.txt", "cat 2>&1 file.txt"]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("read");
+		}
+		for (const command of [
+			"cat 2>err.log > out.txt",
+			"cat 2> err.log >> out.txt",
+			"cat 2>/dev/null 1>out.txt",
+			"cat &>out.txt",
+			"cat 2>&1 1>out.txt",
+		]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("write");
+		}
+		expect(
+			checkBashInterception("cat 2>/dev/null <<'EOF'\nx\nEOF", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block,
+		).toBe(false);
 	});
 });
 
