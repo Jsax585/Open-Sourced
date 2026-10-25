@@ -14,8 +14,8 @@ use super::{
 		UNRESOLVED_CLIPBOARD_INTERNAL, after_insert_landing_shift_warning,
 		after_insert_opener_escape_warning, ambiguous_boundary_echo_message,
 		ambiguous_boundary_placement_message, block_insert_landing_shift_warning,
-		boundary_variant_repair_warning, edit_broke_parse_warning, textual_boundary_echo_warning,
-		trailing_comma_replacement_message,
+		boundary_variant_repair_warning, edit_broke_parse_warning, repeated_boundary_echo_message,
+		textual_boundary_echo_warning, trailing_comma_replacement_message,
 	},
 	syntax::{enclosing_boundaries, node_chain, parses_cleanly},
 	types::{Anchor, ApplyResult, BlockResolution, Cursor, Edit},
@@ -458,7 +458,9 @@ struct Variant {
 	dropped: usize,
 	/// A drop-only repair of the one-sided too-short shape: it would delete
 	/// range rows the body may never restate, so choosing it refuses the edit.
-	lossy:   bool,
+	/// This describes the refusal for a patch `normalize_echoes` recorded
+	/// none for.
+	lossy:   Option<Ambiguity>,
 }
 
 /// Why a replacement group cannot be applied as written or repaired.
@@ -512,9 +514,21 @@ fn group_variants(
 	let leading_drops: Vec<_> = if drop_j > 0 { vec![0, drop_j] } else { vec![0] };
 	let trailing_drops: Vec<_> = if drop_k > 0 { vec![0, drop_k] } else { vec![0] };
 	// The shape `normalize_echoes` refuses as ambiguous: an echo on one side
-	// only, with a body too short to cover the range once it is dropped.
+	// only, with a body too short to cover the range once it is dropped. An
+	// earlier pass can expose it in a group it recorded nothing for (a body
+	// that restates the same outside line twice keeps one copy after that pass
+	// drops the other), so the shape is described here as well.
 	let one_sided_short = (drop_j == 0) != (drop_k == 0)
 		&& group.payload.len().saturating_sub(drop_j + drop_k) < group.delete_indices.len();
+	let too_short = one_sided_short.then(|| {
+		let kept = (group.payload.len() - (drop_j + drop_k)) as u32;
+		let (side, count, left_out) = if drop_j > 0 {
+			(BoundarySide::Leading, drop_j as u32, (group.start + kept, group.end))
+		} else {
+			(BoundarySide::Trailing, drop_k as u32, (group.start, group.end - kept))
+		};
+		Ambiguity { start: group.start, end: group.end, side, count, left_out }
+	});
 	let mut variants = Vec::new();
 	let mut ambiguous = None;
 	for drop_l in leading_drops {
@@ -609,7 +623,7 @@ fn group_variants(
 				// body may never restate. The variant still competes, so the
 				// search picks what it would pick without this check, but a
 				// pick that uses it is refused instead of applied.
-				let lossy = one_sided_short && kept == 0;
+				let lossy = if kept == 0 { too_short } else { None };
 				let mut kept_inserts = inserts[drop_l..inserts.len() - drop_t].to_vec();
 				if let Some(line) = before {
 					let cursor = if line as usize >= lines.len() {
@@ -683,6 +697,7 @@ fn repair_boundaries(
 	lines: &[&str],
 	path: Option<&str>,
 	baseline: bool,
+	recorded: bool,
 ) -> Result<Option<RepairedEdits>, EditError> {
 	let Some(path) = path else { return Ok(None) };
 	let mut groups = Vec::new();
@@ -772,14 +787,25 @@ fn repair_boundaries(
 		return Ok(None);
 	};
 	// The best repair drops a one-sided echo from a body too short for its
-	// range: fall through to the too-short refusal `normalize_echoes` recorded
-	// for that group, which names the rows the body leaves out.
-	if groups
+	// range. If `normalize_echoes` recorded a too-short refusal for this patch,
+	// returning no repair hands the edit to it. It records nothing for a group
+	// it dropped an echo from first, so with no recorded refusal the edit is
+	// refused here.
+	if let Some(lossy) = groups
 		.iter()
 		.zip(&combo.choices)
-		.any(|((_, variants), choice)| choice.is_some_and(|index| variants[index].lossy))
+		.find_map(|((_, variants), choice)| choice.and_then(|index| variants[index].lossy))
 	{
-		return Ok(None);
+		if recorded {
+			return Ok(None);
+		}
+		return Err(EditError::apply(repeated_boundary_echo_message(
+			lossy.start,
+			lossy.end,
+			lossy.side,
+			lossy.count,
+			lossy.left_out,
+		)));
 	}
 	let warnings = groups
 		.iter()
@@ -1211,7 +1237,7 @@ pub fn apply_edits(
 		return Ok(finish(authored, leading));
 	}
 	if let Some((repaired, warnings)) =
-		repair_boundaries(&normalized, &lines, options.path, baseline)?
+		repair_boundaries(&normalized, &lines, options.path, baseline, !ambiguities.is_empty())?
 	{
 		let result = materialize(&lines, &repaired);
 		if parses_cleanly(options.path, &result.0) {

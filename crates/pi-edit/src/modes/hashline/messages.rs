@@ -453,6 +453,40 @@ pub fn ambiguous_boundary_echo_message(
 	)
 }
 
+/// A body restates the lines next to the range more than once.
+///
+/// One copy is read as the echo of those lines, and the body still opens (or
+/// ends) with them. `left_out` is the inclusive span of range rows the body
+/// leaves out once every row that restates a line outside the range is set
+/// aside; the chosen repair would delete them.
+pub fn repeated_boundary_echo_message(
+	start_line: u32,
+	end_line: u32,
+	side: BoundarySide,
+	count: u32,
+	left_out: (u32, u32),
+) -> String {
+	let where_clause = match side {
+		BoundarySide::Leading => {
+			format!("opens by restating the {count} line(s) just above the range more than once")
+		},
+		BoundarySide::Trailing => {
+			format!("ends by restating the {count} line(s) just below the range more than once")
+		},
+	};
+	let left_out = match left_out {
+		(first, last) if first == last => format!("line {first}"),
+		(first, last) => format!("lines {first}-{last}"),
+	};
+	format!(
+		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body {where_clause}. With the \
+		 rows that restate lines just outside the range read as those lines, the body is too short \
+		 to be the full final content of the selected range: it leaves out {left_out}, which this \
+		 edit would delete. Re-issue with the range covering exactly the lines that change and the \
+		 body as their complete final content."
+	)
+}
+
 /// A syntax-essential selected edge can be retained on either side of the
 /// payload, but indentation does not establish which placement was intended.
 pub fn ambiguous_boundary_placement_message(start_line: u32, end_line: u32) -> String {

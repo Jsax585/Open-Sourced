@@ -306,6 +306,56 @@ fn refuses_a_too_short_echo_whose_keep_row_repair_also_parses() {
 	);
 }
 
+/// A body that restates the line above (or below) its range more than once.
+/// The first pass drops one copy and records no refusal, and what remains is
+/// the one-sided too-short shape. The drop-only repair parses and deletes
+/// `old();`, which the body never restates; skipping that repair applied the
+/// body as written, which does not parse (the first case writes the function
+/// header twice). Each case is refused and names the range row the body
+/// leaves out. The third case reaches that shape after the first pass drops
+/// an echo on each side.
+#[test]
+fn refuses_a_too_short_echo_a_dropped_copy_exposed() {
+	let one = "const z = 0;\nfunction f() {\n\told();\n}\nafter();\n";
+	let two = "const z = 0;\nfunction f() {\n\told();\n\tmore();\n}\nafter();\n";
+	let cases: [(&str, u32, u32, &[&str], &str, &str); 3] = [
+		(
+			one,
+			3,
+			4,
+			&["function f() {", "function f() {", "}"],
+			"opens by restating the 1 line(s) just above the range more than once",
+			"it leaves out line 4,",
+		),
+		(
+			one,
+			2,
+			3,
+			&["function f() {", "}", "}"],
+			"ends by restating the 1 line(s) just below the range more than once",
+			"it leaves out line 2,",
+		),
+		(
+			two,
+			3,
+			4,
+			&["function f() {", "function f() {", "\tfresh();", "}"],
+			"opens by restating the 1 line(s) just above the range more than once",
+			"it leaves out line 4,",
+		),
+	];
+	for (file, start, end, body, restates, left_out) in cases {
+		let error = apply_edits(file, &replacement(start, end, body, 1), ApplyOptions {
+			clipboard:      None,
+			path:           Some("f.ts"),
+			on_empty_paste: EmptyPaste::Throw,
+		})
+		.expect_err("f.ts")
+		.to_string();
+		assert!(error.contains(restates) && error.contains(left_out), "{body:?}: {error}");
+	}
+}
+
 /// A body that echoes both neighbours and is shorter than the range is not the
 /// one-sided shape the too-short refusal covers. Its repair stays what it was
 /// (the trailing echo is dropped), and must not fall through to applying the
