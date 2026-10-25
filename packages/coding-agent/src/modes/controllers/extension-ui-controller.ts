@@ -714,10 +714,13 @@ export class ExtensionUiController {
 				this.#presentDialog(localSignal, settle => {
 					// A pending approval needs the human, like ask and completion:
 					// flag the terminal and the desktop so a backgrounded session
-					// is findable. Only when notifications are enabled and Warp's
-					// structured OSC 777 protocol has not already rung
-					// permission_request — avoid a second legacy toast.
-					if (cfgApprovalNotify.get(this.ctx.settings) === "on" && !isWarpCliAgentProtocolActive()) {
+					// is findable. Warp's structured OSC 777 bridge already rings
+					// permission_request when it is installed, so skip the second
+					// legacy toast only then; a --trusted-extension launch leaves no
+					// bridge, so the legacy toast still rings there.
+					const warpBridged =
+						isWarpCliAgentProtocolActive() && this.ctx.session.hasExtensionHandlers("tool_approval_requested");
+					if (cfgApprovalNotify.get(this.ctx.settings) === "on" && !warpBridged) {
 						const sessionName = this.ctx.sessionManager.getSessionName();
 						TERMINAL.sendNotification({
 							title: sessionName || "omp",

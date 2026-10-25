@@ -30,7 +30,10 @@ beforeAll(async () => {
 	setThemeInstance(dark);
 });
 
-function makeHarness(settings: Settings = Settings.isolated({})) {
+function makeHarness(
+	settings: Settings = Settings.isolated({}),
+	sessionPatch: Partial<InteractiveModeContext["session"]> = {},
+) {
 	const editor = new CustomEditor(getEditorTheme());
 	const editorContainer = new Container();
 	editorContainer.addChild(editor);
@@ -68,11 +71,13 @@ function makeHarness(settings: Settings = Settings.isolated({})) {
 		session: {
 			agent,
 			extensionRunner: undefined,
+			hasExtensionHandlers: () => false,
 			setUsageFallbackConfirmer: vi.fn(),
 			getQueuedMessages: () => ({ steering: steeringChips(), followUp: [], liveSteered: 0 }),
 			subscribe(listener: (event: { type: string; steering?: string[] }) => void) {
 				return agent.onQueueChange(() => listener({ type: "queue_update", steering: steeringChips() }));
 			},
+			...sessionPatch,
 		},
 		setToolUIContext(context: ExtensionUIContext, hasUI: boolean): void {
 			expect(hasUI).toBe(true);
@@ -697,7 +702,7 @@ describe("ExtensionUiController tool approval", () => {
 		expect(body()).toContain("rm-rf~");
 	});
 
-	it("rings the approval notification exactly once while presented, and never when approval.notify is off", async () => {
+	it("rings the approval notification exactly once per presented prompt, honoring approval.notify and the installed Warp bridge", async () => {
 		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
 		// A Warp shell running the suite exports the protocol variable: clear it so the
@@ -726,22 +731,35 @@ describe("ExtensionUiController tool approval", () => {
 			expect(await pending).toBe("session");
 			expect(notify).toHaveBeenCalledTimes(1);
 
-			// Warp's structured protocol already rings permission_request: no legacy toast.
+			// Warp's structured protocol rings permission_request when the internal
+			// bridge is installed: no legacy toast.
 			Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
-			const warp = makeHarness(Settings.isolated({ "approval.notify": "on" }));
+			const warp = makeHarness(Settings.isolated({ "approval.notify": "on" }), {
+				hasExtensionHandlers: () => true,
+			});
 			const deniedWarp = warp.controller.showCollabAwareApproval(prompt);
 			warp.editor.onSubmit = text => warp.queueSteer(text);
 			for (const key of "stop") warp.handleInput(key);
 			warp.handleInput("\r");
 			expect(await deniedWarp).toBe("deny");
 			expect(notify).toHaveBeenCalledTimes(1);
+			// A --trusted-extension launch leaves no bridge: the legacy toast still rings.
+			const trusted = makeHarness(Settings.isolated({ "approval.notify": "on" }), {
+				hasExtensionHandlers: () => false,
+			});
+			const deniedTrusted = trusted.controller.showCollabAwareApproval(prompt);
+			trusted.editor.onSubmit = text => trusted.queueSteer(text);
+			for (const key of "stop") trusted.handleInput(key);
+			trusted.handleInput("\r");
+			expect(await deniedTrusted).toBe("deny");
+			expect(notify).toHaveBeenCalledTimes(2);
 			const off = makeHarness(Settings.isolated({ "approval.notify": "off" }));
 			const denied = off.controller.showCollabAwareApproval(prompt);
 			off.editor.onSubmit = text => off.queueSteer(text);
 			for (const key of "stop") off.handleInput(key);
 			off.handleInput("\r");
 			expect(await denied).toBe("deny");
-			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify).toHaveBeenCalledTimes(2);
 		} finally {
 			if (originalWarpProtocol === undefined) delete Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
 			else Bun.env.WARP_CLI_AGENT_PROTOCOL_VERSION = originalWarpProtocol;
