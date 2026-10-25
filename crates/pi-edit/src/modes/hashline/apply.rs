@@ -456,6 +456,9 @@ struct Variant {
 	edits:   Vec<Edit>,
 	kept:    usize,
 	dropped: usize,
+	/// A drop-only repair of the one-sided too-short shape: it would delete
+	/// range rows the body may never restate, so choosing it refuses the edit.
+	lossy:   bool,
 }
 
 /// Why a replacement group cannot be applied as written or repaired.
@@ -603,12 +606,10 @@ fn group_variants(
 					continue;
 				}
 				// In that shape, dropping the echo alone deletes range rows the
-				// body may never restate, and parsing cannot tell a shifted range
-				// from a too-wide one. Only a variant that also keeps a source row
-				// is a different reading.
-				if one_sided_short && kept == 0 {
-					continue;
-				}
+				// body may never restate. The variant still competes, so the
+				// search picks what it would pick without this check, but a
+				// pick that uses it is refused instead of applied.
+				let lossy = one_sided_short && kept == 0;
 				let mut kept_inserts = inserts[drop_l..inserts.len() - drop_t].to_vec();
 				if let Some(line) = before {
 					let cursor = if line as usize >= lines.len() {
@@ -624,7 +625,7 @@ fn group_variants(
 				}
 				let mut result = kept_inserts;
 				result.extend(deletes.iter().filter(|edit| !matches!(edit, Edit::Delete { anchor, .. } if Some(anchor.line) == before || Some(anchor.line) == after)).cloned());
-				variants.push(Variant { edits: result, kept, dropped });
+				variants.push(Variant { edits: result, kept, dropped, lossy });
 			}
 		}
 	}
@@ -770,6 +771,16 @@ fn repair_boundaries(
 		}
 		return Ok(None);
 	};
+	// The best repair drops a one-sided echo from a body too short for its
+	// range: fall through to the too-short refusal `normalize_echoes` recorded
+	// for that group, which names the rows the body leaves out.
+	if groups
+		.iter()
+		.zip(&combo.choices)
+		.any(|((_, variants), choice)| choice.is_some_and(|index| variants[index].lossy))
+	{
+		return Ok(None);
+	}
 	let warnings = groups
 		.iter()
 		.zip(&combo.choices)

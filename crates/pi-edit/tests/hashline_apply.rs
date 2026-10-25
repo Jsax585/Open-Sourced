@@ -278,6 +278,34 @@ fn refuses_a_too_short_leading_echo_the_same_way_with_or_without_a_parser() {
 	}
 }
 
+/// The same shape where a repair that keeps a source row also parses: the body
+/// repeats line 5 and has one row for the three-row range 6-8. Keeping line 6
+/// beside the body still deleted the conditional and wrote two adjacent
+/// string literals, which Python joins into one, and it reported success. The
+/// edit is refused like the drop-only reading.
+#[test]
+fn refuses_a_too_short_echo_whose_keep_row_repair_also_parses() {
+	let file =
+		"def stop_of(choice):\n    usage = {\n        \"a\": 1,\n    }\n    stop = (\n        \
+		 \"length\"\n        if choice\n        else \"stop\"\n    )\n    return stop\n";
+	let error = apply_edits(
+		file,
+		&replacement(6, 8, &["    stop = (", "        \"max_tokens\""], 1),
+		ApplyOptions {
+			clipboard:      None,
+			path:           Some("stop.py"),
+			on_empty_paste: EmptyPaste::Throw,
+		},
+	)
+	.expect_err("stop.py");
+	let error = error.to_string();
+	assert!(
+		error.contains("body opens by restating the 1 line(s) just above the range")
+			&& error.contains("the body leaves out lines 7-8"),
+		"{error}"
+	);
+}
+
 /// A body that echoes both neighbours and is shorter than the range is not the
 /// one-sided shape the too-short refusal covers. Its repair stays what it was
 /// (the trailing echo is dropped), and must not fall through to applying the
