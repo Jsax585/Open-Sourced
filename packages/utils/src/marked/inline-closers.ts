@@ -170,35 +170,30 @@ class EmphasisDelimiters {
 
 /**
  * The runs of backticks in the root source, for the code span rule. A span opened by `width` backticks closes at the
- * first `width` backticks after its opening run that belong to a later run of at least `width` backticks. Backslash
- * escapes do not apply inside a code span, so a backslash just before a closing backtick is content and still closes
- * the span: an opener run takes the same closer with or without it, and never runs on to the next span's opener.
+ * next run of exactly `width` backticks: a run of any other length is no closer, and the one that closes is the first
+ * run of that width at or after the opener. Backslash escapes do not apply inside a code span, so a backslash just
+ * before that closing backtick is content and still closes the span.
  */
 class CodeRuns {
-	// Per run, in order: where it starts and ends.
+	// Per run, in order: where it starts and ends; the starts are the binary search `endOf` and `startsRunAt` need.
 	readonly #starts: number[] = [];
 	readonly #ends: number[] = [];
-	// A segment tree over the runs of the widest closer each run holds: its length.
-	readonly #widest: Int32Array;
-	readonly #leaves: number;
+	// Run starts by width, each list ascending: a closer must have the opener's exact width, so finding one is a
+	// binary search in the list for that width and no scan of the runs between.
+	readonly #byWidth = new Map<number, number[]>();
 
 	constructor(src: string) {
-		const widths: number[] = [];
 		for (let at = src.indexOf("`"); at !== -1;) {
 			let end = at + 1;
 			while (src.charCodeAt(end) === 0x60 /* ` */) end++;
 			this.#starts.push(at);
 			this.#ends.push(end);
-			widths.push(end - at);
+			const width = end - at;
+			const starts = this.#byWidth.get(width);
+			if (starts === undefined) this.#byWidth.set(width, [at]);
+			else starts.push(at);
 			at = src.indexOf("`", end);
 		}
-		let leaves = 1;
-		while (leaves < widths.length) leaves <<= 1;
-		const widest = new Int32Array(2 * leaves);
-		for (let run = 0; run < widths.length; run++) widest[leaves + run] = widths[run]!;
-		for (let node = leaves - 1; node >= 1; node--) widest[node] = Math.max(widest[2 * node]!, widest[2 * node + 1]!);
-		this.#widest = widest;
-		this.#leaves = leaves;
 	}
 
 	/** Where the run of backticks holding the backtick at `at` ends. */
@@ -206,28 +201,17 @@ class CodeRuns {
 		return this.#ends[lowerBound(this.#starts, at + 1) - 1]!;
 	}
 
-	/** Where the closer of a code span opened by `width` backticks that end at `from` starts, or -1. */
-	closerAfter(from: number, width: number): number {
-		const run = this.#firstHolding(lowerBound(this.#starts, from), width);
-		return run === -1 ? -1 : this.#starts[run]!;
+	/** Whether a run of backticks starts at `at`: a code span opens at a backtick string, never inside one. */
+	startsRunAt(at: number): boolean {
+		return this.#starts[lowerBound(this.#starts, at + 1) - 1] === at;
 	}
 
-	/** The first run at or after `first` that holds a closer of `width` backticks, or -1. */
-	#firstHolding(first: number, width: number): number {
-		if (first >= this.#starts.length) return -1;
-		const widest = this.#widest;
-		const leaves = this.#leaves;
-		let node = leaves + first;
-		if (widest[node]! >= width) return first;
-		// Up to the nearest subtree on the right that holds one, then down to its first run that does.
-		for (;;) {
-			if (node === 1) return -1;
-			if ((node & 1) === 0 && widest[node + 1]! >= width) break;
-			node >>= 1;
-		}
-		node++;
-		while (node < leaves) node = widest[2 * node]! >= width ? 2 * node : 2 * node + 1;
-		return node - leaves;
+	/** Where the closer of a code span opened by `width` backticks that end at `from` starts, or -1. */
+	closerAfter(from: number, width: number): number {
+		const starts = this.#byWidth.get(width);
+		if (starts === undefined) return -1;
+		const run = lowerBound(starts, from);
+		return run < starts.length ? starts[run]! : -1;
 	}
 }
 
@@ -385,10 +369,15 @@ export class InlineClosers {
 		return close === -1 ? -1 : close - pos;
 	}
 
-	/** How many backticks start `rest`, which starts with one. */
+	/**
+	 * How many backticks start `rest`, which starts with one, or 0 where no code span opens because the backtick is
+	 * inside a longer run: the opener is a whole backtick string, so the rest of a run that found no closer is text.
+	 */
 	codeOpenerWidth(rest: string): number {
 		const pos = this.end - rest.length;
-		return Math.min(this.#indexes.codeRuns.endOf(pos), this.end) - pos;
+		const runs = this.#indexes.codeRuns;
+		if (!runs.startsRunAt(pos)) return 0;
+		return Math.min(runs.endOf(pos), this.end) - pos;
 	}
 
 	/** Where the code span opened by the `width` backticks at the start of `rest` closes, or -1. */

@@ -513,22 +513,25 @@ describe("marked compatibility", () => {
 		expect(shape(Lexer.lexInline("*a ***a**"))).toEqual([["em", "*a ***a**", [["text", "a ***a*"]]]]);
 	});
 
-	// A code span closes at the first `width` backticks after its opener that belong to a later run of at least
-	// `width` backticks. Backslash escapes do not apply inside a code span, so a backslash right before a closing
-	// backtick is content: it closes the span there instead of pushing the closer into the run and swallowing the next
-	// opener. A URL autolink ends at the first " " or ">" after its scheme, past any "<". Inside emphasis or a link
-	// label, a closer past its end closes nothing.
-	test("closes code spans at the next run of at least their width, and autolinks past other openers, but not past a nested end", () => {
+	// A code span closes at the next run of exactly as many backticks as its opener: a longer run is no closer, and
+	// backslash escapes do not apply inside a code span, so a backslash right before the closing backtick is content
+	// rather than something that moves the closer along. A URL autolink ends at the first " " or ">" after its scheme,
+	// past any "<". Inside emphasis or a link label, a closer past its end closes nothing.
+	test("closes code spans at the next run of exactly their width, and autolinks past other openers, but not past a nested end", () => {
 		expect(shape(Lexer.lexInline("``a\\```b`` c\\````d``"))).toEqual([
-			["codespan", "``a\\``"],
-			["codespan", "`b`"],
-			["codespan", "` c\\`"],
-			["text", "`"],
-			["codespan", "``d``"],
+			["codespan", "``a\\```b``"],
+			["text", " c"],
+			["escape", "\\`"],
+			["text", "```d``"],
 		]);
 		expect(shape(Lexer.lexInline("`a\\``b` c"))).toEqual([
-			["codespan", "`a\\`"],
-			["codespan", "`b`"],
+			["codespan", "`a\\``b`"],
+			["text", " c"],
+		]);
+		// The width rule on its own: the width-2 run after `a` is no closer for the single backtick opener, so the
+		// span ends at the width-1 run past it.
+		expect(shape(Lexer.lexInline("`a``b` c"))).toEqual([
+			["codespan", "`a``b`"],
 			["text", " c"],
 		]);
 		expect(shape(Lexer.lexInline("*a `b* c`"))).toEqual([
