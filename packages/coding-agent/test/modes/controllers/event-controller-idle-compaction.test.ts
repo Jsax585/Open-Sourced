@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
@@ -431,6 +434,136 @@ describe("EventController idle compaction teardown", () => {
 			expect(recapRecords(manager)).toEqual([]);
 		} finally {
 			controller.dispose();
+		}
+	});
+
+	it("drops a recap after a newer user message follows a turn that ended without a reply", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: { "compaction.idleEnabled": false, "completion.notify": "off" },
+		});
+		const manager = SessionManager.inMemory();
+		manager.appendMessage({ role: "user", content: "First request", timestamp: Date.now() });
+		const { promise, resolve } = Promise.withResolvers<{ replyText: string; assistantMessage: AssistantMessage }>();
+		const present = vi.fn(recordPresented);
+		const recordRecap = vi.spyOn(manager, "recordRecap");
+		const controller = new EventController(
+			createContext({ sessionManager: manager, present, runEphemeralTurn: () => promise }),
+		);
+		try {
+			await controller.handleEvent({ type: "agent_end", messages: [] });
+			vi.advanceTimersByTime(240_000);
+			await flushMicrotasks();
+			manager.appendMessage({ role: "user", content: "Second request", timestamp: Date.now() });
+			resolve({ replyText: "The first request is finished.", assistantMessage: createAssistantMessage() });
+			await flushMicrotasks();
+			expect(present.mock.calls.some(([content]) => content instanceof RecapNotice)).toBe(false);
+			expect(recordRecap).not.toHaveBeenCalled();
+			expect(recapRecords(manager)).toEqual([]);
+		} finally {
+			controller.dispose();
+		}
+	});
+
+	it("clears a session's recap when it starts work while another session is viewed", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: { "compaction.idleEnabled": false, "completion.notify": "off" },
+		});
+		const main = SessionManager.inMemory();
+		const turnId = main.appendMessage(createAssistantMessage());
+		const context = createContext({
+			sessionManager: main,
+			runEphemeralTurn: async () => ({ replyText: "Main is done.", assistantMessage: createAssistantMessage() }),
+		});
+		let mainListener: ((event: { type: string }) => void) | undefined;
+		Object.assign(context.session, {
+			subscribe: (listener: (event: { type: string }) => void) => {
+				mainListener = listener;
+				return () => {
+					mainListener = undefined;
+				};
+			},
+		});
+		const controller = new EventController(context);
+		try {
+			await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+			vi.advanceTimersByTime(240_000);
+			await flushMicrotasks();
+			expect(recapRecords(main).at(-1)).toMatchObject({ turnId, state: "available" });
+
+			// Focus a worker: from here the controller only sees the worker's events.
+			const workerManager = SessionManager.inMemory();
+			workerManager.appendMessage(createAssistantMessage());
+			const worker = { ...context.session, sessionManager: workerManager };
+			Object.defineProperty(context, "viewSession", { get: () => worker });
+			mainListener?.({ type: "agent_start" });
+
+			expect(recapRecords(main).at(-1)).toEqual({
+				version: 1,
+				sessionId: main.getSessionId(),
+				turnId,
+				state: "cleared",
+			});
+			expect(recapRecords(workerManager)).toEqual([]);
+			expect(mainListener).toBeUndefined();
+		} finally {
+			controller.dispose();
+		}
+	});
+
+	it("keeps published and cleared recaps in the session file without changing model context", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: { "compaction.idleEnabled": false, "completion.notify": "off" },
+		});
+		// Real file I/O runs on real timers; only the recap delay uses the fake clock.
+		vi.useRealTimers();
+		const dir = await mkdtemp(join(tmpdir(), "omp-recap-"));
+		const manager = SessionManager.create(dir, dir);
+		const turnId = manager.appendMessage(createAssistantMessage());
+		const before = manager.buildSessionContext().messages;
+		const controller = new EventController(
+			createContext({
+				sessionManager: manager,
+				runEphemeralTurn: async () => ({
+					replyText: "Fixed the parser; the next step is review.",
+					assistantMessage: createAssistantMessage(),
+				}),
+			}),
+		);
+		let reopened: SessionManager | undefined;
+		try {
+			await manager.flush();
+			vi.useFakeTimers();
+			await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+			vi.advanceTimersByTime(240_000);
+			await flushMicrotasks();
+			vi.useRealTimers();
+			await controller.handleEvent({ type: "agent_start" });
+			await manager.flush();
+
+			reopened = await SessionManager.open(manager.getSessionFile()!, dir);
+			expect(recapRecords(reopened)).toEqual([
+				{
+					version: 1,
+					sessionId: manager.getSessionId(),
+					turnId,
+					state: "available",
+					text: "Fixed the parser; the next step is review.",
+				},
+				{ version: 1, sessionId: manager.getSessionId(), turnId, state: "cleared" },
+			]);
+			expect(reopened.buildSessionContext().messages).toEqual(before);
+		} finally {
+			controller.dispose();
+			vi.useRealTimers();
+			await reopened?.close();
+			await manager.close();
+			await rm(dir, { recursive: true, force: true });
 		}
 	});
 

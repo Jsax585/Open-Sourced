@@ -278,6 +278,8 @@ export class EventController {
 	// In-flight ephemeral recap turn; aborted by #cancelIdleRecap when any
 	// activity (new turn, compaction, editor draft) supersedes the idle recap.
 	#idleRecapAbort?: AbortController;
+	// Sessions with a published `completion-recap`, each watched until its next run clears it.
+	#recapRunWatches = new Map<AgentSession, () => void>();
 	/** Next-message prediction offered as composer ghost text after a completed turn. */
 	readonly composerPrediction: ComposerPredictionController;
 	#ircExpiryTimers = new Map<string, NodeJS.Timeout>();
@@ -478,6 +480,8 @@ export class EventController {
 		this.#toolArgsReveal.stop();
 		this.#cancelIdleCompaction();
 		this.#cancelIdleRecap();
+		for (const unsubscribe of this.#recapRunWatches.values()) unsubscribe();
+		this.#recapRunWatches.clear();
 		this.composerPrediction.cancel();
 		this.#setTerminalProgress(false);
 		for (const timer of this.#ircExpiryTimers.values()) {
@@ -2788,21 +2792,23 @@ export class EventController {
 		}
 	}
 
-	/** Newest message of `manager` as a recap anchor; undefined unless that message is an assistant reply. */
-	#recapAnchor(manager: SessionManager): { sessionId: string; turnId: string } | undefined {
+	/**
+	 * Newest message entry of `manager`. Its id detects work that lands while a recap
+	 * generates; a `completion-recap` entry is written only when it is an assistant reply.
+	 */
+	#recapAnchor(manager: SessionManager): { sessionId: string; turnId: string; assistant: boolean } | undefined {
 		const turn = manager.getBranchView().findLast(entry => entry.type === "message");
-		return turn?.type === "message" && turn.message.role === "assistant"
-			? { sessionId: manager.getSessionId(), turnId: turn.id }
+		return turn?.type === "message"
+			? { sessionId: manager.getSessionId(), turnId: turn.id, assistant: turn.message.role === "assistant" }
 			: undefined;
 	}
 
 	/**
-	 * Mark the viewed session's (main or focused) published recap as cleared.
+	 * Mark `manager`'s published recap as cleared; defaults to the viewed session (main or focused).
 	 * A collab guest's replica mirrors the host's entries, so it never writes its own.
 	 */
-	#clearPublishedRecap(): void {
+	#clearPublishedRecap(manager: SessionManager = this.ctx.viewSession.sessionManager): void {
 		if (this.ctx.collabGuest) return;
-		const manager = this.ctx.viewSession.sessionManager;
 		const entry = manager
 			.getBranchView()
 			.findLast(entry => entry.type === "custom" && entry.customType === "completion-recap");
@@ -2816,6 +2822,22 @@ export class EventController {
 			turnId: data.turnId,
 			state: "cleared",
 		});
+	}
+
+	/**
+	 * Clear `session`'s published recap when that session next starts work. Focus only
+	 * forwards the viewed session's events here, so a session that runs while another one
+	 * is focused would otherwise keep a stale `available` recap.
+	 */
+	#clearRecapOnNextRun(session: AgentSession): void {
+		if (this.#recapRunWatches.has(session)) return;
+		const unsubscribe = session.subscribe(event => {
+			if (event.type !== "agent_start" && event.type !== "auto_compaction_start") return;
+			this.#recapRunWatches.get(session)?.();
+			this.#recapRunWatches.delete(session);
+			this.#clearPublishedRecap(session.sessionManager);
+		});
+		this.#recapRunWatches.set(session, unsubscribe);
 	}
 
 	#scheduleIdleCompaction(): void {
@@ -2936,13 +2958,15 @@ export class EventController {
 			const recap = previewLine(replyText, TRUNCATE_LENGTHS.RECAP);
 			if (!recap) return;
 			manager.recordRecap(replyText);
-			if (anchor && !this.ctx.collabGuest) {
+			if (anchor?.assistant && !this.ctx.collabGuest) {
 				manager.appendCustomEntry("completion-recap", {
 					version: 1,
-					...anchor,
+					sessionId: anchor.sessionId,
+					turnId: anchor.turnId,
 					state: "available",
 					text: recap,
 				});
+				this.#clearRecapOnNextRun(session);
 			}
 			this.ctx.present(new RecapNotice(recap));
 		} catch (error) {
