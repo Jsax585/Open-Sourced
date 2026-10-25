@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -848,6 +848,75 @@ describe("device-only write transport for explicit lists omitting write", () => 
 			).rejects.toThrow("return the content in `yield` instead");
 		} finally {
 			await removeWithRetries(tempDir);
+		}
+	});
+
+	// With both a local:// root and `yield`, the refusal used to name two
+	// competing deliverables ("give that path" immediately followed by "return
+	// the content in `yield` instead"), which reads as "do not hand over the
+	// path". The path and `yield` must be one route.
+	it("offers the local:// path through yield rather than against it", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-yield-local-"));
+		try {
+			const activeNames = new Set(["read", "grep"]);
+			const getSessionId = () => "device-only-yield-local";
+			const session = xdevSession(tempDir, {
+				requireYieldTool: true,
+				getSessionId,
+				getArtifactsDir: () => path.join(tempDir, "artifacts"),
+				isToolActive: name => activeNames.has(name),
+				setActiveToolNames: names => {
+					for (const name of names) activeNames.add(name);
+				},
+			});
+			const tools = await createTools(session, ["read", "grep"]);
+			const write = tools.find(entry => entry.name === "write");
+			expect(write).toBeDefined();
+			expect(session.isToolActive?.("yield")).toBe(true);
+
+			const err = await write!
+				.execute("write-device-only-yield-local", { path: path.join(tempDir, "findings.md"), content: "x" })
+				.then(
+					() => null,
+					(caught: unknown) => caught,
+				);
+			const message = err instanceof Error ? err.message : String(err);
+			expect(message).toContain(path.join(tempDir, "artifacts", "local", "<name>"));
+			expect(message).toContain("return that path, or the content itself, in `yield`");
+			expect(message).not.toContain("instead");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
+	// The refusal reaches transcripts and exports, so the hint carries the
+	// home-relative form, not the user's home directory.
+	it("names the local:// root home-relative when it sits under the home directory", async () => {
+		const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-home-"));
+		const homedirSpy = spyOn(os, "homedir").mockReturnValue(homeDir);
+		const tempDir = path.join(homeDir, "work");
+		try {
+			await fs.mkdir(tempDir, { recursive: true });
+			const session = xdevSession(tempDir, {
+				getSessionId: () => "device-only-home",
+				getArtifactsDir: () => path.join(homeDir, ".omp", "artifacts"),
+			});
+			const tools = await createTools(session, ["read"]);
+			const write = tools.find(entry => entry.name === "write");
+			expect(write).toBeDefined();
+
+			const err = await write!
+				.execute("write-device-only-home", { path: path.join(tempDir, "nope.txt"), content: "x" })
+				.then(
+					() => null,
+					(caught: unknown) => caught,
+				);
+			const message = err instanceof Error ? err.message : String(err);
+			expect(message).toContain(`~/${path.join(".omp", "artifacts", "local", "<name>")}`);
+			expect(message).not.toContain(homeDir);
+		} finally {
+			homedirSpy.mockRestore();
+			await removeWithRetries(homeDir);
 		}
 	});
 
