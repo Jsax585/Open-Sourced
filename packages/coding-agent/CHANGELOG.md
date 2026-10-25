@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recovered spilled tool output in sessions without an artifacts directory: the `artifact://` link the truncation footer advertises now reads the in-memory copy instead of failing with "No session - artifacts unavailable". ([#17009](https://github.com/can1357/oh-my-pi/pull/17009) by [@adi-IL](https://github.com/adi-IL))
+
 ### Added
 
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
