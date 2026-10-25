@@ -26,8 +26,8 @@ import { normalizeToLF } from "../edit/normalize";
 import {
 	extractUriScheme,
 	InternalUrlRouter,
+	LocalProtocolHandler,
 	resolveLocalRoot,
-	sessionLocalProtocolOptions,
 	sessionResolveContext,
 	sessionWriteContext,
 } from "../internal-urls";
@@ -416,9 +416,14 @@ function isArchivePathNotFound(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOTDIR";
 }
 
-/** On-disk form of `local://<name>` for this session, for messages that point a caller at the file. */
-function localFileDiskPathHint(session: ToolSession): string {
-	return path.join(resolveLocalRoot(sessionLocalProtocolOptions(session)), "<name>");
+/**
+ * On-disk form of `local://<name>`, resolved the way the write itself resolves
+ * it (session context, then process override, then main session); undefined
+ * when `local://` has no root for this session.
+ */
+function localFileDiskPathHint(session: ToolSession): string | undefined {
+	const options = LocalProtocolHandler.resolveOptions(sessionResolveContext(session));
+	return options ? path.join(resolveLocalRoot(options), "<name>") : undefined;
 }
 
 function normalizeArchiveWriteSubPath(rawPath: string): string {
@@ -848,10 +853,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				this.session.isToolActive?.("yield") === true
 					? " To deliver results to the caller, return the content in `yield` instead."
 					: "";
+			const diskPath = localFileDiskPathHint(this.session);
 			throw new ToolError(
-				"This `write` tool is limited to the xd:// device transport and local:// session scratch: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices), or write a `local://<name>` file. Other filesystem paths are refused, but a `local://<name>` file is a real file on disk at " +
-					localFileDiskPathHint(this.session) +
-					", so give that path to whoever needs to read or copy it." +
+				"This `write` tool is limited to the xd:// device transport and local:// session scratch: call it with path `xd://<tool>` and the device's JSON arguments in `content` (`read xd://` lists mounted devices), or write a `local://<name>` file. Other filesystem paths are refused" +
+					(diskPath
+						? ", but a `local://<name>` file is a real file on disk at " +
+							diskPath +
+							", so give that path to whoever needs to read or copy it."
+						: ".") +
 					yieldFallback,
 			);
 		}

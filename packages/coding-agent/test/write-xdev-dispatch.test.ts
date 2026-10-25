@@ -7,6 +7,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
+import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { requiresApproval, resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -911,13 +912,15 @@ describe("device-only write transport for explicit lists omitting write", () => 
 	it("allows the local sandbox outside plan mode while other targets stay rejected", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-local-sandbox-"));
 		try {
-			const getArtifactsDir = () => path.join(tempDir, "artifacts");
+			// A subagent pins its parent's local:// root, which differs from its own
+			// artifacts dir; files land under the pinned root.
+			const getArtifactsDir = () => path.join(tempDir, "own-artifacts");
 			const getSessionId = () => "device-only-local";
 			const session = xdevSession(tempDir, {
 				enableLsp: false,
 				getArtifactsDir,
 				getSessionId,
-				localProtocolOptions: { getArtifactsDir, getSessionId },
+				localProtocolOptions: { getArtifactsDir: () => path.join(tempDir, "parent-artifacts"), getSessionId },
 			});
 			const tools = await createTools(session, ["read"]);
 			const read = tools.find(entry => entry.name === "read");
@@ -937,7 +940,7 @@ describe("device-only write transport for explicit lists omitting write", () => 
 
 			// The refusal names the on-disk location of local:// files, so the
 			// agent can hand its caller a real path; the file written above is there.
-			const localRoot = path.join(tempDir, "artifacts", "local");
+			const localRoot = path.join(tempDir, "parent-artifacts", "local");
 			const refusal = write!.execute("write-device-only-fs", { path: path.join(tempDir, "nope.txt"), content: "x" });
 			await expect(refusal).rejects.toThrow("Other filesystem paths are refused");
 			await expect(refusal).rejects.toThrow(path.join(localRoot, "<name>"));
@@ -952,6 +955,35 @@ describe("device-only write transport for explicit lists omitting write", () => 
 				}),
 			).rejects.toThrow("Other filesystem paths are refused");
 		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
+	it("names the override root when the session itself has no local:// mapping", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-local-override-"));
+		LocalProtocolHandler.setOverride({
+			getArtifactsDir: () => path.join(tempDir, "override-artifacts"),
+			getSessionId: () => "override-session",
+		});
+		try {
+			const session = xdevSession(tempDir, { enableLsp: false, getSessionId: () => "own-session" });
+			const tools = await createTools(session, ["read"]);
+			const write = tools.find(entry => entry.name === "write");
+			expect(write).toBeDefined();
+
+			const reportWrite = await write!.execute("write-override-local", {
+				path: "local://report.md",
+				content: "report draft\n",
+			});
+			expect(reportWrite.isError).toBeUndefined();
+
+			const localRoot = path.join(tempDir, "override-artifacts", "local");
+			await expect(
+				write!.execute("write-override-fs", { path: path.join(tempDir, "nope.txt"), content: "x" }),
+			).rejects.toThrow(path.join(localRoot, "<name>"));
+			expect(await Bun.file(path.join(localRoot, "report.md")).text()).toBe("report draft\n");
+		} finally {
+			LocalProtocolHandler.resetOverrideForTests();
 			await removeWithRetries(tempDir);
 		}
 	});
