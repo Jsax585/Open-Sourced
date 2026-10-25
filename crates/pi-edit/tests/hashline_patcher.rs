@@ -520,3 +520,50 @@ async fn head_insert_still_applies_across_a_stale_tag() {
 	assert_eq!(workspace.read("b.txt").as_deref(), Some("head\ncurrent\n"));
 	assert!(outcome.text.contains("despite a stale snapshot tag"), "{}", outcome.text);
 }
+
+/// A body that restates both neighbouring lines and is too short for its
+/// range: `PUT 3.=5:` restates `alive = true;` above and the `isAlive()`
+/// header below, with one blank row between them for three range rows. Its
+/// repair used to drop only the trailing echo, writing `alive = true;` twice
+/// and deleting `constructor() {}` while reporting success. It is refused,
+/// the file is left as it was, and the resend the refusal asks for applies.
+#[tokio::test]
+async fn refuses_a_short_body_that_restates_both_neighbours_and_applies_the_resend() {
+	const PROBE: &str = "class Probe {\n\talive = true;\n\n\tconstructor() {}\n\n\tisAlive(): \
+	                     boolean {\n\t\treturn this.alive;\n\t}\n}\n";
+	let workspace = common::Workspace::new(EditMode::Hashline);
+	workspace.write("probe.ts", PROBE);
+	let tag = workspace.snapshot("probe.ts", PROBE, None);
+	let error = workspace
+		.apply_json(
+			&json!({
+				"input": format!(
+					"[probe.ts#{tag}]\nPUT 3.=5:\n+\talive = true;\n+\n+\tisAlive(): boolean {{\n"
+				)
+			}),
+			&common::DiskWriter::default(),
+		)
+		.await
+		.expect_err("a body too short between two echoes must not apply")
+		.to_string();
+	assert!(
+		error.contains("`PUT 3.=5:` rejected: the body restates both")
+			&& error.contains("they leave out lines 4-5"),
+		"{error}"
+	);
+	assert_eq!(workspace.read("probe.ts").as_deref(), Some(PROBE));
+	workspace
+		.apply_json(
+			&json!({ "input": format!("[probe.ts#{tag}]\nPUT 3.=5:\n+\n") }),
+			&common::DiskWriter::default(),
+		)
+		.await
+		.expect("the resend covers exactly the changed lines");
+	assert_eq!(
+		workspace.read("probe.ts").as_deref(),
+		Some(
+			"class Probe {\n\talive = true;\n\n\tisAlive(): boolean {\n\t\treturn \
+			 this.alive;\n\t}\n}\n"
+		)
+	);
+}

@@ -16,6 +16,7 @@ use super::{
 		ambiguous_boundary_placement_message, block_insert_landing_shift_warning,
 		boundary_variant_repair_warning, edit_broke_parse_warning, repeated_boundary_echo_message,
 		textual_boundary_echo_warning, trailing_comma_replacement_message,
+		two_sided_boundary_echo_message,
 	},
 	syntax::{enclosing_boundaries, node_chain, parses_cleanly},
 	types::{Anchor, ApplyResult, BlockResolution, Cursor, Edit},
@@ -299,14 +300,49 @@ fn annotation_echo(lines: &[&str], path: Option<&str>, first: u32, last: u32) ->
 	})
 }
 
+/// The neighbouring lines a too-short body restates, with their counts.
+#[derive(Clone, Copy)]
+enum Echoed {
+	Leading(u32),
+	Trailing(u32),
+	/// The lines just above and just below the range.
+	Both(u32, u32),
+}
+
 #[derive(Clone, Copy)]
 struct Ambiguity {
 	start:    u32,
 	end:      u32,
-	side:     BoundarySide,
-	count:    u32,
-	/// Range rows the body leaves out if the echo means the range is shifted.
+	echoed:   Echoed,
+	/// Range rows the body leaves out: for a one-sided echo, if it means the
+	/// range is shifted; for a two-sided one, past the rows between the echoes.
 	left_out: (u32, u32),
+}
+
+impl Ambiguity {
+	/// The too-short refusal for this group. `repeated`: the body restates the
+	/// line(s) more than once, so an earlier pass dropped one copy and recorded
+	/// nothing for it.
+	fn refusal(&self, repeated: bool) -> EditError {
+		let (start, end, left_out) = (self.start, self.end, self.left_out);
+		EditError::apply(match self.echoed {
+			Echoed::Both(above, below) => {
+				two_sided_boundary_echo_message(start, end, above, below, left_out)
+			},
+			Echoed::Leading(count) if repeated => {
+				repeated_boundary_echo_message(start, end, BoundarySide::Leading, count, left_out)
+			},
+			Echoed::Trailing(count) if repeated => {
+				repeated_boundary_echo_message(start, end, BoundarySide::Trailing, count, left_out)
+			},
+			Echoed::Leading(count) => {
+				ambiguous_boundary_echo_message(start, end, BoundarySide::Leading, count, left_out)
+			},
+			Echoed::Trailing(count) => {
+				ambiguous_boundary_echo_message(start, end, BoundarySide::Trailing, count, left_out)
+			},
+		})
+	}
 }
 
 fn normalize_echoes(
@@ -329,9 +365,22 @@ fn normalize_echoes(
 		let range_len = group.delete_indices.len();
 		let (mut drop_l, mut drop_t) = (0, 0);
 		if leading > 0 && trailing > 0 {
-			if group.payload.len().saturating_sub(leading + trailing) == range_len {
+			let between = group.payload.len().checked_sub(leading + trailing);
+			if between == Some(range_len) {
 				drop_l = leading;
 				drop_t = trailing;
+			} else if let Some(kept) = between.filter(|&kept| kept < range_len && range_len > 1) {
+				// With both neighbours restated the range cannot be shifted, and
+				// the rows between the echoes are too few for it: no reading
+				// keeps the range rows they leave out. A one-row range is left
+				// alone, as it is for a one-sided echo: there the body rows are
+				// content, not an echo.
+				ambiguities.push(Ambiguity {
+					start:    group.start,
+					end:      group.end,
+					echoed:   Echoed::Both(leading as u32, trailing as u32),
+					left_out: (group.start + kept as u32, group.end),
+				});
 			}
 		} else if leading > 0
 			&& (range_len > 1
@@ -344,8 +393,7 @@ fn normalize_echoes(
 				ambiguities.push(Ambiguity {
 					start:    group.start,
 					end:      group.end,
-					side:     BoundarySide::Leading,
-					count:    leading as u32,
+					echoed:   Echoed::Leading(leading as u32),
 					left_out: (group.start + kept, group.end),
 				});
 			}
@@ -360,8 +408,7 @@ fn normalize_echoes(
 				ambiguities.push(Ambiguity {
 					start:    group.start,
 					end:      group.end,
-					side:     BoundarySide::Trailing,
-					count:    trailing as u32,
+					echoed:   Echoed::Trailing(trailing as u32),
 					left_out: (group.start, group.end - kept),
 				});
 			}
@@ -456,10 +503,10 @@ struct Variant {
 	edits:   Vec<Edit>,
 	kept:    usize,
 	dropped: usize,
-	/// A drop-only repair of the one-sided too-short shape: it would delete
-	/// range rows the body may never restate, so choosing it refuses the edit.
-	/// This describes the refusal for a patch `normalize_echoes` recorded
-	/// none for.
+	/// A repair of a too-short echo shape that deletes range rows the body may
+	/// never restate: a drop-only repair of the one-sided shape, or any repair
+	/// of the two-sided one. Choosing it refuses the edit; this describes the
+	/// refusal for a patch `normalize_echoes` recorded none for.
 	lossy:   Option<Ambiguity>,
 }
 
@@ -513,21 +560,28 @@ fn group_variants(
 	let drop_k = duplicate_trailing(group, lines);
 	let leading_drops: Vec<_> = if drop_j > 0 { vec![0, drop_j] } else { vec![0] };
 	let trailing_drops: Vec<_> = if drop_k > 0 { vec![0, drop_k] } else { vec![0] };
-	// The shape `normalize_echoes` refuses as ambiguous: an echo on one side
-	// only, with a body too short to cover the range once it is dropped. An
-	// earlier pass can expose it in a group it recorded nothing for (a body
-	// that restates the same outside line twice keeps one copy after that pass
-	// drops the other), so the shape is described here as well.
-	let one_sided_short = (drop_j == 0) != (drop_k == 0)
-		&& group.payload.len().saturating_sub(drop_j + drop_k) < group.delete_indices.len();
-	let too_short = one_sided_short.then(|| {
-		let kept = (group.payload.len() - (drop_j + drop_k)) as u32;
-		let (side, count, left_out) = if drop_j > 0 {
-			(BoundarySide::Leading, drop_j as u32, (group.start + kept, group.end))
+	// The shapes `normalize_echoes` refuses as ambiguous: an echo on one side
+	// only, or on both sides, with a body too short to cover the range once
+	// the echoes are dropped. An earlier pass can expose one in a group it
+	// recorded nothing for (a body that restates the same outside line twice
+	// keeps one copy after that pass drops the other), so the shape is
+	// described here as well.
+	let range_len = group.delete_indices.len();
+	let between = group.payload.len().checked_sub(drop_j + drop_k);
+	let one_sided_short =
+		(drop_j == 0) != (drop_k == 0) && between.is_none_or(|kept| kept < range_len);
+	let two_sided_short =
+		drop_j > 0 && drop_k > 0 && range_len > 1 && between.is_some_and(|kept| kept < range_len);
+	let too_short = (one_sided_short || two_sided_short).then(|| {
+		let kept = between.unwrap_or(0) as u32;
+		let (echoed, left_out) = if two_sided_short {
+			(Echoed::Both(drop_j as u32, drop_k as u32), (group.start + kept, group.end))
+		} else if drop_j > 0 {
+			(Echoed::Leading(drop_j as u32), (group.start + kept, group.end))
 		} else {
-			(BoundarySide::Trailing, drop_k as u32, (group.start, group.end - kept))
+			(Echoed::Trailing(drop_k as u32), (group.start, group.end - kept))
 		};
-		Ambiguity { start: group.start, end: group.end, side, count, left_out }
+		Ambiguity { start: group.start, end: group.end, echoed, left_out }
 	});
 	let mut variants = Vec::new();
 	let mut ambiguous = None;
@@ -619,11 +673,16 @@ fn group_variants(
 				{
 					continue;
 				}
-				// In that shape, dropping the echo alone deletes range rows the
-				// body may never restate. The variant still competes, so the
-				// search picks what it would pick without this check, but a
-				// pick that uses it is refused instead of applied.
-				let lossy = if kept == 0 { too_short } else { None };
+				// In those shapes, dropping the echo alone deletes range rows the
+				// body may never restate, and with both neighbours restated no
+				// repair keeps them. The variant still competes, so the search
+				// picks what it would pick without this check, but a pick that
+				// uses it is refused instead of applied.
+				let lossy = if kept == 0 || two_sided_short {
+					too_short
+				} else {
+					None
+				};
 				let mut kept_inserts = inserts[drop_l..inserts.len() - drop_t].to_vec();
 				if let Some(line) = before {
 					let cursor = if line as usize >= lines.len() {
@@ -786,11 +845,10 @@ fn repair_boundaries(
 		}
 		return Ok(None);
 	};
-	// The best repair drops a one-sided echo from a body too short for its
-	// range. If `normalize_echoes` recorded a too-short refusal for this patch,
-	// returning no repair hands the edit to it. It records nothing for a group
-	// it dropped an echo from first, so with no recorded refusal the edit is
-	// refused here.
+	// The best repair drops an echo from a body too short for its range. If
+	// `normalize_echoes` recorded a too-short refusal for this patch, returning
+	// no repair hands the edit to it. It records nothing for a group it dropped
+	// an echo from first, so with no recorded refusal the edit is refused here.
 	if let Some(lossy) = groups
 		.iter()
 		.zip(&combo.choices)
@@ -799,13 +857,7 @@ fn repair_boundaries(
 		if recorded {
 			return Ok(None);
 		}
-		return Err(EditError::apply(repeated_boundary_echo_message(
-			lossy.start,
-			lossy.end,
-			lossy.side,
-			lossy.count,
-			lossy.left_out,
-		)));
+		return Err(lossy.refusal(true));
 	}
 	let warnings = groups
 		.iter()
@@ -1224,15 +1276,16 @@ pub fn apply_edits(
 			block_resolutions: Vec::<BlockResolution>::new(),
 		}
 	};
-	if authored_parses {
+	// A body that restates both neighbouring lines and is too short for its
+	// range has no reading that keeps the rows it leaves out, so no repair is
+	// tried for it.
+	if authored_parses
+		|| ambiguities
+			.iter()
+			.any(|ambiguity| matches!(ambiguity.echoed, Echoed::Both(..)))
+	{
 		if let Some(ambiguity) = ambiguities.first() {
-			return Err(EditError::apply(ambiguous_boundary_echo_message(
-				ambiguity.start,
-				ambiguity.end,
-				ambiguity.side,
-				ambiguity.count,
-				ambiguity.left_out,
-			)));
+			return Err(ambiguity.refusal(false));
 		}
 		return Ok(finish(authored, leading));
 	}
@@ -1246,13 +1299,7 @@ pub fn apply_edits(
 		}
 	}
 	if let Some(ambiguity) = ambiguities.first() {
-		return Err(EditError::apply(ambiguous_boundary_echo_message(
-			ambiguity.start,
-			ambiguity.end,
-			ambiguity.side,
-			ambiguity.count,
-			ambiguity.left_out,
-		)));
+		return Err(ambiguity.refusal(false));
 	}
 	Ok(finish(authored, leading))
 }

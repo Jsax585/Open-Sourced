@@ -356,27 +356,6 @@ fn refuses_a_too_short_echo_a_dropped_copy_exposed() {
 	}
 }
 
-/// A body that echoes both neighbours and is shorter than the range is not the
-/// one-sided shape the too-short refusal covers. Its repair stays what it was
-/// (the trailing echo is dropped), and must not fall through to applying the
-/// body as written, which duplicates the method header and breaks the file.
-#[test]
-fn keeps_the_repair_of_a_short_body_that_echoes_both_neighbours() {
-	let file = "class Probe {\n\talive = true;\n\n\tconstructor() {}\n\n\tisAlive(): boolean \
-	            {\n\t\treturn this.alive;\n\t}\n}\n";
-	let result = apply(
-		file,
-		&replacement(3, 5, &["\talive = true;", "", "\tisAlive(): boolean {"], 1),
-		Some("probe.ts"),
-	);
-	assert!(parses_cleanly(Some("probe.ts"), &result.text), "{}", result.text);
-	assert_eq!(
-		result.text,
-		"class Probe {\n\talive = true;\n\talive = true;\n\n\tisAlive(): boolean {\n\t\treturn \
-		 this.alive;\n\t}\n}\n"
-	);
-}
-
 #[test]
 fn drops_a_trailing_attribute_echo_in_a_single_line_replacement() {
 	let file = "/// Old summary.\n#[napi]\npub fn f() {}";

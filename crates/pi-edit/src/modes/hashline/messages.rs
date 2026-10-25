@@ -487,6 +487,32 @@ pub fn repeated_boundary_echo_message(
 	)
 }
 
+/// A body restates both neighbouring lines but is too short for the range.
+///
+/// With both neighbours restated the range cannot be shifted, so the rows
+/// between the echoes are the only content the body offers, and they are
+/// fewer than the range. `left_out` is the inclusive span of range rows past
+/// them; applying or repairing the edit would delete those rows.
+pub fn two_sided_boundary_echo_message(
+	start_line: u32,
+	end_line: u32,
+	above: u32,
+	below: u32,
+	left_out: (u32, u32),
+) -> String {
+	let left_out = match left_out {
+		(first, last) if first == last => format!("line {first}"),
+		(first, last) => format!("lines {first}-{last}"),
+	};
+	format!(
+		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body restates both the {above} \
+		 line(s) just above and the {below} line(s) just below the range, and the rows between them \
+		 are too few to be the full final content of the selected range: they leave out {left_out}, \
+		 which this edit would delete. Re-issue with the range covering exactly the lines that \
+		 change and the body as their complete final content."
+	)
+}
+
 /// A syntax-essential selected edge can be retained on either side of the
 /// payload, but indentation does not establish which placement was intended.
 pub fn ambiguous_boundary_placement_message(start_line: u32, end_line: u32) -> String {
