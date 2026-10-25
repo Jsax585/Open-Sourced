@@ -127,6 +127,30 @@ export function adoptDeepSeekEventShapes(events: readonly SessionFormatEvent[]):
 	return { events: view as unknown as SessionFormatEvent[], repairs };
 }
 
+/**
+ * Live dsh harnesses write v0 `user/message` sources carrying `summary` with
+ * non-notice `form` (e.g. mnemon plugin injections), which every released
+ * v0→v1 validator refuses ("summary requires notice form"). The summary is a
+ * display-only label; the content text is unaffected. Strip it before the
+ * released migration chain runs so otherwise-valid transcripts import.
+ */
+export function adoptDeepSeekV0SourceShapes(events: readonly SessionFormatEvent[]): {
+	events: SessionFormatEvent[];
+	repairs: Record<string, number>;
+} {
+	const view = structuredClone(events) as unknown as ReadEvent[];
+	const repairs: Record<string, number> = {};
+	for (const event of view) {
+		if (event.type !== "user/message" && event.type !== "developer/message") continue;
+		const data = record(event.data);
+		const source = record(data?.source);
+		if (source === undefined || source.summary === undefined || source.form === "notice") continue;
+		delete source.summary;
+		repairs["source-summary"] = (repairs["source-summary"] ?? 0) + 1;
+	}
+	return { events: view as unknown as SessionFormatEvent[], repairs };
+}
+
 /** Build a backend-compatible read view; callers must run canonical admission/folding afterwards. */
 export function interpretDeepSeekEvents(events: readonly SessionFormatEvent[]): {
 	events: SessionEvent[];

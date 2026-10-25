@@ -22,7 +22,7 @@ import { historicalChildCatalogSource } from "@deepseek-ai/dsh-session-format-v3
 import { isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import { zstdDecompressStream } from "@oh-my-pi/pi-utils/ar/codecs/zstd";
 import { fileByteSource } from "@oh-my-pi/pi-utils/ar/source";
-import { adoptDeepSeekEventShapes } from "./deepseek-compat";
+import { adoptDeepSeekEventShapes, adoptDeepSeekV0SourceShapes } from "./deepseek-compat";
 import type { ForeignSessionInfo } from "./foreign-session-store";
 
 /** Detached physical read and released logical migration; backend repairs run afterward. */
@@ -57,6 +57,7 @@ interface SqlSession {
 	readonly modified: number;
 	readonly messageCount: number;
 	readonly title?: string;
+	readonly firstMessage?: string;
 }
 
 interface SqlMetadata {
@@ -168,10 +169,6 @@ function sameFile(before: BigIntStats | null, after: BigIntStats | null): boolea
 				before.size === after.size &&
 				before.mtimeNs === after.mtimeNs &&
 				before.ctimeNs === after.ctimeNs;
-}
-
-function sha256(bytes: Uint8Array): string {
-	return new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 }
 
 async function boundedHeader(filename: string): Promise<unknown> {
@@ -384,13 +381,19 @@ function readSqlSession(row: SqlRow, source: string): SqlSession {
 	]) {
 		if (row[column] !== null) headerValue[field] = text(row[column], source, field);
 	}
-	if (version < 2) {
-		if (seedLength !== null) headerValue.seedLength = seedLength;
-	} else headerValue.isSeeded = seedLength !== null;
+	// Legacy v0 rows store f_seed_length as seed-text length, not an event count, and the
+	// released v0 header has no seed field; only v1 headers carry an inherited-event count.
+	if (version === 1 && seedLength !== null) headerValue.seedLength = seedLength;
+	else if (version >= 2) headerValue.isSeeded = seedLength !== null;
 	const classification = classifyHeader(headerValue, source);
 	const headSequence = integer(row.f_head_sequence, source, "head sequence", -1);
 	const headEventId = text(row.f_head_event_id, source, "head event ID");
-	if ((headSequence === -1) !== (headEventId.length === 0) || (seedLength !== null && seedLength > headSequence + 1)) {
+	// Pre-v4 rows carry a legacy seed-text length with unrelated scale; only the v4
+	// schema stores seedLength as an inherited-event count comparable to the head.
+	if (
+		(headSequence === -1) !== (headEventId.length === 0) ||
+		(version === 4 && seedLength !== null && seedLength > headSequence + 1)
+	) {
 		throw failure("SQLite head", source, "head or inherited prefix metadata is incomplete");
 	}
 	text(row.f_incarnation, source, "session incarnation", true);
@@ -414,15 +417,23 @@ function readSqlSession(row: SqlRow, source: string): SqlSession {
 				: timestamp(row.f_last_event_at, source, "last event time"),
 		messageCount: integer(row.message_count, source, "message count"),
 		...(row.f_title === null ? {} : { title: text(row.f_title, source, "title") }),
+		...(row.first_user_text === null || row.first_user_text === undefined
+			? {}
+			: { firstMessage: text(row.first_user_text, source, "first message") }),
 	};
 }
 
 function sqlSessions(db: Database, source: string): SqlSession[] {
 	return db
 		.query<SqlRow, []>(`SELECT s.*, (
-		SELECT COUNT(*) FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
-		WHERE b.f_session_id = s.f_session_id AND e.f_type IN ('user/message', 'assistant/message', 'tool/result')
-	) AS message_count FROM t_sessions s`)
+			SELECT COUNT(*) FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
+			WHERE b.f_session_id = s.f_session_id AND e.f_type IN ('user/message', 'assistant/message', 'tool/result')
+		) AS message_count, (
+			SELECT substr(json_extract(e.f_data, '$.data.content[0].text'), 1, 200)
+			FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
+			WHERE b.f_session_id = s.f_session_id AND e.f_type = 'user/message' AND json_valid(e.f_data)
+			ORDER BY b.f_sequence LIMIT 1
+		) AS first_user_text FROM t_sessions s`)
 		.all()
 		.map(row => readSqlSession(row, source));
 }
@@ -495,51 +506,38 @@ function readSqlArtifact(db: Database, session: SqlSession, source: string): Phy
 	return { headerValue: session.headerValue, rows: events, shapeRepairs: {} };
 }
 
-interface DatabaseBytes {
-	readonly database: Uint8Array;
-	readonly wal: Uint8Array | null;
-}
-
-async function stableDatabaseBytes(source: string): Promise<DatabaseBytes> {
+/**
+ * Stream-copies the canonical database plus WAL into a private directory. Reading a
+ * multi-gigabyte database into memory would exhaust the heap, so stability is checked
+ * with stat guards around the copy and integrity is enforced by WAL frame checksums.
+ */
+async function snapshotDatabaseFiles(source: string, directory: string): Promise<string> {
 	const filenames = [source, `${source}-wal`];
-	const before = await Promise.all(filenames.map(optionalStat));
-	if (before[0] === null)
-		throw failure("SQLite snapshot", source, "canonical database no longer exists; stale files will not be used");
-	const first = await Promise.all(
-		filenames.map((filename, i) => (before[i] === null ? null : Bun.file(filename).bytes())),
-	);
-	const middle = await Promise.all(filenames.map(optionalStat));
-	if (
-		!before.every((stat, i) => sameFile(stat, middle[i]) && (stat === null || BigInt(first[i]!.length) === stat.size))
-	) {
-		throw failure(
-			"SQLite snapshot",
-			source,
-			"database or WAL changed during copy; stop source writes before importing (no retry performed)",
-		);
+	const filename = path.join(directory, "sessions.sqlite");
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const before = await Promise.all(filenames.map(optionalStat));
+		if (before[0] === null)
+			throw failure("SQLite snapshot", source, "canonical database no longer exists; stale files will not be used");
+		await fs.copyFile(source, filename);
+		if (before[1] !== null) await fs.copyFile(`${source}-wal`, `${filename}-wal`);
+		const after = await Promise.all(filenames.map(optionalStat));
+		// A live harness may checkpoint between the size check and the copy; a later
+		// attempt over an idle store yields a consistent snapshot. The source stays untouched.
+		if (before.every((stat, i) => sameFile(stat, after[i]))) return filename;
+		await fs.rm(`${filename}-wal`, { force: true });
 	}
-	const hashes = await Promise.all(
-		filenames.map(async (filename, i) => (middle[i] === null ? null : sha256(await Bun.file(filename).bytes()))),
+	throw failure(
+		"SQLite snapshot",
+		source,
+		"database or WAL still changing after three stable-copy attempts; stop source writes before importing",
 	);
-	const after = await Promise.all(filenames.map(optionalStat));
-	if (
-		!before.every(
-			(stat, i) =>
-				sameFile(stat, after[i]) && (first[i] === null ? hashes[i] === null : sha256(first[i]!) === hashes[i]),
-		)
-	) {
-		throw failure(
-			"SQLite snapshot",
-			source,
-			"database or WAL content changed during copy; stop source writes before importing (no retry performed)",
-		);
-	}
-	return { database: first[0]!, wal: first[1] };
 }
 
-/** Verify the private SQLite connection actually consumed every committed WAL page. */
-function validateWalVisibility(db: Database, bytes: DatabaseBytes, source: string): void {
-	const wal = bytes.wal;
+/** Verify the WAL copied into the private snapshot is fully committed and applied. */
+async function validateWalVisibility(filename: string, pageCount: number, source: string): Promise<void> {
+	const wal = await Bun.file(`${filename}-wal`)
+		.bytes()
+		.catch(() => null);
 	if (wal === null || wal.length === 0) return;
 	if (wal.length < 32)
 		throw failure("SQLite WAL", source, "incomplete WAL header; stop source writes and retry import");
@@ -549,11 +547,11 @@ function validateWalVisibility(db: Database, bytes: DatabaseBytes, source: strin
 		throw failure("SQLite WAL", source, "unsupported WAL header");
 	}
 	const pageSize = view.getUint32(8);
-	if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0 || bytes.database.length < 100) {
-		throw failure("SQLite WAL", source, "invalid WAL or database page size");
+	if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0) {
+		throw failure("SQLite WAL", source, "invalid WAL page size");
 	}
-	const databaseView = new DataView(bytes.database.buffer, bytes.database.byteOffset, bytes.database.byteLength);
-	const storedPageSize = databaseView.getUint16(16);
+	const dbHeader = await Bun.file(filename).slice(0, 18).arrayBuffer();
+	const storedPageSize = new DataView(dbHeader).getUint16(16);
 	if ((storedPageSize === 1 ? 65536 : storedPageSize) !== pageSize) {
 		throw failure("SQLite WAL", source, "WAL page size does not match database");
 	}
@@ -571,7 +569,6 @@ function validateWalVisibility(db: Database, bytes: DatabaseBytes, source: strin
 		throw failure("SQLite WAL", source, "WAL header checksum mismatch");
 	}
 	const stride = pageSize + 24;
-	let committedEnd = 32;
 	let committedPages = 0;
 	for (let offset = 32; offset + stride <= wal.length; offset += stride) {
 		// A reused WAL can retain old frames after its current salt-delimited end.
@@ -583,24 +580,12 @@ function validateWalVisibility(db: Database, bytes: DatabaseBytes, source: strin
 			throw failure("SQLite WAL", source, "WAL frame checksum mismatch; snapshot is incomplete");
 		}
 		if (view.getUint32(offset) === 0) throw failure("SQLite WAL", source, "invalid WAL page number");
-		if (view.getUint32(offset + 4) !== 0) {
-			committedEnd = offset + stride;
-			committedPages = view.getUint32(offset + 4);
-		}
+		if (view.getUint32(offset + 4) !== 0) committedPages = view.getUint32(offset + 4);
 	}
-	if (committedPages === 0) return;
-	const image = db.serialize();
-	if (image.length !== committedPages * pageSize)
+	// A read-only WAL connection replays exactly the checksummed prefix; if SQLite
+	// ignored frames the private snapshot would be short of committed pages.
+	if (committedPages !== 0 && pageCount !== committedPages)
 		throw failure("SQLite WAL", source, "committed WAL was not fully applied to private read snapshot");
-	const pages = new Map<number, number>();
-	for (let offset = 32; offset < committedEnd; offset += stride) pages.set(view.getUint32(offset), offset + 24);
-	for (const [page, offset] of pages) {
-		if (page > committedPages) continue;
-		const actual = image.subarray((page - 1) * pageSize, page * pageSize);
-		const expected = wal.subarray(offset, offset + pageSize);
-		if (!actual.equals(expected))
-			throw failure("SQLite WAL", source, "committed WAL page is missing from private read snapshot");
-	}
 }
 
 async function withDatabase<T>(
@@ -608,18 +593,16 @@ async function withDatabase<T>(
 	action: (db: Database, metadata: SqlMetadata) => T | Promise<T>,
 ): Promise<T> {
 	return atStage("SQLite snapshot", source, async () => {
-		const bytes = await stableDatabaseBytes(source);
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-deepseek-"));
 		let db: Database | undefined;
 		try {
-			const filename = path.join(directory, "sessions.sqlite");
-			await Bun.write(filename, bytes.database);
-			if (bytes.wal !== null) await Bun.write(`${filename}-wal`, bytes.wal);
-			// Never open source: SQLite may create SHM even for a read-only WAL connection.
+			const filename = await snapshotDatabaseFiles(source, directory);
+			// Never open the source: SQLite may create SHM even for a read-only WAL connection.
 			db = new Database(filename, { readonly: true, strict: true, safeIntegers: true });
 			db.exec("BEGIN");
-			db.query<SqlRow, []>("PRAGMA page_count").get();
-			validateWalVisibility(db, bytes, source);
+			const pageRow = db.query<{ page_count: number | bigint | null }, []>("PRAGMA page_count").get();
+			const pageCount = Number(pageRow?.page_count ?? 0);
+			await validateWalVisibility(filename, pageCount, source);
 			const metadata = validateSchema(db, source);
 			const result = await action(db, metadata);
 			db.exec("COMMIT");
@@ -639,11 +622,20 @@ export class DeepSeekSources {
 	readonly #home: string;
 	readonly #sessionsRoot: string;
 	readonly #database: string;
+	readonly #databaseFallback: string;
 
 	constructor(home: string) {
 		this.#home = path.resolve(home);
 		this.#sessionsRoot = path.join(this.#home, "sessions");
 		this.#database = path.join(this.#home, "sessions.sqlite");
+		// Released harness builds store the canonical database inside sessions/; older layouts keep it at the root.
+		this.#databaseFallback = path.join(this.#sessionsRoot, "sessions.sqlite");
+	}
+
+	/** First existing canonical database: root layout, then the newer sessions/ layout. */
+	async #databasePath(): Promise<string | undefined> {
+		if ((await optionalStat(this.#database)) !== null) return this.#database;
+		return (await optionalStat(this.#databaseFallback)) !== null ? this.#databaseFallback : undefined;
 	}
 
 	async #files(): Promise<FileSource[]> {
@@ -695,28 +687,28 @@ export class DeepSeekSources {
 
 	/** Header-only file discovery and indexed SQLite metadata; no transcript bodies are parsed. */
 	async list(): Promise<ForeignSessionInfo[]> {
-		const sql =
-			(await optionalStat(this.#database)) === null
-				? []
-				: await withDatabase(this.#database, db => {
-						const sessions = sqlSessions(db, this.#database);
-						for (const session of sessions)
-							validateHead(db, session, sqlLocator(this.#database, session.header.id));
-						return sessions;
-					});
+		const database = await this.#databasePath();
 		const result = new Map<string, ForeignSessionInfo>();
-		for (const session of sql) {
-			if (result.has(session.header.id)) throw failure("discovery", this.#database, "duplicate logical session ID");
-			result.set(session.header.id, {
-				source: "deepseek",
-				id: session.header.id,
-				path: sqlLocator(this.#database, session.header.id),
-				cwd: session.header.cwd ?? "",
-				created: new Date(session.header.createdAt),
-				modified: new Date(session.modified),
-				messageCount: session.messageCount,
-				...(session.title === undefined ? {} : { title: session.title }),
+		if (database !== undefined) {
+			const sql = await withDatabase(database, db => {
+				const sessions = sqlSessions(db, database);
+				for (const session of sessions) validateHead(db, session, sqlLocator(database, session.header.id));
+				return sessions;
 			});
+			for (const session of sql) {
+				if (result.has(session.header.id)) throw failure("discovery", database, "duplicate logical session ID");
+				result.set(session.header.id, {
+					source: "deepseek",
+					id: session.header.id,
+					path: sqlLocator(database, session.header.id),
+					cwd: session.header.cwd ?? "",
+					created: new Date(session.header.createdAt),
+					modified: new Date(session.modified),
+					messageCount: session.messageCount,
+					...(session.title === undefined ? {} : { title: session.title }),
+					...(session.firstMessage === undefined ? {} : { firstMessage: session.firstMessage }),
+				});
+			}
 		}
 		for (const file of await this.#files()) {
 			if (result.get(file.header.id)?.path.startsWith(SQLITE_PREFIX)) continue;
@@ -737,13 +729,14 @@ export class DeepSeekSources {
 	async #readSelected(
 		info: ForeignSessionInfo,
 		files: readonly FileSource[],
+		database: string,
 		db?: Database,
 		metadata?: SqlMetadata,
 	): Promise<DeepSeekSourceSnapshot> {
-		const sessions = db === undefined ? [] : sqlSessions(db, this.#database);
+		const sessions = db === undefined ? [] : sqlSessions(db, database);
 		const sql = sessions.find(session => session.header.id === info.id);
 		const locator = info.path.startsWith(SQLITE_PREFIX) ? parseLocator(info.path) : undefined;
-		if (locator !== undefined && (locator.database !== this.#database || locator.id !== info.id)) {
+		if (locator !== undefined && (locator.database !== database || locator.id !== info.id)) {
 			throw failure("locator", info.path, "locator does not belong to this DeepSeek source root and logical ID");
 		}
 		if (locator !== undefined && sql === undefined)
@@ -755,11 +748,11 @@ export class DeepSeekSources {
 		const file = files.find(candidate => candidate.header.id === info.id);
 		if (sql === undefined && file === undefined)
 			throw failure("discovery", info.path, "selected session has no supported nested canonical source");
-		const source = sql === undefined ? file!.path : sqlLocator(this.#database, sql.header.id);
+		const source = sql === undefined ? file!.path : sqlLocator(database, sql.header.id);
 		const storedVersion = sql?.storedVersion ?? file!.storedVersion;
 		const header = sql?.header ?? file!.header;
 		const physical = await atStage("physical decode", source, () =>
-			sql === undefined ? readFileArtifact(file!) : readSqlArtifact(db!, sql, source),
+			sql === undefined ? readFileArtifact(file!) : readSqlArtifact(db!, sql, database),
 		);
 		const classification = classifyHeader(physical.headerValue, source);
 		if (classification.header.id !== info.id || classification.storedVersion !== storedVersion)
@@ -770,6 +763,14 @@ export class DeepSeekSources {
 		if (sql !== undefined && storedVersion === 4) {
 			const adopted = adoptDeepSeekEventShapes(physical.rows as readonly SessionFormatEvent[]);
 			selectedPhysical = { ...physical, rows: adopted.events, shapeRepairs: adopted.repairs };
+		}
+		if (storedVersion === 0) {
+			const adopted = adoptDeepSeekV0SourceShapes(selectedPhysical.rows as readonly SessionFormatEvent[]);
+			selectedPhysical = {
+				...selectedPhysical,
+				rows: adopted.events,
+				shapeRepairs: { ...selectedPhysical.shapeRepairs, ...adopted.repairs },
+			};
 		}
 		const children: SessionFormatJsonValue[] = [];
 		if (storedVersion < 4) {
@@ -782,7 +783,7 @@ export class DeepSeekSources {
 			for (const child of sessions) canonical.set(child.header.id, child);
 			for (const child of canonical.values()) {
 				if (child.header.origin !== "subagent" || child.header.parentSession !== header.id) continue;
-				const childSource = "row" in child ? sqlLocator(this.#database, child.header.id) : child.path;
+				const childSource = "row" in child ? sqlLocator(database, child.header.id) : child.path;
 				const evidence = await atStage("child evidence", childSource, async () => {
 					let childPhysical =
 						"row" in child ? readSqlArtifact(db!, child, childSource) : await readFileArtifact(child);
@@ -790,6 +791,11 @@ export class DeepSeekSources {
 						childPhysical = {
 							...childPhysical,
 							rows: adoptDeepSeekEventShapes(childPhysical.rows as readonly SessionFormatEvent[]).events,
+						};
+					if (child.storedVersion === 0)
+						childPhysical = {
+							...childPhysical,
+							rows: adoptDeepSeekV0SourceShapes(childPhysical.rows as readonly SessionFormatEvent[]).events,
 						};
 					const artifact = restoreArtifact(
 						childPhysical,
@@ -819,7 +825,14 @@ export class DeepSeekSources {
 				source,
 			),
 		);
-		if (sql !== undefined && storedVersion === 4 && artifact.inheritedEventCount !== (sql.seedLength ?? 0)) {
+		// Some SQLite builds never populate f_seed_length for v4; the decoded seed marker
+		// is authoritative there. When a stored count exists it must still agree.
+		if (
+			sql !== undefined &&
+			sql.seedLength !== null &&
+			storedVersion === 4 &&
+			artifact.inheritedEventCount !== sql.seedLength
+		) {
 			throw failure("SQLite head", source, "stored inherited prefix disagrees with decoded seed marker");
 		}
 		return {
@@ -831,7 +844,7 @@ export class DeepSeekSources {
 					? { originalPath: file!.path }
 					: {
 							...metadata,
-							databasePath: this.#database,
+							databasePath: database,
 							archivedAt: sql.row.f_archived_at === null ? null : Number(sql.row.f_archived_at),
 							incarnation: sql.row.f_incarnation,
 							revision: Number(sql.row.f_revision),
@@ -872,12 +885,13 @@ export class DeepSeekSources {
 				}
 			}
 			const files = await this.#files();
-			if ((await optionalStat(this.#database)) !== null) {
-				return withDatabase(this.#database, (db, metadata) => this.#readSelected(info, files, db, metadata));
+			const database = await this.#databasePath();
+			if (database !== undefined) {
+				return withDatabase(database, (db, metadata) => this.#readSelected(info, files, database, db, metadata));
 			}
 			if (info.path.startsWith(SQLITE_PREFIX))
 				throw failure("SQLite read", info.path, "canonical database is missing; stale files will not be used");
-			return this.#readSelected(info, files);
+			return this.#readSelected(info, files, this.#database);
 		});
 	}
 }

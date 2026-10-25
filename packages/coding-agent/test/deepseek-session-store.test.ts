@@ -248,6 +248,23 @@ describe("DeepSeek discovery", () => {
 		await leftSession.close();
 		await rightSession.close();
 	});
+
+	it("discovers the canonical database nested inside sessions/ (live harness layout)", async () => {
+		await writeDeepSeekDatabase(path.join(root, "sessions"), [
+			{ id: "nested-db", cwd: root, events: [user(0, "Nested database")], title: "Nested title" },
+		]);
+		await writeDeepSeekLog(root, { id: "file-sibling", cwd: root, events: [user(0, "File sibling")] });
+		const store = new DeepSeekSessionStore(root);
+		const infos = await store.list();
+		expect(infos.map(info => info.id).sort()).toEqual(["file-sibling", "nested-db"]);
+		expect(infos.find(info => info.id === "nested-db")).toMatchObject({
+			title: "Nested title",
+			firstMessage: "Nested database",
+		});
+		const loaded = await store.load(await selected(store, "nested-db"));
+		expect(contextText(loaded)).toEqual(["Nested database"]);
+		await loaded.close();
+	});
 });
 
 describe("DeepSeek released migrations and strict admission", () => {
@@ -270,6 +287,36 @@ describe("DeepSeek released migrations and strict admission", () => {
 		expect(contextText(manager)).toEqual([`Version ${version}`]);
 		expect(manager.getSessionFile()).toBeUndefined();
 		expect(await snapshot(root)).toEqual(before);
+		await manager.close();
+	});
+
+	it("repairs live-harness v0 sources carrying summary with non-notice form", async () => {
+		const injected = deepseekEvent(
+			"user/message",
+			{
+				id: "injected-1",
+				role: "user",
+				source: { kind: "plugin", plugin: "dsh-mnemon", form: "instructions", summary: "recall reminder" },
+				content: [{ type: "text", text: "Injected memory note" }],
+			},
+			2,
+			"append",
+		);
+		await writeDeepSeekLog(root, {
+			id: "v0-summary",
+			cwd: root,
+			version: 0,
+			events: [
+				deepseekEvent("turn/start", { turn: 1 }, 0),
+				deepseekEvent("step/start", { turn: 1, step: 1 }, 1),
+				injected,
+				deepseekEvent("step/end", { turn: 1, step: 1 }, 3),
+				deepseekEvent("turn/end", { turn: 1, reason: { kind: "completed" } }, 4),
+			],
+		});
+		const store = new DeepSeekSessionStore(root);
+		const manager = await store.load(await selected(store, "v0-summary"));
+		expect(contextText(manager)).toEqual(["Injected memory note"]);
 		await manager.close();
 	});
 
@@ -431,6 +478,66 @@ describe("DeepSeek transcript and continuation", () => {
 			.find(entry => entry.type === "message" && entry.message.role === "assistant");
 		expect(assistant).toMatchObject({ message: { stopReason: "aborted" } });
 		expect(contextText(manager, true)).toContain("Inspecting fixture");
+		await manager.close();
+	});
+
+	it("imports no-argument tool calls recorded with blank argument strings", async () => {
+		await writeDeepSeekLog(root, {
+			id: "blank-args",
+			cwd: root,
+			events: [
+				deepseekEvent("turn/start", { turn: 1 }, 0),
+				user(1, "List jobs"),
+				deepseekEvent("step/start", { turn: 1, step: 1 }, 2),
+				deepseekEvent(
+					"request/header",
+					{ header: { config: { provider: "fixture-provider", model: "fixture-model" } }, reason: "initial" },
+					3,
+				),
+				deepseekEvent(
+					"assistant/message",
+					{
+						turn: 1,
+						step: 1,
+						message: {
+							id: "assistant-blank",
+							role: "assistant",
+							source: { kind: "model", provider: "fixture-provider", model: "fixture-model" },
+							content: [{ type: "tool-call", id: "call-blank", name: "job_list", arguments: "" }],
+						},
+						stream: [],
+					},
+					4,
+					"append",
+				),
+				deepseekEvent("tool/call", { turn: 1, step: 1, callId: "call-blank", name: "job_list", arguments: "" }, 5),
+				deepseekEvent(
+					"tool/result",
+					{
+						turn: 1,
+						step: 1,
+						message: {
+							id: "result-blank",
+							role: "tool",
+							toolCallId: "call-blank",
+							isError: false,
+							source: { kind: "tool", callId: "call-blank" },
+							content: [{ type: "text", text: "no queued jobs" }],
+						},
+					},
+					6,
+					"append",
+				),
+				deepseekEvent("step/end", { turn: 1, step: 1 }, 7),
+				deepseekEvent("turn/end", { turn: 1, reason: { kind: "completed" } }, 8),
+			],
+		});
+		const store = new DeepSeekSessionStore(root);
+		const manager = await store.load(await selected(store, "blank-args"));
+		const messages = manager.getEntries().filter(entry => entry.type === "message");
+		const assistant = messages.filter(message => message.message.role === "assistant").at(-1)?.message;
+		if (assistant?.role !== "assistant") throw new Error("Missing assistant");
+		expect(assistant.content).toEqual([{ type: "toolCall", id: "call-blank", name: "job_list", arguments: {} }]);
 		await manager.close();
 	});
 
@@ -754,6 +861,27 @@ describe("DeepSeek transcript and continuation", () => {
 });
 
 describe("DeepSeek SQLite snapshots", () => {
+	it("imports pre-v4 SQLite rows whose seed_length is a legacy text length", async () => {
+		await writeDeepSeekDatabase(root, [
+			{
+				id: "legacy-seed",
+				cwd: root,
+				version: 0,
+				seedLength: 300_903,
+				events: [
+					deepseekEvent("turn/start", { turn: 1 }, 0),
+					deepseekEvent("step/start", { turn: 1, step: 1 }, 1),
+					user(2, "Legacy seed prompt"),
+					deepseekEvent("step/end", { turn: 1, step: 1 }, 3),
+					deepseekEvent("turn/end", { turn: 1, reason: { kind: "completed" } }, 4),
+				],
+			},
+		]);
+		const store = new DeepSeekSessionStore(root);
+		const loaded = await store.load(await selected(store, "legacy-seed"));
+		expect(contextText(loaded)).toEqual(["Legacy seed prompt"]);
+		await loaded.close();
+	});
 	it("uses bridge order, sequence, operation and row time for payload-only and full-envelope rows", async () => {
 		const file = await writeDeepSeekDatabase(root, [
 			{ id: "bridges", cwd: root, events: [user(0, "First"), user(1, "Second")] },

@@ -56,6 +56,7 @@ export async function writeDeepSeekDatabase(
 		events: Record<string, unknown>[];
 		version?: number;
 		title?: string;
+		seedLength?: number;
 	}[],
 ): Promise<string> {
 	await fs.mkdir(root, { recursive: true });
@@ -100,8 +101,8 @@ export async function writeDeepSeekDatabase(
 		`);
 		const insertSession = db.query(`INSERT INTO t_sessions (
 			f_session_id, f_head_event_id, f_head_sequence, f_version, f_created_at, f_cwd,
-			f_delegation_depth, f_incarnation, f_revision, f_last_event_at, f_title
-		) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?)`);
+			f_delegation_depth, f_incarnation, f_revision, f_last_event_at, f_title, f_seed_length
+		) VALUES (?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?)`);
 		const insertEvent = db.query(`INSERT INTO t_events
 			(f_event_id, f_parent_id, f_type, f_encoding, f_data, f_created_at) VALUES (?, ?, ?, 'json', ?, ?)`);
 		const insertBridge = db.query(`INSERT INTO t_session_events
@@ -119,6 +120,7 @@ export async function writeDeepSeekDatabase(
 					`${session.id}:incarnation`,
 					last < 0 ? null : Number(session.events[last].time),
 					session.title ?? null,
+					session.seedLength ?? null,
 				);
 				for (const [seq, event] of session.events.entries()) {
 					const eventId = `${session.id}:event:${seq}`;

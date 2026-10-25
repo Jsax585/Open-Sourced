@@ -257,12 +257,17 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 						content.push({ type: "thinking", thinking: block.text });
 					else if (block.type === "image" || block.type === "file") content.push(await attachments.content(block));
 					else if (block.type === "tool-call" && message.role === "assistant") {
+						const rawArguments = block.arguments;
 						let argumentsValue: unknown;
-						try {
-							argumentsValue = JSON.parse(block.arguments);
-						} catch {
-							throw new Error(`invalid tool arguments at event ${event.seq}`);
-						}
+						// dsh harnesses record empty argument strings for no-argument calls (e.g. job_list).
+						if (typeof rawArguments === "string" && rawArguments.trim().length === 0) argumentsValue = {};
+						else if (typeof rawArguments === "string") {
+							try {
+								argumentsValue = JSON.parse(rawArguments);
+							} catch {
+								throw new Error(`invalid tool arguments at event ${event.seq}`);
+							}
+						} else throw new Error(`invalid tool arguments at event ${event.seq}`);
 						if (!isRecord(argumentsValue)) throw new Error(`invalid tool argument object at event ${event.seq}`);
 						content.push({ type: "toolCall", id: block.id, name: block.name, arguments: argumentsValue });
 					} else throw new Error(`unsupported ${message.role} content block at event ${event.seq}`);
