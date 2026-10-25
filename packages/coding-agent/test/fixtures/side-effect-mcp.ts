@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Stdio MCP fixture that records an effect before optionally losing its response. */
+/** Stdio MCP fixture that records an effect before optionally losing or challenging its response. */
 import * as fs from "node:fs/promises";
 import * as readline from "node:readline";
 
@@ -7,7 +7,7 @@ type JsonRpcRequest = {
 	jsonrpc: "2.0";
 	id?: string | number;
 	method: string;
-	params?: { name?: string; arguments?: { crash?: boolean } };
+	params?: { name?: string; arguments?: { crash?: boolean; authChallenge?: boolean } };
 };
 
 async function startServer(): Promise<void> {
@@ -37,7 +37,10 @@ async function startServer(): Promise<void> {
 						tools: [
 							{
 								name: "record_effect",
-								inputSchema: { type: "object", properties: { crash: { type: "boolean" } } },
+								inputSchema: {
+									type: "object",
+									properties: { crash: { type: "boolean" }, authChallenge: { type: "boolean" } },
+								},
 							},
 						],
 					};
@@ -51,7 +54,14 @@ async function startServer(): Promise<void> {
 					}
 					await fs.appendFile(effectsPath, "record_effect\n");
 					if (request.params.arguments?.crash === true) process.exit(1);
-					result = { content: [{ type: "text", text: "effect recorded" }], isError: false };
+					result =
+						request.params.arguments?.authChallenge === true
+							? {
+									content: [{ type: "text", text: "authorization required after recording effect" }],
+									isError: true,
+									_meta: { "mcp/www_authenticate": ['Bearer realm="side-effect-fixture"'] },
+								}
+							: { content: [{ type: "text", text: "effect recorded" }], isError: false };
 					break;
 				default:
 					result = {};

@@ -824,6 +824,20 @@ export interface ExtensionCommandContext extends ExtensionContext {
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
 
+	/**
+	 * Call an enabled MCP tool in this session by its exact server and original tool names.
+	 * Uses the normal approval, tool-call hooks, preflight, and result hooks without a model turn.
+	 * Never automatically reconnects, authorizes, or retries the tool call. A failed or aborted
+	 * call may already have taken effect; reconcile its result before explicitly calling again.
+	 * Session abort, transition, and shutdown invalidate this command context's MCP access.
+	 */
+	callMCPTool(
+		serverName: string,
+		toolName: string,
+		input: Record<string, unknown>,
+		options?: { signal?: AbortSignal; onUpdate?: AgentToolUpdateCallback },
+	): Promise<AgentToolResult>;
+
 	/** Start a new session, optionally with initialization. */
 	newSession(options?: {
 		parentSession?: string;

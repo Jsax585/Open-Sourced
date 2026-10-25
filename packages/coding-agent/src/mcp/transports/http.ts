@@ -25,6 +25,7 @@ import {
 	nonRetryableMCPTransportError,
 	normalizeMCPTransportError,
 } from "../errors";
+import { isMCPSingleAttempt } from "../execution-policy";
 import { RequestIdAllocator } from "../request-id";
 import { routeProgressNotification, withProgressToken } from "../progress";
 import {
@@ -358,7 +359,7 @@ export class HttpTransport implements MCPTransport {
 		if (this.#sessionId) generated["Mcp-Session-Id"] = this.#sessionId;
 		let response = await this.#fetch({ method: "GET", signal }, generated);
 		const refreshAuth = this.onAuthError;
-		if (refreshAuth && (response.status === 401 || response.status === 403)) {
+		if (!isMCPSingleAttempt() && refreshAuth && (response.status === 401 || response.status === 403)) {
 			await response.body?.cancel();
 			const newHeaders = await untilAborted(signal, () => refreshAuth.call(this));
 			if (!newHeaders) {
@@ -418,7 +419,12 @@ export class HttpTransport implements MCPTransport {
 			// original POST and may have executed it — replaying could run a
 			// state-changing tool twice.
 			const status = error instanceof Error ? AIError.status(error) : undefined;
-			if (!(error instanceof SSEResumeError) && this.onAuthError && (status === 401 || status === 403)) {
+			if (
+				!isMCPSingleAttempt() &&
+				!(error instanceof SSEResumeError) &&
+				this.onAuthError &&
+				(status === 401 || status === 403)
+			) {
 				const newHeaders = await this.onAuthError();
 				if (newHeaders) {
 					// Persist refreshed headers so subsequent requests use them directly

@@ -16,6 +16,7 @@ import {
 	nonRetryableMCPTransportError,
 	normalizeMCPTransportError,
 } from "../errors";
+import { isMCPSingleAttempt } from "../execution-policy";
 import { RequestIdAllocator } from "../request-id";
 import { routeProgressNotification, withProgressToken } from "../progress";
 import { createMCPTimeout, getNeverAbortSignal, resolveMCPTimeoutMs } from "../timeout";
@@ -365,7 +366,7 @@ export class LegacySseTransport implements MCPTransport {
 		const payload = JSON.stringify(body);
 		let response = await this.#fetch(endpointUrl, { method: "POST", body: payload, signal }, generated);
 		const status = AIError.status(response);
-		if (!this.onAuthError || (status !== 401 && status !== 403)) return response;
+		if (isMCPSingleAttempt() || !this.onAuthError || (status !== 401 && status !== 403)) return response;
 
 		const refreshedHeaders = await this.onAuthError();
 		if (!refreshedHeaders) return response;

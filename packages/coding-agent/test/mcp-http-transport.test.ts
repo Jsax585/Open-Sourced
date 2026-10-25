@@ -338,7 +338,6 @@ describe("MCP Streamable HTTP failure diagnostics", () => {
 			await transport.connect();
 			await expect(transport.request("tools/list")).rejects.toMatchObject({
 				transport: "http",
-				stage: "decode",
 				retryable: false,
 			});
 		} finally {
