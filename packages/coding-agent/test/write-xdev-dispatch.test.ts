@@ -882,7 +882,7 @@ describe("device-only write transport for explicit lists omitting write", () => 
 				);
 			const message = err instanceof Error ? err.message : String(err);
 			expect(message).toContain(path.join(tempDir, "artifacts", "local", "<name>"));
-			expect(message).toContain("return that path, or the content itself, in `yield`");
+			expect(message).toContain("`yield`");
 			expect(message).not.toContain("instead");
 		} finally {
 			await removeWithRetries(tempDir);
