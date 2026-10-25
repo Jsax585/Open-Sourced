@@ -246,10 +246,16 @@ describe("default echo/printf redirect rule", () => {
 			"echo `date; ls` > out.txt",
 			"echo ${x:-a;b} > out.txt",
 			"echo $(ls > /dev/null) > out.txt",
+			"echo ${a:-${b}} > out.txt",
+			"echo $(( (1 + 2) * 3 )) > out.txt",
+			"printf %s ${HOME:-${USER}} >> out.txt",
 		]) {
 			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("write");
 		}
 		expect(checkBashInterception("echo $(ls) ; ls > f", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+		expect(checkBashInterception("echo ${a:-${b}}; ls 2>e.log", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(
+			false,
+		);
 		expect(checkBashInterception("echo $(printf a; printf b)", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(
 			false,
 		);
