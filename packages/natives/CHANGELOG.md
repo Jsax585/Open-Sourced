@@ -6,6 +6,10 @@
 
 - Added a `hiddenContent` option to `htmlToMarkdown`: `"drop"` (default) omits hidden content, `"reachable"` keeps content the page can reveal such as collapsed sections and inactive tab panels, and `"all"` also keeps `<template>` and `<noscript>` content; other values throw ([#16246](https://github.com/can1357/oh-my-pi/issues/16246))
 
+### Fixed
+
+- Fixed `sort -t=` (and clusters such as `-nrt=`) failing with "separator must be exactly one character long"; an attached `=` now selects `=` as the field separator, as in GNU sort, and `-t==` is rejected as two characters
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
