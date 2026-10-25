@@ -175,7 +175,6 @@ class EmphasisDelimiters {
  * before that closing backtick is content and still closes the span.
  */
 class CodeRuns {
-	readonly #src: string;
 	// Per run, in order: where it starts and ends; the starts are the binary search `endOf` and `startsStringAt` need.
 	readonly #starts: number[] = [];
 	readonly #ends: number[] = [];
@@ -184,7 +183,6 @@ class CodeRuns {
 	readonly #byWidth = new Map<number, number[]>();
 
 	constructor(src: string) {
-		this.#src = src;
 		for (let at = src.indexOf("`"); at !== -1;) {
 			let end = at + 1;
 			while (src.charCodeAt(end) === 0x60 /* ` */) end++;
@@ -204,17 +202,15 @@ class CodeRuns {
 	}
 
 	/**
-	 * Whether a backtick string starts at `at` for a scan that walked to `at`: a run starts at its first backtick, and
-	 * at the one after it once a backslash escaped that first backtick, since the escape takes the backslash and one
-	 * backtick and leaves the rest of the run a string of its own. A retry deeper inside a run is not a string, which
-	 * keeps a run whose opener found no closer from opening a narrower span one backtick later. Where a tokenizer
-	 * resumed the scan is not a walked position; `InlineClosers.codeOpenerWidth` takes that case on its own.
+	 * Whether a backtick string starts at `at` for a scan that walked to `at`: a string is a whole run, so it starts at
+	 * the run's first backtick and nowhere else. A retry deeper inside a run is not a string, which keeps a run whose
+	 * opener found no closer from opening a narrower span one backtick later. A position a tokenizer's raw resumed at,
+	 * or the suffix an escape token left behind, is not a walked position — `codeOpenerWidth` admits those on its own,
+	 * because it is told the scan resumed there rather than inferring it from the source text.
 	 */
 	startsStringAt(at: number): boolean {
 		const run = lowerBound(this.#starts, at + 1) - 1;
-		const start = this.#starts[run];
-		if (start === undefined) return false;
-		return start === at || (start + 1 === at && escapedAt(this.#src, start));
+		return this.#starts[run] === at;
 	}
 
 	/** Where the closer of a code span opened by `width` backticks that end at `from` starts, or -1. */
