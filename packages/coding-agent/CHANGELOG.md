@@ -4,13 +4,13 @@
 
 ### Added
 
-- Added Mermaid expansion with `o` directly on a selected reply in `/copy`, block selection for multiple diagrams, and pan/zoom/source access. Previews include full-image/SVG file links; copying and saved messages retain authored Mermaid. New flowcharts favor left-to-right unless another direction is specified.
+- Added Mermaid expansion with `o` directly on a selected reply in `/copy`, block selection for multiple diagrams, and pan/zoom/source access. Previews include full-image/SVG file links; copying and saved messages retain authored Mermaid. New flowcharts favor left-to-right unless another direction is specified ([#16977](https://github.com/can1357/oh-my-pi/pull/16977) by [@kiendle](https://github.com/kiendle))
 - Anthropic web search and Files API uploads follow `PI_ANTHROPIC_API_VERSION=2026-10-21`; web search omits `temperature` under that version ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
 - llama.cpp auto-discovery now also finds local servers on llama-server's new default port 9931 when nothing answers on 8080 ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
 ### Fixed
 
-- Fixed `--license` omitting the copyright notice for the URL sanitizer bundled with the Mermaid renderer.
+- Fixed `--license` omitting the copyright notice for the URL sanitizer bundled with the Mermaid renderer ([#16977](https://github.com/can1357/oh-my-pi/pull/16977) by [@kiendle](https://github.com/kiendle))
 - Fixed `omp gc --compress` exiting with "the event loop drained while it was still pending" on Bun 1.3.14 when a session artifact is pretty-printed JSON larger than 1 MiB, and session header probes (gc, session move and transfer) reading whole artifacts on Windows ([#15745](https://github.com/can1357/oh-my-pi/issues/15745), [#16754](https://github.com/can1357/oh-my-pi/pull/16754) by [@wolfiesch](https://github.com/wolfiesch))
 - `/resume` into another session now cancels the previous session's background jobs, as `/new` does, instead of delivering their results into the resumed session and starting a turn there ([#16760](https://github.com/can1357/oh-my-pi/pull/16760) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the models config migration writing `models.yml` readable by other users on the machine, and dropping every custom provider when the write was interrupted; the migrated file is now published atomically with owner-only permissions ([#16654](https://github.com/can1357/oh-my-pi/pull/16654) by [@adi-IL](https://github.com/adi-IL))
