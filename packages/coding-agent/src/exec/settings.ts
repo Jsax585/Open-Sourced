@@ -56,15 +56,18 @@ export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
 		// followed by a plausible filename — including `$VAR` targets; `>|`
 		// (clobber) counts as a redirect; `>&2`/`2>&1` style fd duplication and
 		// redirects of fds other than stdout (`2>err.log`) are not matched, and
-		// the scan continues past them (`2>&1 > out.txt` is a write). The
-		// scan stops at `;`, `&&`, `|` and newlines, so a redirect in a later
-		// command or a heredoc body is not attributed to the echo/cat. Allowed
-		// device sinks are consumed while looking for later real file redirects
+		// the scan continues past them and past input duplication (`<&0`), so
+		// `2>&1 > out.txt` is a write. The scan stops at an unquoted,
+		// unescaped `;`, `&&`, `|` or newline, so a redirect in a later
+		// command or a heredoc body is not attributed to the echo/cat, while
+		// `echo foo\; > out.txt` keeps its escaped separator. Allowed device
+		// sinks are consumed while looking for later real file redirects
 		// because the write tool cannot replace shell output/discard targets.
-		// Each redirect has exactly one way to be consumed (an fd-numbered one
-		// only by the fd branch), which keeps matching linear on long commands.
+		// Each character has exactly one way to be consumed (an fd-numbered
+		// redirect only by the fd branch, an escape only by the escape
+		// branch), which keeps matching linear on long commands.
 		pattern:
-			"^\\s*(?:(?:echo|printf)\\s+|cat\\s*<<|cat(?=\\s+(?:\\d+|&)?>)\\s+)(?:(?:[^\"'>;&|\\n]|(?<=>)&|(?<!>)&(?=>)|(?<=(?:^|\\s)[02-9])>{1,2}\\|?|\"[^\"]*\"|'[^']*')|(?<!\\||>|(?:^|\\s)[02-9])>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?=[\\s;&|]|$))*(?<!\\||>|(?:^|\\s)[02-9])>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]",
+			"^\\s*(?:(?:echo|printf)\\s+|cat\\s*<<|cat(?=\\s+(?:\\d+|&)?>)\\s+)(?:(?:\\\\[\\s\\S]|[^\"'>;&|\\n\\\\]|(?<=[<>])&|(?<![<>])&(?=>)|(?<=(?:^|\\s)[02-9])>{1,2}\\|?|\"[^\"]*\"|'[^']*')|(?<!\\||>|(?:^|\\s)[02-9])>{1,2}\\|?\\s*(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?=[\\s;&|]|$))*(?<!\\||>|(?:^|\\s)[02-9])>{1,2}\\|?\\s*(?!(?:\"/dev/(?:null|tty|stdout|stderr)\"|'/dev/(?:null|tty|stdout|stderr)'|/dev/(?:null|tty|stdout|stderr))(?:[\\s;&|]|$))[$\\w./~\"'-]",
 		tool: "write",
 		message:
 			"Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation. `write` replaces the whole file; to append to an existing file, use `edit` to insert after its last line.",

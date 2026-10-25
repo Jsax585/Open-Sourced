@@ -224,10 +224,25 @@ describe("default echo/printf redirect rule", () => {
 		}
 	});
 
+	it("keeps scanning past escaped separators and input fd duplication", () => {
+		const tools = ["write", "read"];
+		for (const command of [
+			"echo foo\\; > out.txt",
+			"echo a \\| b > out.txt",
+			"echo a \\& b > out.txt",
+			"echo hi <&0 > out.txt",
+			"echo hi 0<&- > out.txt",
+			"echo one\\\ntwo > out.txt",
+		]) {
+			expect(checkBashInterception(command, tools, DEFAULT_BASH_INTERCEPTOR_RULES).suggestedTool).toBe("write");
+		}
+		expect(checkBashInterception("echo hi <&0", tools, DEFAULT_BASH_INTERCEPTOR_RULES).block).toBe(false);
+	});
+
 	it("matches commands with many stderr sinks without exponential backtracking", () => {
 		const start = performance.now();
 		const echo = checkBashInterception(
-			`echo hi${" 2>/dev/null 2>>/dev/null 2>&1".repeat(20)}`,
+			`echo hi${" 2>/dev/null 2>>/dev/null 2>&1 \\; <&0".repeat(20)}`,
 			["write"],
 			DEFAULT_BASH_INTERCEPTOR_RULES,
 		);
