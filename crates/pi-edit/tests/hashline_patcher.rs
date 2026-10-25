@@ -567,3 +567,42 @@ async fn refuses_a_short_body_that_restates_both_neighbours_and_applies_the_rese
 		)
 	);
 }
+
+/// Shapes that lost a range row while reporting success, each refused with
+/// the file left as it was:
+/// - a body that restates the line above twice, in a file with no parser (the
+///   first copy was dropped as an echo and the second written as content,
+///   deleting `z = 3`);
+/// - a one-sided too-short group in a patch whose other group's repair made the
+///   file parse (the short group was applied as written, writing `const a = 1;`
+///   twice and deleting `const c = 3;`).
+#[tokio::test]
+async fn refuses_echo_shapes_that_lost_rows_and_leaves_the_file_unchanged() {
+	const ROWS: &str = "x = 1\ny = 2\nz = 3\nw = 4\n";
+	const MULTI: &str =
+		"const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nfunction f() {\n\treturn 1;\n}\n";
+	let cases = [
+		("r.txt", ROWS, "PUT 2.=3:\n+x = 1\n+x = 1\n+Y = 2\n", "`PUT 2.=3:` rejected"),
+		(
+			"m.ts",
+			MULTI,
+			"PUT 2.=3:\n+const a = 1;\n+const B = 2;\nPUT 6.=6:\n+\treturn 1;\n+}\n",
+			"`PUT 2.=3:` rejected",
+		),
+	];
+	for (path, text, ops, refusal) in cases {
+		let workspace = common::Workspace::new(EditMode::Hashline);
+		workspace.write(path, text);
+		let tag = workspace.snapshot(path, text, None);
+		let error = workspace
+			.apply_json(
+				&json!({ "input": format!("[{path}#{tag}]\n{ops}") }),
+				&common::DiskWriter::default(),
+			)
+			.await
+			.expect_err(path)
+			.to_string();
+		assert!(error.contains(refusal), "{path}: {error}");
+		assert_eq!(workspace.read(path).as_deref(), Some(text), "{path}");
+	}
+}

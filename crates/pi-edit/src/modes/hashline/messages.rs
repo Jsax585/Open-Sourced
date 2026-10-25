@@ -490,27 +490,67 @@ pub fn repeated_boundary_echo_message(
 /// A body restates both neighbouring lines but is too short for the range.
 ///
 /// With both neighbours restated the range cannot be shifted, so the rows
-/// between the echoes are the only content the body offers, and they are
-/// fewer than the range. `left_out` is the inclusive span of range rows past
-/// them; applying or repairing the edit would delete those rows.
+/// left once the restated rows are set aside are the only content the body
+/// offers, and they are fewer than the range. `repeated`: the body restates
+/// them more than once. `left_out` is the inclusive span of range rows past
+/// those rows; applying or repairing the edit would delete them.
 pub fn two_sided_boundary_echo_message(
 	start_line: u32,
 	end_line: u32,
 	above: u32,
 	below: u32,
+	repeated: bool,
 	left_out: (u32, u32),
 ) -> String {
-	let left_out = match left_out {
-		(first, last) if first == last => format!("line {first}"),
-		(first, last) => format!("lines {first}-{last}"),
-	};
+	let left_out = line_span(left_out);
+	let repeated = if repeated { " more than once" } else { "" };
 	format!(
 		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body restates both the {above} \
-		 line(s) just above and the {below} line(s) just below the range, and the rows between them \
-		 are too few to be the full final content of the selected range: they leave out {left_out}, \
-		 which this edit would delete. Re-issue with the range covering exactly the lines that \
-		 change and the body as their complete final content."
+		 line(s) just above and the {below} line(s) just below the range{repeated}, and once the \
+		 rows that restate lines outside the range are set aside, the rows left are too few to be \
+		 the full final content of the selected range: they leave out {left_out}, which this edit \
+		 would delete. Re-issue with the range covering exactly the lines that change and the body \
+		 as their complete final content."
 	)
+}
+
+/// What a patch would do to a range whose body restates a neighbouring line,
+/// judged on the rows it would write there.
+///
+/// `above` / `below` are the spans of neighbouring lines the result would
+/// hold a second copy of; `left_out` is the span of range rows past the rows
+/// the body supplies once those copies are set aside. At least one is set.
+pub fn boundary_echo_outcome_message(
+	start_line: u32,
+	end_line: u32,
+	above: Option<(u32, u32)>,
+	below: Option<(u32, u32)>,
+	left_out: Option<(u32, u32)>,
+) -> String {
+	let mut effects = Vec::new();
+	if let Some(span) = above {
+		effects.push(format!("write {} (just above the range) a second time", line_span(span)));
+	}
+	if let Some(span) = below {
+		effects.push(format!("write {} (just below the range) a second time", line_span(span)));
+	}
+	if let Some(span) = left_out {
+		effects.push(format!("leave out {} of the range, deleting it", line_span(span)));
+	}
+	format!(
+		"`PUT {start_line}{HL_RANGE_SEP}{end_line}:` rejected: the body restates lines next to the \
+		 range, and as applied the result would {}. Re-issue with the range covering exactly the \
+		 lines that change and the body as their complete final content.",
+		effects.join(" and ")
+	)
+}
+
+fn line_span((first, last): (u32, u32)) -> String {
+	if first == last {
+		format!("line {first}")
+	} else {
+		format!("lines {first}-{last}")
+	}
 }
 
 /// A syntax-essential selected edge can be retained on either side of the
