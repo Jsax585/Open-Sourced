@@ -117,6 +117,7 @@ import {
 	shouldDropAutoToolChoiceForReasoning,
 	shouldRetryWithoutStrictTools,
 } from "./openai-shared";
+import { readOpenRouterGenerationError } from "./openrouter-generation";
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
@@ -1130,6 +1131,32 @@ const streamOpenAIResponsesOnce = (
 							"OpenAI responses stream closed before a terminal response event was received",
 							{ provider: model.provider, kind: "incomplete-stream" },
 						);
+					}
+
+					// OpenRouter's Responses translation can hide a native failure behind
+					// "completed". Consult metadata only for truly empty stops, never
+					// for replayable reasoning or provider-hosted tool progress.
+					if (
+						model.compat.isOpenRouterHost &&
+						output.stopReason === "stop" &&
+						output.content.length === 0 &&
+						nativeOutputItems.length === 0 &&
+						!output.stopDetails &&
+						output.responseId
+					) {
+						const nativeError = await readOpenRouterGenerationError({
+							baseUrl: resolvedBaseUrl,
+							headers,
+							responseId: output.responseId,
+							outputTokens: output.usage.output,
+							reasoningTokens: output.usage.reasoningTokens,
+							fetch: options?.fetch,
+							signal: requestSignal,
+						});
+						if (abortTracker.wasCallerAbort()) throw new AIError.AbortError();
+						if (nativeError) {
+							throw new AIError.ProviderResponseError(nativeError, { provider: model.provider, kind: "output" });
+						}
 					}
 
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
