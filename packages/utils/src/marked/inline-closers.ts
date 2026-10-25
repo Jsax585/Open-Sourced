@@ -170,16 +170,15 @@ class EmphasisDelimiters {
 
 /**
  * The runs of backticks in the root source, for the code span rule. A span opened by `width` backticks closes at the
- * first `width` backticks after its opening run that no backslash escapes: the start of a later run of at least
- * `width`, or, in a run whose first backtick a backslash escapes, the backticks from its `width`th on, since the
- * search for a closer goes on `width` past an escaped one.
+ * first `width` backticks after its opening run that belong to a later run of at least `width` backticks. Backslash
+ * escapes do not apply inside a code span, so a backslash just before a closing backtick is content and still closes
+ * the span: an opener run takes the same closer with or without it, and never runs on to the next span's opener.
  */
 class CodeRuns {
-	// Per run, in order: where it starts and ends, and whether a backslash escapes it.
+	// Per run, in order: where it starts and ends.
 	readonly #starts: number[] = [];
 	readonly #ends: number[] = [];
-	readonly #escaped: boolean[] = [];
-	// A segment tree over the runs of the widest closer each run holds: its length, or half of it when escaped.
+	// A segment tree over the runs of the widest closer each run holds: its length.
 	readonly #widest: Int32Array;
 	readonly #leaves: number;
 
@@ -188,11 +187,9 @@ class CodeRuns {
 		for (let at = src.indexOf("`"); at !== -1;) {
 			let end = at + 1;
 			while (src.charCodeAt(end) === 0x60 /* ` */) end++;
-			const escaped = escapedAt(src, at);
 			this.#starts.push(at);
 			this.#ends.push(end);
-			this.#escaped.push(escaped);
-			widths.push(escaped ? (end - at) >> 1 : end - at);
+			widths.push(end - at);
 			at = src.indexOf("`", end);
 		}
 		let leaves = 1;
@@ -212,7 +209,7 @@ class CodeRuns {
 	/** Where the closer of a code span opened by `width` backticks that end at `from` starts, or -1. */
 	closerAfter(from: number, width: number): number {
 		const run = this.#firstHolding(lowerBound(this.#starts, from), width);
-		return run === -1 ? -1 : this.#starts[run]! + (this.#escaped[run] ? width : 0);
+		return run === -1 ? -1 : this.#starts[run]!;
 	}
 
 	/** The first run at or after `first` that holds a closer of `width` backticks, or -1. */
