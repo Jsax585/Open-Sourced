@@ -175,7 +175,25 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		const artifact = await resolveArtifactFile(url, context);
+		let artifact: ResolvedArtifactFile;
+		try {
+			artifact = await resolveArtifactFile(url, context);
+		} catch (error) {
+			if (!(error instanceof MissingArtifactError)) throw error;
+			// A non-persistent session (`--no-session`, SDK) spills into memory
+			// instead of an artifacts dir, so the file lookup misses but the
+			// `artifact://` link the truncation footer advertises must still read.
+			const id = parseArtifactId(url);
+			const inMemory = context?.session?.sessionManager?.getArtifactContent?.(id) ?? null;
+			if (inMemory === null) throw error;
+			const size = Buffer.byteLength(inMemory, "utf8");
+			if (size > MAX_INLINE_ARTIFACT_BYTES) {
+				throw new Error(
+					`Artifact ${id} is ${size} bytes; full internal resolution is blocked. Use read selectors such as artifact://${id}:1-3000 or artifact://${id}:raw:1-3000.`,
+				);
+			}
+			return { url: url.href, content: inMemory, contentType: "text/plain", size };
+		}
 
 		// Path consumers (search, the shell filesystem) use `locate`, which never
 		// reads the bytes; only content materialization is size-gated.
