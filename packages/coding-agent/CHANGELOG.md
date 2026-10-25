@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an `Omp-Session: <id>` trailer to the commits omp writes itself (autoresearch `init_experiment`/`log_experiment`, `omp commit`, isolated task merges and branch commits, the git TUI) when `OMP_SESSION_ID` holds a session id, so those commits trace back to their session like commits made through `git commit --trailer`
+
 ### Fixed
 
 - Fixed `read` middle-eliding large file pages into an artifact; a page past the output spill threshold now stops at a line boundary with an exact `:N` continuation ([#16277](https://github.com/can1357/oh-my-pi/issues/16277))
