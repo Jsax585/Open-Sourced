@@ -543,10 +543,10 @@ pub fn boundary_echo_outcome_message(
 			format!("write {} ({place} the range) a second time", line_span((first, last)))
 		},
 		Restated::Copies(line, 1) => {
-			format!("write line {line} ({place} the range) a second time")
+			format!("hold one more copy of line {line} ({place} the range) than the range did")
 		},
 		Restated::Copies(line, extra) => {
-			format!("write line {line} ({place} the range) {extra} more times")
+			format!("hold {extra} more copies of line {line} ({place} the range) than the range did")
 		},
 	};
 	let mut effects = Vec::new();
