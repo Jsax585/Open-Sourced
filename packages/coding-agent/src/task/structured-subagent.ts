@@ -12,11 +12,13 @@ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
+	formatModelStringWithRouting,
 	resolveAgentModelSelection,
 	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
-	formatModelStringWithRouting,
+	getModelMatchPreferences,
 	resolveModelOverride,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { isKindRole } from "../config/model-roles";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
@@ -86,7 +88,12 @@ import {
 	cfgTaskPerCallModel,
 	perCallModelEnabled,
 } from "./settings";
-import { assertPerCallModelApproved, PerCallModelError, type PerCallModelGrants } from "./model-approval";
+import {
+	assertPerCallModelApproved,
+	parentModelGrantPattern,
+	PerCallModelError,
+	type PerCallModelGrants,
+} from "./model-approval";
 
 /** Final structured completion metadata returned for a schema-bearing run. */
 export type StructuredSubagentSchemaResult = StructuredSubagentOutput;
@@ -429,7 +436,7 @@ async function preflightPerCallModel(
 	if (selectorProblem) fail(selectorProblem);
 	// Roles, their values and the grants come from the operator's settings, never a subagent
 	// overlay that the executor fills from advisor frontmatter or a retry-role snapshot.
-	const operatorSettings = settings.rootSettings();
+	const operatorSettings = settings.grantAuthority();
 	const candidates = perCallModelCandidates(selector) ?? [];
 	const roles = candidates.map(candidate => {
 		if (!ROLE_MODEL_SELECTOR.test(candidate)) return undefined;
@@ -456,6 +463,7 @@ async function preflightPerCallModel(
 		agentModel: agent.model,
 		agentSource: agent.source,
 		parentModelPattern,
+		matchPreferences: structuredClone(getModelMatchPreferences(settings.grantAuthority())),
 	};
 	const role = candidates.length === 1 ? roles[0] : undefined;
 	// A role candidate expands through its configured value; any other candidate stays literal.
@@ -477,12 +485,12 @@ async function preflightPerCallModel(
 		let resolvedAny = false;
 		for (const source of candidateRole ? resolveConfiguredModelPatterns(candidate, operatorSettings) : [candidate]) {
 			// The operator's role values resolve as they do everywhere else; the caller's own ids only exactly.
-			const resolution = resolveModelOverride(
-				[source],
-				chatRegistry,
-				operatorSettings,
-				candidateRole ? undefined : exact,
-			);
+			const resolution = candidateRole
+				? resolveModelRoleValue(source, chat, {
+						settings: operatorSettings,
+						matchPreferences: grants.matchPreferences,
+					})
+				: resolveModelOverride([source], chatRegistry, operatorSettings, exact);
 			const model = resolution.model;
 			if (!model) continue;
 			try {
@@ -660,9 +668,9 @@ export async function resolveEffectiveSubagentPolicy(
 					perCallSelector,
 					agent,
 					Object.hasOwn(agentModelOverrides, agentName),
-					// The parent's live model grants with its `@upstream` pin, so it grants only that route.
+					// A multi-upstream or otherwise richer parent route cannot grant a simpler selector.
 					parentActiveModel
-						? formatModelStringWithRouting(parentActiveModel)
+						? parentModelGrantPattern(parentActiveModel)
 						: request.session.getActiveModelString?.(),
 				);
 	const perCallModelGrants = perCall?.grants;
@@ -896,7 +904,7 @@ function buildExecutorOptions(
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
-		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+		contextFiles: session.contextFiles,
 		noContextFiles: session.noContextFiles,
 		skills,
 		// Autoload runs after session start, outside the seance isolation options.

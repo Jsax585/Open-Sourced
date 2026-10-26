@@ -4,21 +4,26 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { factoryDroidRegistry } from "@oh-my-pi/pi-catalog/compat/factory-droid";
 import { buildFactoryDroidModel } from "@oh-my-pi/pi-catalog/discovery";
-import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { getModelMatchPreferences, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { parseAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import {
 	assertPerCallDispatchModel,
 	assertPerCallModelApproved,
-	isPerCallModelApproved,
+	getPerCallModelAdvertisement,
+	parentModelGrantPattern,
+	PerCallModelError,
 	type PerCallModelGrants,
 } from "@oh-my-pi/pi-coding-agent/task/model-approval";
+import { cfgTaskPerCallModelAllow } from "@oh-my-pi/pi-coding-agent/task/settings";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 
 const target = createMockModel({ id: "target" });
 const other = createMockModel({ id: "other" });
 const bracketed = createMockModel({ id: "glm[1m]" });
+const bracketImposter = createMockModel({ id: "glm1" });
 const image = { ...createMockModel({ id: "painter" }), kind: "image" as const };
 const routerModel = (provider: string, id: string, baseUrl: string) =>
 	buildModel({
@@ -49,10 +54,36 @@ const droidModel = (id: string, rotation: string[]) =>
 const droidFable = droidModel("claude-fable-5", ["anthropic"]);
 const droidVertexFable = droidModel("claude-fable-5.1", ["vertex_anthropic"]);
 const droidOpus = droidModel("claude-opus-5", ["anthropic"]);
-const chat = [target, other, bracketed, sonnet, codingRouter, codingRouterLow, droidFable, droidVertexFable, droidOpus];
+const chat = [
+	target,
+	other,
+	bracketed,
+	bracketImposter,
+	sonnet,
+	codingRouter,
+	codingRouterLow,
+	droidFable,
+	droidVertexFable,
+	droidOpus,
+];
 const registry = {
+	getAll: () => [...chat, image],
 	getAvailable: (kind?: string) => (kind === "chat" ? chat : [...chat, image]),
-} as Parameters<typeof isPerCallModelApproved>[2];
+};
+
+function approved(
+	model: Model,
+	grants: PerCallModelGrants,
+	modelRegistry: Parameters<typeof assertPerCallModelApproved>[2] = registry,
+): boolean {
+	try {
+		assertPerCallModelApproved(model, grants, modelRegistry);
+		return true;
+	} catch (error) {
+		if (!(error instanceof PerCallModelError)) throw error;
+		return false;
+	}
+}
 
 interface Row {
 	name: string;
@@ -62,6 +93,7 @@ interface Row {
 	agentRemoved?: boolean;
 	parentModelPattern?: string;
 	model?: Model;
+	unavailable?: Model;
 	/** Settings injected by a subagent overlay on top of `settings`. */
 	overlay?: Record<string, unknown>;
 	approved: boolean;
@@ -78,6 +110,32 @@ const rows: Row[] = [
 	},
 	{ name: "role value naming another model", settings: { modelRoles: { review: "mock/other" } }, approved: false },
 	{ name: "glob role value", settings: { modelRoles: { review: "mock/*" } }, approved: true },
+	{ name: "bare-id glob role value", settings: { modelRoles: { review: "tar?et" } }, approved: true },
+	{ name: "glob role value with a level", settings: { modelRoles: { review: "mock/*:high" } }, approved: true },
+	{
+		name: "a provider-scoped glob never matches a different provider's bare id",
+		settings: { modelRoles: { review: "anthropic/*" } },
+		model: sonnet,
+		approved: false,
+	},
+	{
+		name: "a glob keeps an explicit upstream pin",
+		settings: { modelRoles: { review: "openrouter/anthropic/*@anthropic" } },
+		model: pinnedSonnet,
+		approved: true,
+	},
+	{
+		name: "an unpinned provider glob does not grant a pinned route",
+		settings: { modelRoles: { review: "openrouter/*" } },
+		model: pinnedSonnet,
+		approved: false,
+	},
+	{
+		name: "a provider glob spans slashes in aggregator ids",
+		settings: { modelRoles: { review: "openrouter/*" } },
+		model: sonnet,
+		approved: true,
+	},
 	{ name: "non-chat role value", settings: { modelRoles: { image: "mock/target" } }, approved: false },
 	{ name: "role alias is not expanded into defaults", settings: { modelRoles: { review: "@smol" } }, approved: false },
 	{ name: "bare * is @default, not a glob", settings: { modelRoles: { review: "*" } }, approved: false },
@@ -119,6 +177,26 @@ const rows: Row[] = [
 		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/target"] },
 		approved: true,
 	},
+	{
+		name: "the allowlist compares a level-shaped entry literally",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/target:high"] },
+		approved: false,
+	},
+	{
+		name: "the allowlist never resolves a bare id",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["target"] },
+		approved: false,
+	},
+	{
+		name: "the allowlist expands provider-scoped globs",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/*"] },
+		approved: true,
+	},
+	{
+		name: "the allowlist trims literal entries",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": [" mock/target "] },
+		approved: true,
+	},
 	{ name: "allowlist alone grants nothing", settings: { "task.perCallModelAllow": ["mock/target"] }, approved: false },
 	{
 		name: "allowlist role entry admits what the role grants",
@@ -141,6 +219,41 @@ const rows: Row[] = [
 		approved: true,
 	},
 	{
+		name: "an allowlist bare-id glob matches only the bare id",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["tar?et"] },
+		approved: true,
+	},
+	{
+		name: "brackets in an allowlist glob are literal",
+		settings: { modelRoles: { review: "mock/*" }, "task.perCallModelAllow": ["mock/glm[1m]*"] },
+		model: bracketImposter,
+		approved: false,
+	},
+	{
+		name: "an allowlist bracketed glob admits the literal brackets",
+		settings: { modelRoles: { review: "mock/*" }, "task.perCallModelAllow": ["mock/glm[1m]*"] },
+		model: bracketed,
+		approved: true,
+	},
+	{
+		name: "an unpinned allowlist glob does not admit a pinned route",
+		settings: {
+			modelRoles: { review: "openrouter/anthropic/claude-sonnet-4.5@anthropic" },
+			"task.perCallModelAllow": ["openrouter/*"],
+		},
+		model: pinnedSonnet,
+		approved: false,
+	},
+	{
+		name: "an allowlist glob keeps an explicit upstream pin",
+		settings: {
+			modelRoles: { review: "openrouter/anthropic/claude-sonnet-4.5@anthropic" },
+			"task.perCallModelAllow": ["openrouter/*@anthropic"],
+		},
+		model: pinnedSonnet,
+		approved: true,
+	},
+	{
 		name: "brackets in a literal id are not a glob",
 		settings: { modelRoles: { review: "mock/glm[1m]" } },
 		model: bracketed,
@@ -150,6 +263,19 @@ const rows: Row[] = [
 		name: "a literal bracketed grant approves only itself",
 		settings: { modelRoles: { review: "mock/glm[1m]" } },
 		approved: false,
+	},
+	{
+		name: "an unavailable bracketed literal never becomes a glob",
+		settings: { modelRoles: { review: "mock/glm[1m]" } },
+		unavailable: bracketed,
+		model: bracketImposter,
+		approved: false,
+	},
+	{
+		name: "brackets stay literal within an actual glob",
+		settings: { modelRoles: { review: "mock/glm[1m]*" } },
+		model: bracketed,
+		approved: true,
 	},
 	{
 		name: "a non-chat model never qualifies",
@@ -203,6 +329,20 @@ const rows: Row[] = [
 		approved: true,
 	},
 	{
+		name: "an unavailable literal with a level-shaped suffix never grants the base id",
+		settings: { modelRoles: { review: "nanogpt/nanogpt/coding-router:low" } },
+		unavailable: codingRouterLow,
+		model: codingRouter,
+		approved: false,
+	},
+	{
+		name: "an unavailable bare literal with a level-shaped suffix never grants the base id",
+		settings: { modelRoles: { review: "nanogpt/coding-router:low" } },
+		unavailable: codingRouterLow,
+		model: codingRouter,
+		approved: false,
+	},
+	{
 		name: "an allowlisted catalog id with a level-shaped suffix admits that id",
 		settings: {
 			modelRoles: { review: "nanogpt/*" },
@@ -221,16 +361,26 @@ const rows: Row[] = [
 		approved: false,
 	},
 	{
-		name: "a model whose provider always falls back server-side needs the fallback approved",
+		name: "an allowlist role never splits an unavailable literal's level-shaped suffix",
+		settings: {
+			modelRoles: { review: "nanogpt/nanogpt/coding-router:low", smol: "nanogpt/nanogpt/coding-router" },
+			"task.perCallModelAllow": ["@review"],
+		},
+		unavailable: codingRouterLow,
+		model: codingRouter,
+		approved: false,
+	},
+	{
+		name: "a model whose provider may fall back server-side is refused",
 		settings: { modelRoles: { review: "factory-droid/claude-fable-5" } },
 		model: droidFable,
 		approved: false,
 	},
 	{
-		name: "a model whose server-side fallback target is approved",
+		name: "a model whose server-side fallback target is also approved is still refused",
 		settings: { modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" } },
 		model: droidFable,
-		approved: true,
+		approved: false,
 	},
 	{
 		name: "a route without a server-side fallback needs no fallback approval",
@@ -251,11 +401,74 @@ const rows: Row[] = [
 	},
 ];
 
+describe("per-call model advertisement", () => {
+	it("advertises no built-in role defaults", () => {
+		expect(getPerCallModelAdvertisement(Settings.isolated())).toEqual({ roles: [], allowlist: [] });
+	});
+
+	it("keeps configured role order and selectors while filtering and deduplicating grants", () => {
+		const settings = Settings.isolated({
+			modelRoles: {
+				smol: "anthropic/claude-haiku-4-5",
+				image: "image/provider",
+				judge: "judge/provider",
+				web: "web/provider",
+				alias: "@smol",
+				legacyAlias: "pi/slow",
+				defaulted: "default",
+				inherited: "inherit",
+				starAlias: "*",
+				slow: "unavailable/model@upstream:high",
+				custom: "anthropic/*, @slow, default, mock/target, anthropic/*, inherit",
+			},
+			"task.perCallModelAllow": ["mock/target", " mock/target ", "unavailable/model@upstream"],
+		});
+		expect(getPerCallModelAdvertisement(settings)).toEqual({
+			roles: [
+				{ role: "smol", patterns: ["anthropic/claude-haiku-4-5"] },
+				{ role: "slow", patterns: ["unavailable/model@upstream:high"] },
+				{ role: "custom", patterns: ["anthropic/*", "mock/target"] },
+			],
+			allowlist: ["mock/target", "unavailable/model@upstream"],
+		});
+	});
+
+	it("reads live grant authority, excluding derived settings but honoring host overlays", () => {
+		const root = Settings.isolated({
+			modelRoles: { smol: "mock/target" },
+			"task.perCallModelAllow": ["mock/target"],
+		});
+		const child = root.overlay(
+			{ modelRoles: { slow: "mock/other" }, "task.perCallModelAllow": ["mock/other"] },
+			{ derived: true },
+		);
+		expect(getPerCallModelAdvertisement(child)).toEqual(getPerCallModelAdvertisement(root));
+		root.setModelRole("smol", "mock/edited");
+		cfgTaskPerCallModelAllow.override(root, ["mock/edited"]);
+		expect(getPerCallModelAdvertisement(child)).toEqual({
+			roles: [{ role: "smol", patterns: ["mock/edited"] }],
+			allowlist: ["mock/edited"],
+		});
+
+		const host = root.overlay({
+			modelRoles: { slow: "host/model" },
+			"task.perCallModelAllow": ["host/model"],
+		});
+		expect(getPerCallModelAdvertisement(host)).toEqual({
+			roles: [
+				{ role: "slow", patterns: ["host/model"] },
+				{ role: "smol", patterns: ["mock/edited"] },
+			],
+			allowlist: ["host/model"],
+		});
+	});
+});
+
 describe("per-call model grants", () => {
 	it.each(rows)("$name", row => {
 		const grants: PerCallModelGrants = {
 			settings: row.overlay
-				? Settings.isolated(row.settings ?? {}).overlay(row.overlay)
+				? Settings.isolated(row.settings ?? {}).overlay(row.overlay, { derived: true })
 				: Settings.isolated(row.settings ?? {}),
 			agentName: "worker",
 			agentSource: row.agentSource,
@@ -263,16 +476,68 @@ describe("per-call model grants", () => {
 			agentRemoved: row.agentRemoved,
 			parentModelPattern: row.parentModelPattern,
 		};
-		expect(isPerCallModelApproved(row.model ?? target, grants, registry)).toBe(row.approved);
+		const available = chat.filter(model => model !== row.unavailable);
+		const modelRegistry = { ...registry, getAvailable: () => available };
+		expect(approved(row.model ?? target, grants, modelRegistry)).toBe(row.approved);
 	});
 
 	it("a role removed from the operator's settings stops granting even when a child snapshotted it", () => {
 		const root = Settings.isolated({ modelRoles: { review: "mock/target" } });
 		// Spawn-time snapshot: the child copies the root's roles into its own overrides.
-		const child = root.overlay({ modelRoles: { ...root.getModelRoles(), advisor: "mock/other" } });
+		const child = root.overlay({ modelRoles: { ...root.getModelRoles(), advisor: "mock/other" } }, { derived: true });
 		root.setModelRole("review", undefined);
-		const grandchild = child.overlay({});
-		expect(isPerCallModelApproved(target, { settings: grandchild, agentName: "worker" }, registry)).toBe(false);
+		const grandchild = child.overlay({}, { derived: true });
+		expect(approved(target, { settings: grandchild, agentName: "worker" })).toBe(false);
+	});
+
+	it("honors an SDK host overlay's allowlist", () => {
+		const settings = Settings.isolated({ modelRoles: { review: "mock/target" } }).overlay({
+			"task.perCallModelAllow": ["mock/other"],
+		});
+		expect(approved(target, { settings, agentName: "worker" })).toBe(false);
+	});
+
+	it("honors roles configured by an SDK host overlay", () => {
+		const settings = Settings.isolated().overlay({ modelRoles: { review: "mock/target" } });
+		expect(approved(target, { settings, agentName: "worker" })).toBe(true);
+	});
+
+	it("resolves grants against spawn-time preferences while role and allowlist edits remain live", () => {
+		const first = createMockModel({ id: "worker-a" });
+		const second = createMockModel({ id: "worker-b" });
+		const usageOrder = ["mock/worker-a", "mock/worker-b"];
+		const settings = Settings.isolated(
+			{ modelRoles: { review: "mock/worker" }, "task.perCallModelAllow": ["@review"] },
+			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
+		);
+		const grants: PerCallModelGrants = {
+			settings,
+			agentName: "worker",
+			matchPreferences: structuredClone(getModelMatchPreferences(settings)),
+		};
+		const modelRegistry = { getAll: () => [first, second], getAvailable: () => [first, second] };
+		expect(approved(first, grants, modelRegistry)).toBe(true);
+		usageOrder.reverse();
+		expect(approved(first, grants, modelRegistry)).toBe(true);
+		expect(approved(second, grants, modelRegistry)).toBe(false);
+		cfgTaskPerCallModelAllow.override(settings, ["mock/worker-b"]);
+		expect(approved(first, grants, modelRegistry)).toBe(false);
+		cfgTaskPerCallModelAllow.override(settings, []);
+		settings.setModelRole("review", undefined);
+		expect(approved(first, grants, modelRegistry)).toBe(false);
+	});
+
+	it.each([
+		{ only: ["anthropic", "google-vertex"] },
+		{ order: ["anthropic", "google-vertex"] },
+		{ only: ["anthropic"], allowFallbacks: true },
+	])("does not collapse a parent's routing policy into a grant: %j", routing => {
+		const model = { ...sonnet, compat: { ...sonnet.compat, openRouterRouting: routing } } as Model;
+		expect(parentModelGrantPattern(model)).toBeUndefined();
+	});
+
+	it("captures a faithfully representable parent upstream pin", () => {
+		expect(parentModelGrantPattern(pinnedSonnet)).toBe("openrouter/anthropic/claude-sonnet-4.5@anthropic");
 	});
 
 	it("never trusts a project agent file that claims a user source", () => {
@@ -289,16 +554,18 @@ describe("per-call model grants", () => {
 			agentModel: agent.model,
 			agentSource: agent.source,
 		};
-		expect(isPerCallModelApproved(target, grants, registry)).toBe(false);
+		expect(approved(target, grants)).toBe(false);
 	});
 
-	it("names the unapproved server-side fallback target in the rejection", () => {
+	it("names the server-side fallback and rejects even when its target is approved", () => {
 		const grants = {
-			settings: Settings.isolated({ modelRoles: { review: "factory-droid/claude-fable-5" } }),
+			settings: Settings.isolated({
+				modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" },
+			}),
 			agentName: "worker",
 		};
 		expect(() => assertPerCallModelApproved(droidFable, grants, registry)).toThrow(
-			/server-side fallback to factory-droid\/claude-opus-5/,
+			/provider may answer with another model server-side \(factory-droid\/claude-opus-5\).*Only checked client-side fallbacks/,
 		);
 	});
 
@@ -324,21 +591,21 @@ describe("per-call model grants", () => {
 	});
 
 	it.each([
-		["a provider glob", ["openai/*"]],
-		["a provider glob with a level", ["openai/*:high"]],
-		["a role whose value is a provider glob", ["@scope"]],
-	])("keeps %s in the allowlist on that provider", (_name, allow) => {
+		["a provider glob", ["openai/*"], true],
+		["a literal level-shaped glob", ["openai/*:high"], false],
+		["a role whose value is a provider glob", ["@scope"], true],
+	])("keeps %s in the allowlist on that provider", (_name, allow, directApproved) => {
 		const direct = createMockModel({ provider: "openai", id: "gpt-5" });
 		const routed = createMockModel({ provider: "openrouter", id: "openai/gpt-5" });
-		const providers = { getAvailable: () => [direct, routed] } as Parameters<typeof isPerCallModelApproved>[2];
+		const providers = { getAll: () => [direct, routed], getAvailable: () => [direct, routed] };
 		const settings = Settings.isolated({
 			modelRoles: { review: "openrouter/openai/gpt-5", fast: "openai/gpt-5", scope: "openai/*" },
 			"task.perCallModelAllow": allow,
 		});
 		const grants = { settings, agentName: "worker" };
 		// Granted by `review`, but its bare id `openai/gpt-5` must not satisfy an `openai/*` entry.
-		expect(isPerCallModelApproved(routed, grants, providers)).toBe(false);
-		expect(isPerCallModelApproved(direct, grants, providers)).toBe(true);
+		expect(approved(routed, grants, providers)).toBe(false);
+		expect(approved(direct, grants, providers)).toBe(directApproved);
 	});
 });
 
@@ -357,6 +624,16 @@ describe("per-call dispatch with runtime fallbacks", () => {
 			/not approved/,
 		],
 		[
+			"runtime: a question-mark wildcard chain entry never grants",
+			{ ...chained, "retry.fallbackChains": { review: ["mock/tar?et"] }, "task.perCallModelFallbacks": "runtime" },
+			/not approved/,
+		],
+		[
+			"runtime: a level-shaped exact allowlist entry stays literal",
+			{ ...chained, "task.perCallModelFallbacks": "runtime", "task.perCallModelAllow": ["mock/target:high"] },
+			/task\.perCallModelAllow/,
+		],
+		[
 			"runtime: a chain entry outside the allowlist is refused",
 			{ ...chained, "task.perCallModelFallbacks": "runtime", "task.perCallModelAllow": ["mock/other"] },
 			/task\.perCallModelAllow/,
@@ -368,9 +645,7 @@ describe("per-call dispatch with runtime fallbacks", () => {
 	it("runtime: a concrete chain entry may be sent to but never requested", () => {
 		const settings = { ...chained, "task.perCallModelFallbacks": "runtime" };
 		expect(dispatch(settings)).not.toThrow();
-		expect(
-			isPerCallModelApproved(target, { settings: Settings.isolated(settings), agentName: "worker" }, registry),
-		).toBe(false);
+		expect(approved(target, { settings: Settings.isolated(settings), agentName: "worker" }, registry)).toBe(false);
 		// A non-chat model named in a chain stays out of reach.
 		const imageChain = { ...settings, "retry.fallbackChains": { review: ["mock/painter"] } };
 		expect(dispatch(imageChain, image)).toThrow(/not approved/);
@@ -379,15 +654,82 @@ describe("per-call dispatch with runtime fallbacks", () => {
 	it("runtime: reads the opt-in and chain from the operator's settings, never a subagent overlay", () => {
 		const grants = (settings: Settings) => ({ settings, agentName: "worker" });
 		// The executor installs the worker's own `subagent:<id>` chain on its overlay; that never grants.
-		const overlaid = Settings.isolated({ ...chained, "retry.fallbackChains": {} }).overlay({
-			"task.perCallModelFallbacks": "runtime",
-			"retry.fallbackChains": { "subagent:x": ["mock/target"] },
-		});
+		const overlaid = Settings.isolated({ ...chained, "retry.fallbackChains": {} }).overlay(
+			{
+				"task.perCallModelFallbacks": "runtime",
+				"retry.fallbackChains": { "subagent:x": ["mock/target"] },
+			},
+			{ derived: true },
+		);
 		expect(() => assertPerCallDispatchModel(target, grants(overlaid), registry)).toThrow(/not approved/);
-		const operator = Settings.isolated({ ...chained, "task.perCallModelFallbacks": "runtime" }).overlay({
+		const operator = Settings.isolated({ ...chained, "task.perCallModelFallbacks": "runtime" }).overlay(
+			{ "task.perCallModelFallbacks": "off" },
+			{ derived: true },
+		);
+		expect(() => assertPerCallDispatchModel(target, grants(operator), registry)).not.toThrow();
+	});
+
+	it("runtime: honors a host overlay as its own grant authority", () => {
+		const host = Settings.isolated({ ...chained, "task.perCallModelFallbacks": "runtime" }).overlay({
 			"task.perCallModelFallbacks": "off",
 		});
-		expect(() => assertPerCallDispatchModel(target, grants(operator), registry)).not.toThrow();
+		expect(() => assertPerCallDispatchModel(target, { settings: host, agentName: "worker" }, registry)).toThrow(
+			/perCallModelFallbacks: runtime/,
+		);
+		const enabledHost = Settings.isolated({ ...chained }).overlay({ "task.perCallModelFallbacks": "runtime" });
+		expect(() =>
+			assertPerCallDispatchModel(target, { settings: enabledHost, agentName: "worker" }, registry),
+		).not.toThrow();
+	});
+
+	it("runtime: unavailable chain literals never broaden to their level-shaped siblings", () => {
+		const modelRegistry = { ...registry, getAvailable: () => chat.filter(model => model !== codingRouterLow) };
+		const grants = {
+			settings: Settings.isolated({
+				modelRoles: { review: "mock/other" },
+				"retry.fallbackChains": { review: ["nanogpt/nanogpt/coding-router:low"] },
+				"task.perCallModelFallbacks": "runtime",
+			}),
+			agentName: "worker",
+		};
+		expect(() => assertPerCallDispatchModel(codingRouter, grants, modelRegistry)).toThrow(/not approved/);
+	});
+
+	it("runtime: uses the same scoped role and glob allowlist rules as initial approval", () => {
+		const settings = {
+			modelRoles: { review: "mock/other", scope: "anthropic/*" },
+			"retry.fallbackChains": { review: ["openrouter/anthropic/claude-sonnet-4.5"] },
+			"task.perCallModelFallbacks": "runtime",
+		};
+		expect(dispatch({ ...settings, "task.perCallModelAllow": ["anthropic/*"] }, sonnet)).toThrow(/not approved/);
+		expect(dispatch({ ...settings, "task.perCallModelAllow": ["@scope"] }, sonnet)).toThrow(/not approved/);
+		expect(dispatch({ ...settings, "task.perCallModelAllow": ["openrouter/*"] }, sonnet)).not.toThrow();
+	});
+
+	it("runtime: freezes non-exact chain matching at spawn while allowlist edits stay live", () => {
+		const first = createMockModel({ id: "worker-a" });
+		const second = createMockModel({ id: "worker-b" });
+		const usageOrder = ["mock/worker-a", "mock/worker-b"];
+		const settings = Settings.isolated(
+			{
+				modelRoles: { review: "mock/other" },
+				"retry.fallbackChains": { review: ["mock/worker"] },
+				"task.perCallModelFallbacks": "runtime",
+				"task.perCallModelAllow": ["mock/*"],
+			},
+			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
+		);
+		const grants = {
+			settings,
+			agentName: "worker",
+			matchPreferences: structuredClone(getModelMatchPreferences(settings)),
+		};
+		const modelRegistry = { getAll: () => [first, second], getAvailable: () => [first, second] };
+		usageOrder.reverse();
+		expect(() => assertPerCallDispatchModel(first, grants, modelRegistry)).not.toThrow();
+		expect(() => assertPerCallDispatchModel(second, grants, modelRegistry)).toThrow(/not approved/);
+		cfgTaskPerCallModelAllow.override(settings, ["mock/worker-b"]);
+		expect(() => assertPerCallDispatchModel(first, grants, modelRegistry)).toThrow(/not approved/);
 	});
 
 	it("runtime: a chain entry's @upstream pin is part of its identity", () => {
@@ -400,17 +742,17 @@ describe("per-call dispatch with runtime fallbacks", () => {
 		expect(dispatch(pinnedChain, sonnet)).toThrow(/not approved/);
 	});
 
-	it("runtime: a Factory Droid chain entry needs its server-side fallback target reachable", () => {
+	it("runtime: Factory Droid server-side fallbacks are always refused, even with reachable targets", () => {
 		const droidChain = {
 			modelRoles: { review: "mock/other" },
 			"retry.fallbackChains": { review: ["factory-droid/claude-fable-5"] },
 			"task.perCallModelFallbacks": "runtime",
 		};
-		expect(dispatch(droidChain, droidFable)).toThrow(/server-side fallback to factory-droid\/claude-opus-5/);
+		expect(dispatch(droidChain, droidFable)).toThrow(/another model server-side \(factory-droid\/claude-opus-5\)/);
 		const withTarget = {
 			...droidChain,
 			"retry.fallbackChains": { review: ["factory-droid/claude-fable-5", "factory-droid/claude-opus-5"] },
 		};
-		expect(dispatch(withTarget, droidFable)).not.toThrow();
+		expect(dispatch(withTarget, droidFable)).toThrow(/another model server-side/);
 	});
 });

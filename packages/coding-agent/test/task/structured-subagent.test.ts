@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
+import type { Model } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { factoryDroidRegistry } from "@oh-my-pi/pi-catalog/compat/factory-droid";
+import { buildFactoryDroidModel } from "@oh-my-pi/pi-catalog/discovery";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	disableProvider,
@@ -1440,14 +1444,21 @@ describe("agent frontmatter structured opt-in", () => {
 describe("per-call model preflight", () => {
 	const target = createMockModel({ id: "target" });
 	const painter = { ...createMockModel({ id: "painter" }), kind: "image" as const };
-	function perCallSession(settings: Record<string, unknown>, warm = true, refreshPending = false): ToolSession {
+	function perCallSession(
+		settings: Record<string, unknown>,
+		warm = true,
+		refreshPending = false,
+		parentModel?: Model,
+	): ToolSession {
 		return Object.assign(
 			session({
 				settings: Settings.isolated({ "task.isolation.enabled": false, "task.maxRecursionDepth": 2, ...settings }),
 			}),
 			{
 				getActiveModelString: () => "mock/parent",
+				...(parentModel ? { getActiveModel: () => parentModel } : {}),
 				modelRegistry: {
+					getAll: () => [target, painter],
 					getAvailable: (kind?: string) => (!warm ? [] : kind === "chat" ? [target] : [target, painter]),
 					awaitBackgroundRefresh: async () => {},
 					isBackgroundRefreshPending: () => refreshPending,
@@ -1562,6 +1573,23 @@ describe("per-call model preflight", () => {
 		expect(policy.perCallModelGrants).toBeDefined();
 	});
 
+	it.each([{ only: ["anthropic", "google-vertex"] }, { order: ["anthropic", "google-vertex"] }])(
+		"does not grant from a parent route that cannot be represented exactly: %j",
+		async routing => {
+			mockDiscovery();
+			// The mock API has no routing compat type; preflight reads routing generically from the live parent.
+			const parent = { ...target, compat: { openRouterRouting: routing } } as unknown as Model;
+			await expect(
+				resolveEffectiveSubagentPolicy(
+					request({
+						session: perCallSession({ "task.perCallModel": "on" }, true, false, parent),
+						perCallModel: "mock/target",
+					}),
+				),
+			).rejects.toThrow(/not approved/);
+		},
+	);
+
 	it("leaves calls without model on their configured routing", async () => {
 		mockDiscovery({ ...AGENT, model: ["mock/agent-own"] });
 		const policy = await resolveEffectiveSubagentPolicy(
@@ -1595,11 +1623,70 @@ describe("per-call model preflight", () => {
 		const base = perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } });
 		// An overlay (advisor frontmatter, a retry-role snapshot) injects a role the operator never configured.
 		const overlaid = Object.assign(base, {
-			settings: base.settings.overlay({ modelRoles: { ...base.settings.getModelRoles(), sneaky: "mock/target" } }),
+			settings: base.settings.overlay(
+				{ modelRoles: { ...base.settings.getModelRoles(), sneaky: "mock/target" } },
+				{ derived: true },
+			),
 		});
 		await expect(
 			resolveEffectiveSubagentPolicy(request({ session: overlaid, perCallModel: "@sneaky" })),
 		).rejects.toThrow(/names no configured model role/);
+	});
+
+	it("honors a configured role from an SDK host overlay", async () => {
+		mockDiscovery();
+		const base = perCallSession({ "task.perCallModel": "on" });
+		base.settings = base.settings.overlay({ modelRoles: { review: "mock/target" } });
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+	});
+
+	it("expands role values with preferences captured before discovery settles", async () => {
+		mockDiscovery();
+		const first = createMockModel({ id: "worker-a" });
+		const second = createMockModel({ id: "worker-b" });
+		const usageOrder = ["mock/worker-a", "mock/worker-b"];
+		const base = perCallSession({ "task.perCallModel": "on" });
+		base.settings = Settings.isolated(
+			{ "task.perCallModel": "on", modelRoles: { review: "mock/worker" } },
+			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
+		);
+		Object.assign(base, {
+			modelRegistry: {
+				getAll: () => [first, second],
+				getAvailable: () => [first, second],
+				awaitBackgroundRefresh: async () => {
+					usageOrder.reverse();
+				},
+			},
+		});
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/worker-a"]);
+		expect(policy.perCallModelGrants?.matchPreferences?.usageOrder).toEqual(["mock/worker-a", "mock/worker-b"]);
+	});
+
+	it("refuses a role candidate with Factory server-side fallbacks even when its target is granted", async () => {
+		mockDiscovery();
+		const fable = buildModel(
+			buildFactoryDroidModel(
+				factoryDroidRegistry().find(entry => entry.spec.id === "claude-fable-5")!,
+				{ apiProviders: ["anthropic"] },
+			),
+		);
+		const base = perCallSession({
+			"task.perCallModel": "on",
+			modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" },
+		});
+		Object.assign(base, {
+			modelRegistry: {
+				getAll: () => [fable],
+				getAvailable: () => [fable],
+				awaitBackgroundRefresh: async () => {},
+			},
+		});
+		await expect(resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }))).rejects.toThrow(
+			/No available approved model matches/,
+		);
 	});
 
 	it("skips unavailable candidates in caller order and drops the role identity of a list", async () => {
@@ -1621,6 +1708,7 @@ describe("per-call model preflight", () => {
 			perCallSession({ "task.perCallModel": "on", modelRoles: { review: "target" } }),
 			{
 				modelRegistry: {
+					getAll: () => [target],
 					getAvailable: () => (warm ? [target] : []),
 					awaitBackgroundRefresh: async () => {
 						warm = true;
@@ -1644,6 +1732,7 @@ describe("per-call model preflight", () => {
 			perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
 			{
 				modelRegistry: {
+					getAll: () => [builtIn, target],
 					getAvailable: () => (loaded ? [builtIn, target] : [builtIn]),
 					awaitBackgroundRefresh: async () => {
 						loaded = true;

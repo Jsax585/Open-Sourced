@@ -63,6 +63,7 @@ import {
 	cfgEvalToolsEnabled,
 } from "../eval/settings";
 import { cfgTaskMaxRecursionDepth, cfgTaskPerCallModelFallbacks, perCallModelEnabled } from "../task/settings";
+import { getPerCallModelAdvertisement, type PerCallModelAdvertisement } from "../task/model-approval";
 import { cfgToolsMaxTimeout, cfgToolsSpeculativeExecutionEnabled } from "./settings";
 
 /** Language tokens the eval tool accepts, in stable display order. */
@@ -183,6 +184,8 @@ export interface EvalToolDescriptionOptions {
 	perCallModel?: boolean;
 	/** `task.perCallModelFallbacks: runtime` lets a per-call worker fall back to configured chain models. Default: false. */
 	perCallModelFallbacks?: boolean;
+	/** Operator-owned role selectors and narrowing allowlist; independent of model availability. */
+	perCallModelAdvertisement?: PerCallModelAdvertisement;
 }
 
 function evalTemplateContext(options: EvalToolDescriptionOptions) {
@@ -200,6 +203,7 @@ function evalTemplateContext(options: EvalToolDescriptionOptions) {
 		autoProvision: options.autoProvision ?? true,
 		perCallModel: options.perCallModel ?? false,
 		perCallModelFallbacks: options.perCallModelFallbacks ?? false,
+		perCallModelAdvertisement: options.perCallModelAdvertisement,
 	};
 }
 
@@ -355,6 +359,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			cfgTaskMaxRecursionDepth.get(session.settings),
 			session.taskDepth ?? 0,
 		);
+		const perCallModel = perCallModelEnabled(session.settings, "eval");
 		return {
 			py: backends.python,
 			js: backends.js,
@@ -366,8 +371,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 			preludes: this.#advertisedPreludes(session),
 			inlineTopics: session.isToolActive?.("read") === false,
 			autoProvision: cfgEvalAutoProvision.get(session.settings),
-			perCallModel: perCallModelEnabled(session.settings, "eval"),
-			perCallModelFallbacks: cfgTaskPerCallModelFallbacks.get(session.settings) === "runtime",
+			perCallModel,
+			perCallModelFallbacks: cfgTaskPerCallModelFallbacks.get(session.settings.grantAuthority()) === "runtime",
+			perCallModelAdvertisement: perCallModel ? getPerCallModelAdvertisement(session.settings) : undefined,
 		};
 	}
 

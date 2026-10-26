@@ -52,6 +52,7 @@ import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import { AgentRegistry, isResumable } from "../registry/agent-registry";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
 import { createEvalCustomTools, describeEvalTools, evalToolsEnabled } from "./eval-tools";
+import { getPerCallModelAdvertisement, type PerCallModelAdvertisement } from "./model-approval";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
@@ -158,6 +159,7 @@ interface TaskDescriptionOptions {
 	effortEnabled: boolean;
 	perCallModelEnabled: boolean;
 	perCallModelFallbacks: boolean;
+	perCallModelAdvertisement?: PerCallModelAdvertisement;
 	evalToolsEnabled: boolean;
 	structured: boolean;
 	asyncEnabled: boolean;
@@ -210,6 +212,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		effortEnabled: options.effortEnabled,
 		perCallModelEnabled: options.perCallModelEnabled,
 		perCallModelFallbacks: options.perCallModelFallbacks,
+		perCallModelAdvertisement: options.perCallModelAdvertisement,
 		evalToolsEnabled: options.evalToolsEnabled,
 		structured: options.structured,
 		asyncEnabled: options.asyncEnabled,
@@ -786,6 +789,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const sessionAgents = this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [];
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
+		const perCallModel = perCallModelEnabled(this.session.settings, "task");
 		return renderDescription({
 			agents,
 			sessionAgents,
@@ -794,8 +798,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			disabledAgents,
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: cfgTaskEnableEffort.get(this.session.settings),
-			perCallModelEnabled: perCallModelEnabled(this.session.settings, "task"),
-			perCallModelFallbacks: cfgTaskPerCallModelFallbacks.get(this.session.settings) === "runtime",
+			perCallModelEnabled: perCallModel,
+			perCallModelFallbacks: cfgTaskPerCallModelFallbacks.get(this.session.settings.grantAuthority()) === "runtime",
+			perCallModelAdvertisement: perCallModel ? getPerCallModelAdvertisement(this.session.settings) : undefined,
 			evalToolsEnabled: evalToolsEnabled(this.session),
 			structured: this.#isStructured(),
 			asyncEnabled: cfgAsyncEnabled.get(this.session.settings),

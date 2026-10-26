@@ -302,7 +302,7 @@ export const cfgTaskPerCallModel = register({
 		group: "Subagents",
 		label: "Per-Call Model",
 		description:
-			"Whether a subagent call may pick its model with an exact provider/model-id[:level], a configured @role[:level], or an ordered list of them. Only models the configuration already routes to are accepted.",
+			"Whether a subagent call may pick its model with an exact provider/model-id[@upstream][:level], a configured @role[:level], or an ordered list of them. An @upstream pin is part of the model identity and is supported only by aggregators. Only models the configuration already routes to are accepted.",
 		options: [
 			{ value: "off", label: "Off", description: "Reject `model` on task items and eval agent()/workpool()" },
 			{ value: "eval", label: "Eval only", description: "Accept `model` in eval agent() and workpool() only" },
@@ -318,20 +318,20 @@ export function perCallModelEnabled(settings: Settings, invocationKind: "task" |
 }
 
 /**
- * Validates `task.perCallModelAllow`: a list of exact `provider/model-id` strings. A non-string
- * entry fails load and writes instead of reaching approval as an entry that matches nothing.
+ * Validates `task.perCallModelAllow`: exact identities, configured `@role` selectors or globs.
+ * A non-string entry fails load and writes rather than silently matching nothing.
  */
 function validatePerCallModelAllow(value: unknown): void {
 	if (value === undefined || value === null) return;
 	if (!Array.isArray(value)) {
 		throw new Error(
-			`Invalid task.perCallModelAllow: expected a list of provider/model-id strings, got ${Bun.inspect(value)}.`,
+			`Invalid task.perCallModelAllow: expected a list of exact model, @role or glob strings, got ${Bun.inspect(value)}.`,
 		);
 	}
 	for (const [index, entry] of value.entries()) {
 		if (typeof entry === "string") continue;
 		throw new Error(
-			`Invalid task.perCallModelAllow[${index}]: expected a provider/model-id string, got ${Bun.inspect(entry)}.`,
+			`Invalid task.perCallModelAllow[${index}]: expected an exact model, @role or glob string, got ${Bun.inspect(entry)}.`,
 		);
 	}
 }
