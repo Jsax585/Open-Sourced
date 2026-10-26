@@ -1,8 +1,9 @@
 /**
  * Extension-originated `sendMessage`/`sendUserMessage` calls start an async
- * session send the action itself never exposes a promise for. Every mode's
- * action wiring (runtime-init.ts, acp-agent.ts, extension-ui-controller.ts,
- * task/executor.ts) dispatches through {@link ExtensionSendQueue.dispatch}, so
+ * session send the action itself never exposes a promise for. The action
+ * wiring in runtime-init.ts (`initializeExtensions`, which print mode, RPC mode
+ * and task subagents use), acp-agent.ts and extension-ui-controller.ts
+ * dispatches through {@link ExtensionSendQueue.dispatch}, so
  * startup and `/reload-plugins` can hold sends until discovery has rebuilt the
  * prompt. Only `initializeExtensions` also tracks them, so a caller that prompts
  * as soon as startup returns (print mode, task subagents) can settle them via
