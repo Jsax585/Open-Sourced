@@ -14,6 +14,38 @@ function at(value: unknown, ...path: Array<string | number>): unknown {
 }
 
 describe("SessionAnonymizer", () => {
+	test("replaces imported replacement context with one opaque marker instead of exposing nested secrets", () => {
+		const secret = "import-carrier-private-XYZ";
+		const record = {
+			type: "compaction",
+			id: "a1b2c3d4",
+			parentId: null,
+			summary: "Imported context",
+			preserveData: {
+				importedContext: {
+					version: 1,
+					messages: [
+						{
+							role: "assistant",
+							content: [
+								{ type: "text", text: secret },
+								{ type: "thinking", thinking: secret },
+								{ type: "toolCall", id: "call", name: "read", arguments: { nested: [secret] } },
+								{ type: "image", data: secret, mimeType: "image/png" },
+							],
+						},
+					],
+				},
+			},
+		};
+		const original = structuredClone(record);
+		const anonymized = new SessionAnonymizer().entry(record);
+		expect(JSON.stringify(anonymized)).not.toContain(secret);
+		expect(JSON.stringify(anonymized)).not.toContain("importedContext");
+		expect(at(anonymized, "preserveData")).toMatch(/^\[redacted #\d+: \d+ chars, 1 line\]$/);
+		expect(record).toEqual(original);
+	});
+
 	test("redacts turn content, keeps metadata, and maps tool args consistently across copies", () => {
 		const usage = { input: 120, output: 30, cacheRead: 0, cacheWrite: 0, totalTokens: 150, cost: { total: 0.01 } };
 		const records = [

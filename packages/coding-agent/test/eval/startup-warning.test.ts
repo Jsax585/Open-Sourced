@@ -91,7 +91,13 @@ describe("resolveFirstLaunchPythonEvalWarning", () => {
 
 	it("skips resumed launches, which never write the changelog marker", async () => {
 		const probe = mockProbe();
-		for (const args of [{ continue: true }, { resume: true }, { fromClaude: true }] as const) {
+		for (const args of [
+			{ continue: true },
+			{ resume: true },
+			{ fromClaude: true },
+			{ fromCodex: true },
+			{ fromDeepseek: true },
+		] as const) {
 			expect(
 				await resolveFirstLaunchPythonEvalWarning({ ...base, args, lastChangelogVersion: undefined }),
 			).toBeUndefined();

@@ -30,6 +30,7 @@ import {
 	DEFAULT_SHAKE_CONFIG,
 	type CompactionSettings as EngineCompactionSettings,
 	effectiveReserveTokens,
+	getImportedContext,
 	invalidateMessageCache,
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
@@ -44,6 +45,7 @@ import {
 	type SummaryOptions,
 	shouldCompact,
 	shouldUseProviderNativeCompaction,
+	stripImportedContext,
 	upsertFileOperations,
 } from "@oh-my-pi/pi-agent-core/compaction";
 import {
@@ -265,6 +267,36 @@ function findUsageAnchorIndex(branchEntries: readonly SessionEntry[], compaction
 		return index;
 	}
 	return -1;
+}
+
+/** Mutation view of interpreted context; snapshot writes stay in its carrier, never in source history. */
+function maintenanceEntries(entries: readonly SessionEntry[]): SessionEntry[] {
+	let resetIndex = -1;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (entries[i].type === "reset_boundary") {
+			resetIndex = i;
+			break;
+		}
+	}
+	const active = resetIndex >= 0 ? entries.slice(resetIndex + 1) : entries.slice();
+	const boundary = getLatestCompactionEntry(active);
+	const context = getImportedContext(boundary?.preserveData);
+	if (!context || !boundary) return active;
+	return [
+		...context.messages.map((_, index): SessionEntry => ({
+			type: "message",
+			id: "",
+			parentId: null,
+			timestamp: boundary.timestamp,
+			get message() {
+				return context.messages[index];
+			},
+			set message(message: AgentMessage) {
+				context.messages[index] = message;
+			},
+		})),
+		...active.slice(active.indexOf(boundary) + 1),
+	];
 }
 
 /** A terminal payload rejection may be byte-sized history or irreducible media, not necessarily token overflow. */
@@ -715,7 +747,7 @@ export class SessionMaintenance {
 	}
 
 	async #pruneToolOutputs(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
-		const branchEntries = this.#host.sessionManager.getBranchView();
+		const branchEntries = maintenanceEntries(this.#host.sessionManager.getBranchView());
 		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
 		const model = this.#host.model();
 		const result = pruneToolOutputs(
@@ -762,7 +794,7 @@ export class SessionMaintenance {
 	async #pruneStaleToolResults(): Promise<{ prunedCount: number; tokensSaved: number } | undefined> {
 		const { supersedeReads, dropUseless } = this.#compactionSettings;
 		if (!supersedeReads && !dropUseless) return undefined;
-		const branchEntries = this.#host.sessionManager.getBranchView();
+		const branchEntries = maintenanceEntries(this.#host.sessionManager.getBranchView());
 		const keepBoundaryId = getLatestCompactionEntry(branchEntries)?.firstKeptEntryId;
 		const model = this.#host.model();
 		const result = pruneSupersededToolResults(
@@ -815,7 +847,7 @@ export class SessionMaintenance {
 	 * and skips the disk rewrite.
 	 */
 	async dropImages(): Promise<{ removed: number; tokensFreed: number }> {
-		const branchEntries = this.#host.sessionManager.getBranch();
+		const branchEntries = maintenanceEntries(this.#host.sessionManager.getBranch());
 		const countOptions = { excludeEncryptedReasoning: true } as const;
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
@@ -910,7 +942,7 @@ export class SessionMaintenance {
 		}
 
 		if (mode === "thinking") {
-			const branchEntries = this.#host.sessionManager.getBranch();
+			const branchEntries = maintenanceEntries(this.#host.sessionManager.getBranch());
 			const latestCompaction = getLatestCompactionEntry(branchEntries);
 			const compactionIndex = latestCompaction ? branchEntries.lastIndexOf(latestCompaction) : -1;
 			const hasRemoteReplacementHistory = getOpenAiRemoteCompactionPayload(latestCompaction) !== undefined;
@@ -956,7 +988,7 @@ export class SessionMaintenance {
 			if (opts.signal?.aborted || opts.isCurrent?.() === false) throw new CompactionCancelledError();
 		};
 		assertCurrent();
-		const branchEntries = this.#host.sessionManager.getBranch();
+		const branchEntries = maintenanceEntries(this.#host.sessionManager.getBranch());
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 		const config = this.#withPlanProtection({
 			...(opts.config ?? AGGRESSIVE_SHAKE_CONFIG),
@@ -2481,6 +2513,7 @@ export class SessionMaintenance {
 		advisorResetReason: string;
 		detachExtensionEmit?: boolean;
 	}): Promise<CompactionEntry | undefined> {
+		args.preserveData = stripImportedContext(args.preserveData);
 		const entryId = this.#host.sessionManager.appendCompaction(
 			args.summary,
 			args.shortSummary,

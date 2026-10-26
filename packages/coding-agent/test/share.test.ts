@@ -112,6 +112,48 @@ describe("sealToFit", () => {
 });
 
 describe("buildShareSnapshot", () => {
+	test("drops imported replacement context from redacted shares without changing native export data", () => {
+		const secret = "import-carrier-private-XYZ";
+		const entry: SessionEntry = {
+			type: "compaction",
+			id: "boundary",
+			parentId: null,
+			timestamp: "2026-06-12T00:00:00.000Z",
+			summary: "Imported context",
+			firstKeptEntryId: "boundary",
+			tokensBefore: 0,
+			preserveData: {
+				importedContext: {
+					version: 1,
+					messages: [
+						{
+							role: "assistant",
+							content: [
+								{ type: "text", text: secret },
+								{ type: "thinking", thinking: secret },
+								{ type: "toolCall", id: "call", name: "read", arguments: { nested: [secret] } },
+								{ type: "image", data: secret, mimeType: "image/png" },
+							],
+						},
+					],
+				},
+			},
+		};
+		const original = structuredClone(entry);
+		const sm = {
+			getHeader: () => sessionData([], "boundary").header,
+			getEntries: () => [entry],
+			getLeafId: () => "boundary",
+		} as unknown as SessionManager;
+		const snapshot = buildShareSnapshot(sm, {
+			obfuscator: new SecretObfuscator([{ type: "plain", content: secret }]),
+		});
+		expect(JSON.stringify(snapshot)).not.toContain(secret);
+		expect(JSON.stringify(snapshot)).not.toContain("importedContext");
+		expect(entry).toEqual(original);
+		expect(buildShareSnapshot(sm).entries).toEqual([original]);
+	});
+
 	test("redacts secrets through the obfuscator and leaves the original untouched", () => {
 		const entries = [messageEntry("e1", null, "the token is hunter2-XYZZY, keep safe")];
 		const sm = {

@@ -51,6 +51,7 @@ import type {
 	UsageFallbackConfirmation,
 	UsageFallbackConfirmer,
 } from "./agent-session-types";
+import { nativeTurnEntries } from "./exit-diagnostics";
 import { assistantTurnProducedOutput, isEmptyAssistantStop, isEmptyErrorTurn, operatorTitleText } from "./messages";
 import {
 	type ActiveRetryFallbackState,
@@ -3188,6 +3189,16 @@ export class TurnRecovery {
 	 * {@link retry} is the matching action.
 	 */
 	get hasAbortedToolCallTail(): boolean {
+		const branch = this.#host.sessionManager.getBranchView();
+		const nativeEntries = nativeTurnEntries(branch);
+		if (
+			nativeEntries !== branch &&
+			retryableAssistantTurnEnd(
+				nativeEntries.flatMap(entry => (entry.type === "message" ? [entry.message] : [])),
+			) === undefined
+		) {
+			return false;
+		}
 		const active = this.#host.agent.state.messages;
 		if (abortedToolCallTail(active)) return true;
 		// A trailing assistant message is authoritative for a live session: a
@@ -3196,7 +3207,11 @@ export class TurnRecovery {
 		// A restored session omits the failed turn (and its synthetic results)
 		// from provider context, so — mirroring retry() — the persisted display
 		// transcript decides whether a retryable tool-call tail exists.
-		return abortedToolCallTail(this.#host.sessionManager.buildSessionContext({ transcript: true }).messages);
+		return abortedToolCallTail(
+			nativeEntries === branch
+				? this.#host.sessionManager.buildSessionContext({ transcript: true }).messages
+				: nativeEntries.flatMap(entry => (entry.type === "message" ? [entry.message] : [])),
+		);
 	}
 	/**
 	 * Manually retry the last failed assistant turn.
@@ -3227,6 +3242,16 @@ export class TurnRecovery {
 	 */
 	async retry(): Promise<boolean> {
 		if (this.#host.isStreaming() || this.#host.isCompacting() || this.isRetrying) return false;
+		const branch = this.#host.sessionManager.getBranchView();
+		const nativeEntries = nativeTurnEntries(branch);
+		if (
+			nativeEntries !== branch &&
+			retryableAssistantTurnEnd(
+				nativeEntries.flatMap(entry => (entry.type === "message" ? [entry.message] : [])),
+			) === undefined
+		) {
+			return false;
+		}
 
 		const messages = this.#host.agent.state.messages;
 		const activeTurnEnd = retryableAssistantTurnEnd(messages);
@@ -3247,7 +3272,10 @@ export class TurnRecovery {
 			// A restored session already dropped the failed assistant turn (and its
 			// paired synthetic tool results) from provider context, so the persisted
 			// display transcript is the source of truth for a retryable failed tail.
-			const transcriptMessages = this.#host.sessionManager.buildSessionContext({ transcript: true }).messages;
+			const transcriptMessages =
+				nativeEntries === branch
+					? this.#host.sessionManager.buildSessionContext({ transcript: true }).messages
+					: nativeEntries.flatMap(entry => (entry.type === "message" ? [entry.message] : []));
 			if (retryableAssistantTurnEnd(transcriptMessages) === undefined) return false;
 			// The boundary is already gone from active context; when the intact
 			// failed batch is still the tail, replay the tools directly.

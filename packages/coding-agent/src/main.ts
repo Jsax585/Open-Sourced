@@ -875,12 +875,18 @@ function exitForSessionResolutionError(error: SessionResolutionError): never {
 }
 
 function resolveForeignSessionSource(
-	parsed: Pick<Args, "continue" | "fork" | "fromClaude" | "fromCodex" | "noSession" | "resume">,
+	parsed: Pick<Args, "continue" | "fork" | "fromClaude" | "fromCodex" | "fromDeepseek" | "noSession" | "resume">,
 ): ForeignSessionSource | undefined {
-	if (parsed.fromClaude && parsed.fromCodex) {
-		throw new SessionResolutionError("--from-claude and --from-codex cannot be used together");
+	const sources: ForeignSessionSource[] = [];
+	if (parsed.fromClaude) sources.push("claude");
+	if (parsed.fromCodex) sources.push("codex");
+	if (parsed.fromDeepseek) sources.push("deepseek");
+	if (sources.length > 1) {
+		throw new SessionResolutionError(
+			`${sources.map(source => `--from-${source}`).join(" and ")} cannot be used together`,
+		);
 	}
-	const source = parsed.fromClaude ? "claude" : parsed.fromCodex ? "codex" : undefined;
+	const source = sources[0];
 	if (!source) return undefined;
 	if (parsed.noSession) {
 		throw new SessionResolutionError(`--from-${source} requires session persistence`);
@@ -891,8 +897,8 @@ function resolveForeignSessionSource(
 	return source;
 }
 
-function isForeignSessionImport(parsed: Pick<Args, "fromClaude" | "fromCodex">): boolean {
-	return parsed.fromClaude === true || parsed.fromCodex === true;
+function isForeignSessionImport(parsed: Pick<Args, "fromClaude" | "fromCodex" | "fromDeepseek">): boolean {
+	return parsed.fromClaude === true || parsed.fromCodex === true || parsed.fromDeepseek === true;
 }
 
 type MissingCwdMoveResult =

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an `importedContext` compaction carrier (`getImportedContext`/`stripImportedContext`) so imported foreign sessions replay their exact source context; the next compaction summarizes and supersedes it ([#17035](https://github.com/can1357/oh-my-pi/pull/17035) by [@taylor-shift](https://github.com/taylor-shift))
+
 ### Fixed
 
 - Fixed split-turn compaction leaving `session.compacting` context out of the turn-prefix summary ([#16707](https://github.com/can1357/oh-my-pi/pull/16707) by [@integrITsolutions](https://github.com/integrITsolutions))

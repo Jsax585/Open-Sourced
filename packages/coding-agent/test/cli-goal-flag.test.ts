@@ -136,6 +136,7 @@ describe("--goal launch option", () => {
 			["--continue"],
 			["--from-claude"],
 			["--from-codex"],
+			["--from-deepseek"],
 		]) {
 			const rawArgs = ["--session-dir", dir.path(), ...shape, "--goal", "do thing"];
 			const { thrown, touched } = await launchInteractive(rawArgs);

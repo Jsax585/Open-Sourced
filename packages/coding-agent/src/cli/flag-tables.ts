@@ -314,6 +314,7 @@ export const VALUELESS_FLAGS: ReadonlySet<string> = new Set([
 	"--continue",
 	"--from-claude",
 	"--from-codex",
+	"--from-deepseek",
 	"--no-session",
 	"--no-tools",
 	"--no-lsp",
@@ -394,6 +395,7 @@ const ONE_SHOT_LAUNCH_FLAGS: Readonly<Record<string, true>> = {
 	"--fork": true,
 	"--from-claude": true,
 	"--from-codex": true,
+	"--from-deepseek": true,
 	"--goal": true,
 };
 

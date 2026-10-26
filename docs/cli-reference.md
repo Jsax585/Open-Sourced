@@ -89,13 +89,15 @@ Argument handling:
 | `--fork <session>` | Fork a saved session (by ID prefix or path) into a new session. See [session operations](./session-operations-export-share-fork-resume.md). |
 | `--from-claude` | Import a Claude Code session into OMP. |
 | `--from-codex` | Import a Codex session into OMP. |
+| `--from-deepseek` | Import a local DeepSeek Harness session into OMP; see [supported sources and limits](./session-operations-export-share-fork-resume.md#deepseek-harness-import). |
 | `--export <session>` | Export a session file to HTML and exit. |
 | `--no-title` | Disable title auto-generation (equivalent to the `PI_NO_TITLE` [environment variable](./environment-variables.md)). |
 
 `--continue`, `--resume`, `--restore`, `--fork`, and foreign-session imports require
-persistence and cannot use `--no-session`. `--from-claude` and `--from-codex`
-are mutually exclusive and cannot be combined with `--continue`, `--resume`,
-or `--fork`.
+persistence and cannot use `--no-session`. `--from-claude`, `--from-codex`, and
+`--from-deepseek` are mutually exclusive and cannot be combined with
+`--continue`, `--resume`, `--restore`, `--fork`, or `--goal`. Foreign import pickers
+are unavailable in protocol modes.
 
 #### Model selection
 

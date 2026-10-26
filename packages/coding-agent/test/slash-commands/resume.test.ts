@@ -79,10 +79,11 @@ describe("/resume slash command", () => {
 		expect(harness.handleResumeSession).not.toHaveBeenCalled();
 	});
 
-	it("opens foreign session selectors for @claude and @codex", async () => {
-		const sources: Array<{ argument: string; source: "claude" | "codex" }> = [
+	it("opens foreign session selectors for @claude, @codex, and @deepseek", async () => {
+		const sources: Array<{ argument: string; source: "claude" | "codex" | "deepseek" }> = [
 			{ argument: "@claude", source: "claude" },
 			{ argument: "@codex", source: "codex" },
+			{ argument: "@deepseek", source: "deepseek" },
 		];
 		for (const { argument, source } of sources) {
 			const harness = createRuntime();

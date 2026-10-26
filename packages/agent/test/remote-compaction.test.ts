@@ -2225,6 +2225,72 @@ describe("requestRemoteCompaction wire formats", () => {
 });
 
 describe("compact() remote compaction failure handling", () => {
+	for (const streaming of [false, true]) {
+		test(`import context replaces obsolete transcript in ${streaming ? "V2" : "V1"} native compaction`, async () => {
+			const model = makeOpenAiModel({ remoteCompaction: { enabled: true, v2StreamingEnabled: streaming } });
+			const messages: UserMessage[] = [{ role: "user", content: "replacement surface", timestamp: 1 }];
+			const entries: SessionEntry[] = [
+				{
+					type: "message",
+					id: "source",
+					parentId: null,
+					timestamp: new Date(0).toISOString(),
+					message: { role: "user", content: "obsolete original", timestamp: 0 },
+				},
+				{
+					type: "compaction",
+					id: "import",
+					parentId: "source",
+					timestamp: new Date(2).toISOString(),
+					summary: "display divider",
+					firstKeptEntryId: "source",
+					tokensBefore: 0,
+					preserveData: { importedContext: { version: 1, messages } },
+				},
+				{
+					type: "message",
+					id: "native",
+					parentId: "import",
+					timestamp: new Date(3).toISOString(),
+					message: { role: "user", content: "native tail", timestamp: 3 },
+				},
+			];
+			const preparation = prepareCompaction(
+				entries,
+				{ ...DEFAULT_COMPACTION_SETTINGS, keepRecentTokens: 100_000 },
+				model,
+			)!;
+			const inputs: string[] = [];
+			const fetchMock: FetchImpl = async (_url, init) => {
+				const body = JSON.parse(String(init?.body)) as { input: unknown };
+				inputs.push(JSON.stringify(body.input));
+				return streaming
+					? sseResponse([
+							{
+								type: "response.output_item.done",
+								output_index: 0,
+								item: { type: "compaction", encrypted_content: "import-successor" },
+							},
+							{
+								type: "response.done",
+								response: {
+									id: "response-import-successor",
+									usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+								},
+							},
+						])
+					: Response.json({ output: [{ type: "compaction", encrypted_content: "import-successor" }] });
+			};
+			const result = await compact(preparation, model, "test-key", undefined, undefined, { fetch: fetchMock });
+			expect(inputs).toHaveLength(1);
+			expect(inputs[0].match(/replacement surface/g)).toHaveLength(1);
+			expect(inputs[0].match(/native tail/g)).toHaveLength(1);
+			expect(inputs[0]).not.toContain("obsolete original");
+			expect(inputs[0]).not.toContain("display divider");
+			expect(result.preserveData?.importedContext).toBeUndefined();
+		});
+	}
+
 	afterEach(() => {
 		vi.restoreAllMocks();
 	});

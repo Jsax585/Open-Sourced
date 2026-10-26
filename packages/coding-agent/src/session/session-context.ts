@@ -1,6 +1,10 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { customMessageEntryMessage, isUserRequestEntry } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { getAnthropicCompactionPayload, isTurnStartEntry } from "@oh-my-pi/pi-agent-core/compaction";
+import {
+	getAnthropicCompactionPayload,
+	getImportedContext,
+	isTurnStartEntry,
+} from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	coerceServiceTierByFamily,
 	type OpenAIResponsesHistoryPayload,
@@ -440,7 +444,12 @@ export function buildSessionContext(
 		}
 	};
 
-	if (options?.transcript && !options.collapseCompactedHistory) {
+	const importContext = compaction ? getImportedContext(compaction.preserveData) : undefined;
+	const importBoundaryIdx = importContext ? path.findIndex(entry => entry.id === compaction?.id) : -1;
+	if (
+		options?.transcript &&
+		(!options.collapseCompactedHistory || (importContext && resetBoundaryIdx < importBoundaryIdx))
+	) {
 		// Display transcript: every entry in chronological order. Compactions do
 		// not erase prior history here — each renders inline (as a divider in the
 		// TUI) at the point it fired, with any snapcompact frames re-attached so
@@ -501,6 +510,9 @@ export function buildSessionContext(
 		for (let i = resetBoundaryIdx + 1; i < path.length; i++) {
 			appendMessage(path[i]);
 		}
+	} else if (importContext) {
+		for (const message of importContext.messages) pushMessage(message);
+		for (let i = importBoundaryIdx + 1; i < path.length; i++) appendMessage(path[i]);
 	} else if (compaction) {
 		const remotePayload = getOpenAiRemoteCompactionPayload(compaction);
 		const remoteReplacementHistory = remotePayload?.items;

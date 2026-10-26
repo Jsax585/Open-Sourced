@@ -5,6 +5,21 @@ import type { SessionEntry } from "./session-entries";
 export const TOOL_EXECUTION_START_CUSTOM_TYPE = "tool_execution_start";
 export const SESSION_EXIT_CUSTOM_TYPE = "session_exit";
 
+/** Native recovery never crosses an imported-context boundary. */
+export function nativeTurnEntries(entries: readonly SessionEntry[]): readonly SessionEntry[] {
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index]!;
+		if (
+			entry.type === "compaction" &&
+			entry.preserveData !== undefined &&
+			Object.hasOwn(entry.preserveData, "importedContext")
+		) {
+			return entries.slice(index + 1);
+		}
+	}
+	return entries;
+}
+
 /**
  * Compact projection of tool-call arguments persisted with the start marker.
  * The assistant message already carries the full arguments; this exists only
@@ -128,6 +143,7 @@ function findUnfinishedTurn(
 	entries: readonly SessionEntry[],
 	options?: InterruptedTurnOptions,
 ): UnfinishedTurn | undefined {
+	entries = nativeTurnEntries(entries);
 	let exitIndex = -1;
 	let exit: SessionExitData | undefined;
 	for (let index = entries.length - 1; index >= 0; index--) {
@@ -187,6 +203,7 @@ export function isInterruptedTurnAbort(message: AgentMessage): boolean {
  * recovery already closed that nothing followed, not even a normal exit.
  */
 export function hasRestorableTurn(entries: readonly SessionEntry[]): boolean {
+	entries = nativeTurnEntries(entries);
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index]!;
 		const exit = readSessionExit(entry);
@@ -239,6 +256,7 @@ export function createInterruptedTurnAbortMessage(
  * branch's writer is gone, so resume recovery owns its interrupted tail.
  */
 export function sessionExitFollowsLastMessage(entries: readonly SessionEntry[]): boolean {
+	entries = nativeTurnEntries(entries);
 	for (let index = entries.length - 1; index >= 0; index--) {
 		const entry = entries[index]!;
 		if (entry.type === "message") return false;
@@ -252,6 +270,7 @@ export function createInterruptedToolResults(
 	entries: readonly SessionEntry[],
 	context: "process-exit" | "fork" = "process-exit",
 ): ToolResultMessage[] {
+	entries = nativeTurnEntries(entries);
 	let tail: AgentMessage | undefined;
 	let assistant: AssistantMessage | undefined;
 	for (let index = entries.length - 1; index >= 0; index--) {
@@ -402,6 +421,7 @@ function applyMessageEntry(pending: Map<string, PendingToolCallRecord>, message:
 
 /** Finds tool calls left pending at the end of a session branch. */
 export function collectPendingToolCalls(entries: readonly SessionEntry[]): PendingToolCallDiagnostic[] {
+	entries = nativeTurnEntries(entries);
 	const pending = new Map<string, PendingToolCallRecord>();
 	for (const entry of entries) {
 		if (entry.type === "message") {
