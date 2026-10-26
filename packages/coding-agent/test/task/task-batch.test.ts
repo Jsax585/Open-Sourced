@@ -929,7 +929,7 @@ describe("batch model placement", () => {
 			const tool = await TaskTool.create(
 				createSession({ settings: { "task.batch": batch, "async.enabled": false, "task.perCallModel": mode } }),
 			);
-			// A role alias is not an exact selector, but the disabled gate is what the caller must hear first.
+			// The disabled gate is what the caller must hear before resolving a role selector.
 			const work = { task: "Do work", solutionSpace: "c", model: "@smol" };
 			// Through shared argument validation, as a model's tool call arrives: `model` must reach preflight in both shapes.
 			const args = validateAgentToolArguments(tool as unknown as AgentTool, {
@@ -1026,8 +1026,45 @@ describe("bundled seance model call boundaries", () => {
 	);
 
 	it.each([
-		["candidate arrays", ["mock/requested-seance-model"]],
-		["role aliases", "@review"],
+		["candidate arrays", ["mock/requested-seance-model"], undefined],
+		["configured roles", "@review", "review"],
+		["mixed arrays", ["missing-provider/missing-model", "@review", "mock/requested-seance-model"], undefined],
+	] as const)("accepts approved %s in a model-facing seance item", async (_label, model, role) => {
+		using tempDir = TempDir.createSync("@omp-seance-model-candidates-");
+		const fixture = await seanceSession(tempDir.path(), {
+			"task.batch": true,
+			"task.perCallModel": "on",
+			modelRoles: { review: "mock/requested-seance-model" },
+		});
+		const run = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => makeResult(options.id, { agent: "seance" }));
+		try {
+			const tool = await TaskTool.create(fixture.session);
+			const args = validateAgentToolArguments(tool as unknown as AgentTool, {
+				type: "toolCall",
+				id: "seance-model-candidates",
+				name: "task",
+				arguments: {
+					context: "Historical context",
+					tasks: [{ agent: "seance", task: "Consult the transcript.", sourceSession: fixture.sourceFile, model }],
+				},
+			});
+			const result = await tool.execute("seance-model-candidates", args);
+			expect(result.isError).not.toBe(true);
+			expect(run).toHaveBeenCalledTimes(1);
+			expect(run.mock.calls[0]?.[0].modelOverride).toEqual([fixture.modelSelector]);
+			expect(run.mock.calls[0]?.[0].modelRole).toBe(role);
+			expect(run.mock.calls[0]?.[0].perCallModelGrants).toBeDefined();
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
+
+	it.each([
+		["legacy role aliases", "pi/review"],
+		["empty candidate arrays", []],
+		["comma lists", "mock/requested-seance-model,@review"],
 		["model patterns", "mock/*"],
 	] as const)("rejects %s in a model-facing seance item", async (_label, model) => {
 		using tempDir = TempDir.createSync("@omp-seance-model-selectors-");
@@ -1050,7 +1087,7 @@ describe("bundled seance model call boundaries", () => {
 			});
 			const result = await tool.execute("seance-invalid-model", args);
 			expect(result.isError).toBe(true);
-			expect(getFirstText(result)).toMatch(/one exact provider\/model-id/i);
+			expect(getFirstText(result)).toMatch(/invalid `model` value.*exact provider\/model-id.*configured @role/i);
 			expect(run).not.toHaveBeenCalled();
 		} finally {
 			fixture.authStorage.close();
