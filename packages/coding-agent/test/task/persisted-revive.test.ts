@@ -840,6 +840,107 @@ describe("persisted subagent revival", () => {
 		}
 	});
 
+	it("cold-revives a model-facing seance under the per-call guards, and a host seance without them", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const saved = perCallModelFixture("seance-model");
+		const neighbour = perCallModelFixture("seance-model-v2");
+		const models = [saved, neighbour];
+		const modelRegistry = {
+			authStorage: {},
+			getAvailable: () => models,
+			find: (provider: string, id: string) => models.find(model => model.provider === provider && model.id === id),
+			hasConfiguredAuth: () => true,
+			awaitBackgroundRefresh: async () => {},
+		} as unknown as ModelRegistry;
+		const disposed: boolean[] = [];
+		let options: CreateAgentSessionOptions | undefined;
+		let landedOn = saved;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+			options = created;
+			const session = Object.assign(createRevivedSession([]).session, {
+				model: landedOn,
+				dispose: async () => {
+					disposed.push(true);
+				},
+			});
+			return { session } as CreateAgentSessionResult;
+		});
+		const revive = async (perCallModel: boolean, rootModel = saved) => {
+			const cwd = makeTempDir("@pi-revive-seance-per-call-");
+			const sourceFile = path.join(cwd, "source.jsonl");
+			const source = SessionManager.create(cwd, path.join(cwd, "sources"));
+			source.appendMessage({ role: "user", content: "historical request", timestamp: 1 });
+			await source.ensureOnDisk();
+			const sourcePath = source.getSessionFile();
+			if (!sourcePath) throw new Error("Expected a persisted source");
+			await source.close();
+			await fs.promises.rename(sourcePath, sourceFile);
+			const fork = await SessionManager.forkFrom(sourceFile, cwd, undefined, undefined, {
+				seance: true,
+				suppressBreadcrumb: true,
+				sessionFile: path.join(cwd, "forks", "seance.jsonl"),
+			});
+			const sessionFile = fork.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted seance fork");
+			fork.appendSessionInit({
+				systemPrompt: ["seance prompt"],
+				task: "Read the source transcript.",
+				tools: ["read", "grep", "glob"],
+				agent: "seance",
+				resolvedModel: "mock/seance-model:high",
+				restrictToolNames: true,
+				spawns: "",
+				...(perCallModel ? { perCallModel: true } : {}),
+			});
+			await fork.close();
+			const ref = createRef(sessionFile);
+			const reviver = await createPersistedSubagentReviverFactory({
+				session: {
+					sessionManager: { getCwd: () => cwd, getArtifactManager: () => undefined },
+					effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
+					getSessionAgents: () => [],
+					model: rootModel,
+				} as unknown as AgentSession,
+				authStorage: {} as never,
+				modelRegistry,
+				settings: Settings.isolated({ "task.maxEffort": "low" }),
+				enableLsp: true,
+			})(ref);
+			if (!reviver) throw new Error("Expected a cold seance reviver");
+			return reviver(ref);
+		};
+
+		// Model-facing: the exact saved model only, approved by the live root parent's grant, never switched.
+		await revive(true);
+		// The seance restore path, not the ordinary one: isolation options and its read-only tools.
+		expect(options?.disableExtensionDiscovery).toBe(true);
+		expect(options?.toolNames).toEqual(["read", "grep", "glob"]);
+		expect(options?.modelPattern).toBe("mock/seance-model:high");
+		expect(options?.modelPatternAuthFallback).toBeUndefined();
+		expect(options?.disableModelFallback).toBe(true);
+		expect(options?.disableServerSideFallback).toBe(true);
+		expect(options?.thinkingLevelCeiling).toBe(Effort.Low);
+		const check = options?.assertDispatchModel;
+		if (!check) throw new Error("Expected a per-call dispatch check on a model-facing seance");
+		expect(check(saved)).toBeUndefined();
+		expect(() => check(neighbour)).toThrow(/not approved/);
+		// The grant is the live parent's model, re-read at revival: a different parent model approves nothing saved.
+		await revive(true, neighbour);
+		expect(() => options?.assertDispatchModel?.(saved)).toThrow(/not approved/);
+		// Deferred resolution landing on a similarly named model fails the revival.
+		landedOn = neighbour;
+		await expect(revive(true)).rejects.toThrow(
+			"per-call model mock/seance-model:high is no longer available (resolution found mock/seance-model-v2)",
+		);
+		expect(disposed).toEqual([true]);
+
+		// Host `/seance` selection: none of the per-call guards.
+		await revive(false);
+		expect(options?.assertDispatchModel).toBeUndefined();
+		expect(options?.disableModelFallback).toBeUndefined();
+		expect(options?.thinkingLevelCeiling).toBeUndefined();
+	});
+
 	it("falls back to the ref display name reviving a legacy session file without a persisted agent name", async () => {
 		const cwd = makeTempDir("@pi-revive-agent-name-legacy-");
 		const sessionFile = await createPersistedSession(cwd);
