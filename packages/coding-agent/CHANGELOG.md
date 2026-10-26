@@ -171,6 +171,13 @@
 ### Breaking Changes
 
 - `snapshotJobs` no longer accepts `includeResults`, and `buildJobResult` accepts only the `"wait"` and `"cancel"` ops; the `"jobs"` op has had no caller since `wait` and `proc://` replaced the `hub` tool ([#16763](https://github.com/can1357/oh-my-pi/pull/16763) by [@will-bogusz](https://github.com/will-bogusz))
+### Fixed
+- Fixed the thinking-block visibility toggle and the prose-only format switch no longer clearing and replaying the whole terminal, which stalled a long transcript for a change that renders nothing, and hiding or showing thinking blocks mid-stream no longer losing or jumping the assistant's answer ([#15336](https://github.com/can1357/oh-my-pi/pull/15336) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+
+- Honored `display_name`, `context_window`, and `input_modalities` when a model list nests them under `metadata`, so codex-lb-style gateways surface the advertised name, window, and image input instead of the raw id and defaults. ([#17010](https://github.com/can1357/oh-my-pi/pull/17010) by [@adi-IL](https://github.com/adi-IL))
+- Recovered spilled tool output in sessions without an artifacts directory: the `artifact://` link the truncation footer advertises now reads the in-memory copy instead of failing with "No session - artifacts unavailable". ([#17009](https://github.com/can1357/oh-my-pi/pull/17009) by [@adi-IL](https://github.com/adi-IL))
+### Breaking Changes
+
 - `snapshotJobs` no longer accepts `includeResults`, and `buildJobResult` accepts only the `"wait"` and `"cancel"` ops; the `"jobs"` op has had no caller since `wait` and `proc://` replaced the `hub` tool ([#16763](https://github.com/can1357/oh-my-pi/pull/16763) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Added
@@ -222,7 +229,6 @@
 - Fixed a turn that ended with background jobs still running looking stuck: the working row now says it is waiting for those jobs and names them instead of repeating the last tool call, and Esc ends the wait, so the jobs keep running and their results land in context for your next prompt instead of starting a new turn ([#17032](https://github.com/can1357/oh-my-pi/pull/17032) by [@sjawhar](https://github.com/sjawhar))
 
 ### Fixed
-- Fixed the thinking-block visibility toggle and the prose-only format switch no longer clearing and replaying the whole terminal, which stalled a long transcript for a change that renders nothing, and hiding or showing thinking blocks mid-stream no longer losing or jumping the assistant's answer ([#15336](https://github.com/can1357/oh-my-pi/pull/15336) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Honored `display_name`, `context_window`, and `input_modalities` when a model list nests them under `metadata`, so codex-lb-style gateways surface the advertised name, window, and image input instead of the raw id and defaults. ([#17010](https://github.com/can1357/oh-my-pi/pull/17010) by [@adi-IL](https://github.com/adi-IL))
 - Recovered spilled tool output in sessions without an artifacts directory: the `artifact://` link the truncation footer advertises now reads the in-memory copy instead of failing with "No session - artifacts unavailable". ([#17009](https://github.com/can1357/oh-my-pi/pull/17009) by [@adi-IL](https://github.com/adi-IL))
