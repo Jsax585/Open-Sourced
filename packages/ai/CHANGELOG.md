@@ -5,6 +5,7 @@
 ### Added
 
 - Added `PI_ANTHROPIC_API_VERSION=2026-10-21` to send Anthropic API version 2026-10-21 to the official Anthropic API; sampling parameters are omitted under that version, which rejects them ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
+- Added `/login refuseless` with API key validation against `/v1/models`, supporting the `REFUSELESS_API_KEY` environment variable ([#17038](https://github.com/can1357/oh-my-pi/pull/17038) by [@Twilight0](https://github.com/Twilight0))
 
 ### Fixed
 
