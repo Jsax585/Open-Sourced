@@ -18,6 +18,22 @@ describe("Xiaomi Token Plan request-time host", () => {
 		expect(setup.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
 	});
 
+	test("routes a ttp- key from a cached catalog row through regional auth policy", () => {
+		const setup = resolveOpenAIRequestSetup(
+			{ ...xiaomiModel, provider: "xiaomi-token-plan-cn" },
+			{ apiKey: "ttp-test-key", messages: [] },
+		);
+		expect(setup.baseUrl).toBe("https://token-plan-cn.xiaomimimo.com/v1");
+	});
+
+	test("preserves an intentional custom endpoint for a token-plan key", () => {
+		const setup = resolveOpenAIRequestSetup(
+			{ ...xiaomiModel, baseUrl: "https://xiaomimimo.com.proxy.example/v1" },
+			{ apiKey: "ttp-test-key", messages: [] },
+		);
+		expect(setup.baseUrl).toBe("https://xiaomimimo.com.proxy.example/v1");
+	});
+
 	test("uses the region stored at login, else sgp", () => {
 		const storedHost = resolveOpenAIRequestSetup(
 			{ provider: "xiaomi", id: "mimo-v2.6-pro", baseUrl: "https://token-plan-ams.xiaomimimo.com/v1" },
