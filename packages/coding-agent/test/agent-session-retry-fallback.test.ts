@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { createCompactionSummaryMessage } from "@oh-my-pi/pi-agent-core/compaction";
 import {
 	type AnthropicFallbackCreditHandle,
@@ -20,6 +21,7 @@ import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mo
 import { buildParams } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { factoryDroidRegistry } from "@oh-my-pi/pi-catalog/compat/factory-droid";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
@@ -261,6 +263,8 @@ describe("AgentSession retry fallback", () => {
 		authStorage.keys.setRuntime("openrouter", "openrouter-test-key");
 		authStorage.keys.setRuntime("devin", "devin-test-key");
 		authStorage.keys.setRuntime("openai-codex", "openai-codex-test-key");
+		authStorage.keys.setRuntime("cursor", "cursor-test-key");
+		authStorage.keys.setRuntime("factory-droid", "factory-droid-test-key");
 		sharedRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	});
 
@@ -6028,6 +6032,86 @@ describe("AgentSession retry fallback", () => {
 		}
 	});
 
+	it.each([
+		{ label: "switches while model switching is allowed", disableModelFallback: false },
+		{ label: "retries the same model with disableModelFallback", disableModelFallback: true },
+	])("retry fallback: $label", async ({ disableModelFallback }) => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled test models to exist");
+		const requestedModels: string[] = [];
+		const agent = createFallbackAgent(primaryModel, requestedModels, {
+			firstError: "overloaded_error: provider returned error 503",
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.baseDelayMs": 5,
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			disableModelFallback,
+		});
+
+		await session.prompt("Recover from an overloaded provider");
+		await session.waitForIdle();
+
+		const primaryId = `${primaryModel.provider}/${primaryModel.id}`;
+		const fallbackId = `${fallbackModel.provider}/${fallbackModel.id}`;
+		expect(requestedModels).toEqual([primaryId, disableModelFallback ? primaryId : fallbackId]);
+		expect(session.model?.id).toBe(disableModelFallback ? primaryModel.id : fallbackModel.id);
+	});
+
+	it.each([
+		{ label: "switches while model switching is allowed", disableModelFallback: false },
+		{ label: "stays on the depleted model with disableModelFallback", disableModelFallback: true },
+	])("usage-aware fallback: $label", async ({ disableModelFallback }) => {
+		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const fallbackModel = getBundledModel("openai", "gpt-4o-mini");
+		if (!primaryModel || !fallbackModel) throw new Error("Expected bundled test models to exist");
+		const requestedModels: string[] = [];
+		const mock = createMockModel();
+		const agent = new Agent({
+			getApiKey: model => `${model.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (model, context, options) => {
+				requestedModels.push(`${model.provider}/${model.id}`);
+				mock.push({ content: ["ok"] });
+				return mock.stream(model, context, options);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.usageAwareFallback": true,
+			"retry.usageReservePolicy": "auto",
+			"retry.fallbackChains": { default: [`${fallbackModel.provider}/${fallbackModel.id}`] },
+		});
+		settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+		vi.spyOn(modelRegistry.authStorage.health, "model").mockImplementation(async (_provider, options) =>
+			options.modelId === primaryModel.id
+				? { state: "depleted", accounts: [{ credentialId: 1, credentialType: "oauth", state: "depleted" }] }
+				: { state: "healthy", accounts: [] },
+		);
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			disableModelFallback,
+		});
+
+		await session.prompt("Run on the depleted model");
+		await session.waitForIdle();
+
+		const selected = disableModelFallback ? primaryModel : fallbackModel;
+		expect(requestedModels).toEqual([`${selected.provider}/${selected.id}`]);
+		expect(session.model?.id).toBe(selected.id);
+	});
+
 	it("does not send oversized context to a smaller retry fallback model", async () => {
 		// Regression for #8065: the forward counterpart of #7952. A retryable
 		// error on a large-window primary switches to a retry-fallback candidate,
@@ -6476,6 +6560,54 @@ describe("AgentSession retry fallback", () => {
 		expect(session.model?.id).toBe(fallbackModel.id);
 		// Without the ceiling the fallback's `:high` would apply verbatim.
 		expect(session.thinkingLevel).toBe(Effort.Low);
+	});
+
+	it("pins provider-deferring thinking selectors to an explicit effort at or below the session ceiling", async () => {
+		// Each model's metadata says off/unset defers to a provider default that thinks:
+		// Cursor Grok is mandatory-reasoning (floored to medium on the wire), and Factory
+		// Sonnet 5.5 / Fable 5.1 keep between-tools / adaptive thinking when off.
+		const cursorGrok = getBundledModel("cursor", "cursor-grok-4.6");
+		const factory = (id: string) => {
+			const entry = factoryDroidRegistry().find(candidate => candidate.spec.id === id);
+			if (!entry) throw new Error(`Expected Factory registry model ${id}`);
+			return buildModel(entry.spec);
+		};
+		// Control: a model that can actually disable thinking keeps an explicit off.
+		const canDisable = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!cursorGrok || !canDisable) throw new Error("Expected bundled ceiling models");
+		const sent = async (model: Model, thinkingLevel: ThinkingLevel | undefined) => {
+			let options: { reasoning?: unknown; disableReasoning?: boolean } | undefined;
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (streamModel, context, streamOptions) => {
+					options = streamOptions;
+					mock.push({ content: ["ok"] });
+					return mock.stream(streamModel, context, streamOptions);
+				},
+			});
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry,
+				thinkingLevel,
+				thinkingLevelCeiling: Effort.Low,
+			});
+			await session.prompt("Run under the ceiling");
+			await session.waitForIdle();
+			await session.dispose();
+			session = undefined;
+			return { reasoning: options?.reasoning, disableReasoning: options?.disableReasoning === true };
+		};
+		const pinned = { reasoning: Effort.Low, disableReasoning: false };
+		for (const model of [cursorGrok, factory("claude-sonnet-5-5"), factory("claude-fable-5.1")]) {
+			expect(await sent(model, ThinkingLevel.Off)).toEqual(pinned);
+			expect(await sent(model, ThinkingLevel.Inherit)).toEqual(pinned);
+			expect(await sent(model, undefined)).toEqual(pinned);
+		}
+		expect(await sent(canDisable, ThinkingLevel.Off)).toEqual({ reasoning: undefined, disableReasoning: true });
 	});
 
 	it("skips usage fallbacks whose effort floor exceeds the session ceiling", async () => {

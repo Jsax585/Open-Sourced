@@ -4,9 +4,10 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { MAIN_AGENT_RULE_NAME, SUB_AGENT_RULE_NAME } from "../capability/rule";
 import { validateAgentAccountPools } from "../config/account-pools";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { assertModelSupportsEffortCeiling } from "@oh-my-pi/pi-tui/thinking";
 import type { ModelRegistry } from "../config/model-registry";
-import { resolveAgentAdvisorRolePattern } from "../config/model-resolver";
+import { formatModelStringWithRouting, resolveAgentAdvisorRolePattern } from "../config/model-resolver";
 import { formatModelRoleAlias } from "../config/model-roles";
 import type { Settings } from "../config/settings";
 import { MCPManager } from "../mcp/manager";
@@ -17,6 +18,7 @@ import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { installRetryFallbackRole } from "../session/retry-fallback-chains";
 import type { AuthStorage } from "../session/auth-storage";
+import { EPHEMERAL_MODEL_CHANGE_ROLE } from "../session/session-entries";
 import {
 	extractSessionInit,
 	hasConversationalHistory,
@@ -30,11 +32,12 @@ import {
 	createMCPProxyTools,
 	createSubagentSettings,
 	followMCPTools,
+	replayRevivedAgentStart,
 	subagentRetryFallbackRole,
 } from "./executor";
 import { isCompletionProbeEnabled } from "./completion-probe";
 import { discoverAgents, getAgent } from "./discovery";
-import { assertPerCallDispatchModel } from "./model-approval";
+import { assertPerCallDispatchModel, PerCallModelError } from "./model-approval";
 import { cfgTaskAgentAccountPools, cfgTaskMaxEffort, cfgTaskPerCallModelFallbacks } from "./settings";
 import { type RestoredSeanceSession, restoreSeanceSession } from "./seance";
 import { seanceIsolationOptions } from "./seance-policy";
@@ -75,6 +78,21 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 		systemPrompt: init.systemPrompt.join("\n\n"),
 		source: "user",
 	};
+}
+
+/**
+ * The exact model a per-call worker last ran: the newest retry-fallback switch on the branch
+ * (`task.perCallModelFallbacks: runtime`, recorded as its routed identity, including a switch
+ * back to the primary), else the model the spawn resolved.
+ */
+function lastRunPerCallModel(session: SessionManager, resolvedModel: string | undefined): string | undefined {
+	const branch = session.getBranch();
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type === "model_change" && entry.role === EPHEMERAL_MODEL_CHANGE_ROLE && entry.model)
+			return entry.model;
+	}
+	return resolvedModel;
 }
 
 /**
@@ -167,6 +185,12 @@ export function createPersistedSubagentReviverFactory(
 					`Cannot revive subagent "${ref.id}": session file "${sessionFile}" has no message history (truncated to header/session_init). The agent was not revived.`,
 				);
 			}
+			if (init.perCallModel && !init.resolvedModel) {
+				await reopened.close();
+				throw new Error(
+					`Cannot revive subagent "${ref.id}": its per-call model was not recorded, so it cannot be restored exactly. The agent was not revived.`,
+				);
+			}
 			// The agent's frontmatter model grants a per-call worker only while that agent is still discovered.
 			const configuredAgent =
 				init.perCallModel && init.agent
@@ -219,13 +243,19 @@ export function createPersistedSubagentReviverFactory(
 			const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(ctx.settings));
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
-			// A per-call worker revives on the model it resolved to, never by re-resolving a requested
-			// role whose value may have changed since; the dispatch check still applies current grants.
+			// A per-call worker revives only onto the exact model it last ran: no role alias (never
+			// re-resolving a requested role whose value may have changed since), no auth fallback.
+			// Under runtime fallbacks that is the fallback it last switched to, recorded by the
+			// switch's transcript entry; dispatch still applies current grants, so a fallback that
+			// is no longer approved refuses the revived worker's first request.
+			const perCallRevivalModel = init.perCallModel ? lastRunPerCallModel(reopened, init.resolvedModel) : undefined;
 			const persistedModelPattern = restoredSeance
 				? restoredSeance.modelPattern
-				: !init.perCallModel && init.modelRole && init.modelRole !== "default"
-					? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
-					: init.resolvedModel;
+				: init.perCallModel
+					? perCallRevivalModel
+					: init.modelRole && init.modelRole !== "default"
+						? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
+						: init.resolvedModel;
 			// Older session files persisted the synthetic xd:// write transport in the
 			// enabled set. A read-only agent definition could never grant full write,
 			// so remove that transport name before replaying tools as explicit grants.
@@ -250,13 +280,14 @@ export function createPersistedSubagentReviverFactory(
 			try {
 				({ session } = await createAgentSession({
 					cwd: restoredSeance?.cwd ?? ctx.session.sessionManager.getCwd(),
+					costGate: ctx.session.costGate,
 					authStorage: ctx.authStorage,
 					// Revived agents join the root session tree, so their observability
 					// frames ride the same bus the RPC/collab surfaces subscribed to.
 					subagentEventBus: ctx.subagentEventBus,
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
-					modelPatternAuthFallback: restoredSeance ? undefined : init.resolvedModel,
+					modelPatternAuthFallback: restoredSeance || init.perCallModel ? undefined : init.resolvedModel,
 					settings: subagentSettings,
 					sessionManager: reopened,
 					agentId: ref.id,
@@ -289,24 +320,41 @@ export function createPersistedSubagentReviverFactory(
 					...(init.perCallModel
 						? {
 								thinkingLevelCeiling: cfgTaskMaxEffort.get(ctx.settings),
-								disableModelFallback: cfgTaskPerCallModelFallbacks.get(ctx.settings) === "off",
+								disableModelFallback: cfgTaskPerCallModelFallbacks.get(ctx.settings.rootSettings()) === "off",
 								disableContextPromotion: true,
+								// An optional server-side fallback is a model switch the per-request check never sees.
+								disableServerSideFallback: true,
 								pinnedRetryFallbackRole: subagentRetryFallbackRole(ref.id),
 								assertDispatchModel: (model: Model) => {
-									assertPerCallDispatchModel(
-										model,
-										{
-											settings: ctx.settings,
-											agentName: init.agent ?? ref.displayName,
-											agentModel: configuredAgent?.model,
-											agentSource: configuredAgent?.source,
-											agentRemoved: configuredAgent === undefined,
-											parentModelPattern: ctx.session.model
-												? `${ctx.session.model.provider}/${ctx.session.model.id}`
-												: undefined,
-										},
-										ctx.modelRegistry,
-									);
+									// The parent grant is the real parent's live model: the root session for its
+									// direct children, else the parent's live registry session. A parked or vanished
+									// parent grants nothing; the transcript never does.
+									const parentSession =
+										ref.parentId === (ctx.session.getAgentId?.() ?? MAIN_AGENT_ID)
+											? ctx.session
+											: registry.get(ref.parentId ?? "")?.session;
+									const parentModel = parentSession?.model;
+									try {
+										assertPerCallDispatchModel(
+											model,
+											{
+												settings: ctx.settings,
+												agentName: init.agent ?? ref.displayName,
+												agentModel: configuredAgent?.model,
+												agentSource: configuredAgent?.source,
+												agentRemoved: configuredAgent === undefined,
+												parentModelPattern: parentModel
+													? formatModelStringWithRouting(parentModel)
+													: undefined,
+											},
+											ctx.modelRegistry,
+										);
+									} catch (error) {
+										if (parentSession || !(error instanceof PerCallModelError)) throw error;
+										throw new PerCallModelError(
+											`${error.message} Parent agent "${ref.parentId ?? "unknown"}" of revived subagent "${ref.id}" is not live, so its model grants nothing.`,
+										);
+									}
 									assertModelSupportsEffortCeiling(model, cfgTaskMaxEffort.get(ctx.settings));
 								},
 							}
@@ -345,11 +393,21 @@ export function createPersistedSubagentReviverFactory(
 				mcpFollower?.dispose();
 				throw error;
 			}
-			// A per-call worker whose model cannot run at or below the live ceiling fails instead
-			// of running at the model's floor, as its spawn would.
-			if (init.perCallModel && session.model) {
+			// A per-call worker runs only on the exact model it last ran, never a similarly named
+			// survivor, and fails instead of running at the model's floor above the live ceiling.
+			if (init.perCallModel) {
 				try {
-					assertModelSupportsEffortCeiling(session.model, cfgTaskMaxEffort.get(ctx.settings));
+					const saved = perCallRevivalModel!;
+					const identity = session.model ? formatModelStringWithRouting(session.model) : undefined;
+					if (
+						identity === undefined ||
+						(identity !== saved && identity !== splitThinkingSuffix(saved, -1, MAX_THINKING_SUFFIX_OPTIONS).base)
+					) {
+						throw new PerCallModelError(
+							`Cannot revive subagent "${ref.id}": its per-call model ${saved} is no longer available${identity ? ` (resolution found ${identity})` : ""}. A per-call worker revives only on its exact saved model.`,
+						);
+					}
+					assertModelSupportsEffortCeiling(session.model!, cfgTaskMaxEffort.get(ctx.settings));
 				} catch (error) {
 					mcpFollower?.dispose();
 					await session.dispose();
@@ -376,6 +434,7 @@ export function createPersistedSubagentReviverFactory(
 				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
 			});
+			await replayRevivedAgentStart(session);
 			// Cold revives must drive registry status themselves — createAgentSession
 			// doesn't wire this generically (the live path does it in the executor).
 			// The internal run-state signal precedes deferrable public `agent_end`,

@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import type { ThinkingConfig } from "@oh-my-pi/pi-catalog/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -86,6 +88,7 @@ describe("per-call exact selection after background discovery", () => {
 				// The worker never switches models and every request stays held to the grants.
 				const options = created.mock.calls[0]?.[0];
 				expect(options?.disableModelFallback).toBe(true);
+				expect(options?.disableServerSideFallback).toBe(true);
 				expect(options?.prewalk).toBeUndefined();
 				expect(() => options?.assertDispatchModel?.(createMockModel({ id: "other" }))).toThrow(/not approved/);
 			} else {
@@ -322,6 +325,9 @@ describe("per-call exact selection after background discovery", () => {
 				// Context promotion never moves a per-call worker, whatever the fallback mode.
 				expect(options?.disableContextPromotion).toBe(true);
 				expect(options?.disableModelFallback).toBe(fallbacks === "off");
+				// A provider's optional server-side fallback switches models inside a request the
+				// dispatch check never sees, so it stays off even with runtime fallbacks allowed.
+				expect(options?.disableServerSideFallback).toBe(true);
 				// Even with runtime fallbacks, a model nobody configured stays out of reach.
 				expect(() => options?.assertDispatchModel?.(createMockModel({ id: "other" }))).toThrow(/not approved/);
 				if (fallbacks === "runtime") {
@@ -420,4 +426,170 @@ describe("per-call exact selection after background discovery", () => {
 			}
 		},
 	);
+
+	it("skips a refused or over-ceiling runtime fallback at the switch and clamps the one it takes", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-executor-fallback-gate-"));
+		const authStorage = await AuthStorage.create(":memory:");
+		const sourceId = "executor-fallback-gate";
+		const agentId = "FallbackGate";
+		try {
+			authStorage.keys.setRuntime("mock", "test-key");
+			registerMockApi(sourceId);
+			const failing = createMockModel({
+				id: "failing",
+				handler: () => ({ throw: "overloaded_error: provider returned error 503" }),
+			});
+			const refused = createMockModel({ id: "refused", handler: () => ({ content: ["Refused answer."] }) });
+			const highOnly = Object.assign(
+				createMockModel({ id: "high-only", reasoning: true, handler: () => ({ content: ["High answer."] }) }),
+				{ thinking: { mode: "effort", efforts: [Effort.High] } satisfies ThinkingConfig },
+			);
+			const laddered = Object.assign(
+				createMockModel({ id: "laddered", reasoning: true, handler: () => ({ content: ["Laddered answer."] }) }),
+				{
+					thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] } satisfies ThinkingConfig,
+				},
+			);
+			const models = [failing, refused, highOnly, laddered];
+			const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+			const find = modelRegistry.find.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "find").mockImplementation(
+				(provider, id) =>
+					models.find(model => model.provider === provider && model.id === id) ?? find(provider, id),
+			);
+			vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
+			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+				agents: [{ name: "worker", description: "test", systemPrompt: "test", source: "bundled", tools: ["read"] }],
+				projectAgentsDir: null,
+			});
+			const session = {
+				cwd,
+				hasUI: false,
+				settings: Settings.isolated({
+					"task.maxRecursionDepth": 2,
+					"task.perCallModel": "on",
+					"task.perCallModelFallbacks": "runtime",
+					// `mock/refused` is in the chain but outside the allowlist.
+					"task.perCallModelAllow": ["@review", "mock/high-only", "mock/laddered"],
+					"task.maxEffort": "low",
+					"task.isolation.enabled": false,
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 5,
+					"retry.maxRetries": 1,
+					modelRoles: { review: "mock/failing" },
+					"retry.fallbackChains": { review: ["mock/refused", "mock/high-only", "mock/laddered:high"] },
+				}),
+				authStorage,
+				modelRegistry,
+				restrictToolNames: true,
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				getSessionAgents: () => [],
+			} as unknown as ToolSession;
+			const execution = await runStructuredSubagent({
+				session,
+				invocationKind: "task",
+				assignment: "Answer the question.",
+				agent: "worker",
+				perCallModel: "@review",
+				structured: false,
+				identity: { id: agentId },
+				keepAlive: false,
+			});
+			expect(execution.result.exitCode).toBe(0);
+			expect(execution.result.output).toBe("Laddered answer.");
+			// The walk passes over the refused and over-ceiling entries without switching onto
+			// them: one failed request on the primary, then the answer, and no request is spent
+			// (and refused by the dispatch check) on a model the worker may not use.
+			expect(execution.result.requests).toBe(2);
+			expect(refused.calls).toHaveLength(0);
+			expect(highOnly.calls).toHaveLength(0);
+			// The chain entry's `:high` runs at the task.maxEffort ceiling.
+			expect(laddered.calls.map(call => call.options?.reasoning)).toEqual([Effort.Low]);
+		} finally {
+			await AgentRegistry.global().get(agentId)?.session?.dispose();
+			AgentRegistry.global().unregister(agentId);
+			unregisterCustomApis(sourceId);
+			authStorage.close();
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
+	it.each([
+		{ label: "clamps a :high selector to task.maxEffort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		{ label: "fails a model whose lowest effort is above task.maxEffort", efforts: [Effort.High] },
+	])("$label on the running worker", async ({ efforts }) => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-executor-effort-ceiling-"));
+		const authStorage = await AuthStorage.create(":memory:");
+		const sourceId = `executor-effort-ceiling-${efforts.length}`;
+		const agentId = `EffortCeiling${efforts.length}`;
+		try {
+			authStorage.keys.setRuntime("mock", "test-key");
+			registerMockApi(sourceId);
+			const model = Object.assign(
+				createMockModel({ id: "laddered", reasoning: true, handler: () => ({ content: ["Capped answer."] }) }),
+				{ thinking: { mode: "effort", efforts } satisfies ThinkingConfig },
+			);
+			const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+			const find = modelRegistry.find.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) =>
+				provider === "mock" && id === model.id ? model : find(provider, id),
+			);
+			vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [model]);
+			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({
+				agents: [{ name: "worker", description: "test", systemPrompt: "test", source: "bundled", tools: ["read"] }],
+				projectAgentsDir: null,
+			});
+			const session = {
+				cwd,
+				hasUI: false,
+				settings: Settings.isolated({
+					"task.maxRecursionDepth": 2,
+					"task.perCallModel": "on",
+					"task.maxEffort": "low",
+					"task.isolation.enabled": false,
+					"compaction.enabled": false,
+					modelRoles: { review: `mock/${model.id}` },
+				}),
+				authStorage,
+				modelRegistry,
+				restrictToolNames: true,
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				getSessionAgents: () => [],
+			} as unknown as ToolSession;
+			const execution = await runStructuredSubagent({
+				session,
+				invocationKind: "task",
+				assignment: "Answer the question.",
+				agent: "worker",
+				perCallModel: `mock/${model.id}:high`,
+				structured: false,
+				identity: { id: agentId },
+				keepAlive: false,
+			});
+			if (efforts.length > 1) {
+				expect(execution.result.exitCode).toBe(0);
+				// The request the provider receives runs at the ceiling, not the requested `:high`.
+				expect(model.calls.map(call => call.options?.reasoning)).toEqual([Effort.Low]);
+			} else {
+				expect(model.calls).toHaveLength(0);
+				expect(execution.result.exitCode).not.toBe(0);
+				expect(`${execution.result.error ?? ""}${execution.result.stderr}`).toMatch(
+					/no supported thinking effort at or below task\.maxEffort=low/,
+				);
+			}
+		} finally {
+			await AgentRegistry.global().get(agentId)?.session?.dispose();
+			AgentRegistry.global().unregister(agentId);
+			unregisterCustomApis(sourceId);
+			authStorage.close();
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
 });

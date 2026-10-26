@@ -113,17 +113,20 @@ describe("workpool model validation", () => {
 		).resolves.toEqual({ name: "approved", agent: "scout", limit: 2 });
 	});
 
-	for (const { model, reason } of [
-		{ model: " , ", reason: /invalid `model` value/ },
-		{ model: [], reason: /invalid `model` value/ },
-		{ model: ["p/valid", ""], reason: /invalid `model` value/ },
-		{ model: [42], reason: /invalid `model` value/ },
-		{ model: "@smol", reason: /has no modelRoles entry/ },
-		{ model: ["p/valid", "p/*"], reason: /invalid `model` value/ },
+	for (const { mode, model, reason } of [
+		// The gate wins over the selector check, so an invalid selector still reports the disabled gate.
+		{ mode: "off", model: ["p/valid", "p/*"], reason: /task\.perCallModel: off/ },
+		{ mode: "on", model: " , ", reason: /invalid `model` value/ },
+		{ mode: "on", model: [], reason: /invalid `model` value/ },
+		{ mode: "on", model: ["p/valid", ""], reason: /invalid `model` value/ },
+		{ mode: "on", model: [42], reason: /invalid `model` value/ },
+		{ mode: "on", model: "@smol", reason: /has no modelRoles entry/ },
+		{ mode: "on", model: "pi/default", reason: /invalid `model` value/ },
+		{ mode: "on", model: ["p/valid", "p/*"], reason: /invalid `model` value/ },
 	]) {
-		it(`rejects invalid selection ${JSON.stringify(model)} before registering a pool`, async () => {
+		it(`rejects ${JSON.stringify(model)} under ${mode} before registering a pool`, async () => {
 			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
-			const session = makeSession({ "task.perCallModel": "on" });
+			const session = makeSession({ "task.perCallModel": mode });
 			await expect(
 				runEvalWorkpool({ op: "create", name: "invalid", agent: "scout", model }, { session }),
 			).rejects.toThrow(reason);

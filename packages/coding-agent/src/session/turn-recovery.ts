@@ -243,6 +243,8 @@ export interface TurnRecoveryHost {
 	modelFallbackDisabled?(): boolean;
 	/** Chain key the fallback walk consults first when no walk has pinned one (a per-call `model` subagent's own chain). */
 	pinnedRetryFallbackRole?(): string | undefined;
+	/** Whether the main-loop dispatch check admits `model`; a fallback walk never switches onto a model it refuses. */
+	dispatchModelAllowed?(model: Model): boolean;
 	isDisposed(): boolean;
 	isStreaming(): boolean;
 	isCompacting(): boolean;
@@ -2001,6 +2003,7 @@ export class TurnRecovery {
 				const resolved = resolveModelOverride([candidate.raw], this.#host.modelRegistry, this.#host.settings);
 				const candidateModel = resolved.model ?? this.#host.modelRegistry.find(candidate.provider, candidate.id);
 				if (!candidateModel || !this.#host.modelRegistry.hasConfiguredAuth(candidateModel)) continue;
+				if (this.#host.dispatchModelAllowed?.(candidateModel) === false) continue;
 				if (ceiling !== undefined && !modelSupportsEffortCeiling(candidateModel, ceiling)) continue;
 				// A usage fallback must also fit: skip a candidate whose window cannot
 				// hold the live context so we never switch onto an oversized request
@@ -2258,6 +2261,10 @@ export class TurnRecovery {
 				// sets `switchedModel`, and the retry budget is reset to 1 on every
 				// failure — an unbounded retry loop against a model that cannot work.
 				if (this.#isNoOpRetryFallback(candidate, selector)) continue;
+				// A per-call worker's dispatch check refuses a model the operator has not approved
+				// for it: skip it here so the walk reaches the next approved entry instead of
+				// switching onto a model whose request would fail the turn.
+				if (this.#host.dispatchModelAllowed?.(candidate) === false) continue;
 				if (options?.excludeProvider === candidate.provider) continue;
 				// Anthropic signatures and redacted blocks are model-bound, while the
 				// latest assistant response must remain byte-identical. A same-provider
@@ -2490,6 +2497,7 @@ export class TurnRecovery {
 		const primaryModel =
 			resolvedPrimary.model ?? this.#host.modelRegistry.find(originalSelector.provider, originalSelector.id);
 		if (!primaryModel) return false;
+		if (this.#host.dispatchModelAllowed?.(primaryModel) === false) return false;
 		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
 		if (!apiKey) return false;
 

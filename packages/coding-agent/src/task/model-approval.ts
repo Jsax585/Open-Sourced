@@ -3,20 +3,23 @@
  * `workpool()`.
  *
  * A model-facing selector may only pick a chat model the operator already
- * routes to: a configured chat role's value, a bundled or user-level agent's
- * frontmatter model, or the parent's live model. Catalog membership,
- * credentials, built-in role defaults, project agent frontmatter and saved
+ * routes to: a configured chat role's value, the selected agent's own
+ * frontmatter model (only when that agent is bundled or user-level), or the
+ * parent's live model. Catalog membership, credentials, built-in role
+ * defaults, project agent frontmatter, other agents' frontmatter and saved
  * transcripts grant nothing. `task.perCallModelAllow`, when set, narrows the
  * result to the models its exact, `@role` or glob entries match. Under
  * `task.perCallModelFallbacks: runtime` a running worker may also send to
  * concrete `retry.fallbackChains` entries; those are never requestable.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { factoryDroidServerSideFallbackModels } from "@oh-my-pi/pi-ai/providers/factory-droid";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 import type { ModelRegistry } from "../config/model-registry";
 import {
 	filterAvailableModelsByEnabledPatterns,
+	formatModelStringWithRouting,
 	normalizeModelPatternList,
 	resolveExplicitModelRole,
 	resolveModelOverride,
@@ -34,7 +37,11 @@ export class PerCallModelError extends Error {
 	}
 }
 
-/** Inputs that grant per-call models. Read live; nothing here is persisted as a grant. */
+/**
+ * Inputs that grant per-call models; nothing here is persisted as a grant. `settings` is read live,
+ * so a configuration change applies to the next request; the agent and parent fields are captured
+ * when the child spawns (or is revived).
+ */
 export interface PerCallModelGrants {
 	settings: Settings;
 	agentName: string;
@@ -43,14 +50,20 @@ export interface PerCallModelGrants {
 	agentModel?: string | string[];
 	/** The selected agent is no longer discovered (cold revival): its frontmatter grants nothing. */
 	agentRemoved?: boolean;
-	/** The parent session's live model, as `provider/model-id`. */
+	/** The parent session's live model, as `provider/model-id` plus any `@upstream` pin. */
 	parentModelPattern?: string;
 }
 
 type ApprovalRegistry = Pick<ModelRegistry, "getAvailable">;
 
-function identity(model: Pick<Model<Api>, "provider" | "id">): string {
-	return `${model.provider}/${model.id}`;
+/**
+ * The one model an exact entry names: a literal catalog id wins over a `:level`
+ * split, and an `@upstream` pin stays part of the identity. Undefined when the
+ * entry is not an exact selector for an available chat model.
+ */
+function exactIdentity(entry: string, chat: Model<Api>[]): string | undefined {
+	const model = resolveModelOverride([entry], { getAvailable: () => chat }, undefined, { exactOnly: true }).model;
+	return model ? formatModelStringWithRouting(model) : undefined;
 }
 
 /** Skip aliases: a configured role's value is a grant of its own, and an unconfigured role would only route through built-in defaults. */
@@ -61,9 +74,14 @@ function grantablePatterns(source: string | string[] | undefined, settings: Sett
 	});
 }
 
-/** Operator-configured selectors that grant a per-call model. */
+/**
+ * Operator-configured selectors that grant a per-call model. Role aliases are
+ * skipped rather than expanded: a configured role's value is a grant of its
+ * own, and an unconfigured role would only route through built-in defaults.
+ */
 export function perCallModelGrantPatterns(grants: PerCallModelGrants): string[] {
-	const { settings, agentName } = grants;
+	const settings = grants.settings.rootSettings();
+	const { agentName } = grants;
 	const trustedAgent =
 		(grants.agentSource === "bundled" || grants.agentSource === "user") &&
 		!grants.agentRemoved &&
@@ -78,19 +96,21 @@ export function perCallModelGrantPatterns(grants: PerCallModelGrants): string[] 
 	return [...new Set(sources.flatMap(source => grantablePatterns(source, settings)))];
 }
 
-/** Whether `pattern` approves `target`: a literal id, every match of a glob, or the one model a selector resolves to. */
+/**
+ * Whether `pattern` approves the routed identity `target`: an exact selector names
+ * one model; otherwise every match of a glob, or the one model a selector resolves to.
+ */
 function patternApproves(pattern: string, target: string, chat: Model<Api>[], settings: Settings): boolean {
-	// A literal id wins, so brackets in real ids (`glm-5.2[1m]`) never act as a glob.
-	const literal = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
-	if (literal === target || pattern === target) return true;
-	if (chat.some(candidate => identity(candidate) === literal || identity(candidate) === pattern)) return false;
+	// An exact selector names one model; brackets in real ids (`glm-5.2[1m]`) never act as a glob.
+	const exact = exactIdentity(pattern, chat);
+	if (exact !== undefined) return exact === target;
 	if (/[*?[]/.test(pattern)) {
 		return filterAvailableModelsByEnabledPatterns(chat, [pattern], settings).some(
-			granted => identity(granted) === target,
+			granted => formatModelStringWithRouting(granted) === target,
 		);
 	}
 	const resolved = resolveModelOverride([pattern], { getAvailable: () => chat }, settings).model;
-	return resolved !== undefined && identity(resolved) === target;
+	return resolved !== undefined && formatModelStringWithRouting(resolved) === target;
 }
 
 /**
@@ -99,9 +119,10 @@ function patternApproves(pattern: string, target: string, chat: Model<Api>[], se
  * another provider's model whose bare id happens to match (`openrouter/openai/gpt-5`).
  */
 function allowPatternAdmits(pattern: string, target: string, chat: Model<Api>[], settings: Settings): boolean {
+	const exact = exactIdentity(pattern, chat);
+	if (exact !== undefined) return exact === target;
 	const base = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
-	const literal = chat.some(candidate => identity(candidate) === base || identity(candidate) === pattern);
-	if (!literal && base.includes("/") && /[*?[]/.test(base)) {
+	if (base.includes("/") && /[*?[]/.test(base)) {
 		return new Bun.Glob(base.toLowerCase()).match(target.toLowerCase());
 	}
 	return patternApproves(pattern, target, chat, settings);
@@ -125,33 +146,90 @@ function allowlistAdmits(target: string, chat: Model<Api>[], settings: Settings)
 	});
 }
 
-/** Whether `model` is one the operator routes to under the current configuration. */
+/** Whether the operator's configuration names `model` itself (see {@link isPerCallModelApproved}). */
+function isGranted(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Api>[]): boolean {
+	const settings = grants.settings.rootSettings();
+	const target = formatModelStringWithRouting(model);
+	if (!chat.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return false;
+	if (!allowlistAdmits(target, chat, settings)) return false;
+	return perCallModelGrantPatterns(grants).some(pattern => patternApproves(pattern, target, chat, settings));
+}
+
+/**
+ * Whether a running worker may switch to `model` as a runtime fallback: under
+ * `task.perCallModelFallbacks: runtime`, a concrete `retry.fallbackChains`
+ * entry names its routed identity and the allowlist admits it. Read from the
+ * operator's settings, never the subagent overlay that installs its own chain.
+ */
+function isRuntimeFallback(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Api>[]): boolean {
+	const settings = grants.settings.rootSettings();
+	if (cfgTaskPerCallModelFallbacks.get(settings) !== "runtime") return false;
+	const target = formatModelStringWithRouting(model);
+	if (!chat.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return false;
+	if (!allowlistAdmits(target, chat, settings)) return false;
+	return grantablePatterns(concreteChainEntries(settings), settings).some(pattern =>
+		patternApproves(pattern, target, chat, settings),
+	);
+}
+
+/**
+ * Server-side fallback targets of `model` that are not themselves approved. Factory Droid
+ * sends Fable's refusal chain on the Anthropic upstream unconditionally, so the model
+ * is approved only while every model it may switch to is. `runtime` also accepts a target
+ * a running worker could reach as a runtime fallback.
+ */
+function unapprovedServerSideFallbacks(
+	model: Model<Api>,
+	grants: PerCallModelGrants,
+	chat: Model<Api>[],
+	runtime = false,
+): string[] {
+	if (model.api !== "factory-droid-agent") return [];
+	return factoryDroidServerSideFallbackModels(model as Model<"factory-droid-agent">)
+		.map(id => `${model.provider}/${id}`)
+		.filter(selector => {
+			const fallback = chat.find(candidate => `${candidate.provider}/${candidate.id}` === selector);
+			if (!fallback) return true;
+			return !isGranted(fallback, grants, chat) && !(runtime && isRuntimeFallback(fallback, grants, chat));
+		});
+}
+
+/**
+ * Whether `model` is one the operator routes to under the current configuration.
+ * Identities are exact: an `@upstream`-pinned route and the unpinned model are
+ * different models here, in either direction, and an entry that is itself a
+ * catalog id (even one ending in a level-shaped segment) names only that id.
+ */
 export function isPerCallModelApproved(
-	model: Pick<Model<Api>, "provider" | "id">,
+	model: Model<Api>,
 	grants: PerCallModelGrants,
 	registry: ApprovalRegistry,
 ): boolean {
-	const target = identity(model);
 	// Subagents run chat models only; a grant naming an image, search, speech or judge model does not count.
 	const chat = registry.getAvailable("chat");
-	if (!chat.some(candidate => identity(candidate) === target)) return false;
-	if (!allowlistAdmits(target, chat, grants.settings)) return false;
-	return perCallModelGrantPatterns(grants).some(pattern => patternApproves(pattern, target, chat, grants.settings));
+	return isGranted(model, grants, chat) && unapprovedServerSideFallbacks(model, grants, chat).length === 0;
 }
 
 /** Throw {@link PerCallModelError} unless `model` is approved. */
 export function assertPerCallModelApproved(
-	model: Pick<Model<Api>, "provider" | "id">,
+	model: Model<Api>,
 	grants: PerCallModelGrants,
 	registry: ApprovalRegistry,
 ): void {
-	if (isPerCallModelApproved(model, grants, registry)) return;
+	const chat = registry.getAvailable("chat");
+	if (isGranted(model, grants, chat)) {
+		const fallbacks = unapprovedServerSideFallbacks(model, grants, chat);
+		if (fallbacks.length === 0) return;
+		throw new PerCallModelError(
+			`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${grants.agentName}": its provider always attaches a server-side fallback to ${fallbacks.join(", ")}, which is not approved. Approve the fallback model too, or use a model without one.`,
+		);
+	}
 	const allowGuidance =
-		cfgTaskPerCallModelAllow.get(grants.settings).length > 0
-			? ", and it must also match an entry in task.perCallModelAllow"
+		cfgTaskPerCallModelAllow.get(grants.settings.rootSettings()).length > 0
+			? " It must also match an entry in task.perCallModelAllow."
 			: "";
 	throw new PerCallModelError(
-		`Per-call model ${identity(model)} is not approved for agent "${grants.agentName}": use a model named by a configured chat role, a bundled or user-level agent's frontmatter, or the parent's model${allowGuidance}. Catalog or credentials alone do not approve a model.`,
+		`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${grants.agentName}": use a model named by a configured chat role, the selected agent's own frontmatter (bundled or user-level agents only), or the parent's model.${allowGuidance} Catalog or credentials alone do not approve a model.`,
 	);
 }
 
@@ -165,34 +243,40 @@ function concreteChainEntries(settings: Settings): string[] {
 /**
  * Throw {@link PerCallModelError} unless a running per-call worker may send to
  * `model`: an approved model, or under `task.perCallModelFallbacks: runtime` a
- * concrete `retry.fallbackChains` entry the allowlist admits.
+ * concrete `retry.fallbackChains` entry the allowlist admits. Either way a Factory
+ * Droid model is refused while a server-side fallback target it always sends is not
+ * itself reachable.
  */
 export function assertPerCallDispatchModel(
-	model: Pick<Model<Api>, "provider" | "id">,
+	model: Model<Api>,
 	grants: PerCallModelGrants,
 	registry: ApprovalRegistry,
 ): void {
-	if (isPerCallModelApproved(model, grants, registry)) return;
-	const { settings } = grants;
+	const settings = grants.settings.rootSettings();
 	const runtime = cfgTaskPerCallModelFallbacks.get(settings) === "runtime";
-	if (runtime) {
-		const target = identity(model);
-		const chat = registry.getAvailable("chat");
-		if (
-			chat.some(candidate => identity(candidate) === target) &&
-			allowlistAdmits(target, chat, settings) &&
-			grantablePatterns(concreteChainEntries(settings), settings).some(pattern =>
-				patternApproves(pattern, target, chat, settings),
-			)
-		) {
-			return;
+	if (!runtime) {
+		try {
+			assertPerCallModelApproved(model, grants, registry);
+		} catch (error) {
+			if (!(error instanceof PerCallModelError)) throw error;
+			throw new PerCallModelError(`${error.message} Runtime fallbacks need task.perCallModelFallbacks: runtime.`);
 		}
+		return;
+	}
+	const chat = registry.getAvailable("chat");
+	const target = formatModelStringWithRouting(model);
+	if (isGranted(model, grants, chat) || isRuntimeFallback(model, grants, chat)) {
+		const fallbacks = unapprovedServerSideFallbacks(model, grants, chat, true);
+		if (fallbacks.length === 0) return;
+		throw new PerCallModelError(
+			`Per-call subagent "${grants.agentName}" cannot send to ${target}: its provider always attaches a server-side fallback to ${fallbacks.join(", ")}, which is not approved and not a configured runtime fallback.`,
+		);
 	}
 	const allowGuidance =
 		cfgTaskPerCallModelAllow.get(settings).length > 0
 			? ", and it must also match an entry in task.perCallModelAllow"
 			: "";
 	throw new PerCallModelError(
-		`Per-call subagent "${grants.agentName}" cannot send to ${identity(model)}: the model is not approved${allowGuidance}.${runtime ? "" : " Runtime fallbacks need task.perCallModelFallbacks: runtime."}`,
+		`Per-call subagent "${grants.agentName}" cannot send to ${target}: the model is not approved and not a concrete retry.fallbackChains entry${allowGuidance}.`,
 	);
 }
