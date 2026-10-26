@@ -429,38 +429,41 @@ describe("model-facing seance model approval", () => {
 		}
 	});
 
-	it.each(["exact", "role", "candidate list"] as const)("dispatches an approved explicit seance model via %s", async kind => {
-		using tempDir = TempDir.createSync("@omp-seance-approved-explicit-");
-		const fixture = await modelGateFixture(tempDir.path());
-		registerMockApi(MODEL_GATE_API_SOURCE);
-		const seanceModel =
-			kind === "exact"
-				? `mock/${fixture.approved.id}`
-				: kind === "role"
-					? "@review"
-					: ["missing-provider/missing-model", "@review"];
-		try {
-			const execution = await runStructuredSubagent({
-				session: fixture.session,
-				invocationKind: "task",
-				agent: "seance",
-				assignment: "Read the historical request.",
-				sourceSession: fixture.sourceFile,
-				seanceModel,
-				structured: false,
-				identity: { id: "ApprovedExplicitSeance" },
-				keepAlive: false,
-			});
-			expect(execution.result.exitCode).toBe(0);
-			expect(execution.result.output).toContain("Approved historical answer.");
-			expect(execution.result.resolvedModel).toBe(`mock/${fixture.approved.id}`);
-			expect(fixture.approved.calls).toHaveLength(1);
-			expect(fixture.unapproved.calls).toHaveLength(0);
-		} finally {
-			unregisterCustomApis(MODEL_GATE_API_SOURCE);
-			fixture.authStorage.close();
-		}
-	});
+	it.each(["exact", "role", "candidate list"] as const)(
+		"dispatches an approved explicit seance model via %s",
+		async kind => {
+			using tempDir = TempDir.createSync("@omp-seance-approved-explicit-");
+			const fixture = await modelGateFixture(tempDir.path());
+			registerMockApi(MODEL_GATE_API_SOURCE);
+			const seanceModel =
+				kind === "exact"
+					? `mock/${fixture.approved.id}`
+					: kind === "role"
+						? "@review"
+						: ["missing-provider/missing-model", "@review"];
+			try {
+				const execution = await runStructuredSubagent({
+					session: fixture.session,
+					invocationKind: "task",
+					agent: "seance",
+					assignment: "Read the historical request.",
+					sourceSession: fixture.sourceFile,
+					seanceModel,
+					structured: false,
+					identity: { id: "ApprovedExplicitSeance" },
+					keepAlive: false,
+				});
+				expect(execution.result.exitCode).toBe(0);
+				expect(execution.result.output).toContain("Approved historical answer.");
+				expect(execution.result.resolvedModel).toBe(`mock/${fixture.approved.id}`);
+				expect(fixture.approved.calls).toHaveLength(1);
+				expect(fixture.unapproved.calls).toHaveLength(0);
+			} finally {
+				unregisterCustomApis(MODEL_GATE_API_SOURCE);
+				fixture.authStorage.close();
+			}
+		},
+	);
 
 	it("expands explicit seance roles and lists before approving authenticated candidates", async () => {
 		using tempDir = TempDir.createSync("@omp-seance-role-candidates-");
@@ -470,7 +473,9 @@ describe("model-facing seance model approval", () => {
 			},
 			"task.agentModelOverrides": { seance: "mock/unapproved-seance-model" },
 		});
-		vi.spyOn(fixture.modelRegistry, "hasConfiguredAuth").mockImplementation(model => model.id === fixture.approved.id);
+		vi.spyOn(fixture.modelRegistry, "hasConfiguredAuth").mockImplementation(
+			model => model.id === fixture.approved.id,
+		);
 		const policy = (seanceModel: string | string[]) =>
 			resolveEffectiveSubagentPolicy({
 				session: fixture.session,
@@ -485,7 +490,11 @@ describe("model-facing seance model approval", () => {
 			expect(role.modelOverride).toEqual([`mock/${fixture.approved.id}:high`]);
 			expect(role.modelRole).toBe("review");
 			expect(role.perCallModelGrants).toBeDefined();
-			const list = await policy(["missing-provider/missing-model", "@review:low", `mock/${fixture.approved.id}:high`]);
+			const list = await policy([
+				"missing-provider/missing-model",
+				"@review:low",
+				`mock/${fixture.approved.id}:high`,
+			]);
 			expect(list.modelOverride).toEqual([`mock/${fixture.approved.id}:low`, `mock/${fixture.approved.id}:high`]);
 			expect(list.modelRole).toBeUndefined();
 			expect(list.perCallModelGrants).toBeDefined();
