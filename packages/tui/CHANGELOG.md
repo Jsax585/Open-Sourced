@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Built-in themes beyond the active dark/light pair now load on first use instead of at startup, so launching with a non-default theme no longer parses all 100 bundled theme files up front ([#17094](https://github.com/can1357/oh-my-pi/pull/17094) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
 
@@ -116,10 +119,6 @@
 ### Changed
 
 - Command and eval output panes no longer re-style and re-join their whole output on every frame, so a long command's output stops costing frame time while it sits in the transcript ([#16779](https://github.com/can1357/oh-my-pi/pull/16779) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
-### Changed
-
-- Built-in themes beyond the active dark/light pair now load on first use instead of at startup, so launching with a non-default theme no longer parses all 100 bundled theme files up front ([#17094](https://github.com/can1357/oh-my-pi/pull/17094) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Fixed
 
