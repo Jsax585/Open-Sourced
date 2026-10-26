@@ -1735,15 +1735,26 @@ export async function resolveModelOverrideWithAuthFallback(
 	authFallbackUsed: boolean;
 	warning?: string;
 }> {
-	if (modelPatterns.length === 0) return { explicitThinkingLevel: false, authFallbackUsed: false };
 	const disabledProviders = disabledProviderIds(settings);
-	const available = modelRegistry.getAvailable();
-	const enabledModels = filterAvailableModelsByEnabledPatterns(
-		disabledProviders.size > 0 ? available.filter(model => !disabledProviders.has(model.provider)) : available,
-		settings ? cfgEnabledModels.get(settings) : [],
-		settings,
-	);
-	const lookupRegistry: ModelLookupRegistry = { getAvailable: () => enabledModels };
+	const enabledPatterns = settings ? cfgEnabledModels.get(settings) : [];
+	if (enabledPatterns.length > 0) {
+		const unscopedRegistry = modelRegistry;
+		const available = unscopedRegistry.getAvailable();
+		const scopedModels = filterAvailableModelsByEnabledPatterns(
+			disabledProviders.size > 0 ? available.filter(model => !disabledProviders.has(model.provider)) : available,
+			enabledPatterns,
+			settings,
+		);
+		modelRegistry = {
+			getAvailable: () => scopedModels,
+			getApiKey: (model, credentialSessionId) => unscopedRegistry.getApiKey(model, credentialSessionId),
+		};
+	}
+	let lookupRegistry: ModelLookupRegistry = modelRegistry;
+	if (disabledProviders.size > 0) {
+		const enabledModels = modelRegistry.getAvailable().filter(model => !disabledProviders.has(model.provider));
+		lookupRegistry = { getAvailable: () => enabledModels };
+	}
 	const primary = resolveModelOverride(modelPatterns, lookupRegistry, settings);
 	if (!primary.model || !parentActiveModelPattern) {
 		return { ...primary, authFallbackUsed: false };

@@ -9,19 +9,15 @@ import * as os from "node:os";
 import path from "node:path";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import {
-	filterAvailableModelsByEnabledPatterns,
-	resolveAgentModelSelection,
-	resolveConfiguredModelPatterns,
-	resolveModelOverride,
-} from "../config/model-resolver";
-import { cfgEnabledModels } from "../config/model-settings";
+import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import {
 	type CompactionThresholdPair,
 	validateAgentCompactionThresholdOverrides,
 } from "../config/compaction-threshold";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
+import * as modelScope from "../config/model-resolver";
+import { cfgEnabledModels } from "../config/model-settings";
 import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { CustomTool } from "../extensibility/custom-tools/types";
@@ -448,34 +444,38 @@ export async function resolveEffectiveSubagentPolicy(
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role.
 	const { patterns: modelOverride, role: modelRole } = resolveAgentModelSelection(modelResolution);
-	const { settings, modelRegistry } = request.session;
-	const enabledPatterns = cfgEnabledModels.get(settings);
-	if (enabledPatterns.length > 0 && modelOverride.length > 0 && modelRegistry) {
-		const available = modelRegistry.getAvailable();
-		const scopedModels = filterAvailableModelsByEnabledPatterns(available, enabledPatterns, settings);
-		// Reject only what the registry can already decide: the selection resolves, every
-		// enabledModels pattern matches something, and none of it is in scope. A selection
-		// or scoped model that extensions or discovery may still register is left to
-		// execution, which resolves the same scope once models are loaded.
-		const decidable =
-			resolveModelOverride(modelOverride, { getAvailable: () => available }, settings).model !== undefined &&
-			enabledPatterns.every(
-				pattern => filterAvailableModelsByEnabledPatterns(available, [pattern], settings).length > 0,
-			);
-		if (decidable && !resolveModelOverride(modelOverride, { getAvailable: () => scopedModels }, settings).model) {
-			throw new StructuredSubagentError(
-				"preflight",
-				`No enabled model matches the subagent selection: ${JSON.stringify(modelOverride)}. Check enabledModels.`,
-			);
-		}
-	}
-	const isolationEnabled = cfgTaskIsolationEnabled.get(settings);
+	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
 	if (isIsolated && !isolationEnabled) {
 		throw new StructuredSubagentError(
 			"preflight",
 			"Subagent isolated execution requires task.isolation.enabled; it is currently false.",
 		);
+	}
+	const { settings, modelRegistry } = request.session;
+	const enabledPatterns = cfgEnabledModels.get(settings);
+	if (enabledPatterns.length > 0 && modelOverride.length > 0 && modelRegistry) {
+		const available = modelRegistry.getAvailable();
+		const scopedModels = modelScope.filterAvailableModelsByEnabledPatterns(available, enabledPatterns, settings);
+		// Reject only what the registry can already decide: the selection resolves, every
+		// enabledModels pattern matches something, and none of it is in scope. A selection
+		// or scoped model that extensions or discovery may still register is left to
+		// execution, which resolves the same scope once models are loaded.
+		const decidable =
+			modelScope.resolveModelOverride(modelOverride, { getAvailable: () => available }, settings).model !==
+				undefined &&
+			enabledPatterns.every(
+				pattern => modelScope.filterAvailableModelsByEnabledPatterns(available, [pattern], settings).length > 0,
+			);
+		if (
+			decidable &&
+			!modelScope.resolveModelOverride(modelOverride, { getAvailable: () => scopedModels }, settings).model
+		) {
+			throw new StructuredSubagentError(
+				"preflight",
+				`No enabled model matches the subagent selection: ${JSON.stringify(modelOverride)}. Check enabledModels.`,
+			);
+		}
 	}
 	return {
 		discovery,
