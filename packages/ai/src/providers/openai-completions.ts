@@ -48,6 +48,7 @@ import {
 } from "../utils/idle-iterator";
 import { OpenAIHttpError, postOpenAIStream } from "../utils/openai-http";
 import { notifyProviderResponse } from "../utils/provider-response";
+import { wrapFetchForRequestCompression } from "../utils/request-compression";
 import {
 	adaptSchemaForStrict,
 	findStrictToolSchemaViolation,
@@ -853,6 +854,7 @@ const streamOpenAICompletionsOnce = (
 				getOpenAIStreamFirstEventTimeoutMs(idleTimeoutMs, model.compat.streamFirstEventTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
+			const promptCacheSessionId = getOpenAIPromptCacheKey(options);
 			const {
 				copilotPremiumRequests,
 				baseUrl,
@@ -867,8 +869,11 @@ const streamOpenAICompletionsOnce = (
 				apiKey,
 				options?.headers,
 				options?.initiatorOverride,
-				getOpenAIPromptCacheKey(options),
+				promptCacheSessionId,
 				options?.sessionId,
+				// The family affinity key rides only an explicit prompt-cache
+				// identity; the sessionId-derived cache-id fallback never does.
+				options?.promptCacheKey ? promptCacheSessionId : undefined,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
@@ -938,7 +943,7 @@ const streamOpenAICompletionsOnce = (
 						signal: requestSignal,
 						maxAttempts: options?.maxHttpAttempts,
 						fetch: wrapFetchForCopilotFallback(
-							options?.fetch,
+							wrapFetchForRequestCompression(options?.fetch ?? fetch, model),
 							model.provider === "github-copilot",
 							resolveCopilotRequestIdentity(options?.headers),
 							copilotCacheKey,
@@ -1880,6 +1885,7 @@ function createRequestSetup(
 	initiatorOverride?: MessageAttribution,
 	promptCacheSessionId?: string,
 	sessionId?: string,
+	promptCacheAffinityKey?: string,
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
@@ -1889,6 +1895,7 @@ function createRequestSetup(
 		initiatorOverride,
 		promptCacheSessionId,
 		sessionId,
+		promptCacheAffinityKey,
 		messages: context.messages,
 		defaultBaseUrl: "https://api.openai.com/v1",
 		// Provider auth/header overlay: Kimi-code hosts require shared client
@@ -2003,6 +2010,12 @@ function applyOpenAIChatCompletionsPromptCachePolicy(
 			);
 		}
 		return;
+	}
+
+	if (promptCache.ttl === "12h") {
+		throw new AIError.ConfigurationError(
+			`OpenAI 12h prompt caching is only available on the Responses API; ${model.provider}/${model.id} uses Chat Completions.`,
+		);
 	}
 
 	params.prompt_cache_key = promptCacheKey;

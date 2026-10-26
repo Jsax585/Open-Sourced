@@ -359,7 +359,7 @@ export interface ToolSession {
 	getMnemopiSessionState?: () => MnemopiSessionState | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "Main", "AuthLoader"). */
 	getAgentId?: () => string | null;
-	/** Parent cache identity for sibling sharing, only when the parent model opts in. */
+	/** Parent cache identity for sibling sharing; the child stores it independently of its initial model, and each request consumes it only when its own model opts in. */
 	getPromptCacheKey?: () => string | undefined;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
 	getToolByName?: (name: string) => AgentTool | undefined;
@@ -480,6 +480,8 @@ export interface ToolSession {
 	getLastAssistantText?: () => string | undefined;
 	/** Resolve a terminal yield's current or immediately preceding report, bound to its call ID. */
 	getYieldReportText?: (toolCallId: string) => string | undefined;
+	/** The `i` intent the model wrote on a tool call of the current turn, by call ID. */
+	getToolCallIntent?: (toolCallId: string) => string | undefined;
 	/** Replace the active workpool item contract and refresh its provider-facing prompt. */
 	setWorkPoolYieldItems?: (items: readonly WorkPoolYieldItem[]) => Promise<void>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */

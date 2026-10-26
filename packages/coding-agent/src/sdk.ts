@@ -28,9 +28,10 @@ import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import type { DiscoverAuthStorageOptions } from "@oh-my-pi/pi-ai/auth-broker/discover";
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
+import { prewarmModelConnection } from "@oh-my-pi/pi-ai/providers/connection-prewarm";
 import { isOpenAICodexWebSocketPreferred } from "@oh-my-pi/pi-ai/providers/openai-codex-transport";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
-import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
+import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { FALLBACK_DIALECT, preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { $env } from "@oh-my-pi/pi-utils/env";
@@ -127,6 +128,8 @@ import {
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
 import type { UserWaitTracker } from "./extensibility/extensions/user-wait";
+import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
+import { partitionStartupExtensions, recordStartupVerdicts } from "./extensibility/extensions/startup-deferral";
 import {
 	createSkillDescriptionCompressor,
 	openSessionSkillDescriptionStore,
@@ -291,6 +294,7 @@ import {
 	xdevEntries,
 } from "./tools";
 import { resolveYieldReportText } from "./tools/yield";
+import { createModelJobWidgetAuthor, type JobWidgetAuthor, JobWidgets, resolveToolCallIntent } from "./job-widgets";
 import { createBrowserPrelude } from "./tools/browser";
 import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
 import { createComputerPrelude } from "./tools/computer";
@@ -319,6 +323,7 @@ import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 import {
 	cfgArchiveEnabled,
 	cfgAsyncMaxJobs,
+	cfgAsyncWidgets,
 	cfgComputerEnabled,
 	cfgRatchetEnabled,
 	cfgGenerateImageEnabled,
@@ -602,7 +607,7 @@ export interface CreateAgentSessionOptions {
 	modelPatternAuthFallback?: string;
 	/** Role name used to install retry fallbacks after deferred subagent patterns resolve. */
 	modelPatternFallbackRole?: string;
-	/** Validated default retry chain to install when a deferred singleton pattern resolves. */
+	/** Validated inherited retry chain for a deferred singleton pattern; empty explicitly disables fallbacks. */
 	modelPatternDefaultFallbackChain?: string[];
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
@@ -699,6 +704,16 @@ export interface CreateAgentSessionOptions {
 	 * @internal
 	 */
 	preloadedExtensions?: LoadExtensionsResult;
+	/**
+	 * Extension sources whose binding waits until the session's first
+	 * {@link AgentSession.loadDeferredExtensions} call (the CLI starts it once the
+	 * composer accepts input; every submission and turn awaits it). They bind
+	 * into the session runtime of {@link preloadedExtensions}, after it. Ignored
+	 * for restricted-tool sessions.
+	 *
+	 * @internal
+	 */
+	deferredExtensionPaths?: readonly string[];
 	/**
 	 * Pre-discovered extension source paths. When provided, the filesystem-scan
 	 * inside `discoverExtensionPaths()` is skipped — the session still calls
@@ -808,7 +823,7 @@ export interface CreateAgentSessionOptions {
 	taskDepth?: number;
 	/** Parent Hindsight state to alias for subagent memory tools. */
 	parentHindsightSessionState?: HindsightSessionState;
-	/** Parent Mnemopi state to alias for subagent memory tools. */
+	/** Parent Mnemopi state: subagents alias it; a top-level fork (`/tan`) inherits its delivered recall. */
 	parentMnemopiSessionState?: MnemopiSessionState;
 	/** Pre-allocated agent identity for IRC routing. Default: "Main" for top-level, parentTaskPrefix-derived for sub. */
 	agentId?: string;
@@ -832,6 +847,12 @@ export interface CreateAgentSessionOptions {
 	parentTaskPrefix?: string;
 	/** Parent's async jobs and delivery sinks; child sessions never resolve a process-global manager. */
 	asyncJobManager?: AsyncJobManager;
+	/**
+	 * Writes the specs of the root session's live job widgets. Defaults to the
+	 * `widget` model role; tests inject a fake. Ignored for child sessions,
+	 * which share their root's widgets.
+	 */
+	jobWidgetAuthor?: JobWidgetAuthor;
 	/**
 	 * Registry id of the spawning agent, recorded as this subagent's parent in
 	 * the agent registry. Distinct from `parentTaskPrefix`, which is this agent's
@@ -1089,19 +1110,30 @@ export async function discoverSessionExtensionPaths(
  * terminal breadcrumb — is created, then hand the result back through
  * {@link CreateAgentSessionOptions.preloadedExtensions} so the work is not
  * repeated. Keep this the single source of the discovery branch logic.
+ *
+ * With `deferStartupSafe`, sources whose recorded startup verdict proves they
+ * register nothing needed before the first frame are left unloaded and
+ * returned as `deferredPaths` for {@link CreateAgentSessionOptions.deferredExtensionPaths}.
  */
 export async function loadSessionExtensions(
 	options: ExtensionDiscoveryOptions,
 	cwd: string,
 	settings: Settings,
 	eventBus: EventBus,
-): Promise<LoadExtensionsResult> {
+	loadOptions: { deferStartupSafe?: boolean } = {},
+): Promise<LoadExtensionsResult & { deferredPaths: string[] }> {
 	const paths = await discoverSessionExtensionPaths(options, cwd, settings);
-	const result = await logger.time("loadExtensions", loadExtensions, paths, cwd, eventBus);
+	const storage = settings.getStorage();
+	const { eager, deferred } =
+		loadOptions.deferStartupSafe && storage
+			? await partitionStartupExtensions(storage, paths, cwd)
+			: { eager: paths, deferred: [] };
+	const result = await logger.time("loadExtensions", loadExtensions, eager, cwd, eventBus);
+	if (storage) await recordStartupVerdicts(storage, result.extensions);
 	for (const { path, error } of result.errors) {
 		logger.error("Failed to load extension", { path, error });
 	}
-	return result;
+	return { ...result, deferredPaths: deferred };
 }
 
 /**
@@ -1412,6 +1444,11 @@ export function customToolToDefinition(tool: CustomTool, sourcePath?: string): T
 		deferrable: tool.deferrable,
 		readsSkillUris: tool.readsSkillUris,
 		approval: typeof tool.approval === "function" ? tool.approval.bind(tool) : tool.approval,
+		// Extension tools take part in Ask-and-remember grants through the same bridge.
+		approvalCacheTargets:
+			typeof tool.approvalCacheTargets === "function"
+				? tool.approvalCacheTargets.bind(tool)
+				: tool.approvalCacheTargets,
 		// Preserved through RegisteredToolAdapter so MCP-backed tools' explicit
 		// `strict: false` (#4336/#4340) survives the custom-tool → definition bridge.
 		strict: tool.strict,
@@ -2030,6 +2067,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
 	let initialRetryFallback: InitialRetryFallbackState | undefined;
+	let modelPatternRetryFallbackRole: string | undefined;
 	// Identify session model strings to restore in fallback order. We do an
 	// initial pass here so model-dependent setup (thinking-level resolution,
 	// host preconnect) can use the restored model; extension-registered
@@ -2077,9 +2115,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// Resolves the session/agent thinking level using the same precedence we
 	// apply at startup: explicit option → persisted session entry → restored
 	// model selector suffix → default role's explicit selector → selected
-	// model's defaultLevel → global settings default. Run again after extension
-	// role reclaim so the final model's own defaults aren't masked by an earlier
-	// fallback model's.
+	// model's defaultLevel → global settings default. A global `auto` is always
+	// an explicit user choice (the setting defaults to a concrete level), so it
+	// outranks the model's defaultLevel. Run again after extension role reclaim
+	// so the final model's own defaults aren't masked by an earlier fallback
+	// model's.
 	const pickInitialThinkingLevel = (selectedModel: Model | undefined): ConfiguredThinkingLevel | undefined => {
 		let level = options.thinkingLevel;
 		if (level === undefined && hasExistingSession && hasThinkingEntry) {
@@ -2093,14 +2133,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
 			level = defaultRoleSpec.thinkingLevel;
 		}
-		if (level === undefined && selectedModel?.thinking?.defaultLevel !== undefined) {
+		const configuredDefaultLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
+		if (
+			level === undefined &&
+			configuredDefaultLevel !== AUTO_THINKING &&
+			selectedModel?.thinking?.defaultLevel !== undefined
+		) {
 			level = selectedModel.thinking.defaultLevel;
 		}
 		if (level === undefined) {
-			level = automaticThinkingLevel(
-				selectedModel,
-				parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings)),
-			);
+			level = automaticThinkingLevel(selectedModel, configuredDefaultLevel);
 		}
 		return level;
 	};
@@ -2117,12 +2159,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				? resolveProvisionalAutoLevel(resolvedModel)
 				: resolveThinkingLevelForModel(resolvedModel, effectiveThinkingLevel),
 		);
-		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
-		// with the rest of session setup (extension/skill load, tool registry,
-		// system prompt build). Without this, the first `fetch(...)` pays the
-		// full handshake serially. Every mode benefits (interactive, print, rpc,
-		// acp).
-		preconnectModelHost(model);
+		// Fire-and-forget connection warm-up so the handshake overlaps the rest
+		// of session setup (extension/skill load, tool registry, system prompt
+		// build). Effective for endpoints known before any request (official
+		// Anthropic); others warm once a request has revealed their real origin.
+		// Every mode benefits (interactive, print, rpc, acp).
+		void prewarmModelConnection(model);
 	}
 
 	// Re-derives the thinking level whenever startup settles on a different
@@ -2241,6 +2283,34 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				maxRunningJobs: () => Math.min(100, cfgAsyncMaxJobs.get(settings)),
 			})
 		: undefined;
+	if (asyncJobManager) {
+		asyncJobManager.widgets = new JobWidgets({
+			enabled: () => cfgAsyncWidgets.get(settings),
+			author:
+				options.jobWidgetAuthor ??
+				createModelJobWidgetAuthor({
+					settings,
+					modelRegistry,
+					sessionId: () => sessionManager.getSessionId(),
+					telemetry: () => agent?.telemetry,
+					obfuscate: () => (obfuscator?.hasSecrets() ? text => obfuscator?.obfuscate(text) ?? text : undefined),
+					onUsage: message => {
+						if (!message.usage) return;
+						sessionManager.appendModelUsage(
+							{
+								purpose: "job-widget",
+								api: message.api,
+								provider: message.provider,
+								model: message.model,
+								usage: message.usage,
+								stopReason: message.stopReason,
+							},
+							{ sessionId: sessionManager.getSessionId(), parentId: sessionManager.getLeafId() },
+						);
+					},
+				}),
+		});
+	}
 	const scopedAsyncJobManager = asyncJobManager ?? options.asyncJobManager;
 
 	const agentRegistry = options.agentRegistry ?? AgentRegistry.global();
@@ -2364,7 +2434,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getPromptCacheKey: () => {
 				if (!session) return undefined;
 				const model = session.agent.state.model;
-				if (!model || resolveCatalogPolicy(model).taskSiblingPromptCache !== true) return undefined;
+				if (!model) return undefined;
 				return session.getPromptCacheKeyForModel(model) ?? session.agent.sessionId;
 			},
 			getToolByName: name => session?.getToolByName(name),
@@ -2415,6 +2485,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getWorkPoolYieldItems: () => session?.getWorkPoolYieldItems() ?? [],
 			getLastAssistantText: () => session?.getLastAssistantText(),
 			getYieldReportText: toolCallId => resolveYieldReportText(session?.messages ?? [], toolCallId),
+			getToolCallIntent: toolCallId => resolveToolCallIntent(session?.messages ?? [], toolCallId),
 			setWorkPoolYieldItems: items => session.setWorkPoolYieldItems(items),
 			getCheckpointState: () => session.getCheckpointState(),
 			setCheckpointState: state => session.setCheckpointState(state ?? undefined),
@@ -2771,6 +2842,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}
 			}
 		}
+		const deferredExtensionPaths = restrictToolNames ? [] : (options.deferredExtensionPaths ?? []);
+		// Deferred extensions append to the forwarded lists after the session
+		// captured them, so subagents and forks still inherit them.
+		if (deferredExtensionPaths.length > 0) extensionsResult.preparedExtensions ??= [];
 		toolSession.preparedExtensions = extensionsResult.preparedExtensions;
 
 		// Process provider registrations queued during extension loading.
@@ -2834,7 +2909,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						// model: any value derived from the earlier fallback model's
 						// `thinking.defaultLevel` must not become sticky.
 						adoptThinkingForModel(restoredModel);
-						preconnectModelHost(restoredModel);
+						void prewarmModelConnection(restoredModel);
 						return true;
 					}
 				}
@@ -3146,11 +3221,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							fallbackSelectors.push(selector);
 						}
 					}
-					if (fallbackSelectors.length > 0) {
+					if (fallbackSelectors.length > 0 || options.modelPatternDefaultFallbackChain?.length === 0) {
 						installRetryFallbackRole(settings, options.modelPatternFallbackRole, {
 							primary: primarySelector,
 							chain: fallbackSelectors,
 						});
+						modelPatternRetryFallbackRole = options.modelPatternFallbackRole;
 					}
 				}
 				model = selectedModel;
@@ -3168,7 +3244,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					);
 					modelFallbackMessage = `Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`;
 				}
-				preconnectModelHost(selectedModel);
+				void prewarmModelConnection(selectedModel);
 				break;
 			}
 			if (!model) {
@@ -3213,7 +3289,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// `pickInitialThinkingLevel` closes over `defaultRoleSpec`,
 				// so the role's explicit selector (e.g. `:max`) now applies.
 				adoptThinkingForModel(resolvedDefaultModel);
-				preconnectModelHost(resolvedDefaultModel);
+				void prewarmModelConnection(resolvedDefaultModel);
 				return true;
 			};
 
@@ -3287,7 +3363,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						restoredSessionThinkingLevel = retryFallback.originalThinkingLevel;
 					}
 					adoptThinkingForModel(resolved.model);
-					preconnectModelHost(resolved.model);
+					void prewarmModelConnection(resolved.model);
 					return true;
 				}
 				return false;
@@ -4250,18 +4326,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const slashCommands = await slashCommandsPromise;
 
 		// Keep image blocks off the wire when they'd be rejected: either the user
-		// disabled images (`images.blockImages`) or the active model has no vision
-		// support. The latter covers switching from a vision model to a text-only
+		// disabled images (`images.blockImages`) or the active model's wire sends
+		// none. The latter covers switching from a vision model to a text-only
 		// one mid-session — historical image blocks would otherwise be replayed to
-		// a provider that 400s on them (#5400). Read both dynamically so a `/model`
-		// switch or setting change takes effect on the next turn.
+		// a provider that 400s on them (#5400) — and routes that strip images,
+		// whose blocks would otherwise be normalized and published for nothing.
+		// Read both dynamically so a `/model` switch or setting change takes
+		// effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
 			const converted = convertToLlm(messages);
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
 			}
 			const activeModel = agent?.state.model ?? model;
-			if (activeModel && !activeModel.input.includes("image")) {
+			if (activeModel && !sendsImageInputOnWire(activeModel)) {
 				return replaceLlmImagesWithText(
 					converted,
 					"[image omitted: the active model does not support image input]",
@@ -4494,6 +4572,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					agent.state.tools.some(tool => tool.name === "think") &&
 					supportsExternalThinking(streamModel);
 				const fallbackCreditRedemption = session?.consumeActiveFallbackCreditRedemption(streamModel);
+				if (streamOptions?.promptCacheKey === undefined) session?.promoteTaskSiblingCandidate(streamModel);
 				const merged: SimpleStreamOptions = {
 					...streamOptions,
 					promptCacheKey: streamOptions?.promptCacheKey ?? session?.getPromptCacheKeyForModel(streamModel),
@@ -4580,7 +4659,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		} else {
 			// Save initial model, thinking level, and service tier for new sessions so they can be restored on resume.
 			if (model) {
-				sessionManager.appendModelChange(`${model.provider}/${model.id}`);
+				const initialModel = `${model.provider}/${model.id}`;
+				sessionManager.appendModelChange(initialModel);
+				// A deferred pattern's own retry role follows the explicit default entry, as
+				// the task executor records it, so chain lookup prefers the pattern's chain
+				// while resume still restores this model as the default.
+				if (modelPatternRetryFallbackRole) {
+					sessionManager.appendModelChange(initialModel, modelPatternRetryFallbackRole);
+				}
 			}
 			if (!autoThinking) {
 				// Do not write the `auto` selector before the first turn resolves; auto
@@ -5483,6 +5569,34 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		if (deferredExtensionPaths.length > 0) {
+			const forwardedPreparedExtensions = extensionsResult.preparedExtensions ?? [];
+			const runtime = extensionsResult.runtime;
+			session.setDeferredExtensionLoader(async () => {
+				const loaded = await logger.time(
+					"loadDeferredExtensions",
+					loadExtensions,
+					[...deferredExtensionPaths],
+					cwd,
+					eventBus,
+					runtime,
+				);
+				const storage = settings.getStorage();
+				if (storage) await recordStartupVerdicts(storage, loaded.extensions);
+				for (const { path, error } of loaded.errors) logger.error("Failed to load extension", { path, error });
+				for (const message of formatExtensionLoadNotifications(loaded.errors)) {
+					session.emitNotice("warning", message, "extensions");
+				}
+				if (session.isDisposed) return;
+				// Providers queue until the runner is initialized; drain them as session creation does.
+				for (const { name, config, sourceId } of runtime.pendingProviderRegistrations.splice(0)) {
+					modelRegistry.registerProvider(name, config, sourceId);
+				}
+				forwardedPreparedExtensions.push(...(loaded.preparedExtensions ?? []));
+				extensionPaths.push(...loaded.extensions.map(extension => extension.resolvedPath));
+				await extensionRunner.addExtensions(loaded.extensions);
+			});
+		}
 		startDeferredMCPDiscovery?.(session);
 
 		startupCleanup.move();
@@ -5521,26 +5635,5 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			});
 		}
 		throw error;
-	}
-}
-
-/**
- * Best-effort preconnect to the model's API host. Bun's `fetch.preconnect`
- * primes DNS + TCP + TLS + H2 so the first real request reuses the warm
- * connection. Errors are swallowed: preconnect is an optimization, never a
- * hard dependency.
- *
- * Skips provider `anthropic`: its requests use the Cowork transport with
- * custom TLS options and never reuse a `fetch.preconnect` socket. The
- * interactive UI warms that connection via `prewarmModelConnection` instead.
- */
-function preconnectModelHost(model: Model): void {
-	if (!model.baseUrl || model.provider === "anthropic") return;
-	const preconnect = (globalThis.fetch as typeof fetch & { preconnect?: (url: string) => void }).preconnect;
-	if (typeof preconnect !== "function") return;
-	try {
-		preconnect(model.baseUrl);
-	} catch {
-		// Best effort.
 	}
 }

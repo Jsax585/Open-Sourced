@@ -91,6 +91,10 @@ export const launchHelp = {
 		advisor: Flags.boolean({
 			description: "Enable the advisor runtime (passively reviews each turn and injects notes)",
 		}),
+		"wait-async": Flags.boolean({
+			description:
+				"Print mode: before exiting, wait for this run's background jobs and wake the session with each result (async.printWake); no time limit unless --max-time is set",
+		}),
 		"external-thinking": Flags.boolean({
 			description:
 				"Use a private scratchpad while disabling supported GPT, Claude, and Gemini reasoning (at your own risk: providers have flagged this request shape as abuse)",
@@ -119,8 +123,8 @@ export const launchHelp = {
 			description: "Auto-approve all tool calls (skip approval prompts)",
 		}),
 		"approval-mode": Flags.string({
-			options: ["always-ask", "write", "yolo"],
-			description: "Override tools.approvalMode for this session (always-ask|write|yolo)",
+			options: ["always-ask", "always-ask-cached", "write", "yolo"],
+			description: "Override tools.approvalMode for this session (always-ask|always-ask-cached|write|yolo)",
 		}),
 	},
 	examples: [

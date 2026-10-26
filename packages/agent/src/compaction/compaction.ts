@@ -36,6 +36,7 @@ import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
+import { resolveCatalogPolicy } from "@oh-my-pi/pi-catalog/compat/catalog-policy";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isRecord, logger, prompt } from "@oh-my-pi/pi-utils";
@@ -727,8 +728,14 @@ export interface SummaryOptions {
 	thinkingLevel?: ThinkingLevel;
 	/** Session routing key for remote compaction transports with sticky provider sessions. */
 	sessionId?: string;
-	/** Prompt-cache key for remote compaction transports that support provider prefix caching. */
+	/** Prompt-cache key for conventional summary requests, gated against the summarizing model. */
 	promptCacheKey?: string;
+	/**
+	 * Prompt-cache key for remote compaction requests, gated against the request
+	 * they send (`remoteCompaction.api`/`model` override, see
+	 * `remoteCompactionPolicyModel`). Defaults to {@link promptCacheKey}.
+	 */
+	remotePromptCacheKey?: string;
 	/** Mutable provider state used to keep Codex compaction on the live session identity. */
 	providerSessionState?: Map<string, ProviderSessionState>;
 	/** Whether Codex remote compaction should prefer the provider WebSocket transport. */
@@ -870,13 +877,14 @@ function planSummaryWindows(
 	messages: Message[],
 	tokenizer: Tokenizer,
 	dialect: Dialect | undefined,
+	dropThinking: boolean,
 	budgetTokens: number,
 ): Message[][] {
 	const windows: Message[][] = [];
 	let current: Message[] = [];
 	let currentTokens = 0;
 	for (const message of messages) {
-		const tokens = tokenizer.countTokens(serializeConversationForSummary([message], dialect));
+		const tokens = tokenizer.countTokens(serializeConversationForSummary([message], dialect, dropThinking));
 		if (currentTokens > 0 && currentTokens + tokens > budgetTokens) {
 			windows.push(current);
 			current = [];
@@ -905,8 +913,9 @@ export async function generateSummary(
 	// Convert to LLM messages first (handles custom app messages when caller provides a transformer).
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(currentMessages);
 	const dialect = preferredDialect(model.id);
+	const dropThinking = resolveCatalogPolicy(model).classifierCotExtraction === true;
 	const tokenizer = new Tokenizer(model);
-	const wholeConversation = serializeConversationForSummary(llmMessages, dialect);
+	const wholeConversation = serializeConversationForSummary(llmMessages, dialect, dropThinking);
 	const budgetTokens = summaryInputBudgetTokens(model, maxTokens);
 	// A span that outgrew the summarizer's window is summarized as a fold: each
 	// window updates the summary carried out of the previous one, which is the
@@ -917,12 +926,15 @@ export async function generateSummary(
 	// common case and costs exactly the one call it always did.
 	const pending: SummaryWindow[] = tokenizer.checkTokenBudget(wholeConversation, budgetTokens).fits
 		? [{ messages: llmMessages, budgetTokens, text: wholeConversation }]
-		: planSummaryWindows(llmMessages, tokenizer, dialect, budgetTokens).map(messages => ({ messages, budgetTokens }));
+		: planSummaryWindows(llmMessages, tokenizer, dialect, dropThinking, budgetTokens).map(messages => ({
+				messages,
+				budgetTokens,
+			}));
 
 	let carriedSummary = previousSummary;
 	while (pending.length > 0) {
 		const window = pending[0];
-		const text = window.text ?? serializeConversationForSummary(window.messages, dialect);
+		const text = window.text ?? serializeConversationForSummary(window.messages, dialect, dropThinking);
 		// A budget probe, not a raw count: a window whose bytes already fit needs
 		// neither an exact count nor the clamp, and the bust path hands back the
 		// exact count the proportional clamp needs as its denominator.
@@ -960,7 +972,7 @@ export async function generateSummary(
 			pending.splice(
 				0,
 				1,
-				...planSummaryWindows(window.messages, tokenizer, dialect, halved).map(messages => ({
+				...planSummaryWindows(window.messages, tokenizer, dialect, dropThinking, halved).map(messages => ({
 					messages,
 					budgetTokens: halved,
 				})),
@@ -1210,7 +1222,11 @@ async function generateShortSummary(
 ): Promise<string> {
 	const maxTokens = Math.min(512, Math.floor(0.2 * reserveTokens));
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(recentMessages);
-	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
+	const conversationText = serializeConversationForSummary(
+		llmMessages,
+		preferredDialect(model.id),
+		resolveCatalogPolicy(model).classifierCotExtraction === true,
+	);
 
 	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
 	if (historySummary) {
@@ -1667,6 +1683,7 @@ export async function compact(
 		thinkingLevel: options?.thinkingLevel,
 		sessionId: options?.sessionId,
 		promptCacheKey: options?.promptCacheKey,
+		remotePromptCacheKey: options?.remotePromptCacheKey ?? options?.promptCacheKey,
 		providerSessionState: options?.providerSessionState,
 		preferWebsockets: options?.preferWebsockets,
 		codexCompaction: options?.codexCompaction,
@@ -1805,7 +1822,7 @@ export async function compact(
 						forceReasoningOff: summaryOptions.thinkingLevel === ThinkingLevel.Off,
 						responsesLite: model.useResponsesLite,
 						sessionId: summaryOptions.sessionId,
-						promptCacheKey: summaryOptions.promptCacheKey,
+						promptCacheKey: summaryOptions.remotePromptCacheKey,
 						providerSessionState: summaryOptions.providerSessionState,
 						codexCompaction: createOpenAICodexCompactionRequestContext({
 							context: summaryOptions.codexCompaction,
@@ -1878,7 +1895,7 @@ export async function compact(
 			assertRemoteCompactionInputFits(trimmed, model);
 			const requestOptions = {
 				sessionId: summaryOptions.sessionId,
-				promptCacheKey: summaryOptions.promptCacheKey,
+				promptCacheKey: summaryOptions.remotePromptCacheKey,
 				retainedMessageBudget: settings.v2RetainedMessageBudget,
 				retainedUserItems,
 			};
@@ -1960,6 +1977,7 @@ export async function compact(
 						{
 							fetch: summaryOptions.fetch,
 							sessionId: summaryOptions.sessionId,
+							promptCacheKey: summaryOptions.remotePromptCacheKey,
 							providerSessionState: summaryOptions.providerSessionState,
 							codexCompaction: summaryOptions.codexCompaction,
 							rewriteOutputs,
@@ -2014,6 +2032,7 @@ export async function compact(
 	let nativeFirstKeptEntryId = firstKeptEntryId;
 	let nativeUsedTokens: number | undefined;
 	let nativeRetainedFiles: AnthropicCompactionFiles[] | undefined;
+	let nativeToolChanges: Record<string, unknown>[] | undefined;
 	if (!usedRemoteCompaction && settings.remoteEnabled !== false && shouldUseAnthropicNativeCompaction(model)) {
 		const previousNative = getPreservedAnthropicCompactionData(previousPreserveData);
 		// Lead with the previous summary as the live context renders it:
@@ -2042,6 +2061,7 @@ export async function compact(
 											: {}),
 										...(previousNative.filesText ? { filesText: previousNative.filesText } : {}),
 										...(previousNative.retainedFiles ? { retainedFiles: previousNative.retainedFiles } : {}),
+										...(previousNative.toolChanges ? { toolChanges: previousNative.toolChanges } : {}),
 										...(previousNative.exactTail ? { exactTail: true as const } : {}),
 									}
 								: undefined,
@@ -2138,6 +2158,7 @@ export async function compact(
 			);
 			nativeSummary = remote.content;
 			nativeSignature = remote.signature;
+			nativeToolChanges = remote.toolChanges;
 			nativeUsedTokens = calculatePromptTokens(remote.usage);
 			usedRemoteCompaction = true;
 		} catch (err) {
@@ -2225,16 +2246,18 @@ export async function compact(
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary = upsertFileOperations(summary, readFiles, modifiedFiles, fileOps.read);
 	if (nativeSummary !== undefined) {
-		// The replayed block stays byte-identical to the API's summary so it
-		// matches its signature. The harness file lists above travel
-		// separately: the converter replaces the summary message with the
-		// block and skips its text, so they would otherwise be invisible to
-		// this provider. Every other provider keeps reading the entry text.
+		// The replayed block (summary and any `tool_changes`) stays
+		// byte-identical to the API's output so it matches its signature. The
+		// harness file lists above travel separately: the converter replaces the
+		// summary message with the block and skips its text, so they would
+		// otherwise be invisible to this provider. Every other provider keeps
+		// reading the entry text.
 		const filesText = upsertFileOperations("", readFiles, modifiedFiles, fileOps.read) || undefined;
 		preserveData = withAnthropicCompactionPreserveData(preserveData, {
 			provider: model.provider,
 			content: nativeSummary,
 			...(nativeSignature ? { signature: nativeSignature } : {}),
+			...(nativeToolChanges ? { toolChanges: nativeToolChanges } : {}),
 			...(filesText ? { filesText } : {}),
 			...(nativeRetainedFiles ? { retainedFiles: nativeRetainedFiles } : {}),
 			exactTail: true,
@@ -2280,8 +2303,12 @@ async function generateTurnPrefixSummary(
 	const maxTokens = Math.min(Math.floor(0.5 * reserveTokens), MAX_SUMMARY_TOKENS); // Smaller budget for turn prefix
 
 	const llmMessages = (options?.convertToLlm ?? defaultConvertToLlm)(messages);
-	const conversationText = serializeConversationForSummary(llmMessages, preferredDialect(model.id));
-	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+	const conversationText = serializeConversationForSummary(
+		llmMessages,
+		preferredDialect(model.id),
+		resolveCatalogPolicy(model).classifierCotExtraction === true,
+	);
+	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${formatAdditionalContext(options?.extraContext)}${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 	const summarizationMessages = [
 		{
 			role: "user" as const,
