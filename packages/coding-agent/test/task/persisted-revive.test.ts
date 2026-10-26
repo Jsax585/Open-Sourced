@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -939,6 +940,95 @@ describe("persisted subagent revival", () => {
 		expect(options?.assertDispatchModel).toBeUndefined();
 		expect(options?.disableModelFallback).toBeUndefined();
 		expect(options?.thinkingLevelCeiling).toBeUndefined();
+	});
+
+	it("cold-revives a seance saved on an @upstream-pinned model onto that exact route, never the unpinned one", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const routed = buildModel({
+			id: "anthropic/claude-sonnet-4.5",
+			name: "anthropic/claude-sonnet-4.5",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			input: ["text"],
+			cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		});
+		const pinned = "openrouter/anthropic/claude-sonnet-4.5@anthropic";
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorage.keys.setRuntime("openrouter", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([routed]);
+		vi.spyOn(modelRegistry, "getAvailableForProviders").mockReturnValue([routed]);
+		vi.spyOn(modelRegistry, "getAll").mockReturnValue([routed]);
+		vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) =>
+			provider === routed.provider && id === routed.id ? routed : undefined,
+		);
+		const revive = async (resolvedModel: string, perCallModel: boolean) => {
+			const cwd = makeTempDir("@pi-revive-seance-pinned-");
+			const source = SessionManager.create(cwd, path.join(cwd, "sources"));
+			source.appendMessage({ role: "user", content: "historical request", timestamp: 1 });
+			await source.ensureOnDisk();
+			const sourceFile = source.getSessionFile();
+			if (!sourceFile) throw new Error("Expected a persisted source");
+			await source.close();
+			const fork = await SessionManager.forkFrom(sourceFile, cwd, undefined, undefined, {
+				seance: true,
+				suppressBreadcrumb: true,
+				sessionFile: path.join(cwd, "forks", "seance.jsonl"),
+			});
+			const sessionFile = fork.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted seance fork");
+			fork.appendSessionInit({
+				systemPrompt: ["seance prompt"],
+				task: "Read the source transcript.",
+				tools: ["read", "grep", "glob"],
+				agent: "seance",
+				resolvedModel,
+				restrictToolNames: true,
+				spawns: "",
+				...(perCallModel ? { perCallModel: true } : {}),
+			});
+			await fork.close();
+			const ref = createRef(sessionFile);
+			const reviver = await createPersistedSubagentReviverFactory({
+				session: {
+					sessionManager: { getCwd: () => cwd, getArtifactManager: () => undefined },
+					effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
+					getSessionAgents: () => [],
+				} as unknown as AgentSession,
+				authStorage,
+				modelRegistry,
+				settings: Settings.isolated({
+					modelRoles: { review: pinned },
+					"compaction.enabled": false,
+					"todo.enabled": false,
+				}),
+				enableLsp: false,
+			})(ref);
+			if (!reviver) throw new Error(`Expected a cold seance reviver for ${resolvedModel}`);
+			const session = await reviver(undefined as never);
+			try {
+				return session.model ? formatModelStringWithRouting(session.model) : undefined;
+			} finally {
+				await session.dispose();
+			}
+		};
+		try {
+			// Model-facing (approved through the pinned role) and host selections both keep their route.
+			for (const perCallModel of [true, false]) {
+				expect(await revive(pinned, perCallModel)).toBe(pinned);
+				expect(await revive(`${pinned}:high`, perCallModel)).toBe(pinned);
+			}
+			// Once the saved model is gone the seance stays transcript-only; nothing similar is substituted.
+			vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([]);
+			await expect(revive(pinned, true)).rejects.toThrow(`Expected a cold seance reviver for ${pinned}`);
+		} finally {
+			authStorage.close();
+		}
 	});
 
 	it("falls back to the ref display name reviving a legacy session file without a persisted agent name", async () => {

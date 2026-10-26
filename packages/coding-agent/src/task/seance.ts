@@ -349,7 +349,10 @@ export async function restoreSeanceSession(context: {
 	}
 	const modelPattern = init.resolvedModel.trim();
 	await modelRegistry.awaitBackgroundRefresh().catch(() => {});
-	if (!resolveSessionModelSelector(modelRegistry, modelPattern)) return undefined;
+	// The saved selector is the dispatched identity: an `@upstream` pin is part of it, so look it up
+	// exactly, pin included, never through the unpinned model or a fuzzy match.
+	const restored = resolveModelOverride([modelPattern], modelRegistry, undefined, { exactOnly: true }).model;
+	if (!restored || !modelRegistry.hasConfiguredAuth(restored)) return undefined;
 	return {
 		cwd,
 		modelPattern,
