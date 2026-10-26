@@ -16,6 +16,7 @@
 
 ### Changed
 
+- Android standalone binaries now bundle Bun 1.4.4.
 - `ask` answers now name the option a note is on (`m: [X, Y] (note on Y: …)`, `User added note on Y: …`) ([#17126](https://github.com/can1357/oh-my-pi/pull/17126) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.0] - 2026-10-26
