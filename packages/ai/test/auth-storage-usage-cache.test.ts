@@ -12,17 +12,33 @@
  *      from cache (no refetch); the entry expires and the next poll retries.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	type AuthCredential,
 	type AuthCredentialStore,
 	AuthStorage,
+	SqliteAuthCredentialStore,
 	type StoredAuthCredential,
 } from "@oh-my-pi/pi-ai/auth-storage";
 import { usageCacheIdentity } from "@oh-my-pi/pi-ai/auth/usage-cache";
+import { UsageService } from "@oh-my-pi/pi-ai/auth/usage";
 import type { UsageLimit, UsageProvider, UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { alibabaTokenPlanUsageProvider } from "@oh-my-pi/pi-ai/usage/alibaba-token-plan";
 import * as claudeUsage from "@oh-my-pi/pi-ai/usage/claude";
 import { serializeAlibabaTokenPlanCredential } from "@oh-my-pi/pi-catalog/wire/alibaba-token-plan";
+import { removeWithRetries } from "../../utils/src/temp";
+
+function credentialReport(
+	storage: AuthStorage,
+	credential: AuthCredential,
+	baseUrl?: string,
+): Promise<UsageReport | null> {
+	const usage = storage.usage;
+	if (!(usage instanceof UsageService)) throw new Error("expected local usage service");
+	return usage.report("anthropic", credential, { baseUrl });
+}
 
 function anthropicReports(reports: UsageReport[] | null): UsageReport[] {
 	return (reports ?? []).filter(r => r.provider === "anthropic");
@@ -234,8 +250,24 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 		expect(calls).toBe(1);
 	});
 
+	it("reuses a Claude account report across equivalent Messages URL forms", async () => {
+		let calls = 0;
+		vi.spyOn(claudeUsage.claudeUsageProvider, "fetchUsage").mockImplementation(async () => {
+			calls += 1;
+			return makeReport("a@example.com");
+		});
+		const credential = oauthRow(1, "a@example.com").credential;
+
+		const first = await credentialReport(storage, credential, "https://api.anthropic.com/v1");
+		const second = await credentialReport(storage, credential, "https://api.anthropic.com");
+
+		expect(second?.limits[0]?.amount.used).toBe(first?.limits[0]?.amount.used);
+		expect(calls).toBe(1);
+	});
+
 	it("cold-fetches instead of replaying a report stored under the previous Anthropic cache version", async () => {
-		const previousVersionKey = "usage_cache:report:2:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const previousVersionKey =
+			"usage_cache:report:2:anthropic:https://api.anthropic.com:oauth|account:account-1|email:a@example.com";
 		store.cache.set(previousVersionKey, {
 			value: JSON.stringify({ value: makeReport("a@example.com"), expiresAt: Date.now() + 60_000 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -251,7 +283,8 @@ describe("AuthStorage usage cache: last-good failure fallback", () => {
 	});
 
 	it("uses the configured usage provider's cache version instead of the built-in version", async () => {
-		const oldKey = "usage_cache:report:3:anthropic:default:oauth|account:account-1|email:a@example.com";
+		const oldKey =
+			"usage_cache:report:3:anthropic:https://api.anthropic.com:oauth|account:account-1|email:a@example.com";
 		store.cache.set(oldKey, {
 			value: JSON.stringify({ value: makeReport("a@example.com"), expiresAt: Date.now() + 60_000 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -470,7 +503,7 @@ describe("AuthStorage usage cache: Claude rate limits", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("waits a minute before re-polling Claude usage after a 429", async () => {
+	it("backs off every Claude account on the host through Retry-After", async () => {
 		let now = 1_800_000_000_000;
 		vi.spyOn(Date, "now").mockImplementation(() => now);
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
@@ -481,7 +514,7 @@ describe("AuthStorage usage cache: Claude rate limits", () => {
 			if (usageRequests === 1) {
 				return Response.json(
 					{ error: { type: "rate_limit_error", message: "Rate limited. Please try again later." } },
-					{ status: 429, headers: { "retry-after": "0" } },
+					{ status: 429, headers: { "retry-after": "600" } },
 				);
 			}
 			return Response.json({
@@ -490,24 +523,107 @@ describe("AuthStorage usage cache: Claude rate limits", () => {
 				juniper_tide: null,
 			});
 		}) as unknown as typeof fetch;
-		const storage = new AuthStorage(makeStore([oauthRow(1, "a@example.com")]), {
+		const [first, second] = [oauthRow(1, "a@example.com"), oauthRow(2, "b@example.com")];
+		const storage = new AuthStorage(makeStore([first, second]), {
 			usageFetch,
 			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
 		});
 		try {
 			await storage.credentials.reload();
-			expect(anthropicReports(await storage.usage.reports())).toEqual([]);
+			expect(await credentialReport(storage, first.credential)).toBeNull();
 
-			now += 30_000;
-			expect(anthropicReports(await storage.usage.reports())).toEqual([]);
+			now += 5 * 60_000 + 1;
+			expect(await credentialReport(storage, second.credential, "https://api.anthropic.com/v1")).toBeNull();
 			expect(usageRequests).toBe(1);
 
-			now += 31_000;
-			const recovered = requireAnthropicReport(await storage.usage.reports());
+			now += 5 * 60_000;
+			const recovered = await credentialReport(storage, second.credential);
+			if (!recovered) throw new Error("expected recovered Claude report");
 			expect(requireLimit(recovered, "anthropic:5h").amount.used).toBe(25);
 			expect(usageRequests).toBe(2);
 		} finally {
 			storage.close();
+		}
+	});
+	it("keeps another account's last-good report during a host-wide 429 cooldown", async () => {
+		let now = 1_800_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		let calls = 0;
+		const usageFetch = (async (input: string | URL | Request) => {
+			const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+			if (url.pathname.endsWith("/usage") && url.search === "" && ++calls === 2)
+				return Response.json({ error: "rate_limited" }, { status: 429 });
+			return Response.json({
+				five_hour: { utilization: 25, resets_at: "2099-09-23T00:00:00Z" },
+				cedar_ember: null,
+				juniper_tide: null,
+			});
+		}) as unknown as typeof fetch;
+		const first = oauthRow(1, "a@example.com");
+		const second = oauthRow(2, "b@example.com");
+		const storage = new AuthStorage(makeStore([first, second]), {
+			usageFetch,
+			usageProviderResolver: provider => (provider === "anthropic" ? claudeUsage.claudeUsageProvider : undefined),
+		});
+		try {
+			await storage.credentials.reload();
+			const lastGood = await credentialReport(storage, first.credential);
+			if (!lastGood) throw new Error("expected initial Claude report");
+			now += 5 * 60_000 + 1;
+			expect(await credentialReport(storage, second.credential)).toBeNull();
+			const fallback = await credentialReport(storage, first.credential);
+			if (!fallback) throw new Error("expected last-good Claude report");
+			expect(fallback.fetchedAt).toBe(lastGood.fetchedAt);
+			expect(requireLimit(fallback, "anthropic:5h").amount.used).toBe(25);
+			expect(calls).toBe(2);
+		} finally {
+			storage.close();
+		}
+	});
+});
+
+describe("AuthStorage usage cache: shared probe ownership", () => {
+	it("coalesces concurrent SQLite-backed session probes into one upstream request", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-usage-lease-"));
+		const dbPath = path.join(dir, "agent.db");
+		const firstStore = await SqliteAuthCredentialStore.open(dbPath);
+		const secondStore = await SqliteAuthCredentialStore.open(dbPath);
+		const credential = oauthRow(1, "a@example.com").credential;
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<UsageReport>();
+		let calls = 0;
+		const provider: UsageProvider = {
+			id: "anthropic",
+			async fetchUsage() {
+				calls++;
+				started.resolve();
+				return release.promise;
+			},
+		};
+		const options = { usageProviderResolver: (id: string) => (id === "anthropic" ? provider : undefined) };
+		let first: AuthStorage | undefined;
+		let second: AuthStorage | undefined;
+		try {
+			await firstStore.replaceAuthCredentials("anthropic", [credential]);
+			first = new AuthStorage(firstStore, options);
+			second = new AuthStorage(secondStore, options);
+			await Promise.all([first.credentials.reload(), second.credentials.reload()]);
+
+			const firstReport = credentialReport(first, credential, "https://api.anthropic.com/v1");
+			await started.promise;
+			const secondReport = credentialReport(second, credential, "https://api.anthropic.com");
+			release.resolve(makeReport("a@example.com"));
+			const [ownerResult, peerResult] = await Promise.all([firstReport, secondReport]);
+			expect(ownerResult?.limits[0]?.amount.used).toBe(42);
+			expect(peerResult?.limits[0]?.amount.used).toBe(42);
+			expect(calls).toBe(1);
+		} finally {
+			first?.close();
+			second?.close();
+			if (!first) firstStore.close();
+			if (!second) secondStore.close();
+			await removeWithRetries(dir);
 		}
 	});
 });
@@ -1337,7 +1453,8 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		if (row.credential.type !== "oauth") throw new Error("expected OAuth test credential");
 		row.credential.expires = Date.now() - 1000;
 		const store = makeStore([row]);
-		const cacheKey = "usage_cache:report:3:anthropic:default:oauth|account:account-3|email:expired@example.com";
+		const cacheKey =
+			"usage_cache:report:3:anthropic:https://api.anthropic.com:oauth|account:account-3|email:expired@example.com";
 		store.cache.set(cacheKey, {
 			value: JSON.stringify({ value: makeReport("expired@example.com"), expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),
@@ -1397,7 +1514,8 @@ describe("AuthStorage usage cache: terminal refresh failure", () => {
 		};
 
 		const lastGood = makeReport("b@example.com");
-		const cacheKey = "usage_cache:report:3:anthropic:default:oauth|account:account-2|email:b@example.com";
+		const cacheKey =
+			"usage_cache:report:3:anthropic:https://api.anthropic.com:oauth|account:account-2|email:b@example.com";
 		cache.set(cacheKey, {
 			value: JSON.stringify({ value: lastGood, expiresAt: 1 }),
 			expiresAtSec: Math.floor((Date.now() + 24 * 60 * 60_000) / 1000),

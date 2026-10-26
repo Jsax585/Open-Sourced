@@ -301,6 +301,7 @@ async function fetchUsagePayload(
 					attempt,
 					willRetry: retryable && attempt < MAX_ATTEMPTS - 1,
 				});
+				if (response.status === 429) ctx.onRateLimit?.(url, response.headers.get("retry-after"));
 				if (!retryable) return { payload: null, endpointAbsent: absent };
 				const retryAfter = response.headers.get("retry-after");
 				if (!(await waitBeforeRetry(attempt, retryAfter, signal, ctx.retryWait))) break;

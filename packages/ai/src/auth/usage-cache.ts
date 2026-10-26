@@ -3,6 +3,7 @@ import type { AuthCredential, OAuthCredential } from "./types";
 import type { CredentialPool } from "./pool";
 import type { Provider } from "../types";
 import type { UsageCredential, UsageProvider, UsageReport } from "../usage";
+import { normalizeClaudeApiBaseUrl } from "../usage/claude-api";
 import { isRecord } from "../utils";
 
 const USAGE_CACHE_PREFIX = "usage_cache:";
@@ -200,6 +201,28 @@ export class UsageCache {
 	failureKey(reportKey: string): string {
 		return `failure:${reportKey}`;
 	}
+	/** A single post-reset probe may bypass a Claude host throttle for the redeemed account. */
+	resetProbeKey(reportKey: string): string {
+		return `reset-probe:${reportKey}`;
+	}
+
+	/** Keep the Claude IP throttle scoped to the same canonical host as usage requests. */
+	claudeHostThrottleKey(baseUrl?: string): string {
+		return `throttle:anthropic:${new URL(normalizeClaudeApiBaseUrl(baseUrl)).origin}`;
+	}
+	/**
+	 * A confirmed reset is durable across sessions: it outranks a peer-written
+	 * report or failure cooldown until the redeemed account's next probe starts.
+	 */
+	resetProbePending(reportKey: string): boolean {
+		return this.get<boolean>(this.resetProbeKey(reportKey))?.value === true;
+	}
+
+	/** Preserve the host cooldown for other accounts while allowing a confirmed reset one probe. */
+	hostCooldownActive(hostKey: string, reportKey: string): boolean {
+		if ((this.get<null>(hostKey)?.expiresAt ?? 0) <= Date.now()) return false;
+		return !this.resetProbePending(reportKey);
+	}
 
 	get<T>(key: string): UsageCacheEntry<T> | undefined {
 		const raw = this.#store.getCache(`${USAGE_CACHE_PREFIX}${key}`);
@@ -236,8 +259,27 @@ export class UsageCache {
 		return true;
 	}
 
+	/** Claim a shared probe lease; undefined means this store has no lease support. */
+	tryAcquireUsageLease(key: string, owner: string, expiresAtMs: number): boolean | undefined {
+		return this.#store.tryAcquireUsageLease?.(key, owner, expiresAtMs);
+	}
+
+	getUsageLeaseExpiresAt(key: string): number | undefined {
+		return this.#store.getUsageLeaseExpiresAt?.(key);
+	}
+
+	releaseUsageLease(key: string, owner: string): void {
+		this.#store.releaseUsageLease?.(key, owner);
+	}
+
 	#normalizeUsageBaseUrl(baseUrl?: string): string {
 		return baseUrl?.trim().replace(/\/+$/, "") ?? "";
+	}
+
+	#reportBaseUrl(request: UsageRequestDescriptor): string {
+		return request.provider === "anthropic"
+			? normalizeClaudeApiBaseUrl(request.baseUrl)
+			: this.#normalizeUsageBaseUrl(request.baseUrl) || "default";
 	}
 
 	#usageCacheProviderKey(provider: Provider): string {
@@ -294,7 +336,7 @@ export class UsageCache {
 	}
 
 	reportKey(request: UsageRequestDescriptor): string {
-		const baseUrl = this.#normalizeUsageBaseUrl(request.baseUrl) || "default";
+		const baseUrl = this.#reportBaseUrl(request);
 		const identity = usageCacheIdentity(request.credential);
 		const providerKey = this.#usageCacheProviderKey(request.provider);
 		const cacheKey = `${USAGE_REPORT_KEY_PREFIX}${providerKey}:${baseUrl}:${identity}`;
@@ -308,7 +350,7 @@ export class UsageCache {
 		const snapshot = requests
 			.map(request => {
 				const providerKey = this.#usageCacheProviderKey(request.provider);
-				return `${providerKey}:${this.#normalizeUsageBaseUrl(request.baseUrl) || "default"}:${usageCacheIdentity(request.credential)}`;
+				return `${providerKey}:${this.#reportBaseUrl(request)}:${usageCacheIdentity(request.credential)}`;
 			})
 			.sort()
 			.join("\n");
@@ -349,6 +391,17 @@ export class UsageCache {
 			for (const key of keys) this.set(this.failureKey(key), { value: null, expiresAt: 0 });
 		}
 		this.invalidate(provider, baseUrl, options);
+		if (provider === "anthropic" && options?.resetSpentCredentialId !== undefined) {
+			const spent = this.#pool.entries(provider).find(entry => entry.id === options.resetSpentCredentialId);
+			if (spent?.credential.type === "oauth") {
+				const key = this.reportKey(oauthUsageRequest(provider, spent.credential, baseUrl));
+				const hostCooldown = this.get<null>(this.claudeHostThrottleKey(baseUrl))?.expiresAt ?? 0;
+				this.set(this.resetProbeKey(key), {
+					value: true,
+					expiresAt: Math.max(Date.now() + USAGE_FORCE_REFRESH_TTL_MS, hostCooldown),
+				});
+			}
+		}
 	}
 
 	/**

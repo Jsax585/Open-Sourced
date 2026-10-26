@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AuthStorage, type OAuthCredential, type ResetCreditTarget } from "@oh-my-pi/pi-ai/auth-storage";
 import { claudeUsageProvider } from "@oh-my-pi/pi-ai/usage/claude";
+import type { UsageReport } from "@oh-my-pi/pi-ai/usage";
 import { isRecord } from "@oh-my-pi/pi-ai/utils";
+import { removeWithRetries } from "../../utils/src/temp";
 
 interface ResetPost {
 	path: string;
@@ -21,6 +26,7 @@ interface ResetFixture {
 		usable: boolean;
 		remaining: number;
 		weeklyUsed: number;
+		fiveHourUsed: number;
 		discoveryStatus?: number;
 		genericUsageEnabled?: boolean;
 		response: unknown;
@@ -31,6 +37,8 @@ interface ResetFixture {
 		postArrived?: () => void;
 		usageGate?: Promise<void>;
 		usageArrived?: () => void;
+		/** One-shot hold on the next generic `/usage` request for this bearer, answered with arrival-time state. */
+		genericHold?: { bearer: string; arrived: () => void; release: Promise<void> };
 	};
 }
 
@@ -39,13 +47,23 @@ afterEach(() => {
 	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
 });
 
-async function fixture(): Promise<ResetFixture> {
+async function openStorage(dbPath: string): Promise<AuthStorage> {
+	// Only Claude usage: other default providers could reach the network via host API-key env vars.
+	const storage = await AuthStorage.create(dbPath, {
+		usageProviderResolver: provider => (provider === "anthropic" ? claudeUsageProvider : undefined),
+	});
+	cleanups.push(() => storage.close());
+	return storage;
+}
+
+async function fixture(dbPath = ":memory:"): Promise<ResetFixture> {
 	const state: ResetFixture["state"] = {
 		program: "cedar_ember",
 		nextGrant: "saved-reset",
 		usable: true,
 		remaining: 2,
 		weeklyUsed: 40,
+		fiveHourUsed: 100,
 		response: { result: "reset", resets_left: 1, cleared: ["five_hour"] },
 		responseStatus: 200,
 	};
@@ -67,6 +85,13 @@ async function fixture(): Promise<ResetFixture> {
 			if (url.pathname === "/api/oauth/usage") {
 				usageRequests.push(url.search);
 				state.usageArrived?.();
+				const fiveHourUsed = state.fiveHourUsed;
+				const hold = state.genericHold;
+				if (!url.search && hold && request.headers.get("authorization") === `Bearer ${hold.bearer}`) {
+					state.genericHold = undefined;
+					hold.arrived();
+					await hold.release;
+				}
 				await state.usageGate;
 				// The incident's generic broker usage path is unavailable; live reset discovery still answers.
 				if (!url.search && !state.genericUsageEnabled) return new Response("usage throttled", { status: 429 });
@@ -81,7 +106,7 @@ async function fixture(): Promise<ResetFixture> {
 				}
 				const hour = 3_600_000;
 				return Response.json({
-					five_hour: { utilization: 100, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
+					five_hour: { utilization: fiveHourUsed, resets_at: new Date(Date.now() + 2 * hour).toISOString() },
 					seven_day: { utilization: state.weeklyUsed, resets_at: new Date(Date.now() + 72 * hour).toISOString() },
 					limits: [
 						{
@@ -129,11 +154,7 @@ async function fixture(): Promise<ResetFixture> {
 		},
 	});
 	cleanups.push(() => server.stop(true));
-	// Only Claude usage: other default providers could reach the network via host API-key env vars.
-	const storage = await AuthStorage.create(":memory:", {
-		usageProviderResolver: provider => (provider === "anthropic" ? claudeUsageProvider : undefined),
-	});
-	cleanups.push(() => storage.close());
+	const storage = await openStorage(dbPath);
 	const credentials: OAuthCredential[] = ["org-a", "org-b"].map(orgId => ({
 		type: "oauth",
 		access: `token-${orgId}`,
@@ -238,6 +259,39 @@ describe("Claude saved reset account safety", () => {
 		f.state.genericUsageEnabled = true;
 		const reports = await f.storage.usage.reports({ baseUrlResolver: f.baseUrlResolver });
 		expect(reports?.some(report => report.metadata?.orgId === "org-b")).toBe(true);
+		expect(reports?.some(report => report.metadata?.orgId === "org-a")).toBe(false);
+		expect(f.usageRequests.filter(search => search === "")).toHaveLength(2);
+		await f.storage.usage.invalidate("anthropic");
+		await f.storage.usage.reports({ baseUrlResolver: f.baseUrlResolver });
+		expect(f.usageRequests.filter(search => search === "")).toHaveLength(2);
+	});
+
+	it("re-probes after a reset redeemed while another session held the account's usage probe", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-ai-claude-reset-"));
+		cleanups.push(() => void removeWithRetries(dir));
+		const dbPath = path.join(dir, "agent.db");
+		const f = await fixture(dbPath);
+		const peer = await openStorage(dbPath);
+		await peer.credentials.reload();
+		f.state.genericUsageEnabled = true;
+		const arrived = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		f.state.genericHold = { bearer: "token-org-b", arrived: arrived.resolve, release: release.promise };
+		const fiveHourFor = (reports: UsageReport[] | null) =>
+			reports?.find(report => report.metadata?.orgId === "org-b")?.limits.find(limit => limit.id === "anthropic:5h")
+				?.amount.usedFraction;
+
+		// The peer's probe reaches upstream before the reset and holds the shared probe lease.
+		const peerReports = peer.usage.reports({ baseUrlResolver: f.baseUrlResolver });
+		await arrived.promise;
+		expect((await f.storage.resets.redeem({ target: f.target, baseUrlResolver: f.baseUrlResolver })).ok).toBe(true);
+		f.state.fiveHourUsed = 0;
+		release.resolve();
+		// The peer never saw the reset, so it caches its pre-reset answer in the shared store.
+		expect(fiveHourFor(await peerReports)).toBe(1);
+
+		const resetReports = await f.storage.usage.reports({ baseUrlResolver: f.baseUrlResolver });
+		expect(fiveHourFor(resetReports)).toBe(0);
 	});
 
 	it("does not spend a new offer under an old confirmation", async () => {

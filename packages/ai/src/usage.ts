@@ -408,6 +408,8 @@ export interface UsageFetchContext {
 	fetch: FetchImpl;
 	logger?: UsageLogger;
 	retryWait?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+	/** Report a provider's endpoint-wide 429 and its optional server cooldown to the cache owner. */
+	onRateLimit?: (url: string, retryAfter: string | null) => void;
 	/**
 	 * Last report cached for this exact credential cache key, when one exists.
 	 * Lets a fetcher keep a field it could not re-read this time (a failed

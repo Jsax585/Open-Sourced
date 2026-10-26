@@ -807,6 +807,39 @@ describe("AuthStorage credential block persistence", () => {
 		store.close();
 	});
 
+	it("arbitrates usage leases across SQLite connections without changing the credential revision", async () => {
+		const first = await SqliteAuthCredentialStore.open(dbPath);
+		const second = await SqliteAuthCredentialStore.open(dbPath);
+		try {
+			const key = "report:anthropic:account";
+			const expiresAtMs = Date.now() + 60_000;
+			const db = new Database(dbPath, { readonly: true });
+			const revision = db.prepare("SELECT revision FROM auth_change_revision WHERE id = 1");
+			try {
+				const before = revision.get();
+				expect(first.tryAcquireUsageLease(key, "first", expiresAtMs)).toBe(true);
+				expect(second.tryAcquireUsageLease(key, "second", expiresAtMs)).toBe(false);
+				expect(second.getUsageLeaseExpiresAt(key)).toBe(expiresAtMs);
+				second.releaseUsageLease(key, "second");
+				expect(second.tryAcquireUsageLease(key, "second", expiresAtMs)).toBe(false);
+				first.releaseUsageLease(key, "first");
+				expect(second.tryAcquireUsageLease(key, "second", Date.now() - 1)).toBe(true);
+				expect(first.getUsageLeaseExpiresAt(key)).toBeUndefined();
+				expect(first.tryAcquireUsageLease(key, "first", expiresAtMs)).toBe(true);
+				second.releaseUsageLease(key, "second");
+				expect(second.tryAcquireUsageLease(key, "second", expiresAtMs)).toBe(false);
+				first.releaseUsageLease(key, "first");
+				expect(second.getUsageLeaseExpiresAt(key)).toBeUndefined();
+				expect(revision.get()).toEqual(before);
+			} finally {
+				db.close();
+			}
+		} finally {
+			second.close();
+			first.close();
+		}
+	});
+
 	it("backfills refresh leases for a v5 auth database", async () => {
 		const legacyDb = new Database(dbPath);
 		legacyDb.run(`
@@ -833,6 +866,7 @@ describe("AuthStorage credential block persistence", () => {
 			const expiresAtMs = Date.now() + 3_600_000;
 			expect(migratedStore.tryAcquireCredentialRefreshLease(1, "test-owner", expiresAtMs)).toBe(true);
 			expect(migratedStore.getCredentialRefreshLeaseExpiresAt(1)).toBe(expiresAtMs);
+			expect(tableExists(dbPath, "usage_probe_leases")).toBe(true);
 			expect(readAuthSchemaVersion(dbPath)).toBe(8);
 		} finally {
 			migratedStore.close();

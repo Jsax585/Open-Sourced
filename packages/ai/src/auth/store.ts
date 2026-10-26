@@ -92,6 +92,12 @@ export interface CredentialCacheStore {
 	/** Drop all cache rows whose keys start with the supplied prefix. */
 	deleteCachePrefix?(prefix: string): void;
 	cleanExpiredCache(): void;
+	/** Atomically claim an expired or absent usage-probe lease; supported by shared stores. */
+	tryAcquireUsageLease?(key: string, owner: string, expiresAtMs: number): boolean;
+	/** Expiry of a live usage-probe lease, if one exists. */
+	getUsageLeaseExpiresAt?(key: string): number | undefined;
+	/** Remove a usage-probe lease only when the caller still owns it. */
+	releaseUsageLease?(key: string, owner: string): void;
 }
 
 /** Durable rate-limit blocks, present together when supported by the store. */

@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed Claude usage polling repeatedly hitting HTTP 429 across accounts and sessions while still refreshing a redeemed account immediately after a saved reset ([#16950](https://github.com/can1357/oh-my-pi/issues/16950))
 - Fixed Xiaomi MiMo API-key login failing with `Unsupported model mimo-v2.5` after the V2.5 retirement ([#16727](https://github.com/can1357/oh-my-pi/pull/16727) by [@LiPu-jpg](https://github.com/LiPu-jpg))
 - Fixed non-streaming requests reporting a missing API key when the credential resolver actually failed, hiding auth broker, OAuth and network outages behind "No API key" ([#16655](https://github.com/can1357/oh-my-pi/pull/16655) by [@adi-IL](https://github.com/adi-IL))
 - Fixed Claude subagents with large structured output schemas failing with `Schemas contains too many optional parameters` ([#16887](https://github.com/can1357/oh-my-pi/pull/16887) by [@alphastorm](https://github.com/alphastorm))

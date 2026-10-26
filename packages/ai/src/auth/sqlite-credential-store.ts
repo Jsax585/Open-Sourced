@@ -431,6 +431,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 	#getCredentialRefreshLeaseStmt: Statement;
 	#renewCredentialRefreshLeaseStmt: Statement;
 	#releaseCredentialRefreshLeaseStmt: Statement;
+	#acquireUsageLeaseStmt: Statement;
+	#getUsageLeaseStmt: Statement;
+	#releaseUsageLeaseStmt: Statement;
 	#getCredentialStateStmt: Statement;
 	#holdsCredentialRefreshLeaseStmt: Statement;
 	#credentialBlockReconcileAfter: Map<string, number> = new Map();
@@ -556,6 +559,16 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#releaseCredentialRefreshLeaseStmt = this.#db.prepare(
 			"DELETE FROM auth_credential_refresh_leases WHERE credential_id = ? AND owner = ?",
 		);
+		this.#acquireUsageLeaseStmt = this.#db.prepare(
+			`INSERT INTO usage_probe_leases (key, owner, expires_at_ms)
+			VALUES (?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				owner = excluded.owner,
+				expires_at_ms = excluded.expires_at_ms
+			WHERE usage_probe_leases.expires_at_ms <= ?`,
+		);
+		this.#getUsageLeaseStmt = this.#db.prepare("SELECT expires_at_ms FROM usage_probe_leases WHERE key = ?");
+		this.#releaseUsageLeaseStmt = this.#db.prepare("DELETE FROM usage_probe_leases WHERE key = ? AND owner = ?");
 		this.#getCredentialStateStmt = this.#db.prepare(
 			"SELECT provider, credential_type, data, identity_key, disabled_cause FROM auth_credentials WHERE id = ?",
 		);
@@ -646,6 +659,11 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 				expires_at INTEGER NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS idx_cache_expires ON cache(expires_at);
+			CREATE TABLE IF NOT EXISTS usage_probe_leases (
+				key TEXT PRIMARY KEY,
+				owner TEXT NOT NULL,
+				expires_at_ms INTEGER NOT NULL
+			);
 			CREATE TABLE IF NOT EXISTS usage_history (
 				id INTEGER PRIMARY KEY AUTOINCREMENT,
 				recorded_at INTEGER NOT NULL,
@@ -1626,6 +1644,26 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		}
 	}
 
+	/** A single upsert arbitrates claims across independent SQLite connections. */
+	tryAcquireUsageLease(key: string, owner: string, expiresAtMs: number): boolean {
+		const result = this.#acquireUsageLeaseStmt.run(key, owner, expiresAtMs, Date.now()) as { changes: number };
+		return result.changes === 1;
+	}
+
+	getUsageLeaseExpiresAt(key: string): number | undefined {
+		const row = this.#getUsageLeaseStmt.get(key) as { expires_at_ms: number } | undefined;
+		if (!row || row.expires_at_ms <= Date.now()) return undefined;
+		return row.expires_at_ms;
+	}
+
+	releaseUsageLease(key: string, owner: string): void {
+		try {
+			this.#releaseUsageLeaseStmt.run(key, owner);
+		} catch {
+			// An expired lease can still be reclaimed if release fails.
+		}
+	}
+
 	getCredentialBlock(credentialId: number, providerKey: string, blockScope: string): number | undefined {
 		// Current callers use meter scopes. The physical shared row exists only
 		// for direct SQLite readers from pre-meter releases.
@@ -2137,6 +2175,9 @@ export class SqliteAuthCredentialStore implements AuthCredentialStore {
 		this.#getCredentialRefreshLeaseStmt.finalize();
 		this.#renewCredentialRefreshLeaseStmt.finalize();
 		this.#releaseCredentialRefreshLeaseStmt.finalize();
+		this.#acquireUsageLeaseStmt.finalize();
+		this.#getUsageLeaseStmt.finalize();
+		this.#releaseUsageLeaseStmt.finalize();
 		this.#getCredentialStateStmt.finalize();
 		this.#holdsCredentialRefreshLeaseStmt.finalize();
 		this.#db.close();

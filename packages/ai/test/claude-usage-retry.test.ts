@@ -41,6 +41,7 @@ describe("claudeUsageProvider retry contract", () => {
 	it("does NOT retry a 429 — rate_limit_error is terminal for this poll", async () => {
 		let attempt = 0;
 		const retryWait = vi.fn(async (_delayMs: number, _signal?: AbortSignal) => {});
+		const onRateLimit = vi.fn((_url: string, _retryAfter: string | null) => {});
 		const fetchMock = (async () => {
 			attempt += 1;
 			// A 429 must end the poll immediately: no backoff, no second attempt.
@@ -49,10 +50,15 @@ describe("claudeUsageProvider retry contract", () => {
 			return jsonResponse(200, VALID_PAYLOAD);
 		}) as FetchImpl;
 
-		const report = await claudeUsageProvider.fetchUsage(baseParams(), makeContext(fetchMock, retryWait));
+		const report = await claudeUsageProvider.fetchUsage(baseParams(), {
+			...makeContext(fetchMock, retryWait),
+			onRateLimit,
+		});
 		expect(report).toBeNull();
 		expect(attempt).toBe(1);
 		expect(retryWait).not.toHaveBeenCalled();
+		expect(onRateLimit).toHaveBeenCalledTimes(1);
+		expect(onRateLimit).toHaveBeenCalledWith("https://api.anthropic.com/api/oauth/usage", "1");
 	});
 
 	it("retries on 503 then succeeds", async () => {
