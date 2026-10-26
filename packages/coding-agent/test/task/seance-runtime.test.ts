@@ -317,7 +317,9 @@ describe("model-facing seance model approval", () => {
 			const parentModel = buildModel({
 				...fixture.approved,
 				api: "openai-completions",
-				compat: { openRouterRouting: routing },
+				compat: {
+					openRouterRouting: routing.only ? { only: [...routing.only] } : { order: [...routing.order] },
+				},
 			});
 			fixture.session.getActiveModel = () => parentModel;
 			fixture.session.getActiveModelString = () => `mock/${fixture.approved.id}`;
