@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `tools.restrictedFolders`: every action on a listed folder (the folder and everything below it) asks for an explicit Approve/Deny in every approval mode, `yolo` included, and no remembered grant, session approval, or ACP "Always allow" covers it; recursive searches rooted above a restricted folder ask too, commands are matched by the directory they run in, and a `deny` policy still denies ([#16049](https://github.com/can1357/oh-my-pi/pull/16049) by [@Peribunt](https://github.com/Peribunt))
+- `/pause` shows draining turns and running jobs across the main agent's subagent tree, without waiting on finished turns, safely parked agents, or suspended advisor reviews ([#17073](https://github.com/can1357/oh-my-pi/pull/17073) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+
 ### Fixed
 
 - Fixed advisors dropping their review and showing a rate-limit error when the provider returns a timed 429 such as Codex's `turn_rate_limit_exceeded`; the advisor now waits out the Retry-After (within `retry.maxDelayMs`) and retries like the main agent ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
+- Fixed a hashline `PUT` being refused with "would hold one more copy of line N … than the range did" when its body restates the line next to the range, fills the range, and adds a new line equal to that neighbour (a second `@property` or `#[test]`, or a `break;` above a new `case`); it applies again, dropping only the restated line ([#17028](https://github.com/can1357/oh-my-pi/pull/17028))
+- Fixed task subagents receiving `AGENTS.md` files, including the user-level `~/.omp/agent/AGENTS.md`, when the session has additional workspace roots (`--add-dir`, `/add-dir`, `workspace.additionalDirectories`)
 - Fixed subagents whose declared model has no working credentials silently running on the parent session's model: that model's own `retry.fallbackChains` key (`provider/id` or `provider/*`) now decides, as it also does for a declared model missing from the catalog (an empty chain refuses the spawn with an error naming the agent and model, a non-empty chain is walked), and any replacement is marked as a fallback in the session and task result ([#16028](https://github.com/can1357/oh-my-pi/pull/16028) by [@sjawhar](https://github.com/sjawhar))
 - Fixed task results not saying which fallback model answered for a subagent: the `<task-result>` now carries a `<model served=… requested=… fallback="true">` line, with the reason when the model was replaced at spawn ([#16028](https://github.com/can1357/oh-my-pi/pull/16028) by [@sjawhar](https://github.com/sjawhar))
 
