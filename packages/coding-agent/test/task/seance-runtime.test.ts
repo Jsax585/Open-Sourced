@@ -6,12 +6,15 @@ import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock
 import type { MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { factoryDroidRegistry } from "@oh-my-pi/pi-catalog/compat/factory-droid";
+import { buildFactoryDroidModel } from "@oh-my-pi/pi-catalog/discovery";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -20,6 +23,7 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import { assertPerCallModelApproved } from "@oh-my-pi/pi-coding-agent/task/model-approval";
 import {
 	resolveEffectiveSubagentPolicy,
 	runStructuredSubagent,
@@ -268,6 +272,132 @@ describe("model-facing seance model approval", () => {
 		}
 	});
 
+	it("uses the host's grant authority and snapshots saved-model match preferences, not derived roles", async () => {
+		using tempDir = TempDir.createSync("@omp-seance-grant-authority-");
+		const fixture = await modelGateFixture(tempDir.path(), { "task.perCallModel": "off" });
+		const usageOrder = [`mock/${fixture.approved.id}`, `mock/${fixture.unapproved.id}`];
+		const host = fixture.session.settings.overlay({ modelRoles: { review: "mock/seance-model" } });
+		vi.spyOn(host, "getStorage").mockReturnValue({ getModelUsageOrder: () => usageOrder } as AgentStorage);
+		fixture.session.settings = host.overlay(
+			{ modelRoles: { review: `mock/${fixture.unapproved.id}` } },
+			{ derived: true },
+		);
+		try {
+			const policy = await resolveEffectiveSubagentPolicy({
+				session: fixture.session,
+				invocationKind: "task",
+				agent: "seance",
+				assignment: "Read the historical request.",
+				sourceSession: fixture.sourceFile,
+			});
+			expect(policy.modelOverride).toEqual([`mock/${fixture.approved.id}`]);
+			const grants = policy.perCallModelGrants;
+			if (!grants) throw new Error("Expected saved-model grants");
+			expect(grants.matchPreferences?.usageOrder).toEqual(usageOrder);
+			usageOrder.reverse();
+			expect(grants.matchPreferences?.usageOrder).not.toEqual(usageOrder);
+			expect(assertPerCallModelApproved(fixture.approved, grants, fixture.modelRegistry)).toBeUndefined();
+			expect(() => assertPerCallModelApproved(fixture.unapproved, grants, fixture.modelRegistry)).toThrow(
+				/not approved/,
+			);
+			host.setModelRole("review", "mock/operator-only-model");
+			expect(() => assertPerCallModelApproved(fixture.approved, grants, fixture.modelRegistry)).toThrow(
+				/not approved/,
+			);
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
+
+	it.each([{ only: ["anthropic", "google-vertex"] }, { order: ["anthropic", "google-vertex"] }])(
+		"does not approve saved or explicit seance models from a parent routed by %j",
+		async routing => {
+			using tempDir = TempDir.createSync("@omp-seance-routed-parent-");
+			const fixture = await modelGateFixture(tempDir.path(), { modelRoles: {} });
+			const parentModel = buildModel({
+				...fixture.approved,
+				api: "openai-completions",
+				compat: { openRouterRouting: routing },
+			});
+			fixture.session.getActiveModel = () => parentModel;
+			fixture.session.getActiveModelString = () => `mock/${fixture.approved.id}`;
+			const policy = (seanceModel?: string) =>
+				resolveEffectiveSubagentPolicy({
+					session: fixture.session,
+					invocationKind: "task",
+					agent: "seance",
+					assignment: "Read the historical request.",
+					sourceSession: fixture.sourceFile,
+					seanceModel,
+				});
+			try {
+				await expect(policy()).rejects.toThrow(/No approved saved model/);
+				await expect(policy(`mock/${fixture.approved.id}`)).rejects.toThrow(/not approved/);
+			} finally {
+				fixture.authStorage.close();
+			}
+		},
+	);
+
+	it("refuses saved and explicit Factory models with server-side fallback even when its targets are granted", async () => {
+		using tempDir = TempDir.createSync("@omp-seance-factory-fallback-");
+		const fixture = await modelGateFixture(tempDir.path(), {
+			modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" },
+		});
+		const models = ["claude-fable-5", "claude-opus-5"].map(id =>
+			buildModel(
+				buildFactoryDroidModel(
+					factoryDroidRegistry().find(entry => entry.spec.id === id)!,
+					{
+						apiProviders: ["anthropic"],
+					},
+				),
+			),
+		);
+		vi.spyOn(fixture.modelRegistry, "getAvailable").mockReturnValue(models);
+		vi.spyOn(fixture.modelRegistry, "getAll").mockReturnValue(models);
+		vi.spyOn(fixture.modelRegistry, "find").mockImplementation((provider, id) =>
+			models.find(model => model.provider === provider && model.id === id),
+		);
+		fixture.authStorage.keys.setRuntime("factory-droid", "credentialed");
+		await Bun.write(
+			fixture.sourceFile,
+			`${[
+				sourceHeader("source-session", fixture.session.cwd),
+				{
+					type: "model_change",
+					id: "factory-model",
+					parentId: null,
+					timestamp: "2026-10-01T00:00:01.000Z",
+					model: "factory-droid/claude-fable-5",
+					role: "default",
+				},
+				{ ...sourceMessage(), parentId: "factory-model" },
+			]
+				.map(entry => JSON.stringify(entry))
+				.join("\n")}\n`,
+		);
+		const policy = (seanceModel?: string, model?: string[]) =>
+			resolveEffectiveSubagentPolicy({
+				session: fixture.session,
+				invocationKind: "task",
+				agent: "seance",
+				assignment: "Read the historical request.",
+				sourceSession: fixture.sourceFile,
+				seanceModel,
+				model,
+			});
+		try {
+			await expect(policy()).rejects.toThrow(/No approved saved model/);
+			await expect(policy("factory-droid/claude-fable-5")).rejects.toThrow(/server-side/);
+			const hostPolicy = await policy(undefined, []);
+			expect(hostPolicy.perCallModelGrants).toBeUndefined();
+			expect(hostPolicy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);
+		} finally {
+			fixture.authStorage.close();
+		}
+	});
+
 	it("stops and reports when no saved seance model is approved even with a configured override", async () => {
 		using tempDir = TempDir.createSync("@omp-seance-no-approved-saved-");
 		const fixture = await modelGateFixture(tempDir.path(), {
@@ -324,7 +454,7 @@ describe("model-facing seance model approval", () => {
 		}
 	});
 
-	it("approves an explicit seance model by routed identity and keeps its upstream pin through preflight", async () => {
+	it("approves explicit and saved seance models by routed identity and keeps their upstream pin through preflight", async () => {
 		using tempDir = TempDir.createSync("@omp-seance-routed-model-");
 		const pinnedGrant = "openrouter/anthropic/claude-sonnet-4.5@anthropic";
 		const fixture = await modelGateFixture(tempDir.path(), { modelRoles: { review: pinnedGrant } });
@@ -342,11 +472,12 @@ describe("model-facing seance model approval", () => {
 		});
 		const models = [fixture.approved, fixture.unapproved, routed];
 		vi.spyOn(fixture.modelRegistry, "getAvailable").mockReturnValue(models);
+		vi.spyOn(fixture.modelRegistry, "getAll").mockReturnValue(models);
 		vi.spyOn(fixture.modelRegistry, "find").mockImplementation((provider, id) =>
 			models.find(model => model.provider === provider && model.id === id),
 		);
 		fixture.authStorage.keys.setRuntime("openrouter", "credentialed");
-		const policy = (seanceModel: string) =>
+		const policy = (seanceModel?: string) =>
 			resolveEffectiveSubagentPolicy({
 				session: fixture.session,
 				invocationKind: "task",
@@ -361,6 +492,26 @@ describe("model-facing seance model approval", () => {
 			const pinned = await policy(pinnedGrant);
 			expect(pinned.modelOverride).toEqual([pinnedGrant]);
 			expect(pinned.perCallModelGrants).toBeDefined();
+			await Bun.write(
+				fixture.sourceFile,
+				`${[
+					sourceHeader("source-session", fixture.session.cwd),
+					{
+						type: "model_change",
+						id: "pinned-model",
+						parentId: null,
+						timestamp: "2026-10-01T00:00:01.000Z",
+						model: pinnedGrant,
+						role: "default",
+					},
+					{ ...sourceMessage(), parentId: "pinned-model" },
+				]
+					.map(entry => JSON.stringify(entry))
+					.join("\n")}\n`,
+			);
+			const saved = await policy();
+			expect(saved.modelOverride).toEqual([pinnedGrant]);
+			expect(saved.perCallModelGrants).toBeDefined();
 		} finally {
 			fixture.authStorage.close();
 		}

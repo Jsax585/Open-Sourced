@@ -8,6 +8,7 @@ import {
 	resolveModelOverride,
 	resolveModelOverrideWithAuthFallback,
 	resolveSessionModelSelector,
+	resolveExactModelIdentity,
 } from "../config/model-resolver";
 import { sessionFilesFromDisk } from "../internal-urls/registry-helpers";
 import seanceAssignmentTemplate from "../prompts/system/seance-assignment.md" with { type: "text" };
@@ -200,7 +201,8 @@ export function validateSeanceParams(context: {
 	const { params, batchEnabled, defaultAgent, seanceAdvertised } = context;
 	if (batchEnabled && params.tasks !== undefined) {
 		if (params.sourceSession !== undefined) {
-			return `Put \`sourceSession\` and \`model\` on the individual \`${SEANCE_AGENT_NAME}\` item inside \`tasks[]\`.`;
+			const fields = params.model !== undefined ? "`sourceSession` and `model`" : "`sourceSession`";
+			return `Put ${fields} on the individual \`${SEANCE_AGENT_NAME}\` item inside \`tasks[]\`.`;
 		}
 		if (params.model !== undefined) return "Put `model` on the individual items inside `tasks[]`.";
 		for (let index = 0; index < params.tasks.length; index++) {
@@ -257,17 +259,21 @@ export async function prepareSeance(context: {
 	const modelPatterns: string[] = [];
 	for (const selector of requestedModels) {
 		if (requestedModel === undefined) {
-			const resolved = resolveSessionModelSelector(modelRegistry, selector);
-			if (!resolved) continue;
 			if (!context.modelGrants) {
-				modelPatterns.push(selector);
+				if (resolveSessionModelSelector(modelRegistry, selector)) modelPatterns.push(selector);
 				continue;
 			}
 			// Approve the identity the worker will dispatch: its exact resolution keeps any `@upstream` pin.
 			const exact = resolveModelOverride([selector], modelRegistry, context.session.settings, {
 				exactOnly: true,
 			}).model;
-			if (exact && isPerCallModelApproved(exact, context.modelGrants, modelRegistry)) modelPatterns.push(selector);
+			if (
+				exact &&
+				modelRegistry.hasConfiguredAuth(exact) &&
+				isPerCallModelApproved(exact, context.modelGrants, modelRegistry)
+			) {
+				modelPatterns.push(selector);
+			}
 			continue;
 		}
 		const resolved = await resolveModelOverrideWithAuthFallback(
@@ -349,9 +355,13 @@ export async function restoreSeanceSession(context: {
 	}
 	const modelPattern = init.resolvedModel.trim();
 	await modelRegistry.awaitBackgroundRefresh().catch(() => {});
-	// The saved selector is the dispatched identity: an `@upstream` pin is part of it, so look it up
-	// exactly, pin included, never through the unpinned model or a fuzzy match.
-	const restored = resolveModelOverride([modelPattern], modelRegistry, undefined, { exactOnly: true }).model;
+	// Per-call revival uses the separately persisted identity, never a display selector whose
+	// literal :level id could be mistaken for effort. Host selections retain their saved route too.
+	const restored = init.perCallModel
+		? init.perCallModelIdentity
+			? resolveExactModelIdentity(init.perCallModelIdentity, modelRegistry)
+			: undefined
+		: resolveModelOverride([modelPattern], modelRegistry, undefined, { exactOnly: true }).model;
 	if (!restored || !modelRegistry.hasConfiguredAuth(restored)) return undefined;
 	return {
 		cwd,

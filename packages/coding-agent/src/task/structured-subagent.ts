@@ -14,7 +14,7 @@ import {
 	resolveAgentModelSelection,
 	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
-	formatModelStringWithRouting,
+	getModelMatchPreferences,
 	resolveModelOverride,
 } from "../config/model-resolver";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
@@ -84,7 +84,12 @@ import {
 	cfgTaskPerCallModel,
 	perCallModelEnabled,
 } from "./settings";
-import { assertPerCallModelApproved, PerCallModelError, type PerCallModelGrants } from "./model-approval";
+import {
+	assertPerCallModelApproved,
+	parentModelGrantPattern,
+	PerCallModelError,
+	type PerCallModelGrants,
+} from "./model-approval";
 
 /** Final structured completion metadata returned for a schema-bearing run. */
 export type StructuredSubagentSchemaResult = StructuredSubagentOutput;
@@ -411,6 +416,7 @@ function preflightPerCallModel(
 		agentModel: agent.model,
 		agentSource: agent.source,
 		parentModelPattern,
+		matchPreferences: structuredClone(getModelMatchPreferences(settings.grantAuthority())),
 	};
 	// A cold registry is checked again in the executor once models are loaded.
 	if (!modelRegistry || modelRegistry.getAvailable().length === 0) return grants;
@@ -517,10 +523,10 @@ export async function resolveEffectiveSubagentPolicy(
 	}
 	if (agentName === SEANCE_AGENT_NAME && !isBundledSeance(agent)) assertPlanControlsAllowed(request, planMode);
 	const agentModelOverrides = cfgTaskAgentModelOverrides.get(request.session.settings);
-	// The parent's live model grants with its `@upstream` pin, so it grants only that route.
+	// A multi-upstream or otherwise richer parent route cannot grant a simpler selector.
 	const parentActiveModel = request.session.getActiveModel?.();
 	const parentModelPattern = parentActiveModel
-		? formatModelStringWithRouting(parentActiveModel)
+		? parentModelGrantPattern(parentActiveModel)
 		: request.session.getActiveModelString?.();
 	// Bundled and shadowing `seance` agents share the explicit per-call gate; saved seance models are checked below.
 	const perCallSelector: unknown = request.perCallModel ?? request.seanceModel;
@@ -542,6 +548,7 @@ export async function resolveEffectiveSubagentPolicy(
 			agentModel: agent.model,
 			agentSource: agent.source,
 			parentModelPattern,
+			matchPreferences: structuredClone(getModelMatchPreferences(request.session.settings.grantAuthority())),
 		};
 	}
 	let preparedSeance: { modelPatterns: string[]; session: PreparedSeanceSession } | undefined;
@@ -600,7 +607,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const parentActiveModelPattern =
 		hasPreparedSeance || perCallModelGrants ? undefined : request.session.getActiveModelString?.();
 	const modelResolution = {
-		requestModel: preparedSeance?.modelPatterns ?? (perCallModelGrants ? (perCallSelector as string) : request.model),
+		requestModel: preparedSeance?.modelPatterns ?? request.model,
 		settingsOverride: hasPreparedSeance ? undefined : agentModelOverrides[agentName],
 		agentModel: hasPreparedSeance ? undefined : effectiveAgent.model,
 		settings: request.session.settings,
@@ -827,7 +834,7 @@ function buildExecutorOptions(
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
-		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+		contextFiles: session.contextFiles,
 		noContextFiles: session.noContextFiles,
 		skills,
 		// Autoload runs after session start, outside the seance isolation options.
