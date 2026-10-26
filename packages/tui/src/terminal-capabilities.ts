@@ -1020,6 +1020,16 @@ export function directPlacementLift(line: string): number {
 }
 
 /**
+ * Re-anchor an {@link Image} direct-placement line `lift` rows above its own
+ * row instead of its encoded `CUU(rows-1)`. The renderer lowers the lift when
+ * the block's top is clipped by the frame: the cursor-up would otherwise climb
+ * past the frame's first row into whatever the terminal shows above it.
+ */
+export function withDirectPlacementLift(line: string, lift: number): string {
+	return line.replace(DIRECT_PLACEMENT_LIFT, lift > 0 ? `\x1b7\x1b[${lift}A` : "\x1b7");
+}
+
+/**
  * Rebuild an {@link Image} direct-placement line for the viewport row it is
  * written at. The component-rendered line encodes `CUU(rows-1)`, which clamps
  * at the viewport top once the block's leading rows have scrolled out — the
@@ -1107,6 +1117,19 @@ export function encodeITerm2(
 	}
 
 	return `\x1b]1337;File=${params.join(";")}:${base64Data}\x07`;
+}
+
+/**
+ * The encoded image `encodeITerm2` wrote into `line`, without the size
+ * parameters a rewrap changes; undefined for a line without one.
+ */
+export function iterm2ImagePayload(line: string): string | undefined {
+	const start = line.indexOf(ImageProtocol.Iterm2);
+	if (start === -1) return undefined;
+	const colon = line.indexOf(":", start + ImageProtocol.Iterm2.length);
+	if (colon === -1) return undefined;
+	const end = line.indexOf("\x07", colon + 1);
+	return line.slice(colon + 1, end === -1 ? undefined : end);
 }
 
 export function calculateImageRows(
