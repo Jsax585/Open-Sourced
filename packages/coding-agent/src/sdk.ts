@@ -3154,13 +3154,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// empty or exhausted chain refuses the spawn instead of letting another
 			// model answer as the one requested.
 			const chainFallback = options.modelPatternChainFallback === true;
-			const replaceUnavailableSubagentModel = (
+			const replaceUnavailableSubagentModel = async (
 				requestedSelector: string,
 				requestedModel: Model | undefined,
 				cause: string,
 			) => {
 				if (!cfgRetryModelFallback.get(settings)) return undefined;
-				const replacement = resolveUnavailableModelReplacement(
+				const replacement = await resolveUnavailableModelReplacement(
 					{
 						chains: cfgRetryFallbackChains.get(settings),
 						getModelRole: role => settings.getModelRole(role),
@@ -3172,15 +3172,29 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					selector =>
 						resolveModelOverride([selector.raw], modelRegistry, settings).model ??
 						modelRegistry.find(selector.provider, selector.id),
-					// The side-effect-free check the deferred chain walk below uses
-					// (no OAuth refresh or `!command` key runs per candidate), plus
-					// the effort ceiling runtime fallback recovery also skips on.
-					(candidate, selector) =>
-						!disabledProviders.has(candidate.provider) &&
-						!modelRegistry.isSelectorSuppressed(selector.raw) &&
-						hasModelAuth(candidate) &&
-						(options.thinkingLevelCeiling === undefined ||
-							modelSupportsEffortCeiling(candidate, options.thinkingLevelCeiling)),
+					// The checks runtime fallback recovery makes before it switches to
+					// an entry: a configured credential source, the effort ceiling, then
+					// a key that resolves for this session (a keyless provider passes).
+					// A source that resolves to nothing (an expired token, a failing
+					// `!command`) would fail the first request while a later entry can
+					// serve. Keys resolve in chain order, only up to the chosen entry.
+					async (candidate, selector) => {
+						if (
+							disabledProviders.has(candidate.provider) ||
+							modelRegistry.isSelectorSuppressed(selector.raw) ||
+							!hasModelAuth(candidate) ||
+							(options.thinkingLevelCeiling !== undefined &&
+								!modelSupportsEffortCeiling(candidate, options.thinkingLevelCeiling))
+						) {
+							return false;
+						}
+						try {
+							const key = await modelRegistry.getApiKey(candidate, providerSessionId);
+							return key === kNoAuth || isAuthenticated(key);
+						} catch {
+							return false;
+						}
+					},
 				);
 				if (replacement?.kind !== "refused") return replacement;
 				const chainState =
@@ -3323,7 +3337,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const cause = "has no working credentials";
 						const replacement = chainFallback
-							? replaceUnavailableSubagentModel(pattern, primary.model, cause)
+							? await replaceUnavailableSubagentModel(pattern, primary.model, cause)
 							: undefined;
 						if (replacement) {
 							selectedModel = replacement.model;
@@ -3428,7 +3442,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// Every pattern either matched no model or, under usage-aware
 				// fallback, had no usage left.
 				const cause = usageFallbackTriggered ? "has run out of usage" : "matches no available model";
-				const replacement = replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
+				const replacement = await replaceUnavailableSubagentModel(requestedSelector, undefined, cause);
 				if (replacement) {
 					const chainReplacement = describeStartupReplacement(requestedSelector, replacement.chainKey, cause);
 					startupReplacement = chainReplacement;
