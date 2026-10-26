@@ -502,8 +502,10 @@ discard a valid output limit. Without it, a valid top-level `max_output_tokens`,
 sets the cap, ahead of any bundled-reference limit. Each spelling is validated on its own, so an
 unusable value on one never suppresses a usable sibling. Otherwise, context and output follow the
 existing native/reference/default fallback.
-Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
-use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
+Silent endpoints can inherit bundled-reference limits, reasoning, input modalities, and portable effort
+ladders on OpenAI effort transports. Reference matching follows the same namespace and reviewed-alias
+rules as [proxy discovery](#proxy-discovery-discoverytype-proxy). Unknown models use 128,000 context and
+32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
 Anthropic-routed models use an 8,192-token fallback output cap.
 
 A row advertising only image output becomes an image-generation runner; embedding-only output
@@ -560,6 +562,25 @@ Provider-level `api` is **optional** with `discovery.type: proxy` because the
 per-model wire is auto-detected. The Anthropic SDK strips a trailing `/v1`
 from `baseUrl` before appending `/v1/messages`, so a single discovery `baseUrl`
 (ending in `/v1`) round-trips correctly to both wires.
+
+Missing capability metadata is recovered from the bundled catalog: full-ID matches take precedence,
+then the final slash-separated component is matched (for example, `reseller/gpt-5.4`).
+Reviewed KDL logical aliases are a last fallback, including
+`nku/deepseek-v4-1-flash-261017` → `deepseek-v4.1-flash-1017`. Arbitrary dates and version
+suffixes are not stripped, and unknown releases are not guessed. The original full model ID,
+provider, endpoint, headers, and local pricing remain unchanged.
+
+Provider-reported input modalities and token limits outrank catalog fallbacks, using the same
+limit fields and precedence as `openai-models-list` above. Output limits are capped at the resolved
+context window. Explicit `modelOverrides` remain authoritative after discovery.
+
+Cross-provider thinking recovery is limited to plain effort ladders on compatible OpenAI effort
+transports. It does not copy provider-specific wire-ID routing, effort remaps, token budgets,
+defaults, or mandatory/off behavior. Reviewed target-provider thinking rules take precedence over
+borrowed efforts; explicitly configured thinking remains highest priority. Target API policy and
+configured compatibility flags still control whether effort is sent; set
+`compat.supportsReasoningEffort: false` if the gateway rejects it. Catalog recovery describes the
+expected model capabilities, not a live validation of a proxy's implementation.
 
 ```yaml
 providers:

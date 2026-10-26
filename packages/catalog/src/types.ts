@@ -1862,8 +1862,8 @@ export interface Model<TApi extends Api = Api> {
 
 /**
  * A model as authored by configs, bundled catalogs, and discovery — the input
- * vocabulary of `buildModel`. Identical to `Model` except `compat` carries the
- * sparse override shape and nothing is resolved yet.
+ * vocabulary of `buildModel`. Compat carries sparse overrides, discovery may
+ * supply reference fallbacks, and derived policy fields are not resolved yet.
  */
 export interface ModelSpec<TApi extends Api = Api> extends Omit<
 	Model<TApi>,
@@ -1879,6 +1879,11 @@ export interface ModelSpec<TApi extends Api = Api> extends Omit<
 > {
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
 	compat?: CompatConfigOf<TApi>;
+	/**
+	 * Internal cross-provider catalog fallback, below target thinking policy
+	 * and explicit `thinking`. Consumed and removed by `buildModel`.
+	 */
+	referenceThinkingEfforts?: readonly Effort[];
 }
 
 /**

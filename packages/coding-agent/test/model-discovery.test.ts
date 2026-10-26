@@ -5,10 +5,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
-import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
@@ -19,10 +20,12 @@ import {
 } from "@oh-my-pi/pi-catalog/provider-models";
 import type { ModelKind, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { CODEX_CLIENT_VERSION } from "@oh-my-pi/pi-catalog/wire/codex";
+import { finalizeCustomModel } from "@oh-my-pi/pi-coding-agent/config/custom-models";
 import {
 	discoverLiteLLMModels,
 	discoverOllamaModels,
 	discoverOpenAIModelsList,
+	discoverProxyModels,
 	discoveryProbeTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
 import { RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS } from "@oh-my-pi/pi-coding-agent/config/model-provider-discovery";
@@ -3172,6 +3175,7 @@ describe("ModelRegistry runtime discovery", () => {
 								id: "acme-think-1",
 								object: "model",
 								owned_by: "codex-lb",
+								limits: { max_input_tokens: 100_000, max_output_tokens: 16_384 },
 								metadata: {
 									display_name: "Acme Think 1",
 									context_window: 272000,
@@ -3185,6 +3189,17 @@ describe("ModelRegistry runtime discovery", () => {
 										{ effort: "ultra" },
 									],
 									default_reasoning_level: "medium",
+								},
+							},
+							{
+								id: "metadata/deepseek-v4-1-flash-261017",
+								max_output_tokens: 8_192,
+								metadata: {
+									display_name: "Routed Flash",
+									context_window: 64_000,
+									input_modalities: ["text"],
+									supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+									default_reasoning_level: "low",
 								},
 							},
 						],
@@ -3201,6 +3216,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// bundled-catalog fallback must not shadow what the server advertises.
 		expect(advertised?.name).toBe("Acme Think 1");
 		expect(advertised?.contextWindow).toBe(272_000);
+		expect(advertised?.maxTokens).toBe(16_384);
 		expect(advertised?.input).toEqual(["text", "image"]);
 		expect(advertised?.reasoning).toBe(true);
 		expect(advertised?.thinking?.mode).toBe("effort");
@@ -3208,6 +3224,17 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(advertised?.thinking?.defaultLevel).toBe(Effort.Medium);
 		const advertisedCompat = advertised?.compat as OpenAICompat | undefined;
 		expect(advertisedCompat?.supportsReasoningEffort).toBe(true);
+		expect(registry.find("openai-test", "metadata/deepseek-v4-1-flash-261017")).toMatchObject({
+			name: "Routed Flash",
+			contextWindow: 64_000,
+			maxTokens: 8_192,
+			input: ["text"],
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.High],
+				defaultLevel: Effort.Low,
+			},
+		});
 		if (!advertised || advertised.api !== "openai-completions") {
 			throw new Error("expected the discovered model to use OpenAI Completions");
 		}
@@ -3433,7 +3460,209 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(registry.find("lm-studio-test", "local-vlm")?.input).toEqual(["text", "image"]);
 	});
 
-	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
+	test("proxy discovery recovers thin namespaced capabilities without changing the wire model or local transport", async () => {
+		const ids = ["nku/deepseek-v4-1-flash-261017", "magpie/deepseek-flash", "custom/gpt-5.4"] as const;
+		const references = getBundledModelReferenceIndex();
+		const referenceMetadata = (id: string) => {
+			const reference = resolveModelReference(id, references);
+			if (!reference || reference.contextWindow == null || reference.maxTokens == null) {
+				throw new Error(`Missing chat catalog reference: ${id}`);
+			}
+			return {
+				name: reference.name,
+				contextWindow: reference.contextWindow,
+				maxTokens: Math.min(reference.maxTokens, reference.contextWindow),
+				input: reference.input,
+			};
+		};
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				headers: { "X-Proxy": "local" },
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async (input, init) => {
+					expect(String(input)).toBe("https://proxy.example/v1/models");
+					expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer local-secret");
+					return Response.json({ data: ids.map(id => ({ id, supported_endpoint_types: ["openai"] })) });
+				},
+				getBearerApiKeyResolver: async () => "local-secret",
+			},
+		);
+		const byId = new Map(models.map(model => [model.id, model]));
+		expect(byId.get(ids[0])).toMatchObject({
+			...referenceMetadata("deepseek-v4.1-flash-1017"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] },
+		});
+		expect(byId.get(ids[1])).toMatchObject({
+			...referenceMetadata("deepseek-flash"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] },
+		});
+		expect(byId.get(ids[2])).toMatchObject({
+			...referenceMetadata("gpt-5.4"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
+		});
+
+		for (const id of ids) {
+			const model = byId.get(id);
+			if (!model || model.api !== "openai-completions") throw new Error(`Missing proxy model: ${id}`);
+			expect(model).toMatchObject({
+				id,
+				provider: "proxy-test",
+				baseUrl: "https://proxy.example/v1",
+				reasoning: true,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				headers: { "X-Proxy": "local" },
+				compat: {
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+					stripImageInput: false,
+					thinkingFormat: "openai",
+					isOpenRouterHost: false,
+				},
+			});
+			expect(new Headers(model.headers).has("Authorization")).toBe(false);
+			expect(model.requestModelId).toBeUndefined();
+			expect(model.thinking?.effortRouting).toBeUndefined();
+			const effort = model.thinking?.efforts.at(-1);
+			if (!effort) throw new Error(`Missing recovered effort ladder: ${id}`);
+			let body: Record<string, unknown> | undefined;
+			const result = await streamOpenAICompletions(
+				model as Model<"openai-completions">,
+				{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+				{
+					apiKey: "local-secret",
+					reasoning: effort,
+					fetch: async (input, init) => {
+						expect(String(input)).toBe("https://proxy.example/v1/chat/completions");
+						const headers = new Headers(init?.headers);
+						expect(headers.get("X-Proxy")).toBe("local");
+						expect(headers.get("Authorization")).toBe("Bearer local-secret");
+						body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+						return new Response(
+							'data: {"id":"proxy-recovery","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					},
+				},
+			).result();
+			expect(result.stopReason).toBe("stop");
+			expect(body?.model).toBe(id);
+			expect(body?.reasoning_effort).toBe(effort);
+			expect(body?.thinking).toBeUndefined();
+		}
+	});
+
+	test("proxy discovery leaves unreviewed and opaque ids unknown and does not inherit routed effort siblings", async () => {
+		const unknownIds = [
+			"nku/deepseek-v4-1-flash-261018",
+			"@nku/deepseek-v4-1-flash-261017",
+			"opaque-deployment-261017",
+		];
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async () =>
+					Response.json({
+						data: [...unknownIds, "custom/giga-potato"].map(id => ({
+							id,
+							supported_endpoint_types: ["openai"],
+						})),
+					}),
+				getBearerApiKeyResolver: async () => undefined,
+			},
+		);
+		for (const id of unknownIds) {
+			expect(models.find(model => model.id === id)).toMatchObject({
+				contextWindow: 128_000,
+				maxTokens: 32_768,
+				reasoning: false,
+				input: ["text"],
+				compat: { supportsReasoningEffort: false },
+			});
+		}
+		const routed = models.find(model => model.id === "custom/giga-potato");
+		expect(routed).toBeDefined();
+		expect(routed?.requestModelId).toBeUndefined();
+		expect(routed?.thinking?.effortRouting).toBeUndefined();
+		expect(routed?.compat).toMatchObject({ supportsReasoningEffort: false });
+		const unknownRelease = models.find(model => model.id === unknownIds[0]);
+		expect(unknownRelease?.compat).toMatchObject({ stripImageInput: true });
+	});
+
+	test("custom model recovery keeps borrowed efforts below target policy and authored thinking", () => {
+		const custom = {
+			id: "deepseek/deepseek-v4-pro",
+			provider: "openrouter",
+			api: "openai-completions",
+			baseUrl: "https://proxy.example/v1",
+		} as const;
+		const model = finalizeCustomModel(custom, { useDefaults: true });
+		expect(model.thinking?.efforts).toEqual([Effort.High]);
+		expect(Object.hasOwn(model, "referenceThinkingEfforts")).toBe(false);
+
+		const explicit = {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.High, Effort.Max],
+		} as const;
+		expect(finalizeCustomModel({ ...custom, thinking: explicit }, { useDefaults: true }).thinking).toMatchObject(
+			explicit,
+		);
+	});
+
+	test("proxy and OpenAI-list recovery respect target-provider ladders while modelOverrides remain explicit", async () => {
+		const id = "deepseek/deepseek-v4-pro";
+		const fetchMock: FetchImpl = async input => {
+			if (String(input) !== "https://proxy.example/v1/models") {
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			}
+			return Response.json({ data: [{ id, supported_endpoint_types: ["openai"] }] });
+		};
+		for (const type of ["proxy", "openai-models-list"] as const) {
+			const discover = type === "proxy" ? discoverProxyModels : discoverOpenAIModelsList;
+			const models = await discover(
+				{
+					provider: "openrouter",
+					api: "openai-completions",
+					baseUrl: "https://proxy.example",
+					discovery: { type },
+				},
+				{ fetch: fetchMock, getBearerApiKeyResolver: async () => undefined },
+			);
+			const model = models.find(model => model.id === id);
+			// Other hosts expose low/high/max; this OpenRouter deployment only
+			// accepts high. Borrowed catalog metadata is not user configuration.
+			expect(model?.thinking?.efforts).toEqual([Effort.High]);
+			expect(Object.hasOwn(model ?? {}, "referenceThinkingEfforts")).toBe(false);
+		}
+
+		const explicit: ModelSpec<"openai-completions">["thinking"] = {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.High, Effort.Max],
+		};
+		writeRawModelsJson({
+			openrouter: {
+				baseUrl: "https://proxy.example",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "proxy" },
+				modelOverrides: { [id]: { thinking: explicit } },
+			},
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		expect(registry.find("openrouter", id)?.thinking).toMatchObject(explicit);
+	});
+
+	test("proxy discovery honors reported token caps, input modalities, and endpoint routing", async () => {
 		writeRawModelsJson({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
@@ -3448,7 +3677,41 @@ describe("ModelRegistry runtime discovery", () => {
 					JSON.stringify({
 						data: [
 							{ id: "anthropic-model", supported_endpoint_types: ["anthropic"], context_length: 200000 },
-							{ id: "openai-model", supported_endpoint_types: ["openai"], context_length: 65536 },
+							{ id: "anthropic/gpt-5.4", supported_endpoint_types: ["anthropic"] },
+							{
+								id: "limited/gpt-5.4",
+								supported_endpoint_types: ["openai"],
+								context_length: 64_000,
+								max_output_tokens: 8_192,
+								input: ["text"],
+							},
+							{
+								id: "nested/deepseek-v4-1-flash-261017",
+								supported_endpoint_types: ["openai"],
+								context_length: 16_000,
+								max_model_len: "24000",
+								limits: { max_input_tokens: 100_000, max_output_tokens: 30_000 },
+								max_tokens: 4_000,
+								architecture: { input_modalities: ["text"] },
+							},
+							{
+								id: "nested-limits-only",
+								supported_endpoint_types: ["openai"],
+								limits: { max_input_tokens: 12_288, max_output_tokens: 4_096 },
+								input_modalities: ["text", "image"],
+							},
+							{
+								id: "malformed-output",
+								supported_endpoint_types: ["openai"],
+								max_output_tokens: 1.5,
+								max_completion_tokens: 6_000,
+							},
+							{
+								id: "output-over-context",
+								supported_endpoint_types: ["openai"],
+								context_length: 4_096,
+								max_tokens: 8_192,
+							},
 							{ id: "zero-context-model", supported_endpoint_types: ["openai"], context_length: 0 },
 						],
 					}),
@@ -3462,14 +3725,95 @@ describe("ModelRegistry runtime discovery", () => {
 		const anthropic = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "anthropic-model");
 		expect(anthropic?.api).toBe("anthropic-messages");
 		expect(anthropic?.contextWindow).toBe(200000);
-		const openai = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "openai-model");
-		expect(openai?.api).toBe("openai-completions");
-		expect(openai?.contextWindow).toBe(65536);
+		expect(registry.find("proxy-test", "anthropic/gpt-5.4")).toMatchObject({
+			api: "anthropic-messages",
+			thinking: { mode: "budget" },
+		});
+		expect(registry.find("proxy-test", "limited/gpt-5.4")).toMatchObject({
+			api: "openai-completions",
+			contextWindow: 64_000,
+			maxTokens: 8_192,
+			input: ["text"],
+		});
+		expect(registry.find("proxy-test", "nested/deepseek-v4-1-flash-261017")).toMatchObject({
+			contextWindow: 24_000,
+			maxTokens: 24_000,
+			input: ["text"],
+		});
+		expect(registry.find("proxy-test", "nested-limits-only")).toMatchObject({
+			contextWindow: 16_384,
+			maxTokens: 4_096,
+			input: ["text", "image"],
+		});
+		expect(registry.find("proxy-test", "malformed-output")?.maxTokens).toBe(6_000);
+		expect(registry.find("proxy-test", "output-over-context")?.maxTokens).toBe(4_096);
 		// A non-positive upstream context_length must be rejected by the guard and
 		// fall through to the bundled reference (absent here) then the default,
 		// never pinning the model at a broken `0` window.
 		const zeroCtx = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "zero-context-model");
 		expect(zeroCtx?.contextWindow).toBe(128000);
+	});
+
+	test("proxy discovery keeps modelOverrides stronger than recovered and provider-reported capabilities", async () => {
+		writeRawModelsJson({
+			"proxy-test": {
+				baseUrl: "http://127.0.0.1:9998",
+				auth: "none",
+				discovery: { type: "proxy" },
+				compat: { supportsReasoningEffort: false },
+				modelOverrides: {
+					"nku/deepseek-v4-1-flash-261017": {
+						reasoning: false,
+						input: ["text"],
+						contextWindow: 48_000,
+						maxTokens: 6_000,
+					},
+					"custom/gpt-5.4": {
+						thinking: { mode: "effort", efforts: [Effort.Low] },
+						input: ["text", "image"],
+						contextWindow: 40_000,
+						maxTokens: 3_000,
+						cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+						compat: { supportsReasoningEffort: true },
+					},
+				},
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			if (String(input) !== "http://127.0.0.1:9998/v1/models") {
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			}
+			return Response.json({
+				data: ["nku/deepseek-v4-1-flash-261017", "custom/gpt-5.4"].map(id => ({
+					id,
+					supported_endpoint_types: ["openai"],
+					context_length: 64_000,
+					max_output_tokens: 8_192,
+					input: ["text"],
+				})),
+			});
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		const disabled = registry.find("proxy-test", "nku/deepseek-v4-1-flash-261017");
+		expect(disabled).toMatchObject({
+			reasoning: false,
+			input: ["text"],
+			contextWindow: 48_000,
+			maxTokens: 6_000,
+			compat: { supportsReasoningEffort: false },
+		});
+		expect(disabled?.thinking).toBeUndefined();
+		expect(registry.find("proxy-test", "custom/gpt-5.4")).toMatchObject({
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low] },
+			input: ["text", "image"],
+			contextWindow: 40_000,
+			maxTokens: 3_000,
+			cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+			compat: { supportsReasoningEffort: true },
+		});
 	});
 
 	test("proxy discovery uses proxy-reported name over bundled placeholder", async () => {

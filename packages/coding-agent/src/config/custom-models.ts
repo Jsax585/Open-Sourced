@@ -3,6 +3,7 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getVariantAliasSources, resolveVariantSelector } from "@oh-my-pi/pi-catalog/compat/collapse";
 import {
 	getBundledModelReferenceIndex,
+	getReferenceThinkingEfforts,
 	inheritReferenceThinking,
 	resolveModelReference,
 } from "@oh-my-pi/pi-catalog/identity";
@@ -127,6 +128,10 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		baseUrl: resolvedModel.baseUrl,
 		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
 		thinking: inheritReferenceThinking(resolvedModel.thinking, reference, resolvedModel.provider),
+		referenceThinkingEfforts:
+			resolvedModel.thinking === undefined
+				? getReferenceThinkingEfforts(reference, resolvedModel.provider, resolvedModel.api)
+				: undefined,
 		input: input as ("text" | "image")[],
 		imageInputDecoder: resolvedModel.imageInputDecoder,
 		imageCountBudget: resolvedModel.imageCountBudget,

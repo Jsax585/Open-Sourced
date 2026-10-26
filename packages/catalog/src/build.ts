@@ -471,7 +471,7 @@ export function buildDiscoveredModel(spec: ModelSpec<Api>, providerType: string)
 export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi> {
 	const policy = resolveModelPolicy(spec);
 	const supportsComputerUseConfig = explicitComputerUseConfig(spec);
-	const model: Model<TApi> = {
+	const model: Model<TApi> & Pick<ModelSpec<TApi>, "referenceThinkingEfforts"> = {
 		...spec,
 		// A reviewed `thinking-upgrade-neutral` policy can repair a stale
 		// `reasoning: false` discovery default, and an unclassified neutral spec
@@ -488,6 +488,8 @@ export function buildModel<TApi extends Api>(spec: ModelSpec<TApi>): Model<TApi>
 		compat: policy.compat,
 		compatConfig: spec.compat,
 	};
+	// Borrowed source metadata is not authored target configuration or cache state.
+	delete model.referenceThinkingEfforts;
 	applyCatalogAssignments(model, policy.catalog);
 	applyCatalogCorrections(model, policy.catalog);
 	capAntigravityWireProfiles(model, policy.catalog.maxTokensCeiling);

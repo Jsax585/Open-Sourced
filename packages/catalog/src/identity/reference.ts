@@ -8,7 +8,8 @@
  * may strip `search`-style markers and prefers cache-pricing-complete
  * references, both of which would be wrong for canonical coalescing.
  */
-import { collapseVocabulary, discoveryVocabulary } from "../compat/taxonomy";
+import { classifyModel, collapseVocabulary, discoveryVocabulary } from "../compat/taxonomy";
+import type { Effort } from "../effort";
 import type { Api, Model, ThinkingConfig } from "../types";
 import { getBracketStrippedModelIdCandidates, getLongestModelLikeIdSegment, getModelLikeIdSegments } from "./id";
 export interface ModelReferenceIndex {
@@ -169,20 +170,51 @@ export function getReferenceCandidateIds(modelId: string): string[] {
 	return [...candidates];
 }
 
-/**
- * Inherit bundled reference thinking only for same-provider matches. Wire routing
- * (`effortRouting`) is provider-specific; cross-provider inheritance can rewrite
- * gateway ids (e.g. Portkey `@modal/GLM-5-2-FP8` → devin `glm-5-2`).
- */
+/** Explicit caller thinking and same-provider transport metadata are authoritative. */
 export function inheritReferenceThinking(
 	modelThinking: ThinkingConfig | undefined,
 	reference: Pick<Model<Api>, "provider" | "thinking"> | undefined,
 	provider: string,
 ): ThinkingConfig | undefined {
 	if (modelThinking !== undefined) return modelThinking;
-	if (!reference?.thinking) return undefined;
-	if (reference.provider !== provider) return undefined;
+	if (!reference || reference.provider !== provider) return undefined;
 	return reference.thinking;
+}
+
+/**
+ * A pure cross-provider effort ladder is a policy fallback, never explicit target
+ * thinking. Routing, remaps, budgets, and transport controls stay source-local;
+ * defaults and mandatory/off behavior are left to the target model's policy.
+ */
+export function getReferenceThinkingEfforts(
+	reference: Pick<Model<Api>, "provider" | "thinking"> | undefined,
+	provider: string,
+	targetApi: Api,
+): readonly Effort[] | undefined {
+	if (!reference?.thinking || reference.provider === provider) return undefined;
+	const thinking = reference.thinking;
+	if (
+		targetApi !== "openai-completions" &&
+		targetApi !== "openai-responses" &&
+		targetApi !== "openai-codex-responses" &&
+		targetApi !== "azure-openai-responses"
+	) {
+		return undefined;
+	}
+	if (
+		thinking.mode !== "effort" ||
+		thinking.efforts.length === 0 ||
+		thinking.effortRouting !== undefined ||
+		thinking.effortMap !== undefined ||
+		thinking.effortBudgets !== undefined ||
+		thinking.supportsDisplay !== undefined ||
+		thinking.prefixBinding !== undefined ||
+		thinking.suppressWhenOff !== undefined ||
+		thinking.unverified === true
+	) {
+		return undefined;
+	}
+	return thinking.efforts;
 }
 
 /** Resolve a (possibly proxied/affixed) model id to its bundled upstream reference. */
@@ -190,8 +222,19 @@ export function resolveModelReference(modelId: string, index: ModelReferenceInde
 	// Portkey/gateway wire ids (`@provider/model`) are opaque; fuzzy matching would
 	// map them to unrelated bundled entries (e.g. `@modal/GLM-5-2-FP8` → devin/glm-5-2).
 	if (modelId.startsWith("@")) return undefined;
-	for (const candidate of getReferenceCandidateIds(modelId)) {
+	const candidates = getReferenceCandidateIds(modelId);
+	for (const candidate of candidates) {
 		const key = normalizeReferenceKey(candidate);
+		const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
+		if (reference) return reference;
+	}
+	// Reviewed provider-agnostic identity aliases are a last resort, after all
+	// existing full-id and slash-tail matches. Never guess a family or drop a
+	// release date: the logical id must itself name an exact catalog reference.
+	for (const candidate of candidates) {
+		const logicalId = classifyModel("", candidate, { lenient: true }).logicalId;
+		if (!logicalId) continue;
+		const key = normalizeReferenceKey(logicalId);
 		const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
 		if (reference) return reference;
 	}
