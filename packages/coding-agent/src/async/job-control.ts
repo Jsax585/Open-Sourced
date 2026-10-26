@@ -15,7 +15,7 @@ import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 
 import type { ToolSession } from "../tools";
 
-import { formatDuration } from "@oh-my-pi/pi-tui/render/render-utils";
+import { formatDuration, formatNumber } from "@oh-my-pi/pi-tui/render/render-utils";
 import type {
 	AgentActivitySnapshot,
 	CancelOutcome,
@@ -24,7 +24,6 @@ import type {
 } from "@oh-my-pi/pi-tui/tools/wait";
 
 import { isWaitingPollDetails } from "@oh-my-pi/pi-tui/tools/wait";
-import { formatArtifactErrorNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 
 /**
  * Resolve a list of job ids to job records visible to the calling agent.
@@ -191,16 +190,23 @@ export function snapshotJobs(
 		let completionPercent: number | undefined;
 		let stage: string | undefined;
 		let progress: AgentProgress[] | undefined;
+		let requests: number | undefined;
+		let cost: number | undefined;
+		let contextTokens: number | undefined;
+		let contextWindow: number | undefined;
 		if (latest.type === "task") {
 			const progressValue = latest.latestDetails?.progress;
 			if (Array.isArray(progressValue)) {
+				// A batch job's progress lists every spawn of the call, keyed by agent id.
+				// A collided job id is suffixed (`Foo-2`) while its agent id stays `Foo`.
+				const agentId = current?.agentId ?? latest.id;
 				progress = progressValue.filter(isAgentProgressSnapshot);
 				let progressRecord: Record<string, unknown> | undefined;
 				for (const item of progressValue) {
 					if (!item || typeof item !== "object") continue;
 					const candidate = item as Record<string, unknown>;
 					if (!progressRecord) progressRecord = candidate;
-					if (candidate.id === latest.id) {
+					if (candidate.id === agentId) {
 						progressRecord = candidate;
 						break;
 					}
@@ -229,8 +235,13 @@ export function snapshotJobs(
 					const trimmed = stageValue.trim();
 					if (trimmed) stage = trimmed;
 				}
+				requests = finiteNumber(progressRecord?.requests);
+				cost = finiteNumber(progressRecord?.cost);
+				contextTokens = finiteNumber(progressRecord?.contextTokens);
+				contextWindow = finiteNumber(progressRecord?.contextWindow);
 			}
 		}
+		const running = latest.status === "running";
 		const widget = current ? session.asyncJobManager?.widgets?.view(current) : undefined;
 		return {
 			id: latest.id,
@@ -243,8 +254,12 @@ export function snapshotJobs(
 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
 			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),
 			...(advisor ? { advisor: true } : {}),
-			...(completionPercent !== undefined && latest.status === "running" ? { completionPercent } : {}),
+			...(completionPercent !== undefined && running ? { completionPercent } : {}),
 			...(stage ? { stage } : {}),
+			...(requests !== undefined && running ? { requests } : {}),
+			...(cost !== undefined && running ? { cost } : {}),
+			...(contextTokens !== undefined && running ? { contextTokens } : {}),
+			...(contextWindow !== undefined && running ? { contextWindow } : {}),
 			...(widget ? { widget } : {}),
 			...(progress && progress.length > 0 ? { progress } : {}),
 			...(!resultConsumed && options.includeResults !== false && latest.resultText
@@ -264,10 +279,41 @@ export function snapshotJobs(
 	});
 }
 
+function finiteNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Progress suffix for a running task row, e.g.
+ * ` — 5h7m · 90 req · $18.40 · ctx 160K/1M · stage: implementing`, from the
+ * fields {@link snapshotJobs} copies out of the task's latest progress record.
+ * Returns `""` for any other row and for a running task without progress
+ * fields, so those rows keep their plain shape; duration alone never makes a
+ * suffix. Pass `duration: false` where the row already shows the run time.
+ */
+export function runningTaskProgressSuffix(job: JobSnapshot, options: { duration: boolean }): string {
+	if (job.type !== "task" || job.status !== "running") return "";
+	const parts: string[] = [];
+	if (job.requests !== undefined && job.requests > 0) parts.push(`${job.requests} req`);
+	if (job.cost !== undefined && job.cost > 0) parts.push(job.cost < 0.005 ? "<$0.01" : `$${job.cost.toFixed(2)}`);
+	if (job.contextTokens !== undefined && job.contextTokens > 0) {
+		parts.push(
+			job.contextWindow !== undefined && job.contextWindow > 0
+				? `ctx ${formatNumber(job.contextTokens)}/${formatNumber(job.contextWindow)}`
+				: `ctx ${formatNumber(job.contextTokens)}`,
+		);
+	}
+	if (job.completionPercent !== undefined) parts.push(`~${job.completionPercent}%`);
+	if (job.stage) parts.push(`stage: ${job.stage.replace(/\s+/g, " ")}`);
+	if (parts.length === 0) return "";
+	if (options.duration) parts.unshift(formatDuration(job.durationMs));
+	return ` — ${parts.join(" · ")}`;
+}
+
 export function buildJobResult(
 	session: ToolSession,
 	manager: AsyncJobManager,
-	op: "wait" | "cancel" | "jobs",
+	op: "wait" | "cancel",
 	jobs: TrackedJobLike[],
 	cancelOutcomes: CancelOutcome[],
 	agents: AgentActivitySnapshot[] = [],
@@ -279,12 +325,17 @@ export function buildJobResult(
 		seen.add(j.id);
 		return true;
 	});
-	const jobResults = snapshotJobs(session, uniqueJobs, { includeResults: op !== "jobs" });
+	const jobResults = snapshotJobs(session, uniqueJobs);
 	const alreadyConsumed = new Set(jobResults.filter(job => manager.isJobResultConsumed(job.id)).map(job => job.id));
+	const watchedByWait = new Set(
+		op === "wait"
+			? jobResults
+					.filter(job => !alreadyConsumed.has(job.id) && manager.isDeliverySuppressed(job.id))
+					.map(job => job.id)
+			: [],
+	);
 
-	if (op !== "jobs") {
-		manager.consumeJobResults(jobResults.filter(j => j.status !== "running").map(j => j.id));
-	}
+	manager.consumeJobResults(jobResults.filter(j => j.status !== "running").map(j => j.id));
 
 	const completed = jobResults.filter(j => j.status !== "running");
 	const running = jobResults.filter(j => j.status === "running");
@@ -297,24 +348,7 @@ export function buildJobResult(
 		lines.push("");
 	}
 
-	if (op === "jobs" && jobResults.length > 0) {
-		lines.push(`## Jobs (${jobResults.length})\n`);
-		for (const j of jobResults) {
-			const exit = j.exitCode === undefined ? "" : ` — exit ${j.exitCode}`;
-			const artifactId = j.meta?.truncation?.artifactId;
-			const artifact = artifactId ? ` — artifact://${artifactId}` : "";
-			const capture =
-				j.meta?.artifactError === undefined ? "" : ` — ${formatArtifactErrorNotice(j.meta.artifactError)}`;
-			const delivery =
-				j.status === "running" || j.status === "cancelled"
-					? ""
-					: ` — delivery ${alreadyConsumed.has(j.id) ? "delivered" : "pending"}`;
-			const agent = j.agentUrlId ? ` — agent://${j.agentUrlId}` : "";
-			lines.push(
-				`- \`${j.id}\` [${j.type}] — ${j.status} — ${j.label.replace(/\s+/g, " ")}${exit}${artifact}${capture}${delivery}${agent}`,
-			);
-		}
-	} else if (completed.length > 0) {
+	if (completed.length > 0) {
 		lines.push(`## Completed (${completed.length})\n`);
 		for (const j of completed) {
 			lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
@@ -323,7 +357,9 @@ export function buildJobResult(
 				lines.push(
 					alreadyConsumed.has(j.id)
 						? "Delivery: already delivered or recovered."
-						: "Delivery: not auto-delivered; recovered by this snapshot.",
+						: watchedByWait.has(j.id)
+							? "Delivery: delivered directly to wait."
+							: "Delivery: not auto-delivered; recovered by this snapshot.",
 				);
 			}
 			if (j.resultText) {
@@ -352,10 +388,10 @@ export function buildJobResult(
 		}
 	}
 
-	if (op !== "jobs" && running.length > 0) {
+	if (running.length > 0) {
 		lines.push(`## Still Running (${running.length})\n`);
 		for (const j of running) {
-			lines.push(`- \`${j.id}\` [${j.type}] — ${j.label}`);
+			lines.push(`- \`${j.id}\` [${j.type}] — ${j.label}${runningTaskProgressSuffix(j, { duration: true })}`);
 		}
 	}
 
