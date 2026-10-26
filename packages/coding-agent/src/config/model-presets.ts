@@ -24,6 +24,7 @@ import { isRetryFallbackModelKey } from "../session/retry-fallback-chains";
 import { cfgDefaultThinkingLevel, cfgRetryFallbackChains } from "../session/settings";
 import { pickDefaultAvailableModel, resolveModelRoleValue } from "./model-resolver";
 import { cfgModelPresets, cfgModelRoleStorage, type ModelPreset } from "./model-settings";
+import { settingValuesEqual } from "./registry";
 import type { Settings, SettingProvenance } from "./settings";
 
 /** Preset names: a letter, then letters, digits, `-` or `_` (the model hub's role-name rule). */
@@ -91,13 +92,6 @@ function sameChain(a: readonly string[] | undefined, b: readonly string[] | unde
 	return a.length === b.length && a.every((entry, index) => entry === b[index]);
 }
 
-function sameChains(a: Record<string, string[]>, b: Record<string, string[]>): boolean {
-	const keys = Object.keys(a);
-	return (
-		keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && sameChain(a[key], b[key]))
-	);
-}
-
 function isDefaultThinkingLevel(
 	level: ConfiguredThinkingLevel,
 ): level is NonNullable<ModelPreset["defaultThinkingLevel"]> {
@@ -136,7 +130,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 		if (lookup.kind !== "found") return false;
 		const { modelRoles, defaultThinkingLevel, fallbackChains } = lookup.preset;
 		if (defaultThinkingLevel !== undefined && defaultThinkingLevel !== thinking) return false;
-		if (fallbackChains !== undefined && !sameChains(fallbackChains, chains)) return false;
+		if (fallbackChains !== undefined && !settingValuesEqual(fallbackChains, chains)) return false;
 		const presetIds = Object.keys(modelRoles);
 		return (
 			presetIds.length === roleIds.length &&
@@ -251,6 +245,8 @@ export interface ModelPresetShadowedChain {
 	/** The effective chain that won instead. */
 	actual: string[] | undefined;
 	source: SettingProvenance;
+	/** One-based priority when another layer keeps an otherwise identical chain out of order. */
+	position?: { expected: number; actual: number };
 }
 
 export type ModelPresetSwitchResult =
@@ -357,7 +353,7 @@ function writePresetRoles(settings: Settings, preset: ModelPreset): void {
 }
 
 /**
- * Replace the global role fallback chains with the preset's, clearing role chains it
+ * Replace the global role fallback chains in preset order, clearing role chains it
  * leaves out. Model- and provider-keyed chains stay as they are. A preset without
  * recorded chains leaves them alone. In project storage mode nothing is written:
  * chains have no project-scoped write, and rewriting global chains would change
@@ -366,28 +362,34 @@ function writePresetRoles(settings: Settings, preset: ModelPreset): void {
 function writePresetFallbackChains(settings: Settings, preset: ModelPreset): void {
 	const chains = preset.fallbackChains;
 	if (chains === undefined || cfgModelRoleStorage.get(settings) === "project") return;
-	const retry = settings.getGlobalSettings().retry;
-	const global = isRecord(retry) ? retry.fallbackChains : undefined;
-	const globalRoles = isRecord(global) ? Object.keys(global).filter(key => !isRetryFallbackModelKey(key)) : [];
-	for (const role of globalRoles) {
-		if (!Object.hasOwn(chains, role)) cfgRetryFallbackChains.setEntry(settings, role, undefined);
-	}
-	for (const role of Object.keys(chains)) {
-		cfgRetryFallbackChains.setEntry(settings, role, chains[role]);
-	}
+	settings.replaceRoleFallbackChains(chains);
 }
 
 function shadowedChains(settings: Settings, preset: ModelPreset): ModelPresetShadowedChain[] {
 	const expectedChains = preset.fallbackChains;
 	if (expectedChains === undefined) return [];
 	const effective = getRoleFallbackChains(settings);
-	const roles = new Set([...Object.keys(effective), ...Object.keys(expectedChains)]);
+	const expectedRoles = Object.keys(expectedChains);
+	const effectiveRoles = Object.keys(effective);
+	const roles = new Set([...effectiveRoles, ...expectedRoles]);
 	const shadowed: ModelPresetShadowedChain[] = [];
 	for (const role of [...roles].sort((a, b) => a.localeCompare(b))) {
 		const expected = Object.hasOwn(expectedChains, role) ? expectedChains[role] : undefined;
 		const actual = Object.hasOwn(effective, role) ? effective[role] : undefined;
 		if (!sameChain(expected, actual)) {
 			shadowed.push({ role, expected, actual, source: settings.getFallbackChainProvenance(role) });
+		} else if (
+			expected !== undefined &&
+			actual !== undefined &&
+			expectedRoles.indexOf(role) !== effectiveRoles.indexOf(role)
+		) {
+			shadowed.push({
+				role,
+				expected,
+				actual,
+				source: settings.getFallbackChainProvenance(role),
+				position: { expected: expectedRoles.indexOf(role) + 1, actual: effectiveRoles.indexOf(role) + 1 },
+			});
 		}
 	}
 	return shadowed;
@@ -521,6 +523,12 @@ export function describeShadowedRoles(
 		);
 	}
 	for (const entry of chains) {
+		if (entry.position) {
+			lines.push(
+				`${entry.role} fallback priority: ${entry.position.actual} from ${SOURCE_LABELS[entry.source]} (preset: ${entry.position.expected})`,
+			);
+			continue;
+		}
 		lines.push(
 			`${entry.role} fallbacks: ${describeChain(entry.actual)} from ${SOURCE_LABELS[entry.source]} (preset: ${describeChain(entry.expected)})`,
 		);

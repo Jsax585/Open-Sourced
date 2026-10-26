@@ -36,6 +36,8 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { AgentStorage } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
+import { isRetryFallbackModelKey } from "../session/retry-fallback-chains";
+import { cfgRetryFallbackChains } from "../session/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { replaceFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
@@ -82,6 +84,7 @@ type YamlGeneration = { kind: "missing" } | YamlContentGeneration | { kind: "unr
 type PendingYamlMutation = {
 	generation: YamlGeneration;
 	baseValue: unknown;
+	scope?: "role-fallback-chains";
 };
 
 type YamlLoadResult =
@@ -214,6 +217,22 @@ function setOwn(obj: RawSettings, key: string, value: unknown): void {
 	}
 }
 
+/** Replaces role chains in order, retaining only model/provider chains from `current`. */
+function withRoleFallbackChains(current: unknown, roles: unknown): RawSettings {
+	const chains: RawSettings = {};
+	if (isRecord(roles)) {
+		for (const key of Object.keys(roles)) {
+			if (!isRetryFallbackModelKey(key)) setOwn(chains, key, roles[key]);
+		}
+	}
+	if (isRecord(current)) {
+		for (const key of Object.keys(current)) {
+			if (isRetryFallbackModelKey(key)) setOwn(chains, key, current[key]);
+		}
+	}
+	return chains;
+}
+
 /**
  * Removes the value at `segments`, pruning the parent objects the removal leaves empty. Every record on the
  * path below `obj` is replaced by a copy rather than edited: a merged view or a cached read may share it.
@@ -258,6 +277,10 @@ function pendingChangeApplies(
 	if (yamlGenerationsMatch(mutation.generation, generation)) return true;
 	const onDisk: RawSettings = { value: getByPath(current, segments) };
 	const captured: RawSettings = { value: mutation.baseValue };
+	if (mutation.scope === "role-fallback-chains") {
+		onDisk.value = withRoleFallbackChains(undefined, onDisk.value);
+		captured.value = withRoleFallbackChains(undefined, captured.value);
+	}
 	for (const writtenPath of written) {
 		if (isPathPrefix(writtenPath, segments)) return true;
 		if (!isPathPrefix(segments, writtenPath)) continue;
@@ -265,7 +288,9 @@ function pendingChangeApplies(
 		deleteByPath(onDisk, inner);
 		deleteByPath(captured, inner);
 	}
-	return Bun.deepEquals(onDisk.value, captured.value);
+	return mutation.scope === "role-fallback-chains"
+		? settingValuesEqual(onDisk.value, captured.value)
+		: Bun.deepEquals(onDisk.value, captured.value);
 }
 
 /**
@@ -986,9 +1011,9 @@ export class Settings {
 	 * Applies `value` at `segments` of the global layer (`undefined` removes it) and queues that path —
 	 * a setting, or one entry of a record setting — for the next save.
 	 */
-	#stageGlobal(segments: readonly string[], value: unknown): void {
+	#stageGlobal(segments: readonly string[], value: unknown, scope?: "role-fallback-chains"): void {
 		const key = JSON.stringify(segments);
-		this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments));
+		this.#captureGlobalMutation(key, this.#modifiedPathMutations, getByPath(this.#global, segments), scope);
 		if (value === undefined) deleteByPath(this.#global, segments);
 		else setByPath(this.#global, segments, value);
 		this.#persistedMutationGeneration++;
@@ -1857,6 +1882,41 @@ export class Settings {
 		return this.#parent?.getFallbackChainProvenance(key) ?? "default";
 	}
 
+	/** Replaces global role-keyed fallback chains in order without persisting other layers' chains. */
+	replaceRoleFallbackChains(chains: Record<string, string[]>): void {
+		cfgRetryFallbackChains.assertWritable(chains);
+		const segments = cfgRetryFallbackChains.segments;
+		const current = getByPath(this.#global, segments);
+		const next = withRoleFallbackChains(current, chains);
+		const staged = !this.#globalWriteIsNoop(segments, next);
+		if (!staged && !this.#softPins.has(cfgRetryFallbackChains)) return;
+		const prev = cfgRetryFallbackChains.get(this);
+		this.#releaseSoftPin(cfgRetryFallbackChains);
+		if (staged) {
+			// A preceding whole-map write still owns its local selector edits; keep those as entry writes.
+			const mutation = this.#modifiedPathMutations.get(JSON.stringify(segments));
+			if (mutation && mutation.scope !== "role-fallback-chains") {
+				const before = isRecord(mutation.baseValue) ? mutation.baseValue : {};
+				const live = isRecord(current) ? current : {};
+				for (const key of new Set([...Object.keys(before), ...Object.keys(live)])) {
+					if (!isRetryFallbackModelKey(key) || settingValuesEqual(before[key], live[key])) continue;
+					const entry = [...segments, key];
+					const entryKey = JSON.stringify(entry);
+					if (this.#modified.has(entryKey)) continue;
+					this.#modified.set(entryKey, entry);
+					this.#modifiedPathMutations.set(entryKey, {
+						generation: mutation.generation,
+						baseValue: structuredClone(before[key]),
+					});
+				}
+			}
+			this.#stageGlobal(segments, next, "role-fallback-chains");
+		}
+		this.#rebuildMerged();
+		if (staged) this.#queueSave();
+		this.#fireIfChanged(cfgRetryFallbackChains, prev);
+	}
+
 	/**
 	 * Get the persisted layer supplying a model role (project/global/default only).
 	 */
@@ -1999,11 +2059,17 @@ export class Settings {
 		}
 	}
 
-	#captureGlobalMutation(key: string, mutations: Map<string, PendingYamlMutation>, baseValue: unknown): void {
+	#captureGlobalMutation(
+		key: string,
+		mutations: Map<string, PendingYamlMutation>,
+		baseValue: unknown,
+		scope?: "role-fallback-chains",
+	): void {
 		if (!this.#persist || !this.#configPath) return;
 		mutations.set(key, {
 			generation: this.#readYamlGeneration(this.#configPath),
 			baseValue: structuredClone(baseValue),
+			scope,
 		});
 	}
 
@@ -3657,9 +3723,20 @@ export class Settings {
 						continue;
 					}
 					const value = getByPath(this.#global, segments);
-					if (value === undefined) deleteByPath(current, segments);
-					else setByPath(current, segments, value);
-					writtenPaths.push(segments);
+					if (mutation?.scope === "role-fallback-chains") {
+						const existing = getByPath(current, segments);
+						const chains = withRoleFallbackChains(existing, value);
+						setByPath(current, segments, chains);
+						// Only role paths were written: a concurrent selector entry must retain its own stale-write guard.
+						const keys = new Set([...Object.keys(isRecord(existing) ? existing : {}), ...Object.keys(chains)]);
+						for (const key of keys) {
+							if (!isRetryFallbackModelKey(key)) writtenPaths.push([...segments, key]);
+						}
+					} else {
+						if (value === undefined) deleteByPath(current, segments);
+						else setByPath(current, segments, value);
+						writtenPaths.push(segments);
+					}
 					shouldWrite = true;
 				}
 
@@ -3741,6 +3818,7 @@ export class Settings {
 					} else if (pendingChangeApplies(mutation, segments, current, loaded.generation, writtenPaths)) {
 						writtenGeneration ??= this.#readYamlGeneration(configPath);
 						this.#modifiedPathMutations.set(modKey, {
+							...mutation,
 							generation: writtenGeneration,
 							baseValue: structuredClone(written),
 						});
@@ -3824,9 +3902,11 @@ export class Settings {
 			}
 			setByPath(target, ["modelRoles"], roles);
 		}
-		for (const segments of this.#modified.values()) {
+		for (const [key, segments] of this.#modified) {
 			const value = getByPath(this.#global, segments);
-			if (value === undefined) deleteByPath(target, segments);
+			if (this.#modifiedPathMutations.get(key)?.scope === "role-fallback-chains") {
+				setByPath(target, segments, withRoleFallbackChains(getByPath(target, segments), value));
+			} else if (value === undefined) deleteByPath(target, segments);
 			else setByPath(target, segments, value);
 		}
 	}
