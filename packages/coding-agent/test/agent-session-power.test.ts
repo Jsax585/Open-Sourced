@@ -93,6 +93,7 @@ it("applies each power toggle during an active prompt, releases it when disabled
 		expect(held.size).toBe(0);
 	} finally {
 		release.resolve();
+		// Drain a prompt left running by a failed assertion without replacing that assertion's error.
 		await running?.catch(() => undefined);
 		await session.dispose();
 		authStorage.close();
