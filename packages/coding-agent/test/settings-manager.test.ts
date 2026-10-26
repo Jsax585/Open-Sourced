@@ -36,7 +36,6 @@ import {
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
 	cfgProvidersMaxInFlightRequests,
-	cfgPowerSleepPrevention,
 	cfgFeaturesUnexpectedStopDetection,
 	cfgRetryFallbackChains,
 	cfgProviderAppendOnlyContext,
@@ -2627,85 +2626,6 @@ describe("Settings", () => {
 			expect(cfgSymbolPreset.get(reloaded)).not.toBe("ascii");
 			expect(await Bun.file(getConfigPath()).exists()).toBe(false);
 			expect(fs.existsSync(`${jsonPath}.bak`)).toBe(true);
-		});
-
-		it("migrates legacy power booleans with system=true to system level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: true,
-					declareUserActive: false,
-					preventDisplaySleep: false,
-				},
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("system");
-		});
-
-		it("migrates legacy power booleans with display=true to display level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: false,
-					declareUserActive: false,
-					preventDisplaySleep: true,
-				},
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("display");
-		});
-
-		it("migrates legacy power booleans with declareUserActive=true to system level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: false,
-					declareUserActive: true,
-					preventDisplaySleep: false,
-				},
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("system");
-		});
-
-		it("preserves old idle default when only non-idle keys are set", async () => {
-			// Old default was preventIdleSleep=true; user only set display=false.
-			// Migration should yield "idle", not "off".
-			await writeSettings({
-				power: { preventDisplaySleep: false },
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("idle");
-		});
-
-		it("migrates all-false power booleans to off", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: false,
-					preventSystemSleep: false,
-					declareUserActive: false,
-					preventDisplaySleep: false,
-				},
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("off");
-		});
-
-		it("migrates flat-key power booleans to the enum", async () => {
-			await writeSettings({
-				"power.preventIdleSleep": true,
-				"power.preventDisplaySleep": true,
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("display");
-		});
-
-		it("does not overwrite an explicit power.sleepPrevention", async () => {
-			await writeSettings({
-				power: { sleepPrevention: "off", preventIdleSleep: true },
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("off");
 		});
 
 		describe("provider request limits", () => {

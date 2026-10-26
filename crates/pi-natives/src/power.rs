@@ -8,24 +8,18 @@ use napi_derive::napi;
 
 /// Options for starting a power assertion.
 ///
-/// Each boolean maps to a `caffeinate(8)` flag and the closest corresponding
-/// platform capability. Multiple flags can be combined; when set, one
-/// assertion is taken per flag and all are released together when the
-/// handle is stopped or dropped.
-///
-/// If every flag is unset (or omitted), the handle behaves as if `idle`
-/// were `true` — preserving the historical default of `caffeinate -i`.
+/// Each boolean requests an independent platform capability. Multiple flags
+/// can be combined; all acquired assertions are released together when the
+/// handle is stopped or dropped. If no flag is true, no inhibition is acquired.
 #[napi(object, js_name = "PowerAssertionOptions")]
 pub struct PowerAssertionOptions {
 	/// Human-readable reason shown in platform power diagnostics.
 	pub reason:  Option<String>,
-	/// `caffeinate -i`: prevent the system from idle-sleeping.
+	/// Prevent idle system sleep (login1 idle inhibition on Linux).
 	pub idle:    Option<bool>,
-	/// `caffeinate -s`: prevent the system from sleeping (AC power only).
+	/// Prevent system sleep (AC power only on macOS; login1 sleep on Linux).
 	pub system:  Option<bool>,
-	/// `caffeinate -u`: declare the user is active (wakes the display).
-	pub user:    Option<bool>,
-	/// `caffeinate -d`: prevent the display from idle-sleeping.
+	/// Prevent display sleep (best-effort ScreenSaver inhibition on Linux).
 	pub display: Option<bool>,
 }
 
@@ -44,15 +38,12 @@ pub(crate) mod platform {
 	const PREVENT_USER_IDLE_SYSTEM_SLEEP: &str = "PreventUserIdleSystemSleep";
 	const PREVENT_SYSTEM_SLEEP: &str = "PreventSystemSleep";
 	const PREVENT_USER_IDLE_DISPLAY_SLEEP: &str = "PreventUserIdleDisplaySleep";
-	const USER_IS_ACTIVE: &str = "UserIsActive";
 
-	/// Variants this module knows how to acquire. Mirrors the `caffeinate(8)`
-	/// flag set the public API exposes (`-i`, `-s`, `-u`, `-d`).
+	/// Independent sleep-prevention capabilities backed by IOKit.
 	#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 	pub enum AssertionKind {
 		PreventIdleSystemSleep,
 		PreventSystemSleep,
-		DeclareUserActive,
 		PreventDisplaySleep,
 	}
 
@@ -61,7 +52,6 @@ pub(crate) mod platform {
 			match self {
 				Self::PreventIdleSystemSleep => PREVENT_USER_IDLE_SYSTEM_SLEEP,
 				Self::PreventSystemSleep => PREVENT_SYSTEM_SLEEP,
-				Self::DeclareUserActive => USER_IS_ACTIVE,
 				Self::PreventDisplaySleep => PREVENT_USER_IDLE_DISPLAY_SLEEP,
 			}
 		}
@@ -450,38 +440,43 @@ impl PowerAssertion {
 			.unwrap_or("omp agent session");
 		let idle = options.as_ref().and_then(|v| v.idle).unwrap_or(false);
 		let system = options.as_ref().and_then(|v| v.system).unwrap_or(false);
-		let user = options.as_ref().and_then(|v| v.user).unwrap_or(false);
 		let display = options.as_ref().and_then(|v| v.display).unwrap_or(false);
 
-		// Preserve historical default: an empty options object behaves as
-		// `caffeinate -i` (prevent idle system sleep).
-		let effective_idle = idle || !(system || user || display);
+		if !(idle || system || display) {
+			return Ok(Self {
+				#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+				inners:
+					Vec::new(),
+			});
+		}
 
 		#[cfg(target_os = "macos")]
 		{
-			let mut kinds: Vec<platform::AssertionKind> = Vec::new();
-			if effective_idle {
-				kinds.push(platform::AssertionKind::PreventIdleSystemSleep);
+			let mut inners =
+				Vec::with_capacity(usize::from(idle) + usize::from(system) + usize::from(display));
+			if idle {
+				inners.push(platform::AssertionInner::start(
+					platform::AssertionKind::PreventIdleSystemSleep,
+					reason,
+				)?);
 			}
 			if system {
-				kinds.push(platform::AssertionKind::PreventSystemSleep);
-			}
-			if user {
-				kinds.push(platform::AssertionKind::DeclareUserActive);
+				inners.push(platform::AssertionInner::start(
+					platform::AssertionKind::PreventSystemSleep,
+					reason,
+				)?);
 			}
 			if display {
-				kinds.push(platform::AssertionKind::PreventDisplaySleep);
-			}
-			let mut inners: Vec<platform::AssertionInner> = Vec::with_capacity(kinds.len());
-			for kind in kinds {
-				inners.push(platform::AssertionInner::start(kind, reason)?);
+				inners.push(platform::AssertionInner::start(
+					platform::AssertionKind::PreventDisplaySleep,
+					reason,
+				)?);
 			}
 			Ok(Self { inners })
 		}
 		#[cfg(target_os = "linux")]
 		{
-			let _ = user;
-			let what = match (effective_idle, system) {
+			let what = match (idle, system) {
 				(true, true) => Some("idle:sleep"),
 				(true, false) => Some("idle"),
 				(false, true) => Some("sleep"),
@@ -497,12 +492,12 @@ impl PowerAssertion {
 
 			// SetThreadExecutionState carries no diagnostic string, so `reason`
 			// has nowhere to go on Windows.
-			let _ = (user, reason);
+			let _ = reason;
 			// ES_CONTINUOUS makes the state persist until the handle clears it.
 			let mut flags = ES_CONTINUOUS;
 			// Windows has no separate system-sleep assertion: `ES_SYSTEM_REQUIRED`
 			// is the strongest available equivalent for both `idle` and `system`.
-			if effective_idle || system {
+			if idle || system {
 				flags |= ES_SYSTEM_REQUIRED;
 			}
 			if display {
@@ -512,7 +507,7 @@ impl PowerAssertion {
 		}
 		#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 		{
-			let _ = (reason, effective_idle, system, user, display);
+			let _ = (reason, idle, system, display);
 			Ok(Self {})
 		}
 	}

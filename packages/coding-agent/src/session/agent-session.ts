@@ -507,7 +507,9 @@ import {
 	cfgCodexResetsAutoRedeem,
 	cfgDefaultThinkingLevel,
 	cfgExternalThinking,
-	cfgPowerSleepPrevention,
+	cfgPowerInhibitIdle,
+	cfgPowerInhibitSuspend,
+	cfgPowerKeepDisplayAwake,
 	cfgPrewalkAutoTarget,
 	cfgPrewalkEnabled,
 	cfgProviderAppendOnlyContext,
@@ -572,6 +574,13 @@ const cfgWorkspacePromptInputs = combine({
 	autoqa: cfgDevAutoqa,
 	autoqaConsent: cfgDevAutoqaConsent,
 });
+
+/** Independent inhibition axes, read and observed together for the single held assertion. */
+const cfgPowerAssertion = combine(
+	{ idle: cfgPowerInhibitIdle, system: cfgPowerInhibitSuspend, display: cfgPowerKeepDisplayAwake },
+	({ idle, system, display }): PowerAssertionOptions | undefined =>
+		idle || system || display ? { reason: "omp agent session", idle, system, display } : undefined,
+);
 
 const PLAN_MODE_REMINDER_MAX = 3;
 const POST_PROMPT_DRAIN_TIMEOUT_MS = 5_000;
@@ -748,21 +757,6 @@ type PersistedAssistantMessage = AssistantMessage & { [kPersistedSessionEntryId]
 
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
 const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
-
-/**
- * Translate a `power.sleepPrevention` mode into `PowerAssertion.start` options,
- * or `undefined` when the mode asks for no assertion at all.
- */
-export function powerAssertionOptions(mode: "off" | "idle" | "display" | "system"): PowerAssertionOptions | undefined {
-	if (mode === "off") return undefined;
-	return {
-		reason: "omp agent session",
-		idle: true,
-		display: mode === "display" || mode === "system",
-		system: mode === "system",
-		user: mode === "system",
-	};
-}
 
 /**
  * Snapshot a live subagent for `/dump all`: registry status/heartbeat, the
@@ -1254,7 +1248,7 @@ export class AgentSession implements SettingsScope {
 	#acquirePowerAssertion(): void {
 		if (isBunTestRuntime()) return;
 		if (this.#powerAssertion) return;
-		const options = powerAssertionOptions(cfgPowerSleepPrevention.get(this.settings));
+		const options = cfgPowerAssertion.get(this.settings);
 		if (!options) return;
 		this.#powerAssertion = startPowerAssertion(options);
 	}
@@ -2816,9 +2810,9 @@ export class AgentSession implements SettingsScope {
 	#watchWorkspaceAndPowerSettings(): void {
 		this.#settingsWorkspaceDirectories = cfgWorkspaceAdditionalDirectories.get(this.settings);
 		this.#autoQaEnabled = isAutoQaEnabled(this.settings);
-		cfgPowerSleepPrevention.listen(this, () => {
-			// Swap the held assertion for the new mode mid-prompt; idle sessions
-			// pick the mode up when the next prompt begins.
+		cfgPowerAssertion.listen(this, () => {
+			// Swap the held assertion for the new flags mid-prompt; idle sessions
+			// pick the flags up when the next prompt begins.
 			if (this.#promptInFlightCount === 0) return;
 			this.#releasePowerAssertion();
 			this.#acquirePowerAssertion();

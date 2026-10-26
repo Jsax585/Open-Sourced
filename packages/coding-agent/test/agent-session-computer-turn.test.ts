@@ -1,6 +1,6 @@
 /**
- * Contract: computer runs keep the display awake for the whole agent turn (the `power.sleepPrevention` in-flight
- * bracket), however long its non-computer steps take, and the turn's end lets the display sleep at once; the next
+ * Contract: computer runs keep the display awake for the whole agent turn (the prompt in-flight bracket),
+ * however long its non-computer steps take, and the turn's end lets the display sleep at once; the next
  * turn holds it again. A dialog waiting for the user's answer ends the turn's hold until it settles, and a subagent
  * marks no turns, so its runs keep the native grace period.
  */
