@@ -71,13 +71,6 @@
 - Fixed the usage dashboard averaging distinct quota buckets that share a label and window (Google Antigravity's Gemini and Gemini 4 Argon weeklies) into one row, which masked a drained bucket as "50% left"; buckets now group by quota identity, and shared Claude/GPT copies still merge ([#16790](https://github.com/can1357/oh-my-pi/issues/16790))
 - Command and eval output panes no longer re-style and re-join their whole output on every frame, so a long command's output stops costing frame time while it sits in the transcript ([#16779](https://github.com/can1357/oh-my-pi/pull/16779) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
-## [18.12.4] - 2026-10-20
-### Fixed
-
-### Fixed
-
-- Fixed Shift+Enter submitting the prompt instead of inserting a newline in terminals that support the kitty keyboard protocol ([#16458](https://github.com/can1357/oh-my-pi/pull/16458) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
 ### Added
 
 - Added `modelEnds` to `GroupedFileSection`: per file, the model-line index just past its last line, so a caller cutting the output can tell which files it shows whole ([#16594](https://github.com/can1357/oh-my-pi/pull/16594) by [@will-bogusz](https://github.com/will-bogusz))
