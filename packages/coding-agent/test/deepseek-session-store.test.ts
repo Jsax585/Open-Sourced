@@ -3,10 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { SessionFormatEvent } from "@deepseek-ai/dsh-session-format";
-import { currentSessionMessageProjections } from "@deepseek-ai/dsh-session-format-catalog/message-projections";
-import { deriveEventMessage, foldSurface } from "@deepseek-ai/dsh-session/surface";
-import { interpretDeepSeekEvents } from "../src/session/deepseek-compat";
 import { DeepSeekSessionStore } from "../src/session/deepseek-session-store";
 import { persistForeignSession } from "../src/session/foreign-session-import";
 import type { ForeignSessionInfo } from "../src/session/foreign-session-store";
@@ -239,6 +235,17 @@ describe("DeepSeek discovery", () => {
 		await expect(store.load(info)).rejects.toThrow(/encoding/i);
 	});
 
+	it("loads a log session without reading an unusable SQLite store", async () => {
+		await writeDeepSeekLog(root, { id: "log-only", cwd: root, events: [user(0, "From the log")] });
+		const file = await writeDeepSeekDatabase(root, [{ id: "other", cwd: root, events: [user(0, "SQL")] }]);
+		const store = new DeepSeekSessionStore(root);
+		const info = await selected(store, "log-only");
+		await Bun.write(file, "not a database");
+		const loaded = await store.load(info);
+		expect(contextText(loaded)).toEqual(["From the log"]);
+		await loaded.close();
+	});
+
 	it("preserves colliding logical IDs in independent explicit roots", async () => {
 		const left = path.join(root, "left");
 		const right = path.join(root, "right");
@@ -276,7 +283,7 @@ describe("DeepSeek discovery", () => {
 });
 
 describe("DeepSeek released migrations and strict admission", () => {
-	it.each([0, 1, 2, 3, 4])("migrates released v%i without modifying physical source records", async version => {
+	it.each([0, 4])("reads v%i logs without modifying physical source records", async version => {
 		await writeDeepSeekLog(root, {
 			id: `v${version}`,
 			cwd: root,
@@ -328,79 +335,58 @@ describe("DeepSeek released migrations and strict admission", () => {
 		await manager.close();
 	});
 
-	it("migrates inherited v1 prefixes with child-owned seed marker and parent evidence", async () => {
-		await writeDeepSeekLog(root, {
-			id: "parent-v1",
-			cwd: root,
-			version: 1,
-			events: [
+	it("reads a v0 subagent's inherited prefix and records its length", async () => {
+		await rawLog(
+			"child-v0",
+			[
 				deepseekEvent("turn/start", { turn: 1 }, 0),
-				deepseekEvent("step/start", { turn: 1, step: 1 }, 1),
-				user(2, "Inherited prompt"),
-				deepseekEvent("step/end", { turn: 1, step: 1 }, 3),
+				user(1, "Inherited prompt"),
+				deepseekEvent("session/end-seed", {}, 2),
+				user(3, "Child prompt"),
 				deepseekEvent("turn/end", { turn: 1, reason: { kind: "completed" } }, 4),
 			],
-		});
-		await rawLog(
-			"child-v1",
-			[
-				deepseekEvent("turn/start", { turn: 1 }, 0),
-				deepseekEvent("step/start", { turn: 1, step: 1 }, 1),
-				user(2, "Inherited prompt"),
-				deepseekEvent("session/end-seed", {}, 3),
-				user(4, "Child prompt"),
-				deepseekEvent("step/end", { turn: 1, step: 1 }, 5),
-				deepseekEvent("turn/end", { turn: 1, reason: { kind: "completed" } }, 6),
-			],
-			1,
-			{ ...deepseekHeader("child-v1", root, 1), seedLength: 3, parentSession: "parent-v1" },
-		);
-		const before = await snapshot(root);
-		const store = new DeepSeekSessionStore(root);
-		const manager = await store.load(await selected(store, "child-v1"));
-		expect(contextText(manager)).toEqual(["Inherited prompt", "Child prompt"]);
-		expect(await snapshot(root)).toEqual(before);
-		await manager.close();
-	});
-
-	it("uses own historical subagent descriptor evidence to migrate parent catalogs", async () => {
-		await writeDeepSeekLog(root, { id: "catalog-parent", cwd: root, version: 3, events: [user(0, "Parent prompt")] });
-		await rawLog(
-			"catalog-child",
-			[
-				user(0, "Parent prompt"),
-				deepseekEvent("session/end-seed", { inherited: true }, 1),
-				deepseekEvent(
-					"subagent/descriptor",
-					{ mode: "continuable", version: 3, provider: "fixture-provider", label: "Fixture child" },
-					2,
-				),
-			],
-			3,
+			0,
 			{
-				...deepseekHeader("catalog-child", root, 3),
-				isSeeded: true,
-				parentSession: "catalog-parent",
+				...deepseekHeader("child-v0", root, 0),
+				parentSession: "parent-v0",
 				origin: "subagent",
 				delegationDepth: 1,
+				seedLength: 812,
 			},
 		);
 		const before = await snapshot(root);
 		const store = new DeepSeekSessionStore(root);
-		const parent = await store.load(await selected(store, "catalog-parent"));
-		expect(
-			parent.getEntries().find(entry => entry.type === "custom" && entry.customType === "deepseek_import"),
-		).toMatchObject({ data: { storedVersion: 3, migratedVersion: 4 } });
-		expect(contextText(parent)).toEqual(["Parent prompt"]);
-		const child = await store.load(await selected(store, "catalog-child"));
+		const child = await store.load(await selected(store, "child-v0"));
+		expect(contextText(child)).toEqual(["Inherited prompt", "Child prompt"]);
 		expect(
 			child.getEntries().find(entry => entry.type === "custom" && entry.customType === "deepseek_import"),
 		).toMatchObject({
-			data: { parentSession: "catalog-parent", inheritedEventCount: 1, origin: "subagent", delegationDepth: 1 },
+			data: {
+				storedVersion: 0,
+				parentSession: "parent-v0",
+				inheritedEventCount: 3,
+				origin: "subagent",
+				delegationDepth: 1,
+			},
 		});
 		expect(await snapshot(root)).toEqual(before);
-		await parent.close();
 		await child.close();
+	});
+
+	it.each([1, 2, 3])("refuses v%i logs with an unsupported-format error and keeps listing others", async version => {
+		await writeDeepSeekLog(root, { id: "healthy", cwd: root, events: [user(0, "Healthy")] });
+		const file = await rawLog(`v${version}`, [user(0, "Unsupported")], version);
+		const store = new DeepSeekSessionStore(root);
+		expect((await store.list()).map(info => info.id)).toEqual(["healthy"]);
+		const info: ForeignSessionInfo = {
+			source: "deepseek",
+			id: `v${version}`,
+			path: file,
+			cwd: root,
+			created: new Date(DEEPSEEK_FIXTURE_TIME),
+			modified: new Date(DEEPSEEK_FIXTURE_TIME),
+		};
+		await expect(store.load(info)).rejects.toThrow(/unsupported logical format/);
 	});
 
 	it.each([
@@ -591,17 +577,10 @@ describe("DeepSeek transcript and continuation", () => {
 			{ ...user(4, "First replacement", { op: "replace", startSeq: 0, endSeq: 0 }), sourceEventSeqs: [0] },
 			{ ...user(5, "Middle final", { op: "replace", startSeq: 3, endSeq: 3 }), sourceEventSeqs: [3] },
 		];
-		const interpreted = interpretDeepSeekEvents(events as unknown as SessionFormatEvent[]).events;
-		const fold = foldSurface(interpreted, currentSessionMessageProjections);
-		expect(fold.nodes.map(Number)).toEqual([4, 5, 2]);
-		const canonical = fold.nodes.flatMap(seq => {
-			const message = deriveEventMessage(interpreted[seq], fold.projectedMessages);
-			return message?.content.flatMap(block => (block.type === "text" ? [block.text] : [])) ?? [];
-		});
 		await writeDeepSeekLog(root, { id: "replacements", cwd: root, events });
 		const store = new DeepSeekSessionStore(root);
 		const manager = await store.load(await selected(store, "replacements"));
-		expect(contextText(manager)).toEqual(canonical);
+		expect(contextText(manager)).toEqual(["First replacement", "Middle final", "Last stays"]);
 		expect(contextText(manager, true)).toEqual(expect.arrayContaining(["First old", "Middle old", "Last stays"]));
 		expect(contextText(manager, true).filter(text => text === "Last stays")).toHaveLength(1);
 		await manager.close();
@@ -790,21 +769,10 @@ describe("DeepSeek transcript and continuation", () => {
 		await manager.close();
 	});
 
-	it("adopts backend legacy nested tool roles and repairs replacement provenance without source writes", async () => {
+	it("reads backend v0 nested tool results and replacements without source writes", async () => {
 		const events = conversation({ legacy: true });
 		const replacement = user(events.length, "Replacement prompt", { op: "replace", startSeq: 1, endSeq: 1 });
 		events.push(replacement);
-		const beforeEvents = structuredClone(events);
-		const direct = events as unknown as SessionFormatEvent[];
-		expect(() =>
-			foldSurface(direct as unknown as Parameters<typeof foldSurface>[0], currentSessionMessageProjections),
-		).toThrow();
-		const repaired = interpretDeepSeekEvents(direct);
-		expect(repaired.repairs).not.toEqual({});
-		expect(events).toEqual(beforeEvents);
-		expect(repaired.events.find(event => event.type === "tool/result")?.data).toMatchObject({
-			message: { role: "tool", toolCallId: "call-1" },
-		});
 		await writeDeepSeekDatabase(root, [{ id: "legacy-backend", cwd: root, events }]);
 		const before = await snapshot(root);
 		const store = new DeepSeekSessionStore(root);

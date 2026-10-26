@@ -1,15 +1,19 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { SessionFormatEvent } from "@deepseek-ai/dsh-session-format";
-import { sessionFormatCatalog } from "@deepseek-ai/dsh-session-format-catalog";
 
 export const DEEPSEEK_FIXTURE_TIME = 1_767_225_600_000;
 
 export function deepseekHeader(id: string, cwd: string, version = 4): Record<string, unknown> {
-	const header = { version, id, cwd, createdAt: DEEPSEEK_FIXTURE_TIME, delegationDepth: 0 };
-	if (version === 4) return sessionFormatCatalog.encodeCurrentHeader({ ...header, isSeeded: false }, 0);
-	return { type: "session", ...header, ...(version >= 2 ? { isSeeded: false } : {}) };
+	return {
+		type: "session",
+		version,
+		id,
+		createdAt: DEEPSEEK_FIXTURE_TIME,
+		cwd,
+		...(version === 4 ? { isSeeded: false } : {}),
+		delegationDepth: 0,
+	};
 }
 
 export function deepseekEvent(type: string, data: unknown, seq: number, surfaceOp?: unknown): Record<string, unknown> {
@@ -35,12 +39,7 @@ export async function writeDeepSeekLog(
 	const version = options.version ?? 4;
 	const filename = version === 0 ? "session.jsonl" : `session.v${version}.jsonl`;
 	const file = path.join(root, "sessions", "project-key-is-not-cwd", encodeURIComponent(options.id), filename);
-	const records = [
-		deepseekHeader(options.id, options.cwd, version),
-		...options.events.map(event =>
-			version === 4 ? sessionFormatCatalog.encodeCurrentEvent(event as unknown as SessionFormatEvent) : event,
-		),
-	];
+	const records = [deepseekHeader(options.id, options.cwd, version), ...options.events];
 	const text = `${records.map(record => JSON.stringify(record)).join("\n")}\n`;
 	const destination = options.compressed ? `${file}.zstd` : file;
 	await Bun.write(destination, options.compressed ? Bun.zstdCompressSync(text) : text);

@@ -441,12 +441,12 @@ public flag for a different source path (the store constructor accepts a root fo
 embedding and deterministic fixtures).
 
 Supported sources are nested first-party `sessions/<project>/<session>/session.jsonl`
-and `session.vN.jsonl` logs, including `.zstd` variants, with released logical
-formats v0 through v4, plus local `sessions.sqlite` using the
-`@morlay/session-rdb` 0.1.5 schema (including mixed logical v0/v4 sessions). SQLite
-is authoritative when both stores contain the same logical ID. Projection caches,
-historical flat layouts, PostgreSQL, arbitrary persistence plugins, future logical
-formats, and unknown required events are not supported. Unsafe or inconsistent
+(logical v0) and `session.v4.jsonl` logs, including `.zstd` variants, plus local
+`sessions.sqlite` using the `@morlay/session-rdb` 0.1.5 schema (including mixed
+logical v0/v4 sessions). SQLite is authoritative when both stores contain the same
+logical ID. Logical formats v1–v3 are refused with an unsupported-format error; so
+are projection caches, historical flat layouts, PostgreSQL, arbitrary persistence
+plugins, future logical formats, and unknown required events. Unsafe or inconsistent
 SQLite/WAL snapshots fail explicitly rather than writing sidecars or ignoring WAL
 records. Import never boots dsh, reads source credentials, executes historical
 tools, or calls a model.

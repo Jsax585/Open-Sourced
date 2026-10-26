@@ -1,17 +1,5 @@
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AssistantStreamRecord } from "@deepseek-ai/dsh-llm/assistant-stream";
-import type { Message as DeepSeekMessage } from "@deepseek-ai/dsh-llm/message";
-import type { StreamChunk } from "@deepseek-ai/dsh-llm/types";
-import { expandAssistantStream } from "@deepseek-ai/dsh-llm/assistant-stream";
-// Narrow subpath imports keep this module's own dependency surface small; the
-// compiled binary's dsh-llm `createRequire("../package.json")` vendor bug is
-// handled by scripts/dsh-llm-manifest-plugin.ts, since dsh-session imports the
-// dsh-llm main entry regardless.
-import { KNOWN_SESSION_EVENT_TYPES, Session, SessionId, SessionLogOffset } from "@deepseek-ai/dsh-session";
-import { deriveEventMessage, foldSurface, isAppendSurfaceEvent } from "@deepseek-ai/dsh-session/surface";
-import type { SessionEvent, SessionHeader } from "@deepseek-ai/dsh-session/types";
-import { currentSessionMessageProjections } from "@deepseek-ai/dsh-session-format-catalog/message-projections";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { getImportedContext } from "@oh-my-pi/pi-agent-core/compaction";
 import type {
@@ -25,7 +13,15 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { DeepSeekAttachments } from "./deepseek-attachments";
-import { interpretDeepSeekEvents } from "./deepseek-compat";
+import {
+	assertKnownDeepSeekEvents,
+	type DeepSeekEvent,
+	DeepSeekFormatError,
+	type DeepSeekMessage,
+	deepseekEventMessage,
+	expandDeepSeekStream,
+	foldDeepSeekSurface,
+} from "./deepseek-format";
 import { DeepSeekSources } from "./deepseek-sources";
 import type { ForeignSessionInfo, ForeignSessionStore } from "./foreign-session-store";
 import type {
@@ -80,11 +76,10 @@ function usage(value: unknown): Usage {
 }
 
 function terminalReason(
-	event: SessionEvent,
+	event: DeepSeekEvent,
 	turnEnd?: Record<string, unknown>,
 ): { stopReason: AssistantMessage["stopReason"]; errorMessage?: string } {
-	const data: unknown = event.data;
-	if (!isRecord(data)) throw new Error(`invalid assistant payload at event ${event.seq}`);
+	const data = event.data;
 	if (data.interrupted === true) return { stopReason: "aborted" };
 	if (Array.isArray(data.stream)) {
 		for (let index = data.stream.length - 1; index >= 0; index--) {
@@ -113,36 +108,22 @@ function terminalReason(
 	return { stopReason: "stop" };
 }
 
-/** Canonical admission (KNOWN_SESSION_EVENT_TYPES + Session.fromRestore) validates payloads after this shape check. */
-function isSessionEvent(event: unknown): event is SessionEvent {
-	return (
-		isRecord(event) &&
-		typeof event.type === "string" &&
-		Number.isSafeInteger(event.seq) &&
-		typeof event.time === "number" &&
-		"data" in event
-	);
-}
-
-function sessionEvents(events: readonly unknown[]): SessionEvent[] {
-	const cloned: unknown[] = structuredClone([...events]);
-	return cloned.map(event => {
-		if (!isSessionEvent(event)) throw new Error("malformed session event");
-		return event;
-	});
-}
-
-/** Widen the narrowed discriminant so augmentation-only event types (title, compaction) compare without casts. */
-function eventType(event: { readonly type: string }): string {
-	return event.type;
+/** Source and model attribution from an assistant message; both are required for a native assistant turn. */
+function modelSource(message: DeepSeekMessage, seq: number): { provider: string; model: string } {
+	const { provider, model } = message.source;
+	if (typeof provider !== "string" || typeof model !== "string")
+		throw new Error(`invalid assistant source at event ${seq}`);
+	return { provider, model };
 }
 
 function diagnostic(error: unknown): string {
 	// Decoder diagnostics can contain source values. Keep only location/category words,
 	// never JSON parser excerpts or payload strings at this trust boundary.
 	const message = error instanceof Error ? error.message : "unknown conversion error";
+	// Format errors are built from fixed wording plus sequence numbers, never source payloads.
+	if (error instanceof DeepSeekFormatError) return message;
 	if (
-		/^(invalid (?:assistant|input|output|cache-read|cache-write|total|finish|tool)|unsupported (?:finish|user content|assistant content|tool content)|missing historical tool call|unknown required event|missing folded event|Missing required DeepSeek attachment)/.test(
+		/^(invalid (?:assistant|input|output|cache-read|cache-write|total|finish|tool|historical)|unsupported (?:finish|user content|assistant content|tool content|user|assistant|tool)|missing historical tool call|missing folded event|Missing required DeepSeek attachment)/.test(
 			message,
 		) &&
 		!/[\n\r]/.test(message) &&
@@ -154,7 +135,7 @@ function diagnostic(error: unknown): string {
 		: "source validation failed; check the selected session format and required attachments";
 }
 
-/** Read-only DeepSeek Harness conversion; native sessions never need DeepSeek packages after import. */
+/** Read-only DeepSeek Harness conversion (v0 and v4 logs, SQLite archives); no source runtime is loaded. */
 export class DeepSeekSessionStore implements ForeignSessionStore {
 	readonly source = "deepseek";
 	readonly #home: string;
@@ -178,64 +159,39 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 	async load(info: ForeignSessionInfo): Promise<SessionManager> {
 		if (info.source !== this.source) throw new Error(`Cannot load ${info.source} session with DeepSeekSessionStore`);
 		const snapshot = await this.#sources.read(info);
-		let stage = "compatibility interpretation";
+		let stage = "event admission";
 		try {
-			const interpreted =
-				snapshot.kind === "sqlite"
-					? interpretDeepSeekEvents(snapshot.events)
-					: { events: sessionEvents(snapshot.events), repairs: {} };
-			const events = interpreted.events;
-			stage = "canonical validation";
-			for (const event of events) {
-				if (!KNOWN_SESSION_EVENT_TYPES.has(event.type) && event.ignorable !== true) {
-					throw new Error(`unknown required event at sequence ${event.seq}`);
-				}
-			}
-			Session.fromRestore(
-				SessionId(snapshot.header.id),
-				events,
-				snapshot.header as unknown as SessionHeader,
-				SessionLogOffset(snapshot.inheritedEventCount),
-				"detached",
-				currentSessionMessageProjections,
-			);
-			const surface = foldSurface(events, currentSessionMessageProjections);
+			const events = snapshot.events;
+			assertKnownDeepSeekEvents(events);
+			const bySeq = new Map(events.map(event => [event.seq, event]));
+			const surface = foldDeepSeekSurface(events);
 			const manager = SessionManager.inMemory(snapshot.header.cwd ?? info.cwd);
 			const attachments = new DeepSeekAttachments(this.#home);
 			const names = new Map<string, string>();
 			const resultNames = new Map<number, string>();
-			const streams = new Map<number, readonly { time: number; chunk: StreamChunk }[]>();
 			const turnEnds = new Map<number, Record<string, unknown>>();
 			const lastAssistant = new Map<number, number>();
 			const openedTurns = new Set<number>();
 			const eventCounts: Record<string, number> = Object.create(null);
 			for (const event of events) {
 				eventCounts[event.type] = (eventCounts[event.type] ?? 0) + 1;
-				if (event.type === "turn/start") openedTurns.add(event.data.turn);
-				if (event.type === "assistant/message" || event.type === "assistant/attempt") {
-					streams.set(event.seq, expandAssistantStream(event.data.stream as AssistantStreamRecord[]));
+				const turn = event.data.turn;
+				if (event.type === "turn/start" && typeof turn === "number") openedTurns.add(turn);
+				if (event.type === "assistant/message" && typeof turn === "number") lastAssistant.set(turn, event.seq);
+				if (event.type === "turn/end" && typeof turn === "number" && isRecord(event.data.reason)) {
+					turnEnds.set(turn, event.data.reason);
 				}
-				if (event.type === "assistant/message") lastAssistant.set(event.data.turn, event.seq);
-				if (
-					event.type === "turn/end" &&
-					isRecord(event.data) &&
-					typeof event.data.turn === "number" &&
-					isRecord(event.data.reason)
-				) {
-					turnEnds.set(event.data.turn, event.data.reason);
-				}
-				const message = deriveEventMessage(event);
+				const message = deepseekEventMessage(event);
 				if (message?.role === "assistant") {
 					for (const block of message.content) {
-						if (block.type === "tool-call") {
-							if (!block.id || !block.name)
-								throw new Error(`invalid historical tool call at event ${event.seq}`);
-							names.set(block.id, block.name);
-						}
+						if (block.type !== "tool-call") continue;
+						if (typeof block.id !== "string" || !block.id || typeof block.name !== "string" || !block.name)
+							throw new Error(`invalid historical tool call at event ${event.seq}`);
+						names.set(block.id, block.name);
 					}
 				}
 				if (message?.role === "tool") {
-					const name = names.get(message.toolCallId);
+					const name = message.toolCallId === undefined ? undefined : names.get(message.toolCallId);
 					if (!name) throw new Error(`missing historical tool call for result at event ${event.seq}`);
 					resultNames.set(event.seq, name);
 				}
@@ -243,44 +199,50 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 			for (const turn of openedTurns) if (!turnEnds.has(turn)) turnEnds.set(turn, { kind: "interrupted" });
 			let parentId: string | null = null;
 			let ordinal = 0;
-			const append = (
-				entry:
-					| Omit<SessionMessageEntry, "id" | "parentId" | "timestamp">
-					| Omit<CustomMessageEntry, "id" | "parentId" | "timestamp">
-					| Omit<ModelChangeEntry, "id" | "parentId" | "timestamp">
-					| Omit<ModelUsageEntry, "id" | "parentId" | "timestamp">,
-				time: number,
-			): void => {
+			const base = (time: number): { id: string; parentId: string | null; timestamp: string } => {
 				const id = `deepseek-${ordinal++}`;
-				manager.ingestReplicatedEntry({
-					...entry,
-					id,
-					parentId,
-					timestamp: new Date(time).toISOString(),
-				} as SessionEntry);
+				const fields = { id, parentId, timestamp: new Date(time).toISOString() };
 				parentId = id;
+				return fields;
 			};
+			const ingest = (entry: SessionEntry): void => manager.ingestReplicatedEntry(entry);
 			const inert = (customType: string, content: string, details: unknown, time: number): void => {
-				append(
-					{ type: "custom_message", customType, content, details, display: true } as Omit<
-						CustomMessageEntry,
-						"id" | "parentId" | "timestamp"
-					>,
-					time,
-				);
+				const entry: CustomMessageEntry = {
+					...base(time),
+					type: "custom_message",
+					customType,
+					content,
+					details,
+					display: true,
+				};
+				ingest(entry);
+			};
+			const modelChange = (model: string, time: number): void => {
+				const entry: ModelChangeEntry = { ...base(time), type: "model_change", model };
+				ingest(entry);
 			};
 			const convert = async (
 				message: DeepSeekMessage,
-				event: SessionEvent,
+				event: DeepSeekEvent,
 			): Promise<ImportedMessage | undefined> => {
 				if (message.role === "system" || message.role === "developer") return undefined;
 				const content: NativeBlock[] = [];
+				const readable: (TextContent | ImageContent)[] = [];
 				for (const block of message.content) {
-					if (block.type === "text") content.push({ type: "text", text: block.text });
-					else if (block.type === "reasoning" && message.role === "assistant")
+					if (block.type === "text" && typeof block.text === "string") {
+						content.push({ type: "text", text: block.text });
+						readable.push({ type: "text", text: block.text });
+					} else if (
+						block.type === "reasoning" &&
+						typeof block.text === "string" &&
+						message.role === "assistant"
+					) {
 						content.push({ type: "thinking", thinking: block.text });
-					else if (block.type === "image" || block.type === "file") content.push(await attachments.content(block));
-					else if (block.type === "tool-call" && message.role === "assistant") {
+					} else if (block.type === "image" || block.type === "file") {
+						const attached = await attachments.content(block);
+						content.push(attached);
+						readable.push(attached);
+					} else if (block.type === "tool-call" && message.role === "assistant") {
 						const rawArguments = block.arguments;
 						let argumentsValue: unknown;
 						// dsh harnesses record empty argument strings for no-argument calls (e.g. job_list).
@@ -292,35 +254,37 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 								throw new Error(`invalid tool arguments at event ${event.seq}`);
 							}
 						} else throw new Error(`invalid tool arguments at event ${event.seq}`);
-						if (!isRecord(argumentsValue)) throw new Error(`invalid tool argument object at event ${event.seq}`);
+						if (!isRecord(argumentsValue) || typeof block.id !== "string" || typeof block.name !== "string")
+							throw new Error(`invalid tool argument object at event ${event.seq}`);
 						content.push({ type: "toolCall", id: block.id, name: block.name, arguments: argumentsValue });
+					} else if (message.role === "user" && (block.type === "reasoning" || block.type === "tool-call")) {
+						// Background-subagent reports quote their reasoning and calls inside a user message; keep the text, drop the structure.
+						if (typeof block.text === "string") readable.push({ type: "text", text: block.text });
 					} else throw new Error(`unsupported ${message.role} content block at event ${event.seq}`);
 				}
 				if (message.role === "assistant") {
-					const data: unknown = event.data;
-					if (!isRecord(data)) throw new Error(`invalid assistant payload at event ${event.seq}`);
-					const turn = typeof data.turn === "number" ? data.turn : -1;
+					const turn = typeof event.data.turn === "number" ? event.data.turn : -1;
 					return {
 						role: "assistant",
 						content,
 						api: "deepseek-import",
-						provider: message.source.provider,
-						model: message.source.model,
-						usage: usage(data.usage),
+						...modelSource(message, event.seq),
+						usage: usage(event.data.usage),
 						timestamp: event.time,
 						...terminalReason(event, lastAssistant.get(turn) === event.seq ? turnEnds.get(turn) : undefined),
 					};
 				}
-				const readable = content as (TextContent | ImageContent)[];
-				if (message.role === "user")
+				if (message.role === "user") {
 					return {
 						role: "user",
 						content: readable,
 						timestamp: event.time,
 						attribution: message.source.kind === "user" ? "user" : "agent",
 					};
+				}
 				const name = resultNames.get(event.seq);
-				if (!name) throw new Error(`missing historical tool call for result at event ${event.seq}`);
+				if (!name || message.toolCallId === undefined)
+					throw new Error(`missing historical tool call for result at event ${event.seq}`);
 				return {
 					role: "toolResult",
 					toolCallId: message.toolCallId,
@@ -330,76 +294,79 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 					timestamp: event.time,
 				};
 			};
+			const blockText = (message: DeepSeekMessage | undefined, toolNames = false): string =>
+				message?.content
+					.map(block =>
+						(block.type === "text" || block.type === "reasoning") && typeof block.text === "string"
+							? block.text
+							: toolNames && (block.type === "tool-addition" || block.type === "tool-removal")
+								? `${block.type}: ${String(block.toolName)}`
+								: `[${block.type}]`,
+					)
+					.join("\n") ?? "";
 			stage = "transcript conversion and attachment reads";
 			let title = info.title;
 			let lastModel: string | undefined;
 			for (const event of events) {
-				const message = deriveEventMessage(event);
-				if (isAppendSurfaceEvent(event) && message) {
+				const message = deepseekEventMessage(event);
+				if (event.surfaceOp === "append" && message) {
 					if (message.role === "system" || message.role === "developer") {
 						inert(
 							`deepseek_${message.role}`,
-							message.content
-								.map(block =>
-									block.type === "text"
-										? block.text
-										: block.type === "tool-addition" || block.type === "tool-removal"
-											? `${block.type}: ${block.toolName}`
-											: `[${block.type}]`,
-								)
-								.join("\n"),
+							blockText(message, true),
 							{ source: message.source, message },
 							event.time,
 						);
-					} else {
-						const converted = await convert(message, event);
-						if (converted) {
-							if (converted.role === "assistant") {
-								const model = `${converted.provider}/${converted.model}`;
-								if (model !== lastModel) {
-									append({ type: "model_change", model }, event.time);
-									lastModel = model;
-								}
-							}
-							append(
-								{ type: "message", message: converted } as Omit<
-									SessionMessageEntry,
-									"id" | "parentId" | "timestamp"
-								>,
-								event.time,
-							);
-							manager.appendCustomEntry("deepseek_message_source", { seq: event.seq, source: message.source });
-							parentId = manager.getLeafId();
+						continue;
+					}
+					const converted = await convert(message, event);
+					if (!converted) continue;
+					if (converted.role === "assistant") {
+						const model = `${converted.provider}/${converted.model}`;
+						if (model !== lastModel) {
+							modelChange(model, event.time);
+							lastModel = model;
 						}
 					}
+					const entry: SessionMessageEntry = { ...base(event.time), type: "message", message: converted };
+					ingest(entry);
+					manager.appendCustomEntry("deepseek_message_source", { seq: event.seq, source: message.source });
+					parentId = manager.getLeafId();
 				} else if (
 					event.type === "assistant/message" &&
-					event.data.message.content.length === 0 &&
+					event.surfaceOp === "append" &&
 					event.data.usage !== undefined
 				) {
-					append(
-						{
-							type: "model_usage",
-							purpose: "deepseek_historical_empty_message",
-							api: "deepseek-import",
-							provider: event.data.message.source.provider,
-							model: event.data.message.source.model,
-							usage: usage(event.data.usage),
-							...terminalReason(event, turnEnds.get(event.data.turn)),
-						},
-						event.time,
-					);
+					// Empty assistant node: a max-tokens step whose usage still counts.
+					const source =
+						isRecord(event.data.message) && isRecord(event.data.message.source) ? event.data.message.source : {};
+					const turn = typeof event.data.turn === "number" ? event.data.turn : -1;
+					const entry: ModelUsageEntry = {
+						...base(event.time),
+						type: "model_usage",
+						purpose: "deepseek_historical_empty_message",
+						api: "deepseek-import",
+						provider: typeof source.provider === "string" ? source.provider : "deepseek",
+						model: typeof source.model === "string" ? source.model : "unknown",
+						usage: usage(event.data.usage),
+						...terminalReason(event, turnEnds.get(turn)),
+					};
+					ingest(entry);
 				} else if (event.type === "assistant/attempt") {
-					const details: unknown = event.data;
 					const parts: string[] = [];
-					for (const { chunk } of streams.get(event.seq) ?? []) {
-						if (chunk.type === "text-delta" || chunk.type === "reasoning-delta") parts.push(chunk.text);
-						else if (chunk.type === "finish") parts.push(`Attempt status: ${chunk.reason.kind}`);
+					for (const { chunk } of expandDeepSeekStream(event.data.stream)) {
+						if (
+							(chunk.type === "text-delta" || chunk.type === "reasoning-delta") &&
+							typeof chunk.text === "string"
+						)
+							parts.push(chunk.text);
+						else if (chunk.type === "finish" && isRecord(chunk.reason))
+							parts.push(`Attempt status: ${String(chunk.reason.kind)}`);
 					}
 					inert(
 						"deepseek_attempt",
 						parts.join("\n") || "Historical assistant attempt (not active context)",
-						details,
+						event.data,
 						event.time,
 					);
 				} else if (event.type === "request/header") {
@@ -409,67 +376,52 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 						event.data,
 						event.time,
 					);
-					const config = event.data.header.config;
-					const model = `${config.provider}/${config.model}`;
-					if (model !== lastModel) {
-						append({ type: "model_change", model }, event.time);
-						lastModel = model;
+					const config = isRecord(event.data.header) ? event.data.header.config : undefined;
+					if (isRecord(config) && typeof config.provider === "string" && typeof config.model === "string") {
+						const model = `${config.provider}/${config.model}`;
+						if (model !== lastModel) {
+							modelChange(model, event.time);
+							lastModel = model;
+						}
 					}
-				} else if (eventType(event) === "session/title") {
-					// `session/title` comes from the dsh-commands SessionEventMap augmentation, not dsh-session's base union.
-					const data: unknown = event.data;
-					title = isRecord(data) ? (text(data.title) ?? title) : title;
+				} else if (event.type === "session/title") {
+					title = text(event.data.title) ?? title;
 				} else if (typeof event.surfaceOp === "object") {
-					const previous = events[event.seq - 1];
-					const rendered =
-						previous !== undefined && eventType(previous) === "compaction/summary"
-							? ""
-							: message?.content
-									.map(block =>
-										block.type === "text" || block.type === "reasoning" ? block.text : `[${block.type}]`,
-									)
-									.join("\n");
+					const previous = bySeq.get(event.seq - 1);
+					const rendered = previous?.type === "compaction/summary" ? "" : blockText(message);
 					inert(
 						"deepseek_surface_replacement",
 						rendered || "Historical DeepSeek context replacement",
-						{ seq: event.seq, surfaceOp: event.surfaceOp, sourceEventSeqs: event.sourceEventSeqs, message },
+						{ seq: event.seq, surfaceOp: event.surfaceOp, message },
 						event.time,
 					);
-				} else if (eventType(event) === "compaction/summary") {
-					// `compaction/summary` comes from the dsh-compaction SessionEventMap augmentation.
-					const data: unknown = event.data;
-					if (!isRecord(data)) continue;
-					const summary = Array.isArray(data.summary)
-						? data.summary
+				} else if (event.type === "compaction/summary") {
+					const summary = Array.isArray(event.data.summary)
+						? event.data.summary
 								.map(block =>
 									isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "",
 								)
 								.join("\n")
 						: "";
-					inert("deepseek_compaction", summary || "Historical DeepSeek compaction", data, event.time);
+					inert("deepseek_compaction", summary || "Historical DeepSeek compaction", event.data, event.time);
 				}
 			}
 			stage = "current context conversion";
 			const messages: AgentMessage[] = [];
 			for (const seq of surface.nodes) {
-				const event = events[seq];
-				if (!event || event.seq !== seq) throw new Error(`missing folded event at sequence ${seq}`);
-				const message = deriveEventMessage(event, surface.projectedMessages);
+				const event = bySeq.get(seq);
+				if (!event) throw new Error(`missing folded event at sequence ${seq}`);
+				const message = deepseekEventMessage(event, surface.projected);
 				if (!message) continue;
 				const converted = await convert(message, event);
 				if (converted) messages.push(converted);
 			}
-			const shapeRepairs = isRecord(snapshot.metadata.shapeRepairs) ? snapshot.metadata.shapeRepairs : {};
-			const repairs: Record<string, number> = { ...interpreted.repairs };
-			for (const [key, value] of Object.entries(shapeRepairs))
-				if (typeof value === "number") repairs[key] = (repairs[key] ?? 0) + value;
 			manager.appendCustomEntry("deepseek_import", {
 				sourceKind: snapshot.kind,
 				sourceId: snapshot.header.id,
 				sourcePath: info.path,
 				sourceCwd: snapshot.header.cwd,
 				storedVersion: snapshot.storedVersion,
-				migratedVersion: snapshot.header.version,
 				sourceCreatedAt: snapshot.header.createdAt,
 				sourceModifiedAt: info.modified.getTime(),
 				parentSession: snapshot.header.parentSession,
@@ -478,7 +430,6 @@ export class DeepSeekSessionStore implements ForeignSessionStore {
 				delegationDepth: snapshot.header.delegationDepth,
 				eventCounts,
 				...snapshot.metadata,
-				repairs,
 				policy: {
 					sourceAuthority: "transcript-only",
 					providerPrivateReplayState: "inert",

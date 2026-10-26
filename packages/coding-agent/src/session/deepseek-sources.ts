@@ -3,32 +3,24 @@ import type { BigIntStats, Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { KNOWN_SESSION_EVENT_TYPES } from "@deepseek-ai/dsh-session";
-import {
-	parseSessionFormatLogFilename,
-	type SessionFormatArtifact,
-	type SessionFormatCatalog,
-	type SessionFormatEvent,
-	type SessionFormatHeader,
-	type SessionFormatJsonValue,
-	snapshotSessionFormatJson,
-} from "@deepseek-ai/dsh-session-format";
-import {
-	createSessionFormatCatalogWithChildren,
-	historicalSessionFormatCatalog,
-	sessionFormatCatalog,
-} from "@deepseek-ai/dsh-session-format-catalog";
-import { historicalChildCatalogSource } from "@deepseek-ai/dsh-session-format-v3-to-v4";
 import { isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import { zstdDecompressStream } from "@oh-my-pi/pi-utils/ar/codecs/zstd";
 import { fileByteSource } from "@oh-my-pi/pi-utils/ar/source";
-import { adoptDeepSeekEventShapes, adoptDeepSeekV0SourceShapes } from "./deepseek-compat";
+import {
+	type DeepSeekEvent,
+	type DeepSeekHeader,
+	DeepSeekFormatError,
+	decodeDeepSeekRows,
+	deepseekLogGeneration,
+	readDeepSeekHeader,
+} from "./deepseek-format";
 import type { ForeignSessionInfo } from "./foreign-session-store";
 
-/** Detached physical read and released logical migration; backend repairs run afterward. */
+/** Detached read of one source session; never written back. */
 export interface DeepSeekSourceSnapshot {
-	readonly header: SessionFormatHeader;
-	readonly events: readonly SessionFormatEvent[];
+	readonly header: DeepSeekHeader;
+	readonly events: readonly DeepSeekEvent[];
+	/** Events copied from the parent session before `session/end-seed`. */
 	readonly inheritedEventCount: number;
 	readonly storedVersion: number;
 	readonly kind: "jsonl" | "sqlite";
@@ -39,7 +31,7 @@ interface FileSource {
 	readonly path: string;
 	readonly generation: number;
 	readonly headerValue: unknown;
-	readonly header: SessionFormatHeader;
+	readonly header: DeepSeekHeader;
 	readonly storedVersion: number;
 	readonly modified: number;
 }
@@ -49,13 +41,12 @@ type SqlRow = Record<string, unknown>;
 interface SqlSession {
 	readonly row: SqlRow;
 	readonly headerValue: Record<string, unknown>;
-	readonly header: SessionFormatHeader;
+	readonly header: DeepSeekHeader;
 	readonly storedVersion: number;
 	readonly headSequence: number;
 	readonly headEventId: string;
 	readonly seedLength: number | null;
 	readonly modified: number;
-	readonly messageCount: number;
 	readonly title?: string;
 	readonly firstMessage?: string;
 }
@@ -72,7 +63,6 @@ interface SqlMetadata {
 interface PhysicalArtifact {
 	readonly headerValue: unknown;
 	readonly rows: readonly unknown[];
-	readonly shapeRepairs: Record<string, number>;
 }
 
 const SQLITE_PREFIX = "deepseek-sqlite:";
@@ -117,28 +107,24 @@ function timestamp(value: unknown, source: string, field: string): number {
 	return number;
 }
 
-function classifyHeader(value: unknown, source: string): { header: SessionFormatHeader; storedVersion: number } {
-	const result = sessionFormatCatalog.readHeader(value);
-	if (result.status === "unsupported") {
-		throw failure(
-			"format",
-			source,
-			`unsupported logical format v${result.storedVersion}; supported formats are v0–v4`,
-		);
+function classifyHeader(value: unknown, source: string): { header: DeepSeekHeader; storedVersion: number } {
+	let header: DeepSeekHeader;
+	try {
+		header = readDeepSeekHeader(value);
+	} catch (error) {
+		if (error instanceof DeepSeekFormatError) {
+			throw failure(error.message.startsWith("unsupported") ? "format" : "header decode", source, error.message);
+		}
+		throw error;
 	}
-	if (result.status === "malformed") throw failure("header decode", source, "malformed released session header");
-	if (result.header.id.length === 0 || result.header.id.includes("\0")) {
-		throw failure("header decode", source, "session ID must be nonempty and contain no NUL");
-	}
-	if (result.header.cwd !== undefined && (!path.isAbsolute(result.header.cwd) || result.header.cwd.includes("\0"))) {
+	if (header.cwd !== undefined && !path.isAbsolute(header.cwd)) {
 		throw failure("header decode", source, "recorded cwd must be an absolute path");
 	}
-	timestamp(result.header.createdAt, source, "createdAt");
-	return result;
+	return { header, storedVersion: header.version };
 }
 
 function generation(filename: string): number | undefined {
-	return parseSessionFormatLogFilename(filename.endsWith(".zstd") ? filename.slice(0, -5) : filename);
+	return deepseekLogGeneration(filename);
 }
 
 async function entries(directory: string): Promise<Dirent[]> {
@@ -223,25 +209,25 @@ async function readFileArtifact(source: FileSource): Promise<PhysicalArtifact> {
 			) {
 				throw failure("physical decode", source.path, "malformed or torn JSONL record");
 			}
-			return { headerValue: parsed.values[0], rows: parsed.values.slice(1), shapeRepairs: {} };
+			return { headerValue: parsed.values[0], rows: parsed.values.slice(1) };
 		});
 	});
 }
 
-function restoreArtifact(
+/** Decode rows and locate the inherited-prefix boundary (`session/end-seed`). */
+function restoreEvents(
 	physical: PhysicalArtifact,
-	catalog: SessionFormatCatalog,
 	source: string,
-): SessionFormatArtifact {
-	const restore = catalog.createRestore(physical.headerValue, { recovery: "strict", validation: "transformed" });
-	for (const row of physical.rows) restore.decodeRow(row);
-	const artifact = restore.finish();
-	for (const event of artifact.events) {
-		if (catalog.currentVersion === 4 && !KNOWN_SESSION_EVENT_TYPES.has(event.type) && event["ignorable"] !== true) {
-			throw failure("event decode", source, `unknown required event at sequence ${event.seq}`);
-		}
+): { events: DeepSeekEvent[]; inheritedEventCount: number } {
+	let events: DeepSeekEvent[];
+	try {
+		events = decodeDeepSeekRows(physical.rows);
+	} catch (error) {
+		if (error instanceof DeepSeekFormatError) throw failure("event decode", source, error.message);
+		throw error;
 	}
-	return artifact;
+	const seed = events.find(event => event.type === "session/end-seed");
+	return { events, inheritedEventCount: seed === undefined ? 0 : seed.seq + 1 };
 }
 
 function sqlLocator(database: string, id: string): string {
@@ -415,7 +401,6 @@ function readSqlSession(row: SqlRow, source: string): SqlSession {
 			row.f_last_event_at === null
 				? classification.header.createdAt
 				: timestamp(row.f_last_event_at, source, "last event time"),
-		messageCount: integer(row.message_count, source, "message count"),
 		...(row.f_title === null ? {} : { title: text(row.f_title, source, "title") }),
 		...(row.first_user_text === null || row.first_user_text === undefined
 			? {}
@@ -423,15 +408,18 @@ function readSqlSession(row: SqlRow, source: string): SqlSession {
 	};
 }
 
+/**
+ * Indexed per-session metadata only. Counting messages means scanning every event row
+ * (~50 s on a 5 GB store), so the picker omits counts; the preview looks only at the
+ * first 64 events, where the opening prompt lives.
+ */
 function sqlSessions(db: Database, source: string): SqlSession[] {
 	return db
 		.query<SqlRow, []>(`SELECT s.*, (
-			SELECT COUNT(*) FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
-			WHERE b.f_session_id = s.f_session_id AND e.f_type IN ('user/message', 'assistant/message', 'tool/result')
-		) AS message_count, (
 			SELECT substr(json_extract(e.f_data, '$.data.content[0].text'), 1, 200)
 			FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
-			WHERE b.f_session_id = s.f_session_id AND e.f_type = 'user/message' AND json_valid(e.f_data)
+			WHERE b.f_session_id = s.f_session_id AND b.f_sequence < 64
+				AND e.f_type = 'user/message' AND json_valid(e.f_data)
 			ORDER BY b.f_sequence LIMIT 1
 		) AS first_user_text FROM t_sessions s`)
 		.all()
@@ -485,7 +473,7 @@ function readSqlArtifact(db: Database, session: SqlSession, source: string): Phy
 		FROM t_session_events b JOIN t_events e ON e.f_event_id = b.f_event_id
 		WHERE b.f_session_id = ? ORDER BY b.f_sequence`)
 		.all(session.header.id);
-	const events: SessionFormatEvent[] = [];
+	const events: Record<string, unknown>[] = [];
 	for (const [index, row] of rows.entries()) {
 		if (row.f_encoding !== "json") throw failure("SQLite row decode", source, "unsupported event encoding");
 		const seq = integer(row.f_sequence, source, "bridge sequence");
@@ -493,23 +481,23 @@ function readSqlArtifact(db: Database, session: SqlSession, source: string): Phy
 		const time = integer(row.f_created_at, source, "event time", Number.MIN_SAFE_INTEGER);
 		const stored: unknown = JSON.parse(text(row.f_data, source, "event JSON"));
 		const full = isRecord(stored) && typeof stored.type === "string" && Object.hasOwn(stored, "data");
-		const event = {
+		events.push({
 			...(full ? stored : { type: text(row.f_type, source, "event type", true), data: stored }),
 			seq,
 			time,
 			...(row.f_surface_op === null
 				? {}
 				: { surfaceOp: normalizeSurface(JSON.parse(text(row.f_surface_op, source, "surface operation JSON"))) }),
-		};
-		events.push(snapshotSessionFormatJson(event, "SQLite event") as SessionFormatEvent);
+		});
 	}
-	return { headerValue: session.headerValue, rows: events, shapeRepairs: {} };
+	return { headerValue: session.headerValue, rows: events };
 }
 
 /**
- * Stream-copies the canonical database plus WAL into a private directory. Reading a
- * multi-gigabyte database into memory would exhaust the heap, so stability is checked
- * with stat guards around the copy and integrity is enforced by WAL frame checksums.
+ * Copies the canonical database plus WAL into a private directory. Copy-on-write
+ * clones (APFS, Btrfs, XFS, ZFS block cloning) make a multi-gigabyte snapshot near
+ * instant; other filesystems fall back to a byte copy. Stability is checked with stat
+ * guards around the copy and integrity is enforced by WAL frame checksums.
  */
 async function snapshotDatabaseFiles(source: string, directory: string): Promise<string> {
 	const filenames = [source, `${source}-wal`];
@@ -518,8 +506,8 @@ async function snapshotDatabaseFiles(source: string, directory: string): Promise
 		const before = await Promise.all(filenames.map(optionalStat));
 		if (before[0] === null)
 			throw failure("SQLite snapshot", source, "canonical database no longer exists; stale files will not be used");
-		await fs.copyFile(source, filename);
-		if (before[1] !== null) await fs.copyFile(`${source}-wal`, `${filename}-wal`);
+		await fs.copyFile(source, filename, fs.constants.COPYFILE_FICLONE);
+		if (before[1] !== null) await fs.copyFile(`${source}-wal`, `${filename}-wal`, fs.constants.COPYFILE_FICLONE);
 		const after = await Promise.all(filenames.map(optionalStat));
 		// A live harness may checkpoint between the size check and the copy; a later
 		// attempt over an idle store yields a consistent snapshot. The source stays untouched.
@@ -710,7 +698,6 @@ export class DeepSeekSources {
 						cwd: session.header.cwd ?? "",
 						created: new Date(session.header.createdAt),
 						modified: new Date(session.modified),
-						messageCount: session.messageCount,
 						...(session.title === undefined ? {} : { title: session.title }),
 						...(session.firstMessage === undefined ? {} : { firstMessage: session.firstMessage }),
 					});
@@ -762,7 +749,6 @@ export class DeepSeekSources {
 			throw failure("discovery", info.path, "selected session has no supported nested canonical source");
 		const source = sql === undefined ? file!.path : sqlLocator(database, sql.header.id);
 		const storedVersion = sql?.storedVersion ?? file!.storedVersion;
-		const header = sql?.header ?? file!.header;
 		const physical = await atStage("physical decode", source, () =>
 			sql === undefined ? readFileArtifact(file!) : readSqlArtifact(db!, sql, database),
 		);
@@ -771,84 +757,21 @@ export class DeepSeekSources {
 			throw failure("snapshot", source, "selected header changed during discovery");
 		const snapshotHash = new Bun.CryptoHasher("sha256").update(JSON.stringify(physical.headerValue)).update("\n");
 		for (const row of physical.rows) snapshotHash.update(JSON.stringify(row)).update("\n");
-		let selectedPhysical = physical;
-		if (sql !== undefined && storedVersion === 4) {
-			const adopted = adoptDeepSeekEventShapes(physical.rows as readonly SessionFormatEvent[]);
-			selectedPhysical = { ...physical, rows: adopted.events, shapeRepairs: adopted.repairs };
-		}
-		if (storedVersion === 0) {
-			const adopted = adoptDeepSeekV0SourceShapes(selectedPhysical.rows as readonly SessionFormatEvent[]);
-			selectedPhysical = {
-				...selectedPhysical,
-				rows: adopted.events,
-				shapeRepairs: { ...selectedPhysical.shapeRepairs, ...adopted.repairs },
-			};
-		}
-		const children: SessionFormatJsonValue[] = [];
-		if (storedVersion < 4) {
-			const canonical = new Map<string, FileSource | SqlSession>();
-			for (const child of files) {
-				if (canonical.has(child.header.id))
-					throw failure("child evidence", child.path, "duplicate canonical child identity");
-				canonical.set(child.header.id, child);
-			}
-			for (const child of sessions) canonical.set(child.header.id, child);
-			for (const child of canonical.values()) {
-				if (child.header.origin !== "subagent" || child.header.parentSession !== header.id) continue;
-				const childSource = "row" in child ? sqlLocator(database, child.header.id) : child.path;
-				const evidence = await atStage("child evidence", childSource, async () => {
-					let childPhysical =
-						"row" in child ? readSqlArtifact(db!, child, childSource) : await readFileArtifact(child);
-					if ("row" in child && child.storedVersion === 4)
-						childPhysical = {
-							...childPhysical,
-							rows: adoptDeepSeekEventShapes(childPhysical.rows as readonly SessionFormatEvent[]).events,
-						};
-					if (child.storedVersion === 0)
-						childPhysical = {
-							...childPhysical,
-							rows: adoptDeepSeekV0SourceShapes(childPhysical.rows as readonly SessionFormatEvent[]).events,
-						};
-					const artifact = restoreArtifact(
-						childPhysical,
-						child.storedVersion < 4 ? historicalSessionFormatCatalog : sessionFormatCatalog,
-						childSource,
-					);
-					if (
-						artifact.header.origin !== "subagent" ||
-						artifact.header.parentSession !== header.id ||
-						artifact.header.id !== child.header.id
-					) {
-						throw failure(
-							"child evidence",
-							childSource,
-							"child header changed or does not identify a direct subagent child",
-						);
-					}
-					return historicalChildCatalogSource(artifact);
-				});
-				children.push(evidence);
-			}
-		}
-		const artifact = await atStage("logical migration", source, () =>
-			restoreArtifact(
-				selectedPhysical,
-				storedVersion < 4 ? createSessionFormatCatalogWithChildren(children) : sessionFormatCatalog,
-				source,
-			),
-		);
+		const { events, inheritedEventCount } = restoreEvents(physical, source);
 		// Some SQLite builds never populate f_seed_length for v4; the decoded seed marker
 		// is authoritative there. When a stored count exists it must still agree.
 		if (
 			sql !== undefined &&
 			sql.seedLength !== null &&
 			storedVersion === 4 &&
-			artifact.inheritedEventCount !== sql.seedLength
+			inheritedEventCount !== sql.seedLength
 		) {
 			throw failure("SQLite head", source, "stored inherited prefix disagrees with decoded seed marker");
 		}
 		return {
-			...artifact,
+			header: classification.header,
+			events,
+			inheritedEventCount,
 			storedVersion,
 			kind: sql === undefined ? "jsonl" : "sqlite",
 			metadata: {
@@ -863,15 +786,12 @@ export class DeepSeekSources {
 							headEventId: sql.headEventId,
 							headSequence: sql.headSequence,
 						}),
-				logicalSessionId: artifact.header.id,
-				sourceCwd: artifact.header.cwd,
+				logicalSessionId: classification.header.id,
+				sourceCwd: classification.header.cwd,
 				storedVersion,
-				migratedVersion: artifact.header.version,
-				parentSession: artifact.header.parentSession,
-				origin: artifact.header.origin,
-				inheritedEventCount: artifact.inheritedEventCount,
-				shapeRepairs: selectedPhysical.shapeRepairs,
-				childEvidenceCount: children.length,
+				parentSession: classification.header.parentSession,
+				origin: classification.header.origin,
+				inheritedEventCount,
 				originalEventCount: physical.rows.length,
 				originalSnapshotSha256: snapshotHash.digest("hex"),
 			},
@@ -898,12 +818,13 @@ export class DeepSeekSources {
 			}
 			const files = await this.#files(info.path.startsWith(SQLITE_PREFIX) ? undefined : info.path);
 			const database = await this.#databasePath();
-			if (database !== undefined) {
+			// A log session never needs the database body; only SQLite selections pay for a snapshot.
+			if (database !== undefined && info.path.startsWith(SQLITE_PREFIX)) {
 				return withDatabase(database, (db, metadata) => this.#readSelected(info, files, database, db, metadata));
 			}
 			if (info.path.startsWith(SQLITE_PREFIX))
 				throw failure("SQLite read", info.path, "canonical database is missing; stale files will not be used");
-			return this.#readSelected(info, files, this.#database);
+			return this.#readSelected(info, files, database ?? this.#database);
 		});
 	}
 }
