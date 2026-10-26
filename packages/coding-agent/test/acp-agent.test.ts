@@ -4233,6 +4233,108 @@ describe("ACP extension session_start/resources_discover sends (PR #9379 round-6
 		}
 	});
 
+	it("lets session/cancel stop the turn a session_start send started", async () => {
+		// session/new answers before that turn ends, and no client prompt owns it;
+		// the client's stop must still reach it.
+		const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-startup-turn-cancel-"));
+		const agentDir = path.join(tempDir, "agent");
+		await fs.promises.mkdir(agentDir, { recursive: true });
+		setAgentDir(agentDir);
+		await Settings.init({ agentDir, inMemory: true });
+
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		let session: AgentSession | undefined;
+		try {
+			const extensionsDir = path.join(tempDir, "ext");
+			await fs.promises.mkdir(extensionsDir, { recursive: true });
+			const extPath = path.join(extensionsDir, "startup-announce.ts");
+			await fs.promises.writeFile(
+				extPath,
+				`export default function (pi) {
+	pi.on("session_start", () => {
+		pi.sendUserMessage("extension started");
+	});
+}
+`,
+			);
+
+			const loaded = await loadExtensions([extPath], tempDir);
+			expect(loaded.errors).toEqual([]);
+
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+			// The startup turn's model call runs until its request is aborted.
+			const modelCallStarted = Promise.withResolvers<void>();
+			const modelCallAborted = Promise.withResolvers<void>();
+			let calls = 0;
+			const mock = createMockModel({
+				handler: async (_context, options) => {
+					if (calls++ === 0) {
+						const signal = options?.signal;
+						if (signal?.aborted) modelCallAborted.resolve();
+						signal?.addEventListener("abort", () => modelCallAborted.resolve(), { once: true });
+						modelCallStarted.resolve();
+						await modelCallAborted.promise;
+					}
+					return { content: ["ack"] };
+				},
+			});
+			const agentCore = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				streamFn: mock.stream,
+			});
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			const sessionManager = SessionManager.inMemory(tempDir);
+			const extensionRunner = new ExtensionRunner(
+				loaded.extensions,
+				loaded.runtime,
+				tempDir,
+				sessionManager,
+				modelRegistry,
+			);
+
+			session = new AgentSession({
+				agent: agentCore,
+				sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry,
+				extensionRunner,
+			});
+
+			const connection = {
+				sessionUpdate: async () => {},
+				signal: new AbortController().signal,
+				closed: Promise.withResolvers<void>().promise,
+			} as unknown as AgentSideConnection;
+			const acpSession = session;
+			const agent = new AcpAgent(connection, async () => acpSession);
+
+			const created = await withTimeout(
+				agent.newSession({ cwd: tempDir, mcpServers: [] }),
+				10_000,
+				"session/new waited for the startup turn",
+			);
+			await withTimeout(modelCallStarted.promise, 10_000, "startup turn did not start");
+			expect(session.isStreaming).toBe(true);
+
+			await withTimeout(agent.cancel({ sessionId: created.sessionId }), 10_000, "session/cancel did not return");
+			await withTimeout(modelCallAborted.promise, 10_000, "session/cancel did not abort the startup turn");
+			expect(session.isStreaming).toBe(false);
+
+			const response = await agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "next" }],
+			} as PromptRequest);
+			expect(response.stopReason).toBe("end_turn");
+		} finally {
+			await session?.dispose();
+			authStorage.close();
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("gives a session_start-triggered turn visibility into skills a resources_discover handler contributes (regression: PR #9379 review, acp-agent.ts startup sends)", async () => {
 		const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-acp-session-start-turn-discovery-"));
 		const agentDir = path.join(tempDir, "agent");
