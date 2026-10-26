@@ -15,17 +15,17 @@ Pool-first phases:
 <helpers>
 State persists across `eval` calls. Every call provides:
 
-- `workpool(agent=None, *, name=None, context=None{{#if evalTools}}, tools=None{{/if}})`: pool of keep-alive workers bounded by live `task.maxConcurrency`. `.push(*items)` returns item ids; each item goes to the least context-loaded idle worker, a new worker while capacity remains, or a busy worker's round-robin queue. `eval.workpool.freshAgents=true` instead spawns a new agent per item. `.status()` reports counts/workers; `.peek()` returns a non-consuming batch snapshot; `.close()` drops queued work.
+- `workpool(agent=None, *, name=None, context=None{{#if evalTools}}, tools=None{{/if}})`: pool of keep-alive workers bounded by live `task.maxConcurrency`. `.push(*items)` returns item ids; each item goes to the least context-loaded idle worker, a new worker while capacity remains, or a busy worker's round-robin queue. `eval.workpool.freshAgents=true` instead spawns a new agent per item. `.status()` reports counts/workers; `.peek()` returns a non-consuming batch snapshot; `.close()` drops queued work. JS: `await workpool(agent?, { name, context{{#if evalTools}}, tools{{/if}} })`; every pool method is async (`await pool.push(…)`).
   - The pool name is its background job id and label. Push all items while it is active; its first full drain settles and closes that pool job. New phase/wave after drain → create a new named pool.
   - Results auto-deliver. Completely blocked? Leave `eval` and call `wait`; NEVER poll or block the kernel with `pool.wait()`.
-- `agent(prompt, *, agent=None, label=None, schema=None, isolated=None, apply=None, merge=None{{#if evalTools}}, tools=None{{/if}})`: immediate `AgentHandle`; use for a small fixed dependency graph or when the parent needs validated `schema` data. `.wait()` returns text/data; `.handle` is `agent://<id>`. Unwaited results auto-deliver.
-- `completion(prompt, *, model="default", system=None, schema=None)`: immediate `CompletionHandle` for a tool-free one-shot call. Tiers: `"smol"`, `"default"`, `"slow"`.
+- `agent(prompt, *, agent=None, label=None, schema=None, schema_mode=None, isolated=None, apply=None, merge=None{{#if evalTools}}, tools=None{{/if}})`: immediate `AgentHandle`; use for a small fixed dependency graph or when the parent needs validated `schema` data. `.wait()` returns text/data; `.handle` is `agent://<id>`. Unwaited results auto-deliver. JS: `agent(prompt, { agent, label, schema, … })`; `await` it for `.id`/`.handle`; handle methods are async (`await h.wait()`).
+- `completion(prompt, *, model="default", system=None, schema=None)`: immediate `CompletionHandle` for a tool-free one-shot call. Tiers: `"smol"`, `"default"`, `"slow"`. JS: `completion(prompt, { model, system, schema })`; `await h.wait()`.
 - `await judge(state, questions)`: typed `choice`/`bool`/`score` questions over one state → `{id: answer}` with probabilities. Cheaper than `completion()` for classification.
-- `judge_batch(states, questions, *, concurrency=32, retries=1, min_ok=1, intent=None)`: the same questions over many states, run by the host so it outlives the cell. Set nonempty `intent` for its progress/job label (default `"Judging"`). Returns a `JudgmentBatch` at once; per cell pull a bounded slice with `await b.drain(timeout)` (or `async for k, item in b.drain_iter(timeout)`), read `b.status()`/`b.results()`/`b.failed()`, and `b.close()` when done. Item failures are `item.error`, never exceptions; `b.id` is a background job id (results auto-deliver). Never loop `judge()` over a list.
-- `wait(handles, timeout=None, *, raise_errors=True)`: ordered barrier for agent/completion handles only; `raise_errors=False` keeps an error in its slot.
+- `judge_batch(states, questions, *, concurrency=32, retries=1, min_ok=1, intent=None)`: the same questions over many states, run by the host so it outlives the cell. Set nonempty `intent` for its progress/job label (default `"Judging"`). Python returns a `JudgmentBatch` at once; JS: `await judgeBatch(states, questions, { concurrency, retries, minOk, intent })`. Per cell pull a bounded slice with `await b.drain(timeout)` (or `async for k, item in b.drain_iter(timeout)`; JS `for await (const [k, item] of b.drainIter(timeout))`), read `b.status()`/`b.results()`/`b.failed()`, and `b.close()` when done; in JS every batch method is async. Item failures are `item.error`, never exceptions; `b.id` is a background job id (results auto-deliver). Never loop `judge()` over a list.
+- `wait(handles, timeout=None, *, raise_errors=True)` (JS: `await wait(handles, { timeout, raiseErrors })`): ordered barrier for agent/completion handles only; `raise_errors=False` / `raiseErrors: false` keeps an error in its slot.
 {{#if evalTools}}- `@tool` (Python) / `tool(fn, {…})` (JS): kernel-local tool exposed via `tools=`. Use for shared caches, dedup sets, scoring, or structured accumulation across pool workers; calls execute in YOUR kernel and a raised exception returns to the caller without killing it.
 {{/if}}- `log(message)`: progress line. `phase(title)`: status-tree phase.
-- `budget`: Python `budget.total` / `budget.spent()` / `budget.remaining()`; JS awaits them. User `+Nk` = advisory; `+Nk!` = hard.
+- `budget`: Python `budget.total` / `budget.spent()` / `budget.remaining()`; JS `await budget.total()` / `await budget.spent()` / `await budget.remaining()`. User `+Nk` = advisory; `+Nk!` = hard.
 </helpers>
 
 <pool-workflow>
@@ -64,10 +64,10 @@ await review.push(
     "Review cancellation and cleanup",
     "Review performance regressions",
 );
-console.log(review.name); // background job id; results auto-deliver
+print(review.name); // background job id; results auto-deliver
 ```
 
-Need a snapshot without consuming/delivering results? `review.peek()` (JS: `await review.peek()`). Need activity counts? `review.status()`.
+Need a snapshot without consuming/delivering results? `review.peek()`. Need activity counts? `review.status()`. JS: `await` both.
 </pool-workflow>
 
 <dependencies>
