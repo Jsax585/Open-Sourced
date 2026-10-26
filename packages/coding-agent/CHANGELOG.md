@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed task isolation copying ignored nested checkouts of the same source repository into new sandboxes; verified unrelated nested repositories and ordinary ignored runtime input remain available.
 ### Added
 
 - Added `omp -p --wait-async` (setting `async.printWake`): print mode waits for the background jobs it started and wakes the same session with each result before exiting, instead of cancelling them ([#10363](https://github.com/can1357/oh-my-pi/issues/10363), [#16690](https://github.com/can1357/oh-my-pi/pull/16690) by [@trukhinyuri](https://github.com/trukhinyuri))
