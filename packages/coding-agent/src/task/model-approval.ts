@@ -11,16 +11,18 @@
  * result to the models its exact, `@role` or glob entries match.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { factoryDroidServerSideFallbackModels } from "@oh-my-pi/pi-ai/providers/factory-droid";
-import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import { factoryDroidServerSideFallbackModels, isFactoryDroidModel } from "@oh-my-pi/pi-ai/providers/factory-droid";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
+import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { ModelRegistry } from "../config/model-registry";
 import {
-	filterAvailableModelsByEnabledPatterns,
+	formatModelString,
 	formatModelStringWithRouting,
+	type ModelMatchPreferences,
 	normalizeModelPatternList,
 	resolveExplicitModelRole,
 	resolveModelOverride,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
 import { isKindRole } from "../config/model-roles";
 import type { Settings } from "../config/settings";
@@ -36,8 +38,8 @@ export class PerCallModelError extends Error {
 
 /**
  * Inputs that grant per-call models; nothing here is persisted as a grant. `settings` is read live,
- * so a configuration change applies to the next request; the agent and parent fields are captured
- * when the child spawns (or is revived).
+ * so configuration changes apply to the next request; the agent, parent and match preferences
+ * are captured when the child spawns (or is revived).
  */
 export interface PerCallModelGrants {
 	settings: Settings;
@@ -49,26 +51,51 @@ export interface PerCallModelGrants {
 	agentRemoved?: boolean;
 	/** The parent session's live model, as `provider/model-id` plus any `@upstream` pin. */
 	parentModelPattern?: string;
+	/** Spawn-time selector preferences; unrelated later model usage cannot change a grant. */
+	matchPreferences?: ModelMatchPreferences;
 }
 
-type ApprovalRegistry = Pick<ModelRegistry, "getAvailable">;
+type ApprovalRegistry = Pick<ModelRegistry, "getAll" | "getAvailable">;
 
 /**
  * The one model an exact entry names: a literal catalog id wins over a `:level`
  * split, and an `@upstream` pin stays part of the identity. Undefined when the
- * entry is not an exact selector for an available chat model.
+ * entry is not an exact selector in the full catalog, including unavailable models.
  */
-function exactIdentity(entry: string, chat: Model<Api>[]): string | undefined {
-	const model = resolveModelOverride([entry], { getAvailable: () => chat }, undefined, { exactOnly: true }).model;
+function exactIdentity(entry: string, catalog: Model<Api>[]): string | undefined {
+	const model = resolveModelOverride([entry], { getAvailable: () => catalog }, undefined, { exactOnly: true }).model;
 	return model ? formatModelStringWithRouting(model) : undefined;
 }
 
-/** Skip aliases: a configured role's value is a grant of its own, and an unconfigured role would only route through built-in defaults. */
-function grantablePatterns(source: string | string[] | undefined, settings: Settings): string[] {
-	return normalizeModelPatternList(source).filter(pattern => {
-		const bare = pattern.toLowerCase();
-		return bare !== "default" && bare !== "inherit" && resolveExplicitModelRole(pattern, settings) === undefined;
-	});
+/** A parent only grants a route that an exact selector can represent without discarding routing policy. */
+export function parentModelGrantPattern(model: Model<Api>): string | undefined {
+	const selector = formatModelStringWithRouting(model);
+	const compat = model.compat;
+	if (!compat || typeof compat !== "object") return selector;
+	for (const key of ["openRouterRouting", "vercelGatewayRouting"] as const) {
+		const routing: unknown = (compat as Readonly<Record<string, unknown>>)[key];
+		if (routing === undefined) continue;
+		if (
+			!routing ||
+			typeof routing !== "object" ||
+			Object.keys(routing).length !== 1 ||
+			!("only" in routing) ||
+			!Array.isArray(routing.only) ||
+			routing.only.length !== 1 ||
+			typeof routing.only[0] !== "string" ||
+			!routing.only[0] ||
+			selector !== `${formatModelString(model)}@${routing.only[0]}`
+		) {
+			return undefined;
+		}
+	}
+	return selector;
+}
+
+/** Settings-only selectors advertised without resolving the model catalog or availability. */
+export interface PerCallModelAdvertisement {
+	roles: { role: string; patterns: string[] }[];
+	allowlist: string[];
 }
 
 /**
@@ -76,111 +103,109 @@ function grantablePatterns(source: string | string[] | undefined, settings: Sett
  * skipped rather than expanded: a configured role's value is a grant of its
  * own, and an unconfigured role would only route through built-in defaults.
  */
-export function perCallModelGrantPatterns(grants: PerCallModelGrants): string[] {
-	const settings = grants.settings.rootSettings();
+function modelGrantPatterns(source: string | string[] | undefined, settings: Settings): string[] {
+	const patterns = new Set<string>();
+	for (const pattern of normalizeModelPatternList(source)) {
+		const bare = pattern.toLowerCase();
+		if (bare === "default" || bare === "inherit" || resolveExplicitModelRole(pattern, settings)) continue;
+		patterns.add(pattern);
+	}
+	return [...patterns];
+}
+
+function configuredRoleGrantPatterns(settings: Settings): PerCallModelAdvertisement["roles"] {
+	return Object.entries(settings.getModelRoles()).flatMap(([role, value]) => {
+		if (isKindRole(role)) return [];
+		const patterns = modelGrantPatterns(value, settings);
+		return patterns.length > 0 ? [{ role, patterns }] : [];
+	});
+}
+
+/** Stable prompt data: only operator-owned settings grant or narrow the advertised selectors. */
+export function getPerCallModelAdvertisement(settings: Settings): PerCallModelAdvertisement {
+	const authority = settings.grantAuthority();
+	return {
+		roles: configuredRoleGrantPatterns(authority),
+		allowlist: [...new Set(cfgTaskPerCallModelAllow.get(authority).map(entry => entry.trim()))],
+	};
+}
+
+function perCallModelGrantPatterns(grants: PerCallModelGrants): string[] {
+	const settings = grants.settings.grantAuthority();
 	const { agentName } = grants;
 	const trustedAgent =
 		(grants.agentSource === "bundled" || grants.agentSource === "user") &&
 		!grants.agentRemoved &&
 		!cfgTaskDisabledAgents.get(settings).includes(agentName);
-	const sources = [
-		...Object.entries(settings.getModelRoles())
-			.filter(([role]) => !isKindRole(role))
-			.map(([, value]) => value),
-		trustedAgent ? grants.agentModel : undefined,
-		grants.parentModelPattern,
+	return [
+		...new Set([
+			...configuredRoleGrantPatterns(settings).flatMap(({ patterns }) => patterns),
+			...modelGrantPatterns(trustedAgent ? grants.agentModel : undefined, settings),
+			...modelGrantPatterns(grants.parentModelPattern, settings),
+		]),
 	];
-	return [...new Set(sources.flatMap(source => grantablePatterns(source, settings)))];
 }
 
 /**
- * Whether `pattern` approves the routed identity `target`: an exact selector names
- * one model; otherwise every match of a glob, or the one model a selector resolves to.
+ * Approval globs are scoped to either the canonical identity or a bare id, never both. `*` spans
+ * any characters except `@`, including `/` in aggregator ids; `?` matches one such character.
+ * Brackets and all other punctuation are literal, and an upstream pin must be written explicitly.
  */
-function patternApproves(pattern: string, target: string, chat: Model<Api>[], settings: Settings): boolean {
-	// An exact selector names one model; brackets in real ids (`glm-5.2[1m]`) never act as a glob.
-	const exact = exactIdentity(pattern, chat);
-	if (exact !== undefined) return exact === target;
-	if (/[*?[]/.test(pattern)) {
-		return filterAvailableModelsByEnabledPatterns(chat, [pattern], settings).some(
-			granted => formatModelStringWithRouting(granted) === target,
-		);
-	}
-	const resolved = resolveModelOverride([pattern], { getAvailable: () => chat }, settings).model;
-	return resolved !== undefined && formatModelStringWithRouting(resolved) === target;
+function globGrants(pattern: string, model: Model<Api>): boolean {
+	const source = pattern
+		.toLowerCase()
+		.replace(/[\\^$.*+?()[\]{}|]/g, char => (char === "*" ? "[^@]*" : char === "?" ? "[^@]" : `\\${char}`));
+	const identity = formatModelStringWithRouting(model);
+	return new RegExp(`^${source}$`).test(
+		(pattern.includes("/") ? identity : identity.slice(model.provider.length + 1)).toLowerCase(),
+	);
 }
 
-/**
- * Whether an allowlist pattern admits `target`. The allowlist only narrows, so
- * a provider-qualified glob (`openai/*`) matches the full `provider/id`, never
- * another provider's model whose bare id happens to match (`openrouter/openai/gpt-5`).
- */
-function allowPatternAdmits(pattern: string, target: string, chat: Model<Api>[], settings: Settings): boolean {
-	const exact = exactIdentity(pattern, chat);
-	if (exact !== undefined) return exact === target;
-	const base = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS).base;
-	if (base.includes("/") && /[*?[]/.test(base)) {
-		return new Bun.Glob(base.toLowerCase()).match(target.toLowerCase());
-	}
-	return patternApproves(pattern, target, chat, settings);
-}
-
-/**
- * Whether `task.perCallModelAllow` admits `target`. An exact or glob entry
- * matches the model directly; a `@role` entry matches what its configured value grants.
- */
-function allowlistAdmits(target: string, chat: Model<Api>[], settings: Settings): boolean {
-	const allow = cfgTaskPerCallModelAllow.get(settings);
-	if (allow.length === 0) return true;
-	return allow.some(entry => {
-		const selector = entry.trim();
-		const role = resolveExplicitModelRole(selector, settings);
-		if (role === undefined) return selector.length > 0 && allowPatternAdmits(selector, target, chat, settings);
-		if (isKindRole(role)) return false;
-		return grantablePatterns(settings.getModelRole(role), settings).some(pattern =>
-			allowPatternAdmits(pattern, target, chat, settings),
-		);
-	});
-}
-
-/** Whether the operator's configuration names `model` itself (see {@link isPerCallModelApproved}). */
-function isGranted(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Api>[]): boolean {
-	const settings = grants.settings.rootSettings();
+/** Whether the operator's current configuration names this available chat model itself. */
+function isGranted(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Api>[], catalog: Model<Api>[]): boolean {
+	const settings = grants.settings.grantAuthority();
 	const target = formatModelStringWithRouting(model);
 	if (!chat.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return false;
-	if (!allowlistAdmits(target, chat, settings)) return false;
-	return perCallModelGrantPatterns(grants).some(pattern => patternApproves(pattern, target, chat, settings));
+	const patternGrants = (pattern: string): boolean => {
+		// Full-catalog literals win even when unavailable, so :low and [1m] never broaden a grant.
+		const exact = exactIdentity(pattern, catalog);
+		if (exact !== undefined) return exact === target;
+		if (/[*?]/.test(pattern)) {
+			const suffix = splitThinkingSuffix(pattern, -1, MAX_THINKING_SUFFIX_OPTIONS);
+			const globPattern =
+				suffix.level && !catalog.some(candidate => globGrants(pattern, candidate)) ? suffix.base : pattern;
+			return globGrants(globPattern, model);
+		}
+		const knownLiteralId = catalog.some(candidate => candidate.id === pattern);
+		const candidates = knownLiteralId ? chat.filter(candidate => candidate.id === pattern) : chat;
+		const resolved = resolveModelRoleValue(pattern, candidates, { matchPreferences: grants.matchPreferences }).model;
+		return resolved !== undefined && formatModelStringWithRouting(resolved) === target;
+	};
+	const allow = cfgTaskPerCallModelAllow.get(settings);
+	if (
+		allow.length > 0 &&
+		!allow.some(entry => {
+			const selector = entry.trim();
+			const role = resolveExplicitModelRole(selector, settings);
+			if (role !== undefined) {
+				return !isKindRole(role) && modelGrantPatterns(settings.getModelRole(role), settings).some(patternGrants);
+			}
+			// Exact allowlist entries are literal identities, never suffix or fuzzy selectors.
+			return selector === target || (/[*?]/.test(selector) && globGrants(selector, model));
+		})
+	) {
+		return false;
+	}
+	return perCallModelGrantPatterns(grants).some(patternGrants);
 }
 
 /**
- * Server-side fallback targets of `model` that are not themselves granted. Factory Droid
- * sends Fable's refusal chain on the Anthropic upstream unconditionally, so the model
- * is approved only while every model it may switch to is.
+ * Models Factory may switch to server-side. Its transport always sends this refusal chain,
+ * even when client fallback is disabled; granting its targets cannot keep a worker on one model.
  */
-function unapprovedServerSideFallbacks(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Api>[]): string[] {
-	if (model.api !== "factory-droid-agent") return [];
-	return factoryDroidServerSideFallbackModels(model as Model<"factory-droid-agent">)
-		.map(id => `${model.provider}/${id}`)
-		.filter(selector => {
-			const fallback = chat.find(candidate => `${candidate.provider}/${candidate.id}` === selector);
-			return !fallback || !isGranted(fallback, grants, chat);
-		});
-}
-
-/**
- * Whether `model` is one the operator routes to under the current configuration.
- * Identities are exact: an `@upstream`-pinned route and the unpinned model are
- * different models here, in either direction, and an entry that is itself a
- * catalog id (even one ending in a level-shaped segment) names only that id.
- */
-export function isPerCallModelApproved(
-	model: Model<Api>,
-	grants: PerCallModelGrants,
-	registry: ApprovalRegistry,
-): boolean {
-	// Subagents run chat models only; a grant naming an image, search, speech or judge model does not count.
-	const chat = registry.getAvailable("chat");
-	return isGranted(model, grants, chat) && unapprovedServerSideFallbacks(model, grants, chat).length === 0;
+function serverSideFallbacks(model: Model<Api>): string[] {
+	if (!isFactoryDroidModel(model)) return [];
+	return factoryDroidServerSideFallbackModels(model).map(id => formatModelString({ provider: model.provider, id }));
 }
 
 /** Throw {@link PerCallModelError} unless `model` is approved. */
@@ -190,15 +215,15 @@ export function assertPerCallModelApproved(
 	registry: ApprovalRegistry,
 ): void {
 	const chat = registry.getAvailable("chat");
-	if (isGranted(model, grants, chat)) {
-		const fallbacks = unapprovedServerSideFallbacks(model, grants, chat);
+	if (isGranted(model, grants, chat, registry.getAll())) {
+		const fallbacks = serverSideFallbacks(model);
 		if (fallbacks.length === 0) return;
 		throw new PerCallModelError(
-			`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${grants.agentName}": its provider always attaches a server-side fallback to ${fallbacks.join(", ")}, which is not approved. Approve the fallback model too, or use a model without one.`,
+			`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${grants.agentName}": its provider may answer with another model server-side (${fallbacks.join(", ")}). Per-call workers never switch models; pick a model without a server-side fallback.`,
 		);
 	}
 	const allowGuidance =
-		cfgTaskPerCallModelAllow.get(grants.settings.rootSettings()).length > 0
+		cfgTaskPerCallModelAllow.get(grants.settings.grantAuthority()).length > 0
 			? " It must also match an entry in task.perCallModelAllow."
 			: "";
 	throw new PerCallModelError(
