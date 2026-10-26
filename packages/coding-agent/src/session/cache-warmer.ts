@@ -9,8 +9,10 @@
  * in two phases — "streaming" while the agent run that sent the request is
  * still active, "idle" after it settles — and stops on context change, mode
  * change, a refresh that misses the cache, or fixed safety windows (60 min
- * streaming / 30 min idle). An entry whose lifetime outlasts the idle window
- * (Anthropic's 1h tier) is therefore only warmed while a run is active.
+ * streaming / 30 min idle). A window is a hard cap unless a
+ * `cache_warming_decision` handler answers `extendWindow: true`, once per
+ * refresh when it is scheduled, e.g. a 1h entry (Anthropic's 1h tier) after
+ * its run settles.
  *
  * A model is warmed only when its catalog entry (or a models.yml `promptCache`
  * override) declares a lifetime for the retention tier the request used, so
@@ -217,7 +219,9 @@ export interface CacheWarmingDecision {
 	expectedSavings: number;
 	/** False when the prompt size or the model's prices are unknown. */
 	economicsAvailable: boolean;
-	/** The warmer's decision: "warm" when `expectedSavings` is at least $0.05. */
+	/** Safety window the refresh falls past; only an extension's `extendWindow` opt-in warms then. */
+	window?: "streaming" | "idle";
+	/** The warmer's decision: "warm" when `expectedSavings` is at least $0.05 and the refresh falls inside its safety window. */
 	action: CacheWarmingAction;
 }
 
@@ -253,12 +257,19 @@ interface ActiveRun extends CacheWarmRequest {
 	controller: AbortController;
 	phase: "streaming" | "idle";
 	nextWarmAt: number;
-	/** Set while a refresh that an extension forced is in flight. */
+	/** Set while a refresh that an extension forced is in flight, or an extension keeps a refresh armed past a safety window. */
 	extensionOverride: boolean;
 	timer?: NodeJS.Timeout;
 	warmingStopReason?: string;
+	/** Pending ask whether the armed refresh may go past its safety window. */
+	windowCheck?: WindowCheck;
 	/** Cache entry this run's request writes; a refresh hit confirms and extends it. */
 	entry: TrackedCacheEntry;
+}
+
+interface WindowCheck {
+	/** True once an extension let the armed refresh go past its window. */
+	approved: Promise<boolean>;
 }
 
 /** Lifetime of the prompt cache entry the latest request wrote, independent of whether it is warmed. */
@@ -294,7 +305,7 @@ export interface CacheWarmerDeps {
 	/** Current warming mode, read live so setting changes apply without re-arming. */
 	getMode: () => CacheWarmingMode;
 	/** Extension override hook; failures fall back to the warmer's own decision. */
-	decide?: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
+	decide?: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingDecisionEventResult>;
 }
 
 /**
@@ -398,7 +409,7 @@ export class CacheWarmer {
 			nextWarmAt: 0,
 			extensionOverride: false,
 		};
-		this.#schedule(this.#run);
+		void this.#schedule(this.#run);
 	}
 
 	/**
@@ -427,7 +438,7 @@ export class CacheWarmer {
 		run.timer = undefined;
 		run.tier = observed;
 		run.delayMs = delayMs;
-		this.#schedule(run);
+		void this.#schedule(run);
 	}
 
 	onAgentSettled(): void {
@@ -439,7 +450,13 @@ export class CacheWarmer {
 		}
 		run.phase = "idle";
 		const reason = this.#idleStopReason(run);
-		if (reason) this.#stop(reason);
+		if (!reason) return;
+		if (!this.#deps.decide) {
+			this.#stop(reason);
+			return;
+		}
+		// A refresh in flight asks again when it reschedules.
+		if (run.timer !== undefined) void this.#checkWindow(run, reason);
 	}
 
 	/** Reconcile an active run after the effective warming mode changes. */
@@ -470,6 +487,37 @@ export class CacheWarmer {
 			: "30-minute idle safety limit reached";
 	}
 
+	/** The safety window, and why it ends warming, when the run's next refresh at `nextWarmAt` falls past it. */
+	#windowStop(run: ActiveRun): { window: "streaming" | "idle"; reason: string } | undefined {
+		if (run.phase === "idle") {
+			const reason = this.#idleStopReason(run);
+			return reason ? { window: "idle", reason } : undefined;
+		}
+		return run.nextWarmAt > run.startedAt + MAX_WARMING_AGE_MS
+			? { window: "streaming", reason: "one-hour safety limit reached" }
+			: undefined;
+	}
+
+	/**
+	 * Asks extensions once whether the armed refresh may go past its safety
+	 * window; the answer binds that refresh, so it is not asked again at fire time.
+	 */
+	#checkWindow(run: ActiveRun, reason: string): Promise<boolean> {
+		const check: WindowCheck = { approved: Promise.resolve(false) };
+		run.windowCheck = check;
+		run.extensionOverride = false;
+		check.approved = this.#decide(run, this.#evaluate(run)).then(action => {
+			if (this.#run !== run || run.windowCheck !== check || !this.#validateRun(run)) return false;
+			if (action === "warm") {
+				run.extensionOverride = true;
+				return true;
+			}
+			this.#stop(reason);
+			return false;
+		});
+		return check.approved;
+	}
+
 	#clearRun(): void {
 		const run = this.#run;
 		if (!run) return;
@@ -484,24 +532,22 @@ export class CacheWarmer {
 		this.#inactive = { state: "inactive", reason, ...stopped };
 	}
 
-	#schedule(run: ActiveRun): void {
+	/** Settles once a safety window's ask is answered, so a refresh's end event carries the stop it causes. */
+	#schedule(run: ActiveRun): Promise<boolean> | undefined {
 		run.extensionOverride = false;
+		run.windowCheck = undefined;
 		run.nextWarmAt = Date.now() + run.delayMs;
-		const reason =
-			run.phase === "idle"
-				? this.#idleStopReason(run)
-				: run.nextWarmAt > run.startedAt + MAX_WARMING_AGE_MS
-					? "one-hour safety limit reached"
-					: undefined;
-		if (reason) {
-			this.#stop(reason);
+		const stop = this.#windowStop(run);
+		if (stop && !this.#deps.decide) {
+			this.#stop(stop.reason);
 			return;
 		}
 		run.timer = setTimeout(() => void this.#refresh(run), Math.max(0, run.nextWarmAt - Date.now()));
 		run.timer.unref?.();
+		return stop ? this.#checkWindow(run, stop.reason) : undefined;
 	}
 
-	async #decide(decision: CacheWarmingDecision): Promise<CacheWarmingAction> {
+	async #decide(run: ActiveRun, decision: CacheWarmingDecision): Promise<CacheWarmingAction> {
 		const decide = this.#deps.decide;
 		if (!decide) return decision.action;
 		// A slow extension must not push the replay past the expiry margin: on
@@ -515,11 +561,18 @@ export class CacheWarmer {
 					warmCost: decision.warmCost,
 					missCost: decision.missCost,
 					continuationProbability: decision.continuationProbability,
+					refreshIntervalMs: run.delayMs,
+					...(decision.window ? { window: decision.window } : {}),
 					action: decision.action,
-				}).then(override => ({ override })),
+				}).then(result => ({ result })),
 				timedOut,
 			]);
-			return decided ? decided.override : decision.action;
+			if (!decided) return decision.action;
+			const { action = decision.action, extendWindow } = decided.result;
+			// Past a safety window only an explicit opt-in warms: handlers written
+			// to beat the savings floor keep the windows as a hard cap.
+			if (decision.window) return action === "warm" && extendWindow === true ? "warm" : "stop";
+			return action;
 		} catch {
 			// Extension failures fall back to the warmer's own decision.
 			return decision.action;
@@ -531,18 +584,31 @@ export class CacheWarmer {
 	async #refresh(run: ActiveRun): Promise<void> {
 		run.timer = undefined;
 		if (!this.#validateRun(run)) return;
-		const decision = this.#evaluate(run);
-		const action = await this.#decide(decision);
-		if (!this.#validateRun(run)) return;
-		const extensionOverride = action !== decision.action;
-		if (action === "stop") {
-			const reason = extensionOverride
-				? "stopped by extension"
-				: decision.economicsAvailable
-					? "expected savings below threshold"
-					: "cache economics unavailable";
-			this.#stop(reason, { decision, extensionOverride });
-			return;
+		let approved = false;
+		if (run.windowCheck) {
+			approved = await run.windowCheck.approved;
+			if (!this.#validateRun(run)) return;
+		}
+		let extensionOverride = true;
+		if (!approved) {
+			const decision = this.#evaluate(run);
+			const action = await this.#decide(run, decision);
+			if (!this.#validateRun(run)) return;
+			extensionOverride = action !== decision.action;
+			if (action === "stop") {
+				const windowReason = extensionOverride ? undefined : this.#windowStop(run)?.reason;
+				if (windowReason) {
+					this.#stop(windowReason);
+					return;
+				}
+				const reason = extensionOverride
+					? "stopped by extension"
+					: decision.economicsAvailable
+						? "expected savings below threshold"
+						: "cache economics unavailable";
+				this.#stop(reason, { decision, extensionOverride });
+				return;
+			}
 		}
 
 		run.extensionOverride = extensionOverride;
@@ -586,7 +652,7 @@ export class CacheWarmer {
 			this.#entry = run.entry;
 			if (this.#pendingEntry === run.entry) this.#pendingEntry = undefined;
 			if (!this.#validateRun(run)) return;
-			this.#schedule(run);
+			await this.#schedule(run);
 		} finally {
 			this.onRefreshEnd?.({
 				...refresh,
@@ -681,6 +747,7 @@ export class CacheWarmer {
 		const continuationProbability = run.phase === "idle" ? IDLE_CONTINUATION_PROBABILITY : 1;
 		const economicsAvailable = promptTokens > 0 && (cacheHitCost > 0 || cacheMissCost > 0);
 		const expectedSavings = continuationProbability * missCost - warmCost;
+		const window = this.#windowStop(run)?.window;
 		return {
 			phase: run.phase,
 			warmCost,
@@ -688,7 +755,8 @@ export class CacheWarmer {
 			continuationProbability,
 			expectedSavings,
 			economicsAvailable,
-			action: expectedSavings >= CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS ? "warm" : "stop",
+			...(window ? { window } : {}),
+			action: expectedSavings >= CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS && !window ? "warm" : "stop",
 		};
 	}
 }
@@ -704,7 +772,7 @@ function formatCacheWarmingEconomics(decision: CacheWarmingDecision): string {
 		decision.phase === "streaming"
 			? `${probability}% continuation probability while agent is running`
 			: `${probability}% continuation probability`;
-	const comparison = decision.action === "warm" ? ">=" : "<";
+	const comparison = decision.expectedSavings >= CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS ? ">=" : "<";
 	return `${probabilityText}, expected savings ${formatDollars(decision.expectedSavings)} ${comparison} $${CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS.toFixed(3)}`;
 }
 

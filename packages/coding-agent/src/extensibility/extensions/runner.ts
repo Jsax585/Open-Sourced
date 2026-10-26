@@ -78,7 +78,6 @@ import type {
 	ExtensionUIDialogOptions,
 	InputEvent,
 	InputEventResult,
-	CacheWarmingAction,
 	CacheWarmingDecisionEvent,
 	CacheWarmingDecisionEventResult,
 	McpNotificationEvent,
@@ -965,11 +964,12 @@ export class ExtensionRunner {
 
 	/**
 	 * Asks extensions to override a prompt-cache warming decision. The last
-	 * handler returning an action wins; handler failures are reported through
-	 * the extension error listeners and leave the warmer's decision standing.
+	 * handler returning an action wins, with its `extendWindow`; handler
+	 * failures are reported through the extension error listeners and leave the
+	 * warmer's decision standing.
 	 */
-	async emitCacheWarmingDecision(event: CacheWarmingDecisionEvent): Promise<CacheWarmingAction> {
-		let action = event.action;
+	async emitCacheWarmingDecision(event: CacheWarmingDecisionEvent): Promise<CacheWarmingDecisionEventResult> {
+		let decided: CacheWarmingDecisionEventResult = { action: event.action };
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(event.type);
 			if (!handlers || handlers.length === 0) continue;
@@ -982,10 +982,10 @@ export class ExtensionRunner {
 					ext,
 					handlerTimeoutForEvent(event.type),
 				)) as CacheWarmingDecisionEventResult | undefined;
-				if (result?.action !== undefined) action = result.action;
+				if (result?.action !== undefined) decided = { action: result.action, extendWindow: result.extendWindow };
 			}
 		}
-		return action;
+		return decided;
 	}
 	/** Registers the interactive transcript gate that must settle before a tool approval is presented. */
 	setToolApprovalPreviewWaiter(waiter: (toolCallId: string) => Promise<void>): () => void {

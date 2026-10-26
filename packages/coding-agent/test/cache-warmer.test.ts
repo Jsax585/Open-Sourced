@@ -6,6 +6,8 @@ import type { Model } from "@oh-my-pi/pi-catalog/types";
 import {
 	CacheWarmer,
 	type CacheWarmerDeps,
+	type CacheWarmingDecisionEvent,
+	type CacheWarmingDecisionEventResult,
 	type CacheWarmingRefreshEnd,
 	type CacheWarmingRefreshStart,
 	type CacheWarmStream,
@@ -413,28 +415,108 @@ describe("cache warmer lifecycle", () => {
 		expect(status.decision?.continuationProbability).toBe(0.15);
 	});
 
-	test("idle warming stops at the 30-minute safety limit", async () => {
-		const forced = harness({ decide: () => Promise.resolve("warm") });
-		start(forced);
-		forced.warmer.onAgentSettled();
+	test("idle warming stops at the 30-minute safety limit unless an extension extends the window", async () => {
+		// A plain "warm" beats the savings floor but keeps the window as a hard cap.
+		const plain = harness({ decide: () => Promise.resolve({ action: "warm" }) });
+		start(plain);
+		plain.warmer.onAgentSettled();
 		for (let minute = 0; minute < 40; minute++) await advance(60_000);
-		expect(forced.replays.length).toBeGreaterThan(0);
-		expect(forced.warmer.status).toMatchObject({ state: "inactive", reason: "30-minute idle safety limit reached" });
+		expect(plain.replays).toHaveLength(6);
+		expect(plain.warmer.status).toMatchObject({ state: "inactive", reason: "30-minute idle safety limit reached" });
+		expect(plain.refreshes.at(-1)).toMatchObject({
+			type: "end",
+			outcome: "hit",
+			warmingStopReason: "30-minute idle safety limit reached",
+		});
+
+		let extend = true;
+		const events: CacheWarmingDecisionEvent[] = [];
+		const extended = harness({
+			decide: event => {
+				events.push(event);
+				return Promise.resolve(extend ? { action: "warm", extendWindow: true } : { action: event.action });
+			},
+		});
+		start(extended);
+		extended.warmer.onAgentSettled();
+		for (let minute = 0; minute < 40; minute++) await advance(60_000);
+		// Refreshes at 4.5-minute steps continue past the 30-minute window: 36 min is the 8th.
+		expect(extended.replays).toHaveLength(8);
+		expect(extended.refreshes.filter(event => event.type === "end").map(event => event.outcome)).toEqual(
+			Array(8).fill("hit"),
+		);
+		expect(extended.warmed.every(warm => warm.extensionOverride)).toBe(true);
+		expect(extended.warmer.status).toMatchObject({ state: "scheduled", extensionOverride: true });
+		// One ask per refresh: 6 at fire time inside the window, then one when each later refresh is
+		// scheduled (31.5 and 36 min sent, 40.5 min armed), never a second one when it fires.
+		expect(events.map(event => event.window ?? "inside")).toEqual([
+			...Array(6).fill("inside"),
+			"idle",
+			"idle",
+			"idle",
+		]);
+		expect(events.filter(event => event.window).every(event => event.action === "stop")).toBe(true);
+		expect(events.every(event => event.refreshIntervalMs === SHORT_DELAY_MS)).toBe(true);
+
+		// The approved 40.5-minute refresh is sent; the next one, no longer extended, stops.
+		extend = false;
+		await advance(SHORT_DELAY_MS);
+		expect(extended.replays).toHaveLength(9);
+		expect(events).toHaveLength(10);
+		expect(extended.warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "30-minute idle safety limit reached",
+		});
 	});
 
-	test("warms a 1h entry during an active run but not after it settles", async () => {
+	test("warms a 1h entry after its run settles only while an extension asks for it", async () => {
 		const running = harness();
 		start(running, { cacheRetention: "long" });
 		await advance(LONG_DELAY_MS);
 		expect(running.replays).toHaveLength(1);
 
-		const settled = harness({ decide: () => Promise.resolve("warm") });
-		start(settled, { cacheRetention: "long" });
-		settled.warmer.onAgentSettled();
-		expect(settled.warmer.status).toMatchObject({
+		const unhandled = harness();
+		start(unhandled, { cacheRetention: "long" });
+		unhandled.warmer.onAgentSettled();
+		expect(unhandled.warmer.status).toMatchObject({
 			state: "inactive",
 			reason: "cache entry outlives the 30-minute idle window",
 		});
+
+		const plain = harness({ decide: () => Promise.resolve({ action: "warm" }) });
+		start(plain, { cacheRetention: "long" });
+		plain.warmer.onAgentSettled();
+		await drain();
+		expect(plain.warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "cache entry outlives the 30-minute idle window",
+		});
+		await advance(LONG_DELAY_MS);
+		expect(plain.replays).toHaveLength(0);
+
+		const events: CacheWarmingDecisionEvent[] = [];
+		const settled = harness({
+			decide: event => {
+				events.push(event);
+				return Promise.resolve({ action: "warm", extendWindow: true });
+			},
+		});
+		start(settled, { cacheRetention: "long" });
+		settled.warmer.onAgentSettled();
+		await drain();
+		expect(events).toEqual([
+			expect.objectContaining({ window: "idle", action: "stop", refreshIntervalMs: LONG_DELAY_MS }),
+		]);
+		expect(settled.warmer.status).toMatchObject({ state: "scheduled", extensionOverride: true });
+		await advance(LONG_DELAY_MS);
+		expect(settled.replays).toHaveLength(1);
+		expect(settled.refreshes.at(-1)).toMatchObject({ type: "end", phase: "idle", outcome: "hit" });
+		expect(settled.warmer.status).toMatchObject({ state: "scheduled", nextWarmAt: Date.now() + LONG_DELAY_MS });
+		// The settle ask covered the first refresh; scheduling the second asked once more.
+		expect(events).toHaveLength(2);
+		await advance(LONG_DELAY_MS);
+		expect(settled.replays).toHaveLength(2);
+		expect(events).toHaveLength(3);
 	});
 
 	test("adopts the 1h tier the provider reports writing for a resolver-keyed request", async () => {
@@ -523,8 +605,8 @@ describe("cache warmer lifecycle", () => {
 		expect(missed.warmer.cacheEntry?.touchedAt).toBe(missedTouch);
 	});
 
-	test("extensions can stop a refresh and force one past the threshold", async () => {
-		const stopped = harness({ decide: () => Promise.resolve("stop") });
+	test("extensions can stop a refresh and force one past the threshold or the one-hour window", async () => {
+		const stopped = harness({ decide: () => Promise.resolve({ action: "stop" }) });
 		start(stopped);
 		await advance(SHORT_DELAY_MS);
 		expect(stopped.replays).toHaveLength(0);
@@ -535,12 +617,37 @@ describe("cache warmer lifecycle", () => {
 			extensionOverride: true,
 		});
 
-		const forced = harness({ decide: () => Promise.resolve("warm") });
+		const forced = harness({ decide: () => Promise.resolve({ action: "warm" }) });
 		forced.promptTokens = 1_000;
 		start(forced);
 		await advance(SHORT_DELAY_MS);
 		expect(forced.replays).toHaveLength(1);
 		expect(forced.warmed[0]?.extensionOverride).toBe(true);
+
+		const plain = harness({ decide: () => Promise.resolve({ action: "warm" }) });
+		start(plain);
+		for (let minute = 0; minute < 70; minute++) await advance(60_000);
+		// 13 refreshes fit in the hour; the 14th would land at 63 minutes.
+		expect(plain.replays).toHaveLength(13);
+		expect(plain.warmer.status).toMatchObject({ state: "inactive", reason: "one-hour safety limit reached" });
+
+		const events: CacheWarmingDecisionEvent[] = [];
+		const pastHour = harness({
+			decide: event => {
+				events.push(event);
+				return Promise.resolve({ action: "warm", extendWindow: true });
+			},
+		});
+		start(pastHour);
+		for (let minute = 0; minute < 70; minute++) await advance(60_000);
+		expect(pastHour.replays).toHaveLength(15);
+		expect(pastHour.warmed.map(warm => warm.extensionOverride)).toEqual([...Array(13).fill(false), true, true]);
+		expect(events.map(event => event.window ?? "inside")).toEqual([
+			...Array(13).fill("inside"),
+			"streaming",
+			"streaming",
+			"streaming",
+		]);
 	});
 
 	test("extension failures and slow answers fall back to the warmer's own decision", async () => {
@@ -549,7 +656,7 @@ describe("cache warmer lifecycle", () => {
 		await advance(SHORT_DELAY_MS);
 		expect(failing.replays).toHaveLength(1);
 
-		const slow = harness({ decide: () => Promise.withResolvers<"warm">().promise });
+		const slow = harness({ decide: () => Promise.withResolvers<CacheWarmingDecisionEventResult>().promise });
 		start(slow);
 		await advance(SHORT_DELAY_MS);
 		expect(slow.replays).toHaveLength(0);
