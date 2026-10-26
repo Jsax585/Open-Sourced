@@ -2202,9 +2202,32 @@ export class ModelRegistry {
 			return { models: [], authoritativeProviders: new Set(), replaceRuntimeProviders: new Set() };
 		}
 		const writesBefore = getModelCacheWriteStats();
-		const discoveries = await Promise.all(
-			managerOptions.map(options => this.#discoverWithModelManager(options, strategy)),
-		);
+		// Kick off every discovery immediately — cold caches pay real network
+		// latency here and it must stay fully parallel — but consume the
+		// settled results one at a time with a macrotask yield in between.
+		// Each discovery's continuation runs sizeable synchronous work on the
+		// main thread (multi-MB cache payload reads/parses, static catalog
+		// materialization, per-provider merge). On a warm cache every promise
+		// settles in the same turn and the continuations run back-to-back,
+		// blocking the interactive loop for seconds right after first paint
+		// (see `LoopWatchdog` `ui.loop-blocked`). Yielding between consumers
+		// gives pending input and render work a turn without slowing the I/O.
+		const discoveryPromises = managerOptions.map(options => this.#discoverWithModelManager(options, strategy));
+		const discoveries: BuiltInDiscoveryResult[] = [];
+		// Every promise is awaited exactly once so no rejection goes unhandled;
+		// the first rejection (in provider order) is rethrown after the loop,
+		// matching `Promise.all`'s fail-fast contract as observed by
+		// `refreshInBackground`'s catch.
+		let firstError: unknown;
+		for (const discoveryPromise of discoveryPromises) {
+			try {
+				discoveries.push(await discoveryPromise);
+			} catch (error) {
+				firstError ??= error;
+			}
+			await new Promise<void>(resolve => setImmediate(resolve));
+		}
+		if (firstError !== undefined) throw firstError;
 		const writesAfter = getModelCacheWriteStats();
 		const rewrittenRows = writesAfter.payloadWrites - writesBefore.payloadWrites;
 		if (rewrittenRows > MODEL_CACHE_REWRITE_LOG_THRESHOLD) {
