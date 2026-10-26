@@ -4,7 +4,7 @@
 
 ### Breaking Changes
 
-- `PowerAssertion.start` now acquires no inhibitors when all flags are omitted or false; removed the `user` option.
+- `PowerAssertion.start` now acquires no inhibitors when all flags are omitted or false; removed the `user` option ([#17072](https://github.com/can1357/oh-my-pi/pull/17072) by [@develop7](https://github.com/develop7)).
 
 ### Fixed
 

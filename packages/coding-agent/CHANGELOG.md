@@ -4,7 +4,7 @@
 
 ### Breaking Changes
 
-- Replaced `power.sleepPrevention` with independent `power.inhibitIdle`, `power.inhibitSuspend`, and `power.keepDisplayAwake` switches, with power descriptions tailored to the current OS.
+- Replaced `power.sleepPrevention` with independent `power.inhibitIdle`, `power.inhibitSuspend`, and `power.keepDisplayAwake` switches, with power descriptions tailored to the current OS ([#17072](https://github.com/can1357/oh-my-pi/pull/17072) by [@develop7](https://github.com/develop7)).
 
 ### Added
 
