@@ -1,0 +1,12 @@
+// `/v1/models` is key-protected: it answers `401 unknown_api_key` without a
+// bearer key or with a rejected one (verified 2026-10-26), so login validates
+// the pasted key there without spending credits.
+auth "sideren" {
+	name "Sideren"
+	login "api-key" {
+		auth-url "https://www.sideren.io/dashboard/api"
+		instructions "Create or copy your API key from the Sideren dashboard (keys look like sdn_...)"
+		prompt "Paste your Sideren API key" placeholder="sdn_..."
+		validate "models-endpoint" label="Sideren" url="https://api.sideren.io/v1/models"
+	}
+}

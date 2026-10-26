@@ -177,6 +177,7 @@ The variables below supply credentials after runtime/config overrides and stored
 | `alibaba-coding-plan`            | `ALIBABA_CODING_PLAN_API_KEY`                                                 |
 | `sakana`                         | `SAKANA_API_KEY`, then `FUGU_API_KEY`                                         |
 | `sambanova`                      | `SAMBANOVA_API_KEY`                                                           |
+| `sideren`                        | `SIDEREN_API_KEY`                                                             |
 | `aimlapi`                        | `AIMLAPI_API_KEY`                                                             |
 | `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN`                                                                |
 | `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY`                                                            |
@@ -211,6 +212,8 @@ For `xai-oauth`, `XAI_API_KEY` is accepted for an explicit request but does not 
 `charm-hyper` is Charm's OpenAI-compatible inference gateway for coding agents. Issue or manage a key at `https://hyper.charm.land/`; the model list is discovered live from the provider's public `/v1/models` endpoint, and `HYPER_API_KEY` is accepted as a fallback alias for `CHARM_HYPER_API_KEY`.
 
 `inception` is Inception's native Mercury API. Set `INCEPTION_API_KEY` or run `/login inception` with a key from `https://platform.inceptionlabs.ai/dashboard/api-keys`, then select `inception/mercury-3`. OMP discovers chat models from `/v1/models`, including Mercury 3, Mercury 2.5, and Mercury 2; FIM/edit and Decisions-only models are excluded. Mercury 3 supports a 1,000,000-token context and up to 131,072 output tokens. Thinking levels are `minimal`, `low`, `medium`, and `high`; `minimal` maps to Inception's `instant`, and `off` requests that lowest effort rather than disabling reasoning entirely. Mercury does not stream its reasoning, so no thinking text appears and a `high` turn can be silent for minutes before its first output; OMP waits up to 10 minutes for Mercury 3's first chunk (`providers.streamFirstEventTimeoutSeconds` overrides this). While `/v1/models` reports Mercury 3 at $0, OMP prices it at the published launch rate ($0.10 input / $0.35 output per million tokens); a tariff reported by `/v1/models` takes precedence.
+
+`sideren` is Sideren's OpenAI-compatible gateway for coding agents. Set `SIDEREN_API_KEY` or run `/login sideren` with a key from `https://www.sideren.io/dashboard/api` (keys start with `sdn_`), then select a model such as `sideren/@sdn/deepseek-v4.1-flash-1017`. OMP discovers chat models from the key-protected `/v1/models` and keeps only the rows the key's plan can call, so a Free key lists the Free-plan models. Requests draw the account's plan credits rather than a per-token tariff, so models show as plan-included and OMP shows no per-token cost. Thinking levels follow each row's advertised `reasoning_effort` vocabulary; rows that advertise `none` use it as the thinking-off switch.
 
 SingularityAPI sells two unrelated products behind one brand, so OMP models them as two providers: they share no key, no billing model, and no effort ladder, and neither key is accepted by the other host.
 

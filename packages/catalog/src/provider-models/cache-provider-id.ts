@@ -26,6 +26,9 @@ const CREDENTIAL_SCOPED_MODEL_CACHE_PROVIDERS: Readonly<Record<string, true>> = 
 	// than from the synchronous, credential-less startup read.
 	"singularityapi-dev": true,
 	"singularityapi-tech": true,
+	// Sideren answers `/v1/models` per key (rows carry the key's plan access), so
+	// switching keys must not serve the previous key's authoritative roster.
+	sideren: true,
 };
 
 /** Whether a provider's model-cache namespace requires its resolved credential. */
@@ -48,6 +51,8 @@ export function getDefaultModelDiscoveryBaseUrl(providerId: string): string | un
 			return "https://opencode.ai/inference/go/v1";
 		case "opencode-zen":
 			return "https://opencode.ai/zen/v1";
+		case "sideren":
+			return "https://api.sideren.io/v1";
 		case "vllm":
 			return "http://127.0.0.1:8000/v1";
 		default:
@@ -212,6 +217,13 @@ export function resolveModelCacheProviderId(providerId: string, options: ModelCa
 			// carry `reasoning: false` and must be refetched.
 			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
 			return `vllm:models-v2:${Bun.hash(baseUrl).toString(36)}`;
+		}
+		case "sideren": {
+			// The roster is filtered by the key's plan, so the namespace hashes the
+			// key and the discovery endpoint.
+			const baseUrl = options.baseUrl ?? getDefaultModelDiscoveryBaseUrl(providerId)!;
+			const scope = `${options.apiKey ?? ""}\u0000${baseUrl}`;
+			return `sideren:models-v1:${Bun.hash(scope).toString(36)}`;
 		}
 		case "devin":
 			// v2: rows cached before Fusion pairings carried their lead uid as

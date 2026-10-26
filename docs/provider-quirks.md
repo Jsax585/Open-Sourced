@@ -1669,6 +1669,23 @@ SambaNova Cloud serves open-weight models through the OpenAI Chat Completions tr
 - **Roster exclusions**: embedding, Whisper/audio, and CLIP SKUs are dropped through the `exclude-models provider="sambanova"` rule in `runtime/behavior.kdl`.
 - **Authored seed**: `gpt-oss-120b` with its published $0.22 / $0.59 per 1M rate card; bundle policy `fallback`. It keeps the provider visible in `/model` before login and is replaced by the first live roster. SambaNova is credential-scoped in `generate-models.ts`, so the bundle never carries a generator account's roster.
 
+## Sideren (`sideren`)
+Sideren is an OpenAI-compatible inference gateway for coding agents at `https://api.sideren.io/v1`.
+
+### Special casings
+- **Plan-scoped roster**: `/v1/models` is answered per key and marks each row with `sideren.access.allowed`. `siderenModelManagerOptions` drops rows the key's plan cannot call and `kind: "embedding"` rows, so `/model` never offers a model that answers `plan_upgrade_required`.
+- **Thinking**: each row publishes its accepted `reasoning_effort` vocabulary in `capabilities.reasoning_efforts`. Discovery builds the ladder from it; `none` is the thinking-off switch (`reasoningDisableMode: "none-effort"`), never a rung, including on rows whose only value is `none`. Qwen rows use `reasoning_effort` too (Sideren ignores Qwen-native `enable_thinking`); Qwen 3.8 27B has no off value, so thinking-off sends its lowest effort. Reasoning streams on `reasoning_content`.
+- **Request dialect**: plain Chat Completions — `system` role, no `store`, output caps on `max_tokens` (`packages/catalog/src/compat/rules/providers/sideren.kdl`).
+
+### Auth & usage
+- **API Key Login**: `packages/catalog/src/compat/rules/auth/sideren.kdl` declares a `login "api-key"` rule pointing at `https://www.sideren.io/dashboard/api` and validates the key against `https://api.sideren.io/v1/models`, which answers 401 without a valid key and bills nothing. Environment key: `SIDEREN_API_KEY`.
+- **Pricing**: requests draw plan credits, so rows carry no per-token cost and are marked `pricing-status "included"`.
+
+### Catalog model handling
+- **Provider entry (`sideren`)**: default model `@sdn/deepseek-v4.1-flash-1017`, which every Sideren plan includes.
+- **Discovery replacement**: live discovery is authoritative (`dynamicModelsAuthoritative`) and skips cross-provider reference fills, so other hosts' prices and limits never backfill Sideren rows.
+- **Authored seeds**: 32 coding models on the Free through Max plans; bundle policy `always`. Sideren is credential-scoped in `generate-models.ts`, so the bundle never carries a generator account's roster.
+
 ## SiliconFlow (`siliconflow`)
 SiliconFlow is a high-performance AI inference platform providing access to open-source models (such as DeepSeek and GLM). It uses the OpenAI Chat Completions transport (`https://api.siliconflow.com/v1` for global, `https://api.siliconflow.cn/v1` for China region).
 

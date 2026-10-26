@@ -66,6 +66,7 @@ export type KnownProvider =
 	| "qwen-portal"
 	| "sakana"
 	| "sambanova"
+	| "sideren"
 	| "siliconflow"
 	| "siliconflow-cn"
 	| "singularityapi-dev"
