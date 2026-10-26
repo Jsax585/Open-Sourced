@@ -1,9 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Changed
-
-- A launch evaluates fewer modules before its first prompt: the `@file` attachment processor, the `--from-claude`/`--from-opencode` resume importer, the python-eval startup probe and the warp-event bridge load on demand, and the extension, custom-tool, custom-command and hook loaders no longer pull the package barrel into the boot graph ([#15224](https://github.com/can1357/oh-my-pi/pull/15224) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Fixed
 
@@ -107,6 +104,7 @@
 - Added `--no-context-files` to start a session without `AGENTS.md`, `CLAUDE.md` or other context files, including those of `--add-dir` roots and in subagents ([#16768](https://github.com/can1357/oh-my-pi/pull/16768) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
+- A launch evaluates fewer modules before its first prompt: the `@file` attachment processor, the `--from-claude`/`--from-opencode` resume importer, the python-eval startup probe and the warp-event bridge load on demand, and the extension, custom-tool, custom-command and hook loaders no longer pull the package barrel into the boot graph ([#15224](https://github.com/can1357/oh-my-pi/pull/15224) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Clarified how RPC and RPC-UI clients discover and invoke mounted MCP tools through `xd://` devices rather than relying on `dumpTools` ([#16864](https://github.com/can1357/oh-my-pi/pull/16864) by [@michaeltrefry](https://github.com/michaeltrefry))
 - The note `read` adds to a PDF whose pages have no extractable text (a scan) now points at the `:page<N>.png` selector, which returns the page as an image, instead of the browser prelude ([#16585](https://github.com/can1357/oh-my-pi/pull/16585) by [@will-bogusz](https://github.com/will-bogusz))
