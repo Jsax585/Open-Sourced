@@ -99,7 +99,7 @@ describe("AgentSession /new fallback persistence", () => {
 	});
 
 	it.each([
-		{ provider: "anthropic", id: "claude-opus-4-1", thinking: Effort.Low },
+		{ provider: "anthropic", id: "claude-opus-4-8", thinking: Effort.Low },
 		{ provider: "openai", id: "gpt-4o-mini", thinking: undefined },
 	])("preserves the availability primary across /new with $provider/$id", async ({ provider, id, thinking }) => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -210,7 +210,7 @@ describe("AgentSession /new fallback persistence", () => {
 
 	it("persists beneath a refusal detour and keeps the in-memory availability fallback layered", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const availabilityModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const availabilityModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const refusalModel = getBundledModel("openai", "gpt-4o")!;
 		const primary = formatModelStringWithRouting(primaryModel);
 		const availability = formatModelStringWithRouting(availabilityModel);
@@ -278,7 +278,7 @@ describe("AgentSession /new fallback persistence", () => {
 
 	it.each([false, true])("preserves manual effort beneath fallback layers (nested: %s)", async nested => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const refusalModel = getBundledModel("openai", "gpt-5")!;
 		const primary = formatModelStringWithRouting(primaryModel);
 		const fallback = formatModelStringWithRouting(fallbackModel);
@@ -341,7 +341,7 @@ describe("AgentSession /new fallback persistence", () => {
 
 	it("adopts a pinned refusal fallback as /new primary and uses its own chain", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const ownChainModel = getBundledModel("openai", "gpt-4o-mini")!;
 		const oldChainModel = getBundledModel("openai", "gpt-4o")!;
 		const primary = formatModelStringWithRouting(primaryModel);
@@ -417,7 +417,7 @@ describe("AgentSession /new fallback persistence", () => {
 		"drops pinned ownership beneath an unfinished /new detour (reject baseline: %s)",
 		async rejectBaseline => {
 			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-			const pinnedModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+			const pinnedModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 			const detourModel = getBundledModel("openai", "gpt-4o")!;
 			const ownChainModel = getBundledModel("openai", "gpt-4o-mini")!;
 			const primary = formatModelStringWithRouting(primaryModel);

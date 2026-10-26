@@ -124,7 +124,7 @@ describe("AgentSession refusal fallback response settlement", () => {
 		"keeps the fallback active during unexpected-stop recovery for %s output",
 		async output => {
 			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-			const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+			const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 			const primary = `${primaryModel.provider}/${primaryModel.id}`;
 			const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
 			const requestedModels: string[] = [];
@@ -183,7 +183,7 @@ describe("AgentSession refusal fallback response settlement", () => {
 
 	it("restores the primary when unexpected-stop recovery reaches its cap", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const primary = `${primaryModel.provider}/${primaryModel.id}`;
 		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
 		const requestedModels: string[] = [];
@@ -241,7 +241,7 @@ describe("AgentSession refusal fallback response settlement", () => {
 		["continues incomplete queued work on the fallback without an extra retry", "follow-up", true],
 	] as const)("%s", async (_name, queue, unexpected) => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const primary = `${primaryModel.provider}/${primaryModel.id}`;
 		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
 		const requestedModels: string[] = [];
@@ -302,7 +302,7 @@ describe("AgentSession refusal fallback response settlement", () => {
 
 	it("waits for a complete-stop verdict before restoring the primary", async () => {
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-1")!;
+		const fallbackModel = getBundledModel("anthropic", "claude-opus-4-8")!;
 		const primary = `${primaryModel.provider}/${primaryModel.id}`;
 		const fallback = `${fallbackModel.provider}/${fallbackModel.id}`;
 		const requestedModels: string[] = [];
