@@ -16,13 +16,13 @@ import {
 	validateAgentCompactionThresholdOverrides,
 } from "../config/compaction-threshold";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
-import * as modelScope from "../config/model-resolver";
-import { cfgEnabledModels } from "../config/model-settings";
 import { isProviderEnabled, isUserSourceEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
+import * as modelScope from "../config/model-resolver";
+import { cfgEnabledModels } from "../config/model-settings";
 import { MCPManager } from "../mcp/manager";
 import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
