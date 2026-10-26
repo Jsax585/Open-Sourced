@@ -21,4 +21,5 @@ it("prints the embedded OMP license and aggregate notices on the exact top-level
 	expect(exitCode).toBe(0);
 	expect(stderr).toBe("");
 	expect(stdout).toBe(`OMP License and Third-Party Notices\n\n${license.trimEnd()}\n\n${notices.trimEnd()}\n`);
+	expect(stdout.match(/^Copyright \(c\) 2017 Braintree$/m)?.[0]).toBe("Copyright (c) 2017 Braintree");
 });

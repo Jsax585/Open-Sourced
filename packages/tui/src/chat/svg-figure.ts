@@ -26,7 +26,7 @@ const UNITS_PER_ROW = 16;
 /** Least time between rasters of a fence that is still streaming. */
 const STREAM_INTERVAL_MS = 200;
 /** Longest raster edge; the native rasterizer caps the surface at 4096² pixels. */
-const MAX_EDGE_PX = 4096;
+export const MAX_SVG_RASTER_EDGE = 4096;
 /** Share of the terminal's rows one figure may fill, so it fits on screen whole. */
 const MAX_VIEWPORT_SHARE = 0.8;
 
@@ -113,6 +113,14 @@ export interface SvgFigureOptions {
 	markdown?: (text: string) => Markdown;
 	/** Shared inline-image budget; superseded rasters are released from it. */
 	budget?: ImageBudget;
+	/** Available rows in the actual caller's viewport; the native raster edge cap still applies. */
+	maxRows?: () => number;
+	/** Original fenced source when the SVG is a generated view, rather than authored SVG. */
+	sourceFallback?: () => { language: string; source: string };
+	/** Trusted app-owned name used while drawing; defaults to SVG. */
+	label?: string;
+	/** Optional paint palette for a generated figure; authored SVGs keep the shared palette. */
+	palette?: () => Readonly<Record<string, string>>;
 	/** The figure's rows changed outside a text update: a raster landed or rendering fell back to code. */
 	onChange: () => void;
 }
@@ -150,11 +158,15 @@ interface Attempt {
 let nextFigureId = 0;
 
 /** Cells a figure rendered at `width` may fill: the image's width, a share of the viewport, and the raster edge cap. */
-function limitsFor(width: number, cell: CellDimensions): Limits {
-	const viewportRows = Math.floor((process.stdout.rows || 24) * MAX_VIEWPORT_SHARE);
+function limitsFor(width: number, cell: CellDimensions, maxRows?: () => number): Limits {
+	const available = maxRows?.();
+	const viewportRows =
+		available !== undefined && Number.isFinite(available)
+			? Math.floor(available)
+			: Math.floor((process.stdout.rows || 24) * MAX_VIEWPORT_SHARE);
 	return {
-		columns: Math.min(imageMaxColumns(width), Math.floor(MAX_EDGE_PX / cell.widthPx)),
-		rows: Math.max(1, Math.min(viewportRows, Math.floor(MAX_EDGE_PX / cell.heightPx))),
+		columns: Math.min(imageMaxColumns(width), Math.floor(MAX_SVG_RASTER_EDGE / cell.widthPx)),
+		rows: Math.max(1, Math.min(viewportRows, Math.floor(MAX_SVG_RASTER_EDGE / cell.heightPx))),
 	};
 }
 
@@ -178,7 +190,7 @@ export class SvgFigure implements Component {
 	/** Last render width; rasters wait for the first render to know their room. */
 	#width: number | undefined;
 	#image: { raster: Raster; component: Image } | undefined;
-	#fallback: { source: string; md: Markdown } | undefined;
+	#fallback: { language: string; source: string; md: Markdown } | undefined;
 	#placeholder: readonly string[] | undefined;
 
 	constructor(options: SvgFigureOptions) {
@@ -201,6 +213,11 @@ export class SvgFigure implements Component {
 		});
 	}
 
+	/** A successful current-source raster exists, even if transport or the image budget hides its pixels. */
+	get hasRaster(): boolean {
+		return this.#raster?.source === this.#source && this.#failed !== this.#source;
+	}
+
 	/** Whether the final source still waits for its raster (or for failing to render). */
 	get pending(): boolean {
 		return this.#final && this.#raster?.source !== this.#source && this.#failed !== this.#source;
@@ -214,7 +231,7 @@ export class SvgFigure implements Component {
 		const raster = this.#raster;
 		if (!raster) {
 			if (!this.#options.markdown) return [];
-			this.#placeholder ??= [` ${theme.fg("dim", "Drawing SVG…")}`];
+			this.#placeholder ??= [` ${theme.fg("dim", `Drawing ${this.#options.label ?? "SVG"}…`)}`];
 			return this.#placeholder;
 		}
 		return this.#imageFor(raster).render(width);
@@ -247,7 +264,7 @@ export class SvgFigure implements Component {
 		const attempt = this.#attempt;
 		if (this.#failed === this.#source) return false;
 		const cell = getCellDimensions();
-		const limits = limitsFor(width, cell);
+		const limits = limitsFor(width, cell, this.#options.maxRows);
 		return (
 			attempt === undefined ||
 			attempt.source !== this.#source ||
@@ -302,7 +319,7 @@ export class SvgFigure implements Component {
 		const attempt: Attempt = {
 			source: this.#source,
 			cell,
-			limits: limitsFor(width, cell),
+			limits: limitsFor(width, cell, this.#options.maxRows),
 			themeEpoch: getThemeEpoch(),
 			final: this.#final,
 		};
@@ -313,7 +330,7 @@ export class SvgFigure implements Component {
 			this.#rasterizing = true;
 			this.#startedAt = performance.now();
 			try {
-				const prepared = prepareSvg(svg, svgFigurePalette());
+				const prepared = prepareSvg(svg, this.#options.palette?.() ?? svgFigurePalette());
 				png = await rasterizeSvg(
 					new TextEncoder().encode(prepared),
 					attempt.limits.columns * cell.widthPx,
@@ -378,7 +395,7 @@ export class SvgFigure implements Component {
 			{
 				maxWidthCells: columns,
 				maxHeightCells: rows,
-				filename: "svg",
+				filename: this.#options.label?.toLowerCase() ?? "svg",
 				budget: this.#options.budget,
 				imageKey: raster.key,
 				requestRender: this.#options.onChange,
@@ -391,10 +408,10 @@ export class SvgFigure implements Component {
 
 	/** The source as the fenced code block it was written as, fenced longer than any backtick run inside. */
 	#fallbackRows(width: number): readonly string[] {
-		const source = this.#source;
+		const { language, source } = this.#options.sourceFallback?.() ?? { language: "svg", source: this.#source };
 		if (!this.#options.markdown) return [];
-		if (this.#fallback?.source !== source) {
-			this.#fallback = { source, md: this.#options.markdown(fencedCode("svg", source)) };
+		if (this.#fallback?.source !== source || this.#fallback.language !== language) {
+			this.#fallback = { language, source, md: this.#options.markdown(fencedCode(language, source)) };
 		}
 		return this.#fallback.md.render(width);
 	}
