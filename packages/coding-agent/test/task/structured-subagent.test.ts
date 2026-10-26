@@ -1440,7 +1440,7 @@ describe("agent frontmatter structured opt-in", () => {
 describe("per-call model preflight", () => {
 	const target = createMockModel({ id: "target" });
 	const painter = { ...createMockModel({ id: "painter" }), kind: "image" as const };
-	function perCallSession(settings: Record<string, unknown>, warm = true): ToolSession {
+	function perCallSession(settings: Record<string, unknown>, warm = true, refreshPending = false): ToolSession {
 		return Object.assign(
 			session({
 				settings: Settings.isolated({ "task.isolation.enabled": false, "task.maxRecursionDepth": 2, ...settings }),
@@ -1450,13 +1450,15 @@ describe("per-call model preflight", () => {
 				modelRegistry: {
 					getAvailable: (kind?: string) => (!warm ? [] : kind === "chat" ? [target] : [target, painter]),
 					awaitBackgroundRefresh: async () => {},
+					isBackgroundRefreshPending: () => refreshPending,
 				},
 			},
 		);
 	}
 
+	// `off` refuses every kind and `eval` refuses task calls. The selector is invalid on purpose:
+	// the disabled gate is reported first, so a caller is never told to fix a selector it may not send.
 	it.each([
-		["off", "task"],
 		["off", "eval"],
 		["eval", "task"],
 	] as const)("rejects model under task.perCallModel: %s for %s calls", async (mode, invocationKind) => {
@@ -1466,7 +1468,7 @@ describe("per-call model preflight", () => {
 				request({
 					session: perCallSession({ "task.perCallModel": mode }),
 					invocationKind,
-					perCallModel: "mock/target",
+					perCallModel: "@smol",
 				}),
 			),
 		).rejects.toThrow(`task.perCallModel: ${mode}`);
@@ -1474,7 +1476,6 @@ describe("per-call model preflight", () => {
 
 	it.each([
 		["on", "task"],
-		["on", "eval"],
 		["eval", "eval"],
 	] as const)("routes an approved model above the agent's own under %s for %s calls", async (mode, invocationKind) => {
 		mockDiscovery({ ...AGENT, model: ["mock/agent-own"] });
@@ -1494,7 +1495,9 @@ describe("per-call model preflight", () => {
 	it.each([
 		["an unconfigured role", "@smol", {}, /has no modelRoles entry/],
 		["an unknown role", "@nonexistent", {}, /names no configured model role/],
-		["a legacy default alias", "pi/default", {}, /not a per-call selector/],
+		["a legacy default alias", "pi/default", {}, /invalid `model`/],
+		// Shaped like provider/model-id, but names the configured custom role `review`.
+		["a legacy alias of a custom role", "pi/review", {}, /invalid `model`/],
 		["@default", "@default:high", { modelRoles: { default: "mock/target" } }, /not a per-call selector/],
 		["a non-chat role", "@image", { modelRoles: { image: "mock/painter" } }, /non-chat role/],
 		["a glob", "mock/*", {}, /invalid `model`/],
@@ -1528,6 +1531,27 @@ describe("per-call model preflight", () => {
 				}),
 			),
 		).rejects.toThrow(error);
+	});
+
+	it("defers a model discovery has not loaded yet to the executor's post-refresh check", async () => {
+		mockDiscovery();
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({ session: perCallSession({ "task.perCallModel": "on" }, true, true), perCallModel: "mock/missing" }),
+		);
+		expect(policy.modelOverride).toEqual(["mock/missing"]);
+		expect(policy.perCallModelGrants).toBeDefined();
+	});
+
+	it("still rejects a non-chat model while discovery is running", async () => {
+		mockDiscovery();
+		await expect(
+			resolveEffectiveSubagentPolicy(
+				request({
+					session: perCallSession({ "task.perCallModel": "on" }, true, true),
+					perCallModel: "mock/painter",
+				}),
+			),
+		).rejects.toThrow(/image model; a subagent needs a chat model/);
 	});
 
 	it("defers availability and approval to the executor while the registry is cold", async () => {
@@ -1564,6 +1588,18 @@ describe("per-call model preflight", () => {
 		// A single role request keeps its identity for the inherited retry chain and revival.
 		expect(policy.modelRole).toBe("review");
 		expect(policy.parentActiveModelPattern).toBeUndefined();
+	});
+
+	it("resolves role selectors against the operator's settings, not a subagent overlay", async () => {
+		mockDiscovery();
+		const base = perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } });
+		// An overlay (advisor frontmatter, a retry-role snapshot) injects a role the operator never configured.
+		const overlaid = Object.assign(base, {
+			settings: base.settings.overlay({ modelRoles: { ...base.settings.getModelRoles(), sneaky: "mock/target" } }),
+		});
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: overlaid, perCallModel: "@sneaky" })),
+		).rejects.toThrow(/names no configured model role/);
 	});
 
 	it("skips unavailable candidates in caller order and drops the role identity of a list", async () => {
@@ -1612,6 +1648,7 @@ describe("per-call model preflight", () => {
 					awaitBackgroundRefresh: async () => {
 						loaded = true;
 					},
+					isBackgroundRefreshPending: () => !loaded,
 				},
 			},
 		);

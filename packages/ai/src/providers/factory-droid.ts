@@ -238,6 +238,24 @@ function resolveRoute(
 	return route;
 }
 
+/**
+ * Every server-side refusal fallback target a request for `model` can carry on
+ * any upstream it may route to. Factory sends the chain natively, so callers
+ * cannot opt out: the request may switch to these models server-side.
+ */
+export function factoryDroidServerSideFallbackModels(model: Model<"factory-droid-agent">): string[] {
+	const registry = resolveFactoryDroidPolicy(model);
+	const wire = registry?.wire ?? "openai-completions";
+	if (wire === "google-generate") return [];
+	const targets = new Set<string>();
+	for (const upstream of model.factoryDroidApiProviders ?? registry?.rotation ?? []) {
+		const fallbackModels = resolveModelPolicy({ ...model, api: wire }, { upstream }).catalog.serverSideFallbackModels;
+		if (!Array.isArray(fallbackModels)) continue;
+		for (const entry of fallbackModels) if (typeof entry === "string") targets.add(entry);
+	}
+	return [...targets];
+}
+
 /** The attempt's effort: undefined when reasoning is off. */
 function selectEffort(
 	model: Model<"factory-droid-agent">,
@@ -595,6 +613,64 @@ function streamWire(wire: FactoryDroidWire, a: Attempt): AssistantMessageEventSt
 		case "openai-completions":
 			return streamCompletionsWire(a, a.route.inner as Model<"openai-completions">);
 	}
+}
+
+/** Wires that carry Factory's `generate_image` models. */
+export type FactoryDroidImageWire = Extract<FactoryDroidWire, "openai-responses" | "google-generate">;
+
+/** Endpoint, identity headers and system identity for one Factory image request. */
+export interface FactoryDroidImageRoute {
+	/** `openai-responses` rides the Images API beside Responses; `google-generate` the native Gemini route. */
+	wire: FactoryDroidImageWire;
+	baseUrl: string;
+	headers: Record<string, string>;
+	/** Droid identity the proxy requires: the Images `instructions` field or the Gemini system instruction. */
+	identity: string;
+}
+
+/**
+ * Bind an image request to the same client identity chat sends: the CLI's
+ * Images and Gemini image calls reuse its chat request headers for the
+ * model's upstream, and the proxy runs the same Droid identity check.
+ */
+export function factoryDroidImageRoute(
+	model: Model<"factory-droid-agent">,
+	token: string,
+	sessionId: string | undefined,
+	/** Account identity of the credential serving this attempt; host, org and upstream follow it. */
+	identity: OAuthRequestIdentity | undefined,
+): FactoryDroidImageRoute {
+	const registry = resolveFactoryDroidPolicy(model);
+	const wire = registry?.wire;
+	if (!registry?.image || (wire !== "openai-responses" && wire !== "google-generate")) {
+		throw new AIError.ValidationError(`Factory Droid ${model.id} is not an image generation model`);
+	}
+	const scope = scopeToAccount(model, registry, wire, identity, token);
+	const requestId = crypto.randomUUID();
+	// Same route policy chat resolves for this upstream: OpenAI-family routes
+	// name their platform org, and session-locked routes say so.
+	const { policy } = resolveRoute(model, scope, wire);
+	return {
+		wire,
+		baseUrl: scope.baseUrl,
+		headers: buildIdentityHeaders({
+			upstream: scope.upstream,
+			routingSource: policy.routingSessionLock
+				? "session_lock"
+				: (model.factoryDroidRoutingSource ?? "registry_default"),
+			sessionUuid: sessionId ? deterministicUuid(sessionId) : requestId,
+			requestId,
+			orgId: scope.orgId,
+			wire,
+			openaiPlatformHeader: policy.openaiPlatformHeader,
+		}),
+		identity: DROID_SYSTEM_PREFIX,
+	};
+}
+
+/** Whether a catalog model runs on the Factory Droid transport. */
+export function isFactoryDroidModel(model: Model<Api>): model is Model<"factory-droid-agent"> {
+	return model.api === "factory-droid-agent";
 }
 
 export const streamFactoryDroid: StreamFunction<"factory-droid-agent"> = (

@@ -77,7 +77,10 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
 		const requestedName = optionalString(record, "name");
 		const context = optionalString(record, "context");
 		const tools = optionalTools(record);
-		const modelProblem = invalidModelSelectorReason(record.model, "workpool()");
+		const modelProblem = invalidModelSelectorReason(record.model, "workpool()", {
+			settings: options.session.settings,
+			invocationKind: "eval",
+		});
 		if (modelProblem) throw new ToolError(modelProblem);
 		const model = isPerCallModelShape(record.model) ? record.model : undefined;
 		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
