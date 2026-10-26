@@ -138,6 +138,42 @@ describe("jfind tree", () => {
 		}
 	});
 
+	it("cancels an active bounded listing through the real native filesystem bridge", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-native-cancel-"));
+		const entered = Promise.withResolvers<void>();
+		const released = Promise.withResolvers<void>();
+		const controller = new AbortController();
+		const started = performance.now();
+		try {
+			const listing = listFiles(
+				{ path: "skill://bounded-scan", type: "directory" },
+				{
+					includeHidden: false,
+					filesystem: {
+						nativeLocalPaths: true,
+						handler: async () => {
+							entered.resolve();
+							await released.promise;
+							return { local: dir };
+						},
+					},
+					maxScanEntries: 32,
+					maxScanBytes: 1024,
+					timeoutMs: 2_000,
+					signal: controller.signal,
+				},
+			);
+			const outcome = listing.catch(error => error);
+			await entered.promise;
+			controller.abort();
+			expect(await outcome).toMatchObject({ name: "AbortError" });
+			expect(performance.now() - started).toBeLessThan(2_000);
+		} finally {
+			released.resolve();
+			await removeWithRetries(dir);
+		}
+	});
+
 	it("does not spend the scan budget on files jfind never searches", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-scan-ineligible-"));
 		try {
