@@ -28,6 +28,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { Settings } from "../config/settings";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
@@ -58,6 +59,7 @@ import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "@oh-my-pi/pi-tui/tools/task";
 import { repairTaskParams } from "@oh-my-pi/pi-tui/tools/task-repair-args";
 import {
+	invalidExactModelSelectorReason,
 	invalidModelSelectorReason,
 	resolveEffectiveSubagentPolicy,
 	runStructuredSubagent,
@@ -294,7 +296,12 @@ function validateEffort(effort: TaskEffort | undefined, label: string): string |
 	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
 }
 
-function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string | undefined {
+function validateSpawnParams(
+	params: TaskParams,
+	batchEnabled: boolean,
+	settings: Settings,
+	hostModel: boolean,
+): string | undefined {
 	const hasTask = typeof params.task === "string" && params.task.trim() !== "";
 	const tasks = params.tasks;
 	if (batchEnabled && tasks !== undefined) {
@@ -312,7 +319,7 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			const label = `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`;
 			const effortError = validateEffort(item.effort, label);
 			if (effortError) return effortError;
-			const modelError = invalidModelSelectorReason(item.model, label);
+			const modelError = validateModel(item, label, settings, hostModel);
 			if (modelError) return modelError;
 		}
 		const seen = new Map<string, string>();
@@ -336,7 +343,23 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string 
 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
 	}
-	return validateEffort(params.effort, "The call") ?? invalidModelSelectorReason(params.model, "The call");
+	return validateEffort(params.effort, "The call") ?? validateModel(params, "The call", settings, hostModel);
+}
+
+/**
+ * A model-facing `model` is a per-call model for every agent, the bundled seance included: the
+ * `task.perCallModel` gate first, then the exact-selector shape. A host selection (`/seance`)
+ * arrives through {@link executeTaskFromHost}; it must be exact too, but the gate does not cover it.
+ */
+function validateModel(
+	item: TaskItem | TaskParams,
+	label: string,
+	settings: Settings,
+	hostModel: boolean,
+): string | undefined {
+	return hostModel
+		? invalidExactModelSelectorReason(item.model, label, settings)
+		: invalidModelSelectorReason(item.model, label, { settings, invocationKind: "task" });
 }
 
 function spawnModelFields(
@@ -420,11 +443,13 @@ function planSpawns(
 	batchEnabled: boolean,
 	defaultAgent: string,
 	seanceAdvertised: boolean,
+	settings: Settings,
+	hostModel = false,
 ): SpawnPlan | string {
 	const params = repairTaskParams(rawParams as TaskParams);
 	const error =
 		validateShapeParams(batchEnabled, params) ??
-		validateSpawnParams(params, batchEnabled) ??
+		validateSpawnParams(params, batchEnabled, settings, hostModel) ??
 		validateSeanceParams({ params, batchEnabled, defaultAgent, seanceAdvertised });
 	if (error) return error;
 	const items = resolveSpawnItems(params);
@@ -731,6 +756,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				this.#isBatchEnabled(),
 				this.#defaultAgent(),
 				this.#seanceSchemaFields() !== undefined,
+				this.session.settings,
 			);
 			return typeof plan === "string" ? undefined : plan.spawns;
 		},
@@ -1032,7 +1058,14 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// item's agent type against the session's actual default agent.
 		const defaultAgent = this.#defaultAgent();
 		const batchEnabled = this.#isBatchEnabled();
-		const plan = planSpawns(rawParams, batchEnabled, defaultAgent, this.#seanceSchemaFields() !== undefined);
+		const plan = planSpawns(
+			rawParams,
+			batchEnabled,
+			defaultAgent,
+			this.#seanceSchemaFields() !== undefined,
+			this.session.settings,
+			hostModel !== undefined,
+		);
 		if (typeof plan === "string") {
 			return createTaskModeError(plan);
 		}

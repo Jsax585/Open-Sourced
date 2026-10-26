@@ -10,7 +10,7 @@ import type { Api, ModelSpec } from "../types";
 import { FACTORY_DROID_WIRES, type FactoryDroidRegion, type FactoryDroidWire } from "../wire/factory-droid";
 import { apiRouteFor } from "./behavior";
 import { seedModels } from "./providers";
-import { resolveCatalogAxes } from "./resolve";
+import { resolveCatalogAxes, resolveModelPolicy } from "./resolve";
 
 const PROVIDER = "factory-droid";
 
@@ -59,6 +59,8 @@ export interface FactoryDroidModelPolicy {
 	entitlement: FactoryDroidEntitlement;
 	/** Native default with no caller effort is thinking off. */
 	defaultReasoningOff: boolean;
+	/** A `generate_image` model: gated by the org's image-generation settings, served through Factory's image routes. */
+	image: boolean;
 }
 
 /** One registry model: its roster row and resolved policy. */
@@ -128,6 +130,7 @@ function readPolicy(spec: ModelSpec<"factory-droid-agent">): FactoryDroidModelPo
 			...(baseVariant !== undefined && { baseVariant }),
 		},
 		defaultReasoningOff: catalog.defaultReasoningOff === true,
+		image: catalog.kind === "image",
 	};
 }
 
@@ -142,6 +145,27 @@ export function resolveFactoryDroidPolicy(
 ): FactoryDroidModelPolicy | undefined {
 	const id = model.requestModelId ?? model.id;
 	return factoryDroidRegistry().find(entry => entry.spec.id === id)?.policy;
+}
+
+/**
+ * Whether a thinking-off request still reasons on an upstream that may serve the
+ * model: the wire's KDL `disabled-thinking` keeps adaptive or between-tools
+ * thinking, or its completions dialect is `forced-on`. False outside the registry.
+ */
+export function factoryDroidOffKeepsReasoning(model: Pick<ModelSpec<Api>, "id" | "requestModelId">): boolean {
+	const id = model.requestModelId ?? model.id;
+	const entry = factoryDroidRegistry().find(candidate => candidate.spec.id === id);
+	if (!entry) return false;
+	const { wire, rotation } = entry.policy;
+	return (rotation.length > 0 ? rotation : [undefined]).some(upstream => {
+		const resolved = resolveModelPolicy({ ...entry.spec, api: wire }, upstream ? { upstream } : undefined);
+		const disabled = (resolved.compat as { disabledThinking?: string } | undefined)?.disabledThinking;
+		return (
+			disabled === "adaptive" ||
+			disabled === "between-tools" ||
+			resolved.request.completionsReasoningMode === "forced-on"
+		);
+	});
 }
 
 /**

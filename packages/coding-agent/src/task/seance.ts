@@ -3,7 +3,12 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
-import { resolveModelOverrideWithAuthFallback, resolveSessionModelSelector } from "../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	resolveModelOverride,
+	resolveModelOverrideWithAuthFallback,
+	resolveSessionModelSelector,
+} from "../config/model-resolver";
 import { sessionFilesFromDisk } from "../internal-urls/registry-helpers";
 import seanceAssignmentTemplate from "../prompts/system/seance-assignment.md" with { type: "text" };
 import seanceTaskGuidanceTemplate from "../prompts/tools/seance-task-guidance.md" with { type: "text" };
@@ -253,12 +258,16 @@ export async function prepareSeance(context: {
 	for (const selector of requestedModels) {
 		if (requestedModel === undefined) {
 			const resolved = resolveSessionModelSelector(modelRegistry, selector);
-			if (
-				resolved &&
-				(!context.modelGrants || isPerCallModelApproved(resolved.model, context.modelGrants, modelRegistry))
-			) {
+			if (!resolved) continue;
+			if (!context.modelGrants) {
 				modelPatterns.push(selector);
+				continue;
 			}
+			// Approve the identity the worker will dispatch: its exact resolution keeps any `@upstream` pin.
+			const exact = resolveModelOverride([selector], modelRegistry, context.session.settings, {
+				exactOnly: true,
+			}).model;
+			if (exact && isPerCallModelApproved(exact, context.modelGrants, modelRegistry)) modelPatterns.push(selector);
 			continue;
 		}
 		const resolved = await resolveModelOverrideWithAuthFallback(
@@ -271,10 +280,11 @@ export async function prepareSeance(context: {
 		);
 		if (resolved.model && modelRegistry.hasConfiguredAuth(resolved.model)) {
 			if (context.modelGrants) assertPerCallModelApproved(resolved.model, context.modelGrants, modelRegistry);
+			// An exact selection keeps its resolved identity, including an `@upstream` pin, through dispatch.
 			modelPatterns.push(
 				context.exactModel
 					? formatModelSelectorValue(
-							`${resolved.model.provider}/${resolved.model.id}`,
+							formatModelStringWithRouting(resolved.model),
 							resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
 						)
 					: selector,

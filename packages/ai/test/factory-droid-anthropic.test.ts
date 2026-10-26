@@ -3,7 +3,7 @@ import { type } from "@oh-my-pi/omptype";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { streamAnthropic } from "../src/providers/anthropic";
-import { streamFactoryDroid } from "../src/providers/factory-droid";
+import { factoryDroidServerSideFallbackModels, streamFactoryDroid } from "../src/providers/factory-droid";
 import type { AnthropicFallbackCreditHandle, AssistantMessage, Message } from "../src/types";
 import {
 	anthropicChunks,
@@ -12,6 +12,17 @@ import {
 	factoryModel,
 	WORKOS_TOKEN,
 } from "./helpers/factory-droid";
+
+/** The `ttl` of every cache breakpoint in a request body, `5m` where none is set. */
+function breakpointTtls(body: unknown): string[] {
+	if (Array.isArray(body)) return body.flatMap(breakpointTtls);
+	if (typeof body !== "object" || body === null) return [];
+	return Object.entries(body).flatMap(([key, value]) => {
+		if (key !== "cache_control") return breakpointTtls(value);
+		if (typeof value !== "object" || value === null) return [];
+		return "ttl" in value && typeof value.ttl === "string" ? [value.ttl] : ["5m"];
+	});
+}
 
 describe("Factory Droid anthropic wire (Claude)", () => {
 	it("does not invent effort when the registry default leaves thinking off", async () => {
@@ -39,6 +50,25 @@ describe("Factory Droid anthropic wire (Claude)", () => {
 		expect(captured[0].headers["x-api-key"]).toBe("placeholder");
 	});
 
+	it.each([
+		[["anthropic"], ["claude-opus-5"]],
+		[["vertex_anthropic"], []],
+	])("reports the refusal fallback targets a %j rotation always sends", async (rotation, expected) => {
+		const captured: CapturedRequest[] = [];
+		const model = factoryModel("claude-fable-5", rotation);
+		await streamFactoryDroid(
+			model,
+			{ messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+			{ apiKey: WORKOS_TOKEN, fetch: captureFetch(captured, anthropicChunks("OK")) },
+		).result();
+
+		// Callers cannot opt out, so approval must see exactly what the request carries.
+		expect((captured[0]!.body.fallbacks as { model: string }[] | undefined)?.map(entry => entry.model) ?? []).toEqual(
+			expected,
+		);
+		expect(factoryDroidServerSideFallbackModels(model)).toEqual(expected);
+	});
+
 	it("withholds refusal fallbacks on vertex/bedrock rotations, which gate the beta themselves", async () => {
 		const captured: CapturedRequest[] = [];
 		const model = factoryModel("claude-fable-5");
@@ -59,6 +89,31 @@ describe("Factory Droid anthropic wire (Claude)", () => {
 		expect(request.headers["anthropic-beta"] ?? "").not.toContain("server-side-fallback-2026-06-01");
 		expect(request.headers["anthropic-beta"] ?? "").not.toContain("fallback-credit-2026-06-01");
 	});
+
+	it.each([
+		["anthropic", "1h"],
+		["vertex_anthropic", "1h"],
+		["bedrock_anthropic", "1h"],
+		["azure_anthropic", "1h"],
+		["snowflake", "5m"],
+	] as const)(
+		"writes long retention on the %s upstream as ttl %p without the extended-cache beta",
+		async (upstream, ttl) => {
+			const captured: CapturedRequest[] = [];
+			await streamFactoryDroid(
+				factoryModel("claude-opus-4-6", [upstream]),
+				{ systemPrompt: ["Stay concise."], messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+				{ apiKey: WORKOS_TOKEN, cacheRetention: "long", fetch: captureFetch(captured, anthropicChunks("OK")) },
+			).result();
+
+			const request = captured[0]!;
+			expect(request.headers["x-api-provider"]).toBe(upstream);
+			const ttls = breakpointTtls(request.body);
+			expect(ttls.length).toBeGreaterThan(0);
+			expect(ttls.filter(written => written !== ttl)).toEqual([]);
+			expect(request.headers["anthropic-beta"] ?? "").not.toContain("extended-cache-ttl-2025-04-11");
+		},
+	);
 
 	it.each([
 		["required", () => ({ type: "any" })],

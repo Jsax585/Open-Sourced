@@ -6,6 +6,7 @@ import { loadBundledAgents, parseAgent } from "@oh-my-pi/pi-coding-agent/task/ag
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
 import { isBundledSeance, seanceTaskSchemaFields } from "@oh-my-pi/pi-coding-agent/task/seance";
+import * as seanceModule from "@oh-my-pi/pi-coding-agent/task/seance";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
@@ -250,5 +251,47 @@ describe("task spawn validation", () => {
 		expect(await description("off")).not.toContain("`model`: one exact");
 		expect(await description("eval")).not.toContain("`model`: one exact");
 		expect(await description("on")).toContain("`model`: one exact");
+	});
+
+	it("gates a model-facing seance on the resolved agent, not the raw `agent` value", async () => {
+		const seen: { model: unknown; gated: boolean }[] = [];
+		vi.spyOn(seanceModule, "prepareSeance").mockImplementation(async context => {
+			seen.push({ model: context.model, gated: context.modelGrants !== undefined });
+			throw new Error("stop after seance received its selectors");
+		});
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [bundledSeance],
+			projectAgentsDir: null,
+		});
+		const run = async (batch: boolean, params: Record<string, unknown>) => {
+			const tool = await TaskTool.create(
+				createSession({ parentSpawns: "seance", settings: { "task.perCallModel": "off", "task.batch": batch } }),
+			);
+			const result = await tool.execute("tool-call", params);
+			return result.content.find(part => part.type === "text")?.text ?? "";
+		};
+		const variants = (model?: unknown) => {
+			const item = {
+				task: "What was decided?",
+				sourceSession: "/tmp/source.jsonl",
+				...(model === undefined ? {} : { model }),
+			};
+			return [
+				[false, item],
+				[false, { ...item, agent: " seance " }],
+				[true, { context: "c", tasks: [item] }],
+				[true, { context: "c", tasks: [{ ...item, agent: " seance " }] }],
+			] as const;
+		};
+		// An explicit selector is refused by the gate before its shape is judged, however the agent was named.
+		for (const [batch, params] of variants(["anthropic/claude-sonnet-4-5", "openai/gpt-5"])) {
+			const text = await run(batch, params);
+			expect(text).toContain("task.perCallModel: off");
+			expect(text).not.toContain("invalid `model` value");
+		}
+		expect(seen).toEqual([]);
+		// Without one, every spelling reaches the bundled seance's saved-model path under the grants.
+		for (const [batch, params] of variants()) await run(batch, params);
+		expect(seen).toEqual(Array.from({ length: 4 }, () => ({ model: undefined, gated: true })));
 	});
 });

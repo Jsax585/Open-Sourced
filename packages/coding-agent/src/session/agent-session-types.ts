@@ -48,6 +48,7 @@ import type { ToolSession } from "../tools";
 import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SettingsGatedToolDelta } from "./session-tools";
+import type { CostGate } from "./cost-gate";
 import type { SessionManager } from "./session-manager";
 
 /** Maximum time the interactive shutdown path waits for Mnemopi consolidation. */
@@ -193,6 +194,8 @@ export interface AgentSessionConfig {
 	additionalExtensionPaths?: readonly string[];
 	/** Mirror of `disableExtensionDiscovery`; used when no inherited root provider exists. */
 	disableExtensionDiscovery?: boolean;
+	/** Cost gate of the session tree; refuses this session's model requests at `session.maxCost`. */
+	costGate?: CostGate;
 	/** Whether the session spawn policy permits the read-only `scout` subagent. Defaults to true. */
 	scoutAllowedBySpawnPolicy?: boolean;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
@@ -205,7 +208,10 @@ export interface AgentSessionConfig {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); every later change, including retry-fallback recovery, is re-clamped to it. */
 	thinkingLevelCeiling?: Effort;
-	/** Never switch to a retry fallback model; the turn fails instead. */
+	/**
+	 * Never switch the main-loop model: no retry fallback, context promotion or usage-aware fallback;
+	 * the turn retries on, or fails with, its own model instead.
+	 */
 	disableModelFallback?: boolean;
 	/** Retry chain ownership when startup selected one of its fallback entries. */
 	initialRetryFallback?: InitialRetryFallbackState;
@@ -468,6 +474,8 @@ export interface DroppedPrompt {
 	text: string;
 	/** Image attachments submitted with the prompt. */
 	images?: ImageContent[];
+	/** Why the session refused it (e.g. the cost cap), for hosts to show beside the restored text; absent for an abort. */
+	reason?: string;
 }
 
 /** Options for AgentSession.followUp(). */
@@ -568,6 +576,8 @@ export interface SessionStats {
 	};
 	/** Concrete provider-routed model ids with finalized turn counts. */
 	routedModels?: Record<string, number>;
+	/** Failed edits by the engine's `errorKind`. */
+	editRejections?: Record<string, number>;
 	contextUsage?: ContextUsage;
 }
 

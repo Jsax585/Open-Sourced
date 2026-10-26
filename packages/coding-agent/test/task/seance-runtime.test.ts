@@ -5,6 +5,7 @@ import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import type { MockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
@@ -19,7 +20,10 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
-import { runStructuredSubagent } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
+import {
+	resolveEffectiveSubagentPolicy,
+	runStructuredSubagent,
+} from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import subagentSystemPromptTemplate from "../../src/prompts/system/subagent-system-prompt.md" with { type: "text" };
 import seanceAssignmentTemplate from "../../src/prompts/system/seance-assignment.md" with { type: "text" };
@@ -316,6 +320,48 @@ describe("model-facing seance model approval", () => {
 			expect(fixture.unapproved.calls).toHaveLength(0);
 		} finally {
 			unregisterCustomApis(MODEL_GATE_API_SOURCE);
+			fixture.authStorage.close();
+		}
+	});
+
+	it("approves an explicit seance model by routed identity and keeps its upstream pin through preflight", async () => {
+		using tempDir = TempDir.createSync("@omp-seance-routed-model-");
+		const pinnedGrant = "openrouter/anthropic/claude-sonnet-4.5@anthropic";
+		const fixture = await modelGateFixture(tempDir.path(), { modelRoles: { review: pinnedGrant } });
+		const routed = buildModel({
+			id: "anthropic/claude-sonnet-4.5",
+			name: "anthropic/claude-sonnet-4.5",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		});
+		const models = [fixture.approved, fixture.unapproved, routed];
+		vi.spyOn(fixture.modelRegistry, "getAvailable").mockReturnValue(models);
+		vi.spyOn(fixture.modelRegistry, "find").mockImplementation((provider, id) =>
+			models.find(model => model.provider === provider && model.id === id),
+		);
+		fixture.authStorage.keys.setRuntime("openrouter", "credentialed");
+		const policy = (seanceModel: string) =>
+			resolveEffectiveSubagentPolicy({
+				session: fixture.session,
+				invocationKind: "task",
+				agent: "seance",
+				assignment: "Read the historical request.",
+				sourceSession: fixture.sourceFile,
+				seanceModel,
+			});
+		try {
+			// A pinned grant approves only its route, never the unpinned model.
+			await expect(policy("openrouter/anthropic/claude-sonnet-4.5")).rejects.toThrow(/not approved/);
+			const pinned = await policy(pinnedGrant);
+			expect(pinned.modelOverride).toEqual([pinnedGrant]);
+			expect(pinned.perCallModelGrants).toBeDefined();
+		} finally {
 			fixture.authStorage.close();
 		}
 	});
