@@ -44,7 +44,7 @@ For normal file-like reads, `splitPathAndSel()` in `packages/tui/src/tools/read.
 | `:N` / `:LN` / `:N-` / `:N..` | Start at 1-indexed line `N`, open-ended.                                                                                                       |
 | `:A-B` / `:LA-LB` / `:A..B`   | Inclusive 1-indexed line range (`..` is a forgiving alias normalized to `-`).                                                                  |
 | `:A+C` / `:LA+LC`             | `C` lines starting at `A`; tool converts this to end line `A + C - 1`.                                                                         |
-| `:-N`                        | Last `N` lines; `N` must be positive. Also combines with `:raw`. |
+| `:-N`                        | Last `N` lines; `N` must be positive. Also combines with `:raw` and with ranges in a comma list (`:1-12,-15`). |
 | `:R1,R2,...`                  | Multiple ranges, sorted and merged before reading (for example `:5-16,960-973`).                                                               |
 | `:range:raw` or `:raw:range`  | Same line selection, but raw output. Exception: a lone bare `N` is the single line `N` (`:17:raw`); `:N-:raw` stays open-ended.                |
 
@@ -55,6 +55,8 @@ Validation in `parseLineRangeChunk()`:
 - `-` end must be `>= start`.
 
 Selector parsing intentionally falls through for unrecognized trailing `:...`; archive and SQLite paths consume their own colon syntax.
+
+A comma list may repeat the selector colon after a comma (`:1-30,:-30` reads as `:1-30,-30`, `:raw` on either side included). `splitPathAndSel(path, { foldListColons: false })` keeps that colon in the path, and the literal-preferring splitters use it so an existing file named like the list's head (`a:1-30,`) still wins.
 
 URL selectors are parsed separately in `packages/coding-agent/src/tools/fetch.ts`, but use the same line-range parser for `:raw`, `:N`, `:A-B`, `:A+C`, `:5-10,20-30`, and `:range:raw` / `:raw:range`. Because URL ports also use `:`, add a trailing slash before a selector on a host/port URL, e.g. `https://example.com/:80`.
 Literal filesystem paths take precedence over selector interpretation, so an existing POSIX filename that ends in selector-looking text is read literally.
@@ -208,9 +210,9 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
 #### `db.sqlite?q=SELECT ...`
 
 - `kind: "raw"`
-- Cannot be combined with table selectors or any other query param.
+- Cannot be combined with a table selector; the only other query params are `limit` and `offset`, which page the query's rows as they page a table (defaults `limit = 20`, `offset = 0`, `limit` capped at `500`) and add a footer naming the next page's `?q=…&limit=…&offset=…`. Any other param throws, naming it.
 - Empty `q` throws.
-- `executeReadQuery()` prepares the SQL, rejects bound parameters, and collects rows from `statement.iterate()` capped at `MAX_RAW_QUERY_ROWS = 1000`; it does not verify that the SQL starts with `SELECT`.
+- `executeReadQuery()` prepares the SQL and rejects bound parameters. With `limit`/`offset` it runs the query as a subquery under `LIMIT ? OFFSET ?`, so skipped rows are never built; statements that cannot nest (`PRAGMA`, `EXPLAIN`) skip `offset` rows while iterating instead. Without them it collects rows from `statement.iterate()` capped at `MAX_RAW_QUERY_ROWS = 1000`. It does not verify that the SQL starts with `SELECT`.
 
 - Rendering caps in `packages/coding-agent/src/tools/sqlite-reader.ts`:
    - ASCII table width `120` (`MAX_RENDER_WIDTH`)
@@ -221,8 +223,9 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
 
 - `CONVERTIBLE_EXTENSIONS` in `packages/coding-agent/src/utils/markit.ts` covers `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`, `.rtf`, `.epub`.
 - `convertFileWithMarkit()` converts the file to text/markdown; line-range and `:raw` selectors then apply to the converted output (`file.pdf:50-100`, `:5-16,40-80`).
-- PDF member-looking paths now request Chromium page screenshots, not embedded-image extraction. `doc.pdf:p11-img0.png` or `doc.pdf:page11.png` selects page 11; an empty or unrecognized member defaults to page 1. There is no member listing or extracted-image cache. Numeric line selectors still page converted document text.
-- Page screenshots use the shared headless browser, a temporary tab closed after capture, and a 30-second render deadline. They support `?q=` image questions and otherwise follow normal image presentation.
+- PDF member-looking paths now request Chromium page screenshots, not embedded-image extraction. `doc.pdf:p11-img0.png` or `doc.pdf:page11.png` selects page 11; an empty or unrecognized member defaults to page 1. Only a PDF's filesystem path takes the member: a URL read or `local://` path does not. There is no member listing or extracted-image cache. Numeric line selectors still page converted document text.
+- Page screenshots use the shared headless browser, a temporary 874x874 tab closed after capture, and a 30-second render deadline. The capture is the viewport, which the viewer fits the page into (`view=Fit`); a full-page capture often came back without the PDF plugin's frame. The square tab gives portrait and landscape pages the same long side. They support `?q=` image questions and otherwise follow normal image presentation.
+- PDF pages without extractable text (scans) get a note after the converted text naming the page numbers and the `:page<N>.png` member.
 - Conversion failures return a text block like `[Cannot read .pdf file: ...]`.
 
 ### Jupyter notebooks
@@ -252,7 +255,7 @@ Literal filesystem paths take precedence over selector interpretation, so an exi
 - `read` delegates internal and MCP-advertised schemes to `InternalUrlRouter`; the built-in registry currently includes `agent://`, `artifact://`, `attachment://`, `cfg://`, `conflict://`, `history://`, `issue://`, `local://`, `mcp://`, `memory://`, `mr://`, `omp://`, `pr://`, `proc://`, `rule://`, `security://`, `skill://`, `ssh://`, `vault://`, and `xd://`.
    - `security://` is reserved for the OMP-owned, producer-neutral, read-only security-analysis store.
    - `agent://<id>` reads a subagent's latest completed output, including a successful message-result follow-up after revival that the parent requested or the user typed into the focused subagent session; while a newer turn runs, the previous output is marked superseded. Agents without published output return status and progress. `/key/index` extracts from the latest published JSON result. Peer-woken message replies and cancelled or empty message-result follow-ups do not replace the accepted result, nor do structured wakes without a `yield`. `agent://all` is write-only. Bare `history://` lists registered agents and persisted subagents; `history://<id>` reads a transcript across turns.
-   - `proc://` lists caller-visible background jobs (including running agents without job rows) and project services; `proc://<id>` returns status and available output/logs without consuming async-result delivery. Service log files are searchable with `grep proc://<id>`.
+   - `proc://` lists caller-visible background jobs (including running agents without job rows) and project services; `proc://<id>` returns status and available output/logs without consuming async-result delivery. A running subagent's row also shows its latest requests, cost, context fill, completion estimate and stage, as in `wait`. Service log files are searchable with `grep proc://<id>`.
    - `xd://` lists mounted tool devices; `xd://<name>` returns that device's input documentation. Writing JSON to the same URI dispatches the device through `write`.
    - `ssh://host/<path>` reads a remote UTF-8 file or directory; bare `ssh://` lists configured hosts. Remote paths are limited to 1 MiB and require a POSIX remote shell. Percent-encode literal `:`, `?`, or `#` in the path.
    - `history://current/full` exposes the caller's complete current branch when `compaction.experimentalContextManagement` is enabled. It includes original text, tool outputs, entry IDs, and compaction boundaries. Use shared line/raw selectors such as `history://current/full:raw:1-200`; queries, fragments, extra paths, and trailing slashes are rejected. It requires a matching live session owner and never falls back to registry or disk lookup. Bare `history://current` still names an ordinary agent called `current`. See [experimental context windows](../compaction.md#experimental-notes-backed-context-windows).

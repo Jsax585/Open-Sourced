@@ -1722,7 +1722,9 @@ export function sessionModelDiscoveryProviders(
  * primary resolution unchanged so the existing error path still surfaces
  * a meaningful failure downstream. `primaryAuthFailed` reports whether the
  * primary's key was checked and did not work, whether or not a parent model
- * was given or could replace it.
+ * was given or could replace it; it stays false when an authenticated later
+ * entry of the override list replaces the primary, since that list is the
+ * caller's own choice.
  */
 export async function resolveModelOverrideWithAuthFallback(
 	modelPatterns: string[],
@@ -1755,6 +1757,16 @@ export async function resolveModelOverrideWithAuthFallback(
 	}
 	if (!parentActiveModelPattern) {
 		return { ...primary, authFallbackUsed: false, primaryAuthFailed: true };
+	}
+	// The ordered override list is the caller's own fallback chain: an
+	// authenticated later entry beats the parent's model.
+	for (const pattern of resolveConfiguredModelPatterns(modelPatterns, settings)) {
+		const candidate = resolveModelOverride([pattern], lookupRegistry, settings);
+		if (!candidate.model || modelsAreEqual(candidate.model, primary.model)) continue;
+		const candidateKey = await modelRegistry.getApiKey(candidate.model, sessionId);
+		if (candidateKey === kNoAuth || isAuthenticated(candidateKey)) {
+			return { ...candidate, authFallbackUsed: false, primaryAuthFailed: false };
+		}
 	}
 
 	const fallback = resolveModelOverride([parentActiveModelPattern], lookupRegistry, settings);

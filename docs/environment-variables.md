@@ -141,7 +141,7 @@ When the broker is enabled, the local SQLite credential store is bypassed and al
 | `OMP_AUTH_BROKER_TOKEN`             | Bearer token sent on every broker endpoint except `/v1/healthz`                              | `OMP_AUTH_BROKER_URL` is set and no token is available from `auth.broker.token` or `<config-dir>/auth-broker.token`       | Resolution: this env → `auth.broker.token` (`$ENV_NAME` indirection supported) → `<config-dir>/auth-broker.token` (mode `0600`). `<config-dir>` is `~/.omp/` (respecting `PI_CONFIG_DIR`).                                                                                           |
 | `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`   | Freshness window for the encrypted local broker snapshot cache                               | Optional in broker mode                                                                                                   | Default `3600000` (1 h). Freshness is based on broker `snapshot.generatedAt`; `0` disables cache reads/writes and forces the old blocking fetch every startup.                                                                                                                       |
 | `OMP_AUTH_BROKER_SNAPSHOT_CACHE`    | Path to the encrypted local broker snapshot cache                                            | Optional in broker mode                                                                                                   | Defaults to `~/.omp/cache/auth-broker-snapshot.enc` (or XDG cache equivalent). Useful for tests, ephemeral hosts, or relocating the `0600` cache file.                                                                                                                               |
-| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | Process-scoped OAuth account routing for a trusted broker client                             | Optional in broker mode                                                                                                   | Path to a JSON object mapping provider IDs to exact broker `identityKey` arrays. Missing providers are unrestricted; `[]` hides that provider's OAuth accounts; API keys remain visible. Parsed once at startup and fails closed on invalid input. This is not server authorization. |
+| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | Process-scoped broker credential visibility (OAuth accounts and API keys) for a broker client | Optional in broker mode                                                                                                   | Path to a JSON object mapping provider IDs to rules: an `identityKey` array (`[]` hides that provider's OAuth accounts; API keys stay visible), `true`/`false` (everything/nothing), or `{ "accounts"?: [...], "apiKeys"?: boolean }`. Providers without an entry follow the `"*"` rule, else are unrestricted; `"*": false` makes the file an allow-list. Parsed once at startup and fails closed on invalid input. Not broker authorization: a direct client still holds the broker token. Inside `omp auth-gateway serve` it bounds what the gateway's clients can reach; see [auth-broker-gateway.md](./auth-broker-gateway.md#client-account-pools). |
 
 The gateway has no dedicated env vars — it inherits `OMP_AUTH_BROKER_*`. Its own inbound bearer token lives at `<config-dir>/auth-gateway.token` and is managed via `omp auth-gateway token`.
 
@@ -181,6 +181,12 @@ Request bodies of 1 KiB or more are compressed when sent to a provider's own end
 | Variable                 | Behavior                                                                          |
 | ------------------------ | --------------------------------------------------------------------------------- |
 | `PI_REQUEST_COMPRESSION` | `0`/`false`/`no`/`off` sends every request body uncompressed (enabled by default) |
+
+### Anthropic API version
+
+| Variable                   | Behavior                                                                                                                                                                                                                                                                                 |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PI_ANTHROPIC_API_VERSION` | `anthropic-version` sent to the official Anthropic API (`api.anthropic.com`): `2023-06-01` (default) or `2026-10-21`. Under `2026-10-21`, `temperature`/`top_p`/`top_k` are omitted because that version rejects them. Other hosts (Bedrock, Foundry, Copilot, gateways, Anthropic-compatible providers) stay on `2023-06-01`; unknown values log a warning and use `2023-06-01` |
 
 ### Anthropic Foundry Gateway (Azure / enterprise proxy)
 
@@ -314,10 +320,10 @@ OAuth host chain: `KIMI_CODE_OAUTH_HOST` → `KIMI_OAUTH_HOST` → `https://auth
 | Variable                    | Default / behavior                                              |
 | --------------------------- | --------------------------------------------------------------- |
 | `PI_AI_GEMINI_CLI_VERSION`  | Overrides Gemini CLI user-agent version tag (`0.46.0` if unset) |
-| `PI_AI_ANTIGRAVITY_VERSION` | Overrides the auto-discovered Antigravity hub user-agent version; when unset and discovery fails, the fallback is `2.8.0` |
-| `PI_AI_ANTIGRAVITY_CL`      | Overrides Antigravity hub user-agent build changelist (`963137146` if unset) |
-| `PI_AI_ANTIGRAVITY_OS`      | Overrides Antigravity hub user-agent os_type (pinned `darwin` if unset) |
-| `PI_AI_ANTIGRAVITY_ARCH`    | Overrides Antigravity hub user-agent arch (pinned `arm64` if unset) |
+| `PI_AI_ANTIGRAVITY_VERSION` | Overrides the auto-discovered Antigravity hub user-agent version; when unset and discovery fails, the fallback is `2.26.0` |
+| `PI_AI_ANTIGRAVITY_CL`      | Overrides Antigravity hub user-agent build changelist (`1005016104` if unset) |
+| `PI_AI_ANTIGRAVITY_OS`      | Overrides Antigravity hub user-agent os_type (unset: the native build for the host OS, `darwin`, `linux` or `windows`; other OSes report `linux`) |
+| `PI_AI_ANTIGRAVITY_ARCH`    | Overrides Antigravity hub user-agent arch (unset: that build's arch, `arm64` on macOS, `amd64` on Linux and Windows) |
 
 ### GitLab Duo
 
