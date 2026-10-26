@@ -598,6 +598,8 @@ export interface OpenAICompat {
 	clampOutputToModelMax?: boolean;
 	/** Strip image inputs before encoding (text-only serving of a multimodal id). */
 	stripImageInput?: boolean;
+	/** Whether the gateway requires an `<env>` working directory block in the system prompt. */
+	requiresOpenCodeEnvironment?: boolean;
 	/** Thinking-loop watchdog guard family applied to streamed reasoning. */
 	thinkingLoopGuard?: "gemini" | "deepseek" | "xai";
 }
@@ -765,6 +767,8 @@ export interface AnthropicCompat {
 	injectClaudeCodeInstruction?: boolean;
 	/** Strip image inputs before encoding (text-only serving of a multimodal id). */
 	stripImageInput?: boolean;
+	/** Whether the gateway requires an `<env>` working directory block in the system prompt. */
+	requiresOpenCodeEnvironment?: boolean;
 	/**
 	 * Largest width or height a single image block may carry. The canonical
 	 * Anthropic API rejects anything larger with `At least one of the image
@@ -1000,6 +1004,8 @@ export interface ResolvedOpenAISharedCompat {
 	toolSchemaFlavor?: OpenAICompat["toolSchemaFlavor"];
 	/** Strip image inputs before encoding (text-only serving of a multimodal id). */
 	stripImageInput: boolean;
+	/** Whether the gateway requires an `<env>` working directory block in the system prompt. */
+	requiresOpenCodeEnvironment?: boolean;
 	/** Thinking-loop watchdog guard family applied to streamed reasoning. */
 	thinkingLoopGuard?: OpenAICompat["thinkingLoopGuard"];
 	/** Flatten/reject leftover root `anyOf`/`oneOf` unions in strict tool schemas (xAI's function-calling validator 400s on them). */
@@ -1084,6 +1090,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "supportsConfigurationUpdate"
 			| "supportsSteering"
 			| "stripImageInput"
+			| "requiresOpenCodeEnvironment"
 			| "thinkingLoopGuard"
 			| "whenThinking"
 		>
@@ -1196,6 +1203,7 @@ export type ResolvedAnthropicCompat = Required<
 		| "fastMode"
 		| "maxImageDimension"
 		| "maxImagePayloadBytes"
+		| "requiresOpenCodeEnvironment"
 	>
 > & {
 	/** Effort-beta override; undefined keeps the transport's legacy heuristic. */
@@ -1210,6 +1218,7 @@ export type ResolvedAnthropicCompat = Required<
 	stripThinkingHistory?: AnthropicCompat["stripThinkingHistory"];
 	/** Fast-mode SKU; undefined behaves as false. */
 	fastMode?: AnthropicCompat["fastMode"];
+	requiresOpenCodeEnvironment?: boolean;
 	/**
 	 * Largest width or height a single image block may carry. Undefined defers
 	 * to the canonical Anthropic API limit applied by the request builder.
