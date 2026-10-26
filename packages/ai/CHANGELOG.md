@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+- Changed the auth credential store to reuse one prepared statement for its schema, revision and data-version queries instead of preparing the same query on every call, and to read every row at a typed read site instead of casting it ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+- Changed the auth credential store to reuse one prepared statement for its revision and data-version queries instead of preparing the same query on every call, and to read every row at a typed read site instead of casting it ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Fixed
 
@@ -16,8 +19,6 @@
 ## [18.13.0] - 2026-10-26
 - Reduced the CPU spent preparing tool schemas on every model call, so requests with many tools start faster ([#16780](https://github.com/can1357/oh-my-pi/pull/16780) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 - Fixed tool schema normalization modifying the caller's schema in place, which added the folded `const` value to a tool's own `enum` array ([#16780](https://github.com/can1357/oh-my-pi/pull/16780) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-- Changed the auth credential store to reuse one prepared statement for its schema, revision and data-version queries instead of preparing the same query on every call, and to read every row at a typed read site instead of casting it ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-- Changed the auth credential store to reuse one prepared statement for its revision and data-version queries instead of preparing the same query on every call, and to read every row at a typed read site instead of casting it ([#15437](https://github.com/can1357/oh-my-pi/pull/15437) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
 
