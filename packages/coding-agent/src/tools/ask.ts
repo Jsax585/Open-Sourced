@@ -39,7 +39,7 @@ import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments"
 import { ToolAbortError } from "./tool-errors";
 
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
-import { cfgAskNotify, cfgAskTimeout } from "../modes/settings";
+import { cfgAskNotify, askTimeoutMs } from "../modes/settings";
 import { renderAttachmentSourceNotice } from "../session/attachment-source-notice";
 import { cfgSpeechEnabled } from "../tts/settings";
 import { describeAttachedImagesForTextModel, shouldDescribeImagesForTextModel } from "../utils/image-vision-fallback";
@@ -479,7 +479,8 @@ async function askSingleQuestion(
 }
 
 function formatQuestionResult(result: QuestionResult): string {
-	const noteSuffix = result.note ? ` (note: ${result.note})` : "";
+	const noteOn = result.noteOption === undefined ? "" : ` on ${result.noteOption}`;
+	const noteSuffix = result.note ? ` (note${noteOn}: ${result.note})` : "";
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
 	if (result.selectedOptions.length === 0) {
 		if (custom !== undefined) return `${result.id}: ${custom}${noteSuffix}`;
@@ -495,6 +496,7 @@ function formatSingleQuestionResponse(result: {
 	selectedOptions: string[];
 	customInput?: string;
 	note?: string;
+	noteOption?: string;
 	timedOut?: boolean;
 	multi: boolean;
 }): string {
@@ -516,13 +518,14 @@ function formatSingleQuestionResponse(result: {
 		);
 	}
 	if (result.note) {
+		const label = `User added note${result.noteOption === undefined ? "" : ` on ${result.noteOption}`}:`;
 		responseParts.push(
 			result.note.includes("\n")
-				? `User added note:\n${result.note
+				? `${label}\n${result.note
 						.split("\n")
 						.map(line => `  ${line}`)
 						.join("\n")}`
-				: `User added note: ${result.note}`,
+				: `${label} ${result.note}`,
 		);
 	}
 	if (responseParts.length > 0) return responseParts.join("\n");
@@ -578,7 +581,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	}
 
 	static createIf(session: ToolSession): AskTool | null {
-		return (session.canPromptUser ?? session.hasUI) ? new AskTool(session) : null;
+		return (session.canPromptUser ?? session.hasUI) || session.advertiseHeadlessAsk ? new AskTool(session) : null;
 	}
 
 	/** Send terminal notification when ask tool is waiting for input */
@@ -619,6 +622,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						activeModelString: this.session.getActiveModelString?.(),
 						telemetryConfig: this.session.getTelemetry?.(),
 						sessionId: this.session.getSessionId?.() ?? undefined,
+						costGate: this.session.costGate,
 					},
 					signal,
 				);
@@ -741,9 +745,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		// Determine timeout based on settings and plan mode
 		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
-		// `ask.timeout` is in seconds (0 = disabled); convert to ms
-		const timeoutSeconds = cfgAskTimeout.get(this.session.settings);
-		const settingsTimeout = timeoutSeconds === 0 ? null : timeoutSeconds * 1000;
+		const settingsTimeout = askTimeoutMs(this.session.settings) ?? null;
 		const timeout = planModeEnabled ? null : settingsTimeout;
 
 		// Send notification if waiting and not suppressed
@@ -829,6 +831,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.note === undefined
 								? undefined
 								: shiftImageMarkers(result.note, noteOffset, result.noteImages?.length ?? 0),
+						noteOption: result.noteOption,
 						timedOut: result.timedOut,
 					});
 				}

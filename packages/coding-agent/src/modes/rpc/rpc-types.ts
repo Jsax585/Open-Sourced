@@ -182,8 +182,10 @@ export interface RpcSessionState {
 	isSettled: boolean;
 	/** Displayable queue-chip text for pending user-authored messages, mirroring
 	 *  `AgentSession.getQueuedMessages()`. Render the queue from this snapshot
-	 *  (and the `queue_update` event) instead of tracking chips independently. */
-	queuedMessages: { steering: string[]; followUp: string[] };
+	 *  (and the `queue_update` event) instead of tracking chips independently.
+	 *  `liveSteered` counts the leading `steering` entries already sent into the
+	 *  streaming response; `remove_queued_message` cannot reach them. */
+	queuedMessages: { steering: string[]; followUp: string[]; liveSteered: number };
 	todoPhases: TodoPhase[];
 	/** For session dump / export (plain-text parity with /dump). */
 	systemPrompt?: string[];
@@ -223,6 +225,8 @@ export interface RpcPromptError {
 	httpStatus?: number;
 	/** The failure is classified transient: resubmitting later may succeed. OMP's own retries are already exhausted. */
 	retryable: boolean;
+	/** `cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request. */
+	code?: "cost_cap";
 }
 
 /**
@@ -587,14 +591,14 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "predict_word_feedback"; success: true }
 
 	// Side questions (/btw)
-	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: BtwHistoryRecord } }
+	| { id?: string; type: "response"; command: "btw"; success: true; data: { record: RpcBtwHistoryRecord } }
 	| { id?: string; type: "response"; command: "btw_cancel"; success: true; data: { cancelled: boolean } }
 	| {
 			id?: string;
 			type: "response";
 			command: "get_btw_history";
 			success: true;
-			data: { records: readonly BtwHistoryRecord[] };
+			data: { records: readonly RpcBtwHistoryRecord[] };
 	  }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
@@ -603,6 +607,12 @@ export type RpcResponse =
 // ============================================================================
 // Side question (/btw) frames (stdout)
 // ============================================================================
+
+/**
+ * A BTW topic as sent to RPC hosts. The TUI-only `title` heading is never on the wire,
+ * which keeps the released record shape: hosts show the topic's opening question.
+ */
+export type RpcBtwHistoryRecord = Omit<BtwHistoryRecord, "title">;
 
 /** Text appended to the running side question's latest answer. */
 export interface RpcBtwDeltaFrame {
@@ -614,7 +624,7 @@ export interface RpcBtwDeltaFrame {
 /** Full record snapshot on every lifecycle change: started, complete, cancelled, error. */
 export interface RpcBtwRecordFrame {
 	type: "btw_record";
-	record: BtwHistoryRecord;
+	record: RpcBtwHistoryRecord;
 }
 
 // ============================================================================

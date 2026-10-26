@@ -212,6 +212,8 @@ class ThinkingContent(TypedDict):
     thinking: str
     thinkingSignature: NotRequired[str]
     itemId: NotRequired[str]
+    narration: NotRequired[bool]
+    """Prose the model addressed to the user, returned by the provider as thinking; present it as answer text."""
 
 
 class RedactedThinkingContent(TypedDict):
@@ -574,6 +576,8 @@ class QueuedMessagesState:
     """Displayable queue-chip text for pending user-authored messages; accepted verbatim by `remove_queued_message`."""
     steering: tuple[str, ...]
     follow_up: tuple[str, ...]
+    live_steered: int = 0
+    """Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -663,7 +667,7 @@ class SessionState:
     """Background jobs or deliveries can still inject a follow-up and wake the session."""
     is_settled: bool = False
     """Idle with nothing queued or pending; same predicate as `session_settled`."""
-    queued_messages: QueuedMessagesState = field(default_factory=lambda: parse_queued_messages_state({"steering": [], "followUp": []}, "queuedMessages"))
+    queued_messages: QueuedMessagesState = field(default_factory=lambda: parse_queued_messages_state({"steering": [], "followUp": [], "liveSteered": 0}, "queuedMessages"))
     todo_phases: tuple[TodoPhase, ...] = ()
     system_prompt: tuple[str, ...] = ()
     """System prompt sections, for session dumps."""
@@ -705,6 +709,7 @@ class CompactionResult:
     short_summary: str | None = None
     details: JsonValue | None = None
     preserve_data: JsonObject | None = None
+    provider_replay_through_entry_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -808,6 +813,8 @@ class SessionStats:
     session_file: str | None = None
     credits: SessionCredits | None = None
     routed_models: dict[str, float] | None = None
+    edit_rejections: dict[str, float] | None = None
+    """Failed edits by the engine's `errorKind`."""
     context_usage: ContextUsage | None = None
 
 
@@ -893,6 +900,8 @@ class BtwHistoryTurn:
     status: BtwStatus
     created_at: int
     updated_at: int
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
 
 
@@ -906,6 +915,8 @@ class BtwHistoryRecord:
     updated_at: int
     id: str
     leaf_id: str | None
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
     follow_ups: tuple[BtwHistoryTurn, ...] | None = None
 
@@ -943,6 +954,8 @@ class PromptAck:
 @dataclass(slots=True, frozen=True, kw_only=True)
 class AgentStartEvent:
     type: Literal["agent_start"] = "agent_start"
+    resumed_tool_call_ids: tuple[str, ...] | None = None
+    """Calls of an unpaired assistant tail a continued run executes before its first model request."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1190,6 +1203,8 @@ class QueueUpdateEvent:
     type: Literal["queue_update"] = "queue_update"
     steering: tuple[str, ...]
     follow_up: tuple[str, ...]
+    live_steered: int = 0
+    """Leading `steering` entries are live steering already sent into the streaming response; `remove_queued_message` cannot reach them."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1211,6 +1226,8 @@ class PromptError:
     provider: str | None = None
     model: str | None = None
     http_status: int | None = None
+    code: Literal["cost_cap"] | None = None
+    """`cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1846,6 +1863,7 @@ def parse_queued_messages_state(value: object, path: str = "QueuedMessagesState"
     return QueuedMessagesState(
         steering=required(payload, "steering", array(decode_str), path),
         follow_up=required(payload, "followUp", array(decode_str), path),
+        live_steered=defaulted(payload, "liveSteered", decode_int, path, 0),
     )
 
 
@@ -1934,7 +1952,7 @@ def parse_session_state(value: object, path: str = "SessionState") -> SessionSta
         queued_message_count=defaulted(payload, "queuedMessageCount", decode_int, path, 0),
         has_pending_async_work=defaulted(payload, "hasPendingAsyncWork", decode_bool, path, False),
         is_settled=defaulted(payload, "isSettled", decode_bool, path, False),
-        queued_messages=defaulted(payload, "queuedMessages", parse_queued_messages_state, path, parse_queued_messages_state({"steering": [], "followUp": []}, path)),
+        queued_messages=defaulted(payload, "queuedMessages", parse_queued_messages_state, path, parse_queued_messages_state({"steering": [], "followUp": [], "liveSteered": 0}, path)),
         todo_phases=defaulted(payload, "todoPhases", array(parse_todo_phase), path, ()),
         system_prompt=defaulted(payload, "systemPrompt", scalar_or_array(decode_str), path, ()),
         dump_tools=defaulted(payload, "dumpTools", array(parse_tool_descriptor), path, ()),
@@ -1980,6 +1998,7 @@ def parse_compaction_result(value: object, path: str = "CompactionResult") -> Co
         short_summary=optional(payload, "shortSummary", decode_str, path),
         details=optional(payload, "details", decode_json, path),
         preserve_data=optional(payload, "preserveData", decode_json_object, path),
+        provider_replay_through_entry_id=optional(payload, "providerReplayThroughEntryId", decode_str, path),
     )
 
 
@@ -2102,6 +2121,7 @@ def parse_session_stats(value: object, path: str = "SessionStats") -> SessionSta
         session_file=optional(payload, "sessionFile", decode_str, path),
         credits=optional(payload, "credits", parse_session_credits, path),
         routed_models=optional(payload, "routedModels", record(decode_float), path),
+        edit_rejections=optional(payload, "editRejections", record(decode_float), path),
         context_usage=optional(payload, "contextUsage", parse_context_usage, path),
     )
 
@@ -2197,6 +2217,7 @@ def parse_btw_history_turn(value: object, path: str = "BtwHistoryTurn") -> BtwHi
         status=required(payload, "status", _decode_btw_status, path),
         created_at=required(payload, "createdAt", decode_int, path),
         updated_at=required(payload, "updatedAt", decode_int, path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
     )
 
@@ -2211,6 +2232,7 @@ def parse_btw_history_record(value: object, path: str = "BtwHistoryRecord") -> B
         updated_at=required(payload, "updatedAt", decode_int, path),
         id=required(payload, "id", decode_str, path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
         follow_ups=optional(payload, "followUps", array(parse_btw_history_turn), path),
     )
@@ -2256,6 +2278,7 @@ def parse_agent_start_event(value: object, path: str = "AgentStartEvent") -> Age
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["agent_start"]]', literal(frozenset({"agent_start"}))), path)
     return AgentStartEvent(
+        resumed_tool_call_ids=optional(payload, "resumedToolCallIds", array(decode_str), path),
     )
 
 
@@ -2544,6 +2567,7 @@ def parse_queue_update_event(value: object, path: str = "QueueUpdateEvent") -> Q
     return QueueUpdateEvent(
         steering=required(payload, "steering", array(decode_str), path),
         follow_up=required(payload, "followUp", array(decode_str), path),
+        live_steered=defaulted(payload, "liveSteered", decode_int, path, 0),
     )
 
 
@@ -2566,6 +2590,7 @@ def parse_prompt_error(value: object, path: str = "PromptError") -> PromptError:
         provider=optional(payload, "provider", decode_str, path),
         model=optional(payload, "model", decode_str, path),
         http_status=optional(payload, "httpStatus", decode_int, path),
+        code=optional(payload, "code", cast('Decoder[Literal["cost_cap"]]', literal(frozenset({"cost_cap"}))), path),
     )
 
 

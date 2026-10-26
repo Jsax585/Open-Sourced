@@ -143,8 +143,9 @@ For each command:
 3. keep parsed body as executable template content
 4. compute a display source string like `via Claude Code Project`
 5. preserve `argumentHint` from discovery, or parse `argumentHint`/`argument-hint` frontmatter for autocomplete ghost text and ACP input hints
+6. set `side` when the frontmatter has the boolean `side: true` (a quoted `"true"` does not count)
 
-Codex/OpenCode providers strip frontmatter before this stage. Their discovered argument hints survive, but the runtime description currently falls back to the body rather than using the separately discovered description.
+Codex/OpenCode providers strip frontmatter before this stage. Their discovered argument hints and `side` flags survive, but the runtime description currently falls back to the body rather than using the separately discovered description.
 
 Frontmatter parse severity is level-dependent:
 
@@ -247,6 +248,21 @@ The parser is simple quote-aware splitting:
 
 Argument substitution is one pass over the template; dollar placeholders inside argument values are not substituted again. Missing positional values, zero start/length slices, and out-of-range slice starts render as empty strings.
 
+### Side commands (`side: true`)
+
+A file command with `side: true` frontmatter runs as a [`/btw`](#11-built-in-command-note-btw) side question in the interactive TUI. The expanded template, after the same argument substitution, is the question. It works the same with or without arguments. The question and answer stay off the transcript, the command runs while a turn streams without steering it, and the answer gets `/btw` history, follow-ups and branching. The panel and history show the typed invocation (`/sitrep`, `/sitrep the migration`) as the topic's title while the model receives the expanded template. The title lives in an `entry-<id>.title` file beside the record's JSON, which keeps the record readable by older builds. Use it for read-only questions about the session, such as status reports or explanations:
+
+```markdown
+---
+description: Situation report for this session
+argument-hint: "[focus]"
+side: true
+---
+Situation report. Focus on $ARGUMENTS if given, else the whole session.
+```
+
+This routing applies to Enter, Ctrl+Enter, and focused subagent views; a focused view answers about the agent being viewed. An extension command, TypeScript custom command, or `/skill:` command of the same name still takes precedence. If the template fails to render, the error is shown and the typed command goes back into the editor. Other modes (RPC, ACP, print) have no `/btw` surface, so they expand a side command as an ordinary prompt.
+
 ## 7) Unknown `/...` behavior
 
 Unknown slash input is **not rejected** by core slash logic.
@@ -271,7 +287,7 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
 - then requires `streamingBehavior`:
   - `"steer"` -> queue interrupt message (`agent.steer`)
   - `"followUp"` -> queue post-turn message (`agent.followUp`)
-  - `"aside"` -> inject at the next step boundary without interrupting an in-flight tool batch
+  - `"aside"` -> inject at the next step boundary without interrupting an in-flight tool batch (a running interruptible `wait` ends)
 - if `streamingBehavior` is omitted, prompt throws an error
 
 ### Important command-specific streaming behavior
@@ -292,9 +308,9 @@ TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...
 
 ## 10) Built-in command note: `/pause`
 
-`/pause` is available only in the interactive TUI. It engages a process-global gate for the main agent, in-process subagents, and the advisor. Each agent parks at its next safe boundary: in-flight calls finish, nothing is aborted, and no new work starts until the gate is released.
+`/pause` (host interactive sessions only) holds agents at safe boundaries; in-flight calls finish. The screen counts draining turns and running jobs; parked or finished turns stop counting. When both counts reach zero, it hides the rows and signals readiness.
 
-From the pause screen, press the configured interrupt key (Esc by default), Enter, Space, or Ctrl+C to resume. Ctrl+C resumes rather than aborting any agent.
+The interrupt key (Esc by default), Enter, Space, or Ctrl+C resumes; Ctrl+C does not abort agents.
 
 ## 11) Built-in command note: `/btw`
 
@@ -430,7 +446,7 @@ answers or relax these branch guards.
 
 | Command | Source |
 |---|---|
-| `/annotate code-review [focus]` | Local base-branch, working-copy, or commit diff, or a GitHub PR |
+| `/annotate code-review [focus]` | Local base-branch, working-copy, or commit diff, a GitHub PR, or a GitLab MR |
 | `/annotate last` | Latest non-empty assistant reply on the active branch |
 | `/annotate session` | A message or block picked in the `/copy` selector |
 | `/annotate path/to/file` | Text read from a file |
@@ -444,15 +460,17 @@ The whole remainder after `/annotate` is one source specification (`CustomComman
 
 Argument completion offers the modes, a `./` file-path starter, and a quote starter. `CustomCommand.getArgumentCompletions(prefix, cwd)` receives the live session cwd, so file suggestions follow `/move` and `/wt`.
 
-**Code review.** The menu lists up to three GitHub PRs referenced in the conversation, then the local diff kinds. `/annotate code-review pr://owner/repo/N [focus]` skips the menu. The diff is resolved once in the live session cwd and frozen (`ResolvedReviewTarget`); the overlay and the reviewer prompt read the same snapshot, filtered by the same exclusion rules as `/review` (`src/extensibility/custom-commands/bundled/review/diff.ts`). The overlay offers **Continue with LLM review** (submits the `/review` prompt with the notes as operator focus) and **Paste annotations into prompt**. Both include the optional `[focus]` text. Nothing is posted to GitHub.
+**Code review.** The menu lists up to three GitHub PRs or GitLab MRs referenced in the conversation, then the local diff kinds. `/annotate code-review pr://owner/repo/N [focus]` (or a GitLab MR URL) skips the menu. The diff is resolved once in the live session cwd and frozen (`ResolvedReviewTarget`); the overlay and the reviewer prompt read the same snapshot, filtered by the same exclusion rules as `/review` (`src/extensibility/custom-commands/bundled/review/diff.ts`). The overlay offers **Continue with LLM review** (submits the `/review` prompt with the notes as operator focus) and **Paste annotations into prompt**. Both include the optional `[focus]` text. Nothing is posted to GitHub or GitLab.
 
 Without an interactive UI, `code-review` delegates to `/review` instead of opening the annotation overlay; text-source annotation refuses to send a message.
 
 **Text sources.** Feedback is always pasted into the composer, never submitted. File and literal sources are embedded verbatim. The latest reply is referenced as "your last reply" and only the annotated lines are quoted. An older session prose message longer than 1,000 characters is condensed by one call to the current session model (its credentials, no fallback model); if that call fails or returns an unusable result, the full source is embedded with a warning.
 
+**Extension API.** Extensions reach the same pipeline through `ctx.annotations.submit` (caller-supplied notes, no UI, any mode) and `ctx.annotations.open` (the overlay on a chosen source, TUI only); see `docs/extensions.md`. The command and the API share `buildTextReviewPrompt`, `buildCodeReviewFeedback`, and the throwing source readers in `annotate/direct-source.ts`, `annotate/text-source.ts`, and `review/index.ts` (`fetchPrReviewTarget`); the interactive wrappers only translate their errors into notifications. `submit` re-derives each note's quote or hunk row from the source. `text`/`diff` sources are frozen snapshots of the caller's input; `file`, `last`, `uncommitted`, and `pr` are re-read at call time, so a line number is matched against current content and only out-of-range lines fail on their own. Callers pin content with the optional `quote` (text) or `rawLine` (diff row with prefix) anchors; a mismatch rejects with an error naming the note instead of quoting the wrong line. `open` checks the supplied-patch review bound before mounting the overlay. A supplied diff is a `patch` target: it never opens the working-tree file from the overlay.
+
 **ANSI layout.** Diff and text source lines hard-wrap by terminal cells, preserving indentation, expanded tabs, internal/trailing spaces, empty lines, and intact graphemes rather than wrapping prose words. Diff continuation rows align with the content, with foreground styling closed on each physical row; every continuation retains the same original logical note anchor. PgUp/PgDn page through visual rows, and `g`/`G` reach the beginning/end, including continuations of a single long source line. A focused truncated filename floats over existing rows without reflowing the file list, moves upward if needed to fit, and collapses when focus leaves. Paths taller than the whole pane show an explicit omission marker and retain the filename suffix. Like ask-tool notes, the note editor follows the configured terminal hardware-cursor preference, using the terminal's native cursor when enabled and a software cursor when disabled. The final glyph stays visible at the exact text width; the first overflow glyph wraps.
 
-**Overlay keys.** `a` adds a line note, `A` a whole-file/whole-text note, `e` edits the note(s) at the cursor (with a chooser when several apply), `u` undoes the last add/edit/delete. In the note editor, Enter saves, Shift+Enter inserts a newline, Escape discards the draft, and the configured external-editor key replaces the draft without saving it. Notes are trimmed on save; saving an empty edit deletes the note, and an empty new note is ignored. Line anchors (quoted source line, diff hunk header and raw row) are kept exactly.
+**Overlay keys.** `a` adds a line note, `A` a whole-file/whole-text note, `e` edits the note(s) at the cursor (with a chooser when several apply), `u` undoes the last add/edit/delete. The external-editor key (`app.editor.external`, Ctrl+G by default) opens `$VISUAL` or `$EDITOR`. While writing a note, it replaces the draft without saving it. Otherwise, for a file source it edits the file in place and re-reads it; for a typed prompt it replaces the text the paste uses; for a local diff review (not a PR) it opens the current file from the repository root, and the review still uses the frozen snapshot. Session messages are not editable, since the paste omits or summarizes them and notes on edited text would quote lines the model never sees. After a source edit, a line note whose quote still matches its row is kept; a quote that moved to exactly one row is retargeted; any other line note is dropped and undo history is cleared. A non-zero editor exit warns but still uses what the editor saved. In the note editor, Enter saves, Shift+Enter inserts a newline, Escape discards the draft. Notes are trimmed on save; saving an empty edit deletes the note, and an empty new note is ignored. Line anchors (quoted source line, diff hunk header and raw row) are kept exactly.
 
 ## 13) Built-in command note: `/plan-review`
 

@@ -25,7 +25,6 @@ const ADD_FILE_MARKER: &str = "*** Add File: ";
 const DELETE_FILE_MARKER: &str = "*** Delete File: ";
 const UPDATE_FILE_MARKER: &str = "*** Update File: ";
 const MOVE_TO_MARKER: &str = "*** Move to: ";
-const ATOMICITY_NOTICE: &str = "No files were modified — sections apply atomically.";
 
 static PATH_NOISE_FILE: LazyLock<Regex> = LazyLock::new(|| {
 	Regex::new(r"(?i)^\s*\*{3}\s*(?:Add|Update|Delete)\s+File\s*:\s*")
@@ -219,10 +218,11 @@ pub fn format_apply_codex_patch_summary(
 
 fn as_patch_input(entry: &ApplyPatchEntry) -> PatchInput<'_> {
 	PatchInput {
-		path:   &entry.path,
-		op:     entry.op,
-		rename: entry.rename.as_deref(),
-		diff:   entry.diff.as_deref(),
+		path:        &entry.path,
+		op:          entry.op,
+		rename:      entry.rename.as_deref(),
+		diff:        entry.diff.as_deref(),
+		first_match: true,
 	}
 }
 
@@ -255,7 +255,7 @@ fn distinct_paths(entries: &[ApplyPatchEntry]) -> usize {
 /// stays typed so the host can resolve it and retry.
 fn wrap_file_error(path: &str, error: EditError, multiple_files: bool) -> EditError {
 	if multiple_files && !matches!(error, EditError::UnresolvedUrl(_)) {
-		EditError::apply(format!("[{path}]: {error}\n{ATOMICITY_NOTICE}"))
+		EditError::InFile { path: path.to_owned(), source: Box::new(error) }
 	} else {
 		error
 	}
@@ -279,7 +279,7 @@ fn stage_entries(
 		}
 		groups.entry(entry.path.clone()).or_default().push(entry);
 	}
-	let engine = PatchEngine { allow_fuzzy, fuzzy_threshold: threshold };
+	let engine = PatchEngine { allow_fuzzy, fuzzy_threshold: threshold, first_match: true };
 	let mut staged = Vec::with_capacity(groups.len());
 	for path in order {
 		let group = &groups[&path];

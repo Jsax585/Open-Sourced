@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
 import { TtsrManager, type TtsrMatchContext } from "@oh-my-pi/pi-coding-agent/export/ttsr";
@@ -59,26 +59,89 @@ describe("TTSR incremental stream matching", () => {
 		expect(manager.checkSnapshot("clean", TEXT)).toEqual([]);
 	});
 
-	it("matches a condition that arrives late in a snapshot growing in small chunks, with linear cost", () => {
-		const chunk = "const value = compute(input);\n";
-		const run = (chunks: number): number => {
-			const manager = new TtsrManager({ enabled: true });
-			manager.addRule(rule("forbidden", "FORBIDDEN_\\w+\\("));
+	it("matches a condition that arrives late in a snapshot growing in small chunks, scanning each chunk once", () => {
+		const manager = new TtsrManager({ enabled: true });
+		manager.addRule(rule("forbidden", "FORBIDDEN_\\w+\\("));
+		// Count regex input instead of timing it: wall-clock ratios flake under load.
+		const test = RegExp.prototype.test;
+		let scanned = 0;
+		const spy = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (this: RegExp, input: string) {
+			if (this.source.includes("FORBIDDEN_")) scanned += input.length;
+			return test.call(this, input);
+		});
+		try {
 			let snapshot = "";
-			const start = Bun.nanoseconds();
-			for (let index = 0; index < chunks; index++) {
-				snapshot += chunk;
+			for (let index = 0; index < 2_000; index++) {
+				snapshot += "const value = compute(input);\n";
 				expect(manager.checkSnapshot(snapshot, TEXT, { final: false })).toEqual([]);
 			}
 			snapshot += "FORBIDDEN_api(1);\n";
 			expect(names(manager.checkSnapshot(snapshot, TEXT))).toEqual(["forbidden"]);
-			return Bun.nanoseconds() - start;
-		};
-		const smallNs = Math.min(run(250), run(250), run(250));
-		// 8 times the chunks: a full regex rescan per update would take ~64 times as long.
-		let largeNs = Number.POSITIVE_INFINITY;
-		for (let attempt = 0; attempt < 3 && largeNs >= 32 * smallNs; attempt++) largeNs = Math.min(largeNs, run(2_000));
-		expect(largeNs).toBeLessThan(32 * smallNs);
+			// Every chunk is read; a whole-buffer rescan per update would read the stream ~1000 times over.
+			expect(scanned).toBeGreaterThanOrEqual(snapshot.length);
+			expect(scanned).toBeLessThan(2 * snapshot.length);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	describe("one long unterminated line (raw tool-argument JSON escapes its newlines)", () => {
+		const TOOL: TtsrMatchContext = { source: "tool", toolName: "bash", streamKey: "toolcall:long-line" };
+		const DELTA = 16;
+
+		function toolRule(name: string, condition: string): Rule {
+			return { ...rule(name, condition), scope: ["tool"] };
+		}
+
+		function stream(manager: TtsrManager, wire: string): Rule[][] {
+			const results: Rule[][] = [];
+			for (let offset = 0; offset < wire.length; offset += DELTA) {
+				results.push(manager.checkDelta(wire.slice(offset, offset + DELTA), TOOL));
+			}
+			return results;
+		}
+
+		it("reads the line a bounded number of times instead of once per delta", () => {
+			const manager = new TtsrManager({ enabled: true });
+			manager.addRule(toolRule("force-push", "git\\s+push\\s+--force"));
+			const wire = JSON.stringify({ command: "echo ok\n".repeat(8_192) });
+			const test = RegExp.prototype.test;
+			let scanned = 0;
+			const spy = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (this: RegExp, input: string) {
+				if (this.source.includes("push")) scanned += input.length;
+				return test.call(this, input);
+			});
+			try {
+				for (const matches of stream(manager, wire)) expect(matches).toEqual([]);
+				expect(manager.checkDelta("", TOOL, { final: true })).toEqual([]);
+				// Rescanning the whole line on every 16-character delta reads it ~2000 times over.
+				expect(scanned).toBeGreaterThanOrEqual(wire.length);
+				expect(scanned).toBeLessThan(16 * wire.length);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it("still reports a match deep in the line mid-stream, and exactly on the final check", () => {
+			const filler = "echo ok\n".repeat(4_096);
+			const wire = JSON.stringify({ command: `${filler}git push --force origin main\n${filler}` });
+			const matchEnd = wire.indexOf("--force") + "--force".length;
+
+			const manager = new TtsrManager({ enabled: true });
+			manager.addRule(toolRule("force-push", "git\\s+push\\s+--force"));
+			const results = stream(manager, wire);
+			const firstHit = results.findIndex(matches => names(matches).includes("force-push"));
+			expect(firstHit).toBeGreaterThanOrEqual(0);
+			// Deferred scans may report late, but within a quarter of the line's growth, never before the text exists.
+			expect(firstHit * DELTA + DELTA).toBeGreaterThanOrEqual(matchEnd);
+			expect(firstHit * DELTA).toBeLessThanOrEqual(matchEnd * 1.25 + DELTA);
+
+			const finalOnly = new TtsrManager({ enabled: true });
+			finalOnly.addRule(toolRule("force-push", "git\\s+push\\s+--force"));
+			const cut = matchEnd + 64;
+			stream(finalOnly, wire.slice(0, cut));
+			expect(names(finalOnly.checkDelta("", TOOL, { final: true }))).toEqual(["force-push"]);
+		});
 	});
 });
 

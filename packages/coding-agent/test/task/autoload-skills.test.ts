@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionSendQueue } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/send-queue";
@@ -9,8 +12,11 @@ import type { CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent/sdk";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
+import { runStructuredSubagent } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
@@ -397,6 +403,101 @@ describe("autoloadSkills in executor", () => {
 			}),
 			{ triggerTurn: false },
 		);
+	});
+});
+
+describe("autoloadSkills through task spawn", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("delivers a skill added after the parent session's skill list was loaded", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-late-skill-"));
+		try {
+			const baseDir = path.join(root, "late-skill");
+			const filePath = path.join(baseDir, "SKILL.md");
+			await fs.mkdir(baseDir);
+			await Bun.write(
+				filePath,
+				"---\nname: late-skill\ndescription: Added after startup.\n---\n\nLate skill body.\n",
+			);
+			const lateSkill: Skill = {
+				name: "late-skill",
+				description: "Added after startup.",
+				filePath,
+				baseDir,
+				source: "user",
+			};
+
+			let parentSkills: Skill[] = [];
+			const refreshSkills = vi.fn(async () => {
+				parentSkills = [lateSkill];
+			});
+			const parent = {
+				cwd: root,
+				hasUI: false,
+				settings: Settings.isolated({ "task.isolation.enabled": false }),
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				getSessionAgents: () => [],
+				getPlanModeState: () => undefined,
+				get skills() {
+					return parentSkills;
+				},
+				refreshSkills,
+			} as unknown as ToolSession;
+
+			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+				agents: [
+					{
+						name: "late-agent",
+						description: "Autoloads a late skill",
+						systemPrompt: "test",
+						source: "project",
+						autoloadSkills: ["late-skill"],
+					},
+				],
+				projectAgentsDir: null,
+			});
+			// The executor resolves autoload names against the child session's
+			// skills, which createAgentSession seeds from the `skills` the spawn
+			// forwards: the parent's list, read after refreshSkills.
+			const childSkills: Skill[] = [];
+			const child = createMockSession(({ emit }) => {
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-1",
+					toolName: "yield",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { ok: true } },
+					},
+					isError: false,
+				});
+			}, childSkills);
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+				childSkills.push(...(options?.skills ?? []));
+				return createSessionResult(child);
+			});
+
+			await runStructuredSubagent({
+				session: parent,
+				invocationKind: "task",
+				assignment: "do work",
+				agent: "late-agent",
+			});
+
+			expect(refreshSkills).toHaveBeenCalledTimes(1);
+			expect(child.sendCustomMessage).toHaveBeenCalledWith(
+				expect.objectContaining({
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					content: expect.stringContaining("Late skill body."),
+				}),
+				{ triggerTurn: false },
+			);
+		} finally {
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 });
 

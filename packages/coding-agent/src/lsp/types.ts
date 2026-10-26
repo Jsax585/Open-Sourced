@@ -17,7 +17,7 @@ export const lspSchema = type({
 	"timeout?": type.number
 		.atLeast(TOOL_TIMEOUTS.lsp.min)
 		.atMost(TOOL_TIMEOUTS.lsp.max)
-		.describe("Timeout in seconds (default 20; range 5–300)."),
+		.describe("Timeout in seconds; raises or lowers the default (range 5–300)."),
 	payload: "string?",
 });
 
@@ -370,7 +370,7 @@ export interface ServerConfig {
 // Transport
 // =============================================================================
 
-/** Minimal write sink for the server-bound byte stream (satisfied by `Bun.FileSink` and the mux socket adapter). */
+/** Minimal write sink for the server-bound byte stream (satisfied by `Bun.FileSink` and the mux link adapter). */
 export interface LspWriteSink {
 	write(data: string | Uint8Array): number | Promise<number>;
 	flush(): number | void | Promise<number | void>;
@@ -378,7 +378,7 @@ export interface LspWriteSink {
 
 /**
  * Byte transport carrying one LSP JSON-RPC link. Structurally satisfied by
- * `ptree.ChildProcess<"pipe">` (local server spawn) and by the socket adapter
+ * `ptree.ChildProcess<"pipe">` (local server spawn) and by the IPC link adapter
  * in `mux/daemon.ts` (broker-shared server). `exited` may reject (ptree kill).
  */
 export interface LspTransport {
@@ -406,6 +406,10 @@ export interface OpenFile {
 	 * reconcile treats the document as dirty and resyncs from disk.
 	 */
 	syncedHash?: number | bigint;
+	/** When an OMP operation last used this document; long-unused documents close before the next open. */
+	lastUsedAt: number;
+	/** When this document was reopened after an idle close; absent for a first open. */
+	reopenedAt?: number;
 }
 
 export interface PendingRequest {
@@ -437,6 +441,11 @@ export interface LspClient {
 	/** Dynamic capability registrations keyed by the server-provided registration ID. */
 	dynamicCapabilityRegistrations?: Map<string, string>;
 	openFiles: Map<string, OpenFile>;
+	/**
+	 * Documents closed for idleness, with the last version the server saw. A reopen
+	 * resumes past that version; absent until the client closes one.
+	 */
+	idleClosedFiles?: Map<string, number>;
 	pendingRequests: Map<number | string, PendingRequest>;
 	isReading: boolean;
 	/** Lifecycle state: "connecting" until initialize completes, then "ready"; "error" on init failure or reader death. */
