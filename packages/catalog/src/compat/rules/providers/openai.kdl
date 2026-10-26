@@ -36,6 +36,16 @@ provider "openai" {
 			cost input=12.5 output=75 cache-read=1.25 cache-write=15.625
 			limits context=400000 max-tokens=128000
 		}
+		// GPT-6.1 Terra (https://developers.openai.com/api/docs/models/gpt-6.1-terra):
+		// text+image in, text out; 1050000 context, 128000 max output;
+		// $1/$0.05/$1.25/$5 per 1M. Upstream catalog rows outrank this seed
+		// once discovery serves them.
+		model "gpt-6.1-terra" name="GPT-6.1 Terra" {
+			reasoning #true
+			input "text" "image"
+			cost input=1 output=5 cache-read=0.05 cache-write=1.25
+			limits context=1050000 max-tokens=128000
+		}
 
 		// Catalog cost fields are per 1M tokens: GPT transcribers map documented
 		// audio-input/output-token rates directly. Whisper's $0.006/min duration
@@ -213,9 +223,22 @@ provider "openai" {
 			output-multiplier 1.5
 		}
 	}
+	// GPT-6.1 Terra bills the documented >272K whole-request tier: 2x input
+	// and cache rates, 1.5x output for the full request; cache writes stay
+	// 1.25x the long input rate (2.5).
+	models "gpt-6.1-terra*" {
+		long-context-cost {
+			input-threshold 272000
+			input 2.0
+			output 7.5
+			cache-read 0.1
+			cache-write 2.5
+		}
+	}
 	// API Ultrafast is 6x the standard card on both context tiers: GPT-6 Astra
-	// $60/$6/$75/$300 and GPT-6.1 Sol $12/$0.60/$15/$60 per 1M short-context.
-	models "gpt-6-astra*" "gpt-6.1-sol*" {
+	// $60/$6/$75/$300, GPT-6.1 Sol $12/$0.60/$15/$60 and GPT-6.1 Terra
+	// $6/$0.30/$7.5/$30 per 1M short-context.
+	models "gpt-6-astra*" "gpt-6.1-sol*" "gpt-6.1-terra*" {
 		service-tier-cost {
 			ultrafast 6
 		}

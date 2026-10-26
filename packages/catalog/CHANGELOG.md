@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `openai/gpt-6.1-terra` (GPT-6.1 Terra) to the bundled OpenAI catalog from the documented API card (https://developers.openai.com/api/docs/models/gpt-6.1-terra): text+image input, text output, 1050000 context window, 128000 max output tokens, reasoning efforts low/medium/high/xhigh/max over the Responses API with $1 input, $0.05 cached input, $1.25 cache-write and $5 output per 1M tokens (prompts over 272K input tokens bill 2x input/cache and 1.5x output for the full request; Ultrafast 6x). No other provider lists change: Codex, Azure and codex-lb routes gain nothing until a supported route proves availability.
+
 ## [18.13.0] - 2026-10-26
 
 ### Breaking Changes

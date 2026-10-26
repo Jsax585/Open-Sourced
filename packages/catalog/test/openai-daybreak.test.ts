@@ -15,11 +15,11 @@ import { applyGeneratedModelPolicies } from "../scripts/generated-policies";
 
 const DAYBREAK_EFFORTS = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
 // The openai seed also carries transcription and embedding runners; only the
-// Responses rows are Daybreak/GPT-5.6 chat models.
+// Responses rows are first-party chat models (Daybreak/GPT-5.6 plus GPT-6.1 Terra).
 const DAYBREAK_MODELS = seedModels("openai").filter(model => model.api === "openai-responses");
 
 describe("OpenAI Daybreak and GPT-5.6 models", () => {
-	test("bakes off support and long-context pricing onto every first-party GPT-5.6 alias", () => {
+	test("bakes off support and long-context pricing onto every first-party GPT alias", () => {
 		const longContextCosts = {
 			"daybreak-blue-latest": { input: 10, output: 45, cacheRead: 1, cacheWrite: 12.5 },
 			"gpt-5.6": { input: 8, output: 30, cacheRead: 0.8, cacheWrite: 10 },
@@ -40,9 +40,26 @@ describe("OpenAI Daybreak and GPT-5.6 models", () => {
 			expect(model.compat.reasoningDisableMode).toBe("none-effort");
 			expect(model.cost.longContext).toBeUndefined();
 		}
+		// GPT-6.1 Terra (https://developers.openai.com/api/docs/models/gpt-6.1-terra):
+		// $1/$5 base with 5% cache reads and $1.25 cache writes; >272K input
+		// bills 2x input/cache and 1.5x output; 6.x disables via lowest-effort.
+		const terra = getBundledModel<"openai-responses">("openai", "gpt-6.1-terra");
+		expect(terra.name).toBe("GPT-6.1 Terra");
+		expect(terra.cost.input).toBe(1);
+		expect(terra.cost.output).toBe(5);
+		expect(terra.cost.cacheRead).toBe(0.05);
+		expect(terra.cost.cacheWrite).toBe(1.25);
+		expect(terra.compat.reasoningDisableMode).toBe("lowest-effort");
+		expect(terra.cost.longContext).toEqual({
+			inputThreshold: 272_000,
+			input: 2,
+			output: 7.5,
+			cacheRead: 0.1,
+			cacheWrite: 2.5,
+		});
 	});
 
-	test("exposes off and every GPT-5.6 wire effort on all Daybreak IDs", () => {
+	test("exposes off and every wire effort on all Daybreak IDs (plus GPT-6.1 Terra)", () => {
 		const generated: ModelSpec<Api>[] = DAYBREAK_MODELS.map(model => ({
 			...model,
 			cost: { ...model.cost },
@@ -53,13 +70,14 @@ describe("OpenAI Daybreak and GPT-5.6 models", () => {
 			const model = buildModel(spec);
 			expect(getSupportedEfforts(model)).toEqual(DAYBREAK_EFFORTS);
 			expect(model.thinking?.requiresEffort).not.toBe(true);
+			const isTerra61 = spec.id === "gpt-6.1-terra";
 			expect(model.compat).toMatchObject({
 				supportsPromptCacheBreakpoints: true,
 				supportsSamplingParams: false,
-				reasoningDisableMode: "none-effort",
+				reasoningDisableMode: isTerra61 ? "lowest-effort" : "none-effort",
 			});
 			expect(model.applyPatchToolType).toBe("freeform");
-			expect(model.supportsComputerUse).toBe(spec.id === "gpt-5.6-cyber");
+			expect(model.supportsComputerUse).toBe(spec.id === "gpt-5.6-cyber" || isTerra61);
 		}
 	});
 });
