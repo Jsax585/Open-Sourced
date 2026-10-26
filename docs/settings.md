@@ -680,7 +680,7 @@ lsp:
 | --------------------------------- | ------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bash.enabled`                    | boolean | `true`    | Enable the bash tool.                                                                                                                                       |
 | `bash.allowCompoundCommands`      | boolean | `false`   | Evaluate flat, literal `&&` chains per segment; unmatched segments inherit normal bash approval policy and mode.                                            |
-| `bash.gitGuard`                   | boolean | `false`   | For checkouts shared by concurrent agents: refuse `git stash` (except `list`/`show`), `reset --hard`, `reset` to another commit, and `checkout`/`switch`/working-tree `restore` unless a merge or rebase conflict is being resolved. Unstaging stays allowed. Enforced by the embedded shell's `git` builtin, so it sees expanded commands and the real cwd; services, client terminals, `pty` calls, and git started by path or through another program are not guarded. |
+| `bash.gitGuard`                   | boolean | `false`   | For checkouts shared by concurrent agents: refuse `git stash` (except `list`/`show`/`create`), `reset --hard`, `reset` to another commit, `switch` and branch `checkout`, and `checkout`/working-tree `restore` of paths unless a merge or rebase conflict is being resolved. Unstaging stays allowed. Enforced by the embedded shell's `git` builtin, so it sees expanded commands and the real cwd; services, client terminals, `pty` calls, and git started by path or through another program are not guarded. |
 | `launch.enabled`                  | boolean | `true`    | Enable named `bash` services and `proc://` supervision for shared long-running project processes; there is no separate launch tool.                                                                                           |
 | `bash.autoBackground.enabled`     | boolean | `true`   | Auto-background long-running commands.                                                                                                                      |
 | `bash.autoBackground.thresholdMs` | number  | `60000`   | Threshold before auto-backgrounding.                                                                                                                        |
@@ -999,6 +999,16 @@ When a usage refresh detects an eligible banked reset expiring within the next *
 To spend one by hand, use `/usage reset` in a session or `omp usage reset` from a shell, which needs no session or TTY and works from an auth-broker client: without arguments it lists each account's saved resets by `<provider>/<credential id>`, and with one it spends a single reset on that account.
 
 `omp usage` and the active account's status-line usage segment flag banked resets expiring within **7 days** when the account's fullest window they restore is at least 25% used. Within **24 hours**, `omp usage` opens with a banner per account: whether the sweep above spends the reset or asks first (only while an interactive omp session is open), or that it will not, and the `/usage reset` target that spends it now when the provider allows. The interactive TUI shows that warning once per conversation.
+
+### Cost limits
+
+```yaml
+session:
+  warnCost: 5   # USD: warn once when the session's spend reaches it
+  maxCost: 10   # USD: stop sending model requests from this spend on
+```
+
+Both are unset by default and accept positive USD amounts; `--warn-cost` and `--max-cost` override them for one run, and setting or changing either while a session is open applies to its next request. Spend counts every model request of the session and its subagents at the costs the model catalog prices: agent turns, side requests (compaction, handoff, advisor reviews, `/btw`, cache warming), eval `completion()`/`judge()`/`judge_batch()`, judgment-backed `find`, image questions, image descriptions for text-only models, edit auto-repair, and job widgets; at the cap these are refused too, and no session title is generated. Memory extraction (Mnemopi and memories consolidation) runs in the background and is neither counted nor refused. The cap is checked before each request goes out, so requests already in flight can finish past it. A session started with `--resume`/`--continue`, or switched to, starts from the spend its session file records (the total the footer and `/usage` show), which leaves out background subagents' spend and side requests from earlier runs; `/new` starts from zero, while fork, branch and `/btw` keep the session's spend. When the cap stops a run, the interactive TUI shows the reason and puts a refused prompt back in the editor, print mode exits with status `3`, and RPC reports `error.code: "cost_cap"`.
 
 ### Other groups
 
