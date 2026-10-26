@@ -1755,11 +1755,9 @@ export async function resolveModelOverrideWithAuthFallback(
 	if (primaryKey === kNoAuth || isAuthenticated(primaryKey)) {
 		return { ...primary, authFallbackUsed: false, primaryAuthFailed: false };
 	}
-	if (!parentActiveModelPattern) {
-		return { ...primary, authFallbackUsed: false, primaryAuthFailed: true };
-	}
 	// The ordered override list is the caller's own fallback chain: an
-	// authenticated later entry beats the parent's model.
+	// authenticated later entry beats the parent's model, and serves when no
+	// parent model is given (a prepared seance passes none).
 	for (const pattern of resolveConfiguredModelPatterns(modelPatterns, settings)) {
 		const candidate = resolveModelOverride([pattern], lookupRegistry, settings);
 		if (!candidate.model || modelsAreEqual(candidate.model, primary.model)) continue;
@@ -1767,6 +1765,9 @@ export async function resolveModelOverrideWithAuthFallback(
 		if (candidateKey === kNoAuth || isAuthenticated(candidateKey)) {
 			return { ...candidate, authFallbackUsed: false, primaryAuthFailed: false };
 		}
+	}
+	if (!parentActiveModelPattern) {
+		return { ...primary, authFallbackUsed: false, primaryAuthFailed: true };
 	}
 
 	const fallback = resolveModelOverride([parentActiveModelPattern], lookupRegistry, settings);
