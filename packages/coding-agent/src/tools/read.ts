@@ -24,10 +24,12 @@ import {
 	isProbablyBinaryHeader,
 	isEnoent,
 	logger,
+	parseHeifImageMimeType,
 	parseImageMetadata,
 	prompt,
 	readImageMetadata,
 } from "@oh-my-pi/pi-utils";
+import { peekFile } from "@oh-my-pi/pi-utils/peek-file";
 import {
 	cfgIdaAvailable,
 	EXECUTABLE_SNIFF_BYTES,
@@ -63,7 +65,7 @@ import {
 } from "../utils/block-context";
 import { isCpuProfilePath, renderCpuProfile } from "../utils/cpuprofile";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
-import { loadImageInput, loadSvgImageInput } from "../utils/image-loading";
+import { loadHeifImageInput, loadImageInput, loadSvgImageInput } from "../utils/image-loading";
 import {
 	ImageInputTooLargeError,
 	InvalidImageDataError,
@@ -77,6 +79,7 @@ import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
 	formatConflictSummary,
 	formatConflictWarning,
+	formatScanCapNote,
 	getConflictHistory,
 	recoverConflictUriPrefix,
 	scanConflictLines,
@@ -1436,7 +1439,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		mimeType: string;
 		imageMetadata: ImageMetadata | null;
 		fileSize: number;
-		imageKind?: "svg";
+		imageKind?: "svg" | "heif";
 		question?: string;
 		questionPath?: string;
 		signal?: AbortSignal;
@@ -1482,7 +1485,9 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			const imageInput =
 				imageKind === "svg"
 					? await loadSvgImageInput(imageLoadOptions)
-					: await loadImageInput({ ...imageLoadOptions, detectedMimeType: mimeType });
+					: imageKind === "heif"
+						? await loadHeifImageInput({ ...imageLoadOptions, detectedMimeType: mimeType }, signal)
+						: await loadImageInput({ ...imageLoadOptions, detectedMimeType: mimeType });
 			if (!imageInput) {
 				throw new ToolError(
 					imageKind === "svg"
@@ -1763,7 +1768,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				const entry = await fetchReadUrl(this.session, { path: parsedUrlTarget.path, raw: urlRaw }, signal, {
 					ensureArtifact: true,
 				});
-				return buildInMemorySelectorResult(this.session, entry.output, urlSel, {
+				return buildInMemorySelectorResult(this.session, entry.content, urlSel, {
 					details: { ...entry.details },
 					sourceUrl: entry.details.finalUrl,
 					entityLabel: "URL output",
@@ -2093,32 +2098,36 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// unbuffered files keep one centralized 256KB peek regardless of
 		// extension, since only magic bytes — never the name — decide.
 		const wholeFileBytes = fileSize <= SNAPSHOT_MAX_BYTES ? await readWholeFile(absolutePath) : undefined;
-		const imageHeader = wholeFileBytes?.subarray(0, IMAGE_METADATA_HEADER_BYTES);
-		const imageMetadata =
+		const imageHeader =
 			isRawSelector(parsed) && !rawImages
-				? null
-				: imageHeader !== undefined
-					? parseImageMetadata(imageHeader)
-					: await readImageMetadata(absolutePath);
+				? undefined
+				: (wholeFileBytes?.subarray(0, IMAGE_METADATA_HEADER_BYTES) ??
+					(await peekFile(absolutePath, IMAGE_METADATA_HEADER_BYTES, header => header)));
+		const imageMetadata = imageHeader ? parseImageMetadata(imageHeader) : null;
 		const mimeType = imageMetadata?.mimeType;
+		// HEIC, AVIF and other HEIF stills reach the model decoded by ffmpeg instead of as binary.
+		const heifMimeType = imageHeader && !mimeType ? parseHeifImageMimeType(imageHeader) : null;
 		const resolvedDisplayPath = located?.url ?? formatPathRelativeToCwd(renderAbsolutePath, this.session.cwd);
 		const shouldConvertWithMarkit = CONVERTIBLE_EXTENSIONS.has(ext);
 		// Profiler reports (macOS `sample` call trees, V8 `.cpuprofile` JSON):
-		// replace the raw dump with a bottleneck summary (hot paths, top self
-		// time/samples). `:raw` reads the original bytes; text that merely wears
-		// the extension falls through to the plain-text path.
-		if (!mimeType && !isRawSelector(parsed) && fileSize <= MAX_PROFILE_SUMMARY_BYTES) {
+		// a whole-file read gets a bottleneck summary (hot paths, top self
+		// time/samples) instead of the raw dump. Line selectors and `:raw` read the
+		// file itself, so their line numbers and snapshot tag are the file's; text
+		// that merely wears the extension falls through to the plain-text path.
+		if (!mimeType && parsed.kind === "none" && fileSize <= MAX_PROFILE_SUMMARY_BYTES) {
 			let rendered: string | null = null;
 			if (isSampleProfilePath(renderAbsolutePath))
 				rendered = renderSampleProfile(await Bun.file(absolutePath).text());
 			else if (isCpuProfilePath(renderAbsolutePath))
 				rendered = renderCpuProfile(await Bun.file(absolutePath).text());
 			if (rendered) {
-				return buildInMemorySelectorResult(this.session, rendered, parsed, {
-					details: { resolvedPath: renderAbsolutePath },
-					sourcePath: renderAbsolutePath,
-					entityLabel: "profile summary",
-				});
+				// One unnumbered document: `:N` addresses the file, so the summary carries no row
+				// numbers, snapshot tag or `:N` continuation, and no line count that would mark it a
+				// complete read of the file. An oversized summary goes to the central artifact spill.
+				return toolResult<ReadToolDetails>({ resolvedPath: renderAbsolutePath })
+					.text(rendered)
+					.sourcePath(renderAbsolutePath)
+					.done();
 			}
 		}
 		// Read the file based on type
@@ -2162,6 +2171,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				mimeType,
 				imageMetadata,
 				fileSize,
+				question,
+				questionPath,
+				signal,
+			}));
+		} else if (heifMimeType) {
+			({ content, details, sourcePath } = await this.#loadImageContent({
+				readPath,
+				absolutePath,
+				mimeType: heifMimeType,
+				imageMetadata: null,
+				fileSize,
+				imageKind: "heif",
 				question,
 				questionPath,
 				signal,
@@ -2379,15 +2400,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
 					const expandStart = !rawSelector && offset !== undefined && offset > 1;
 					const expandEnd = !rawSelector && limit !== undefined;
-					const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
+					let leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
 					const trailingContext = expandEnd ? RANGE_TRAILING_CONTEXT_LINES : 0;
-					const startLine = requestedStart - leadingContext;
-					const startLineDisplay = startLine + 1;
+					let startLine = requestedStart - leadingContext;
+					let startLineDisplay = startLine + 1;
 
 					const DEFAULT_LIMIT = this.#defaultLimit;
 					const effectiveLimit = limit ?? DEFAULT_LIMIT;
-					const maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
-					const selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
+					let maxLinesToCollect = Math.min(effectiveLimit + leadingContext + trailingContext, DEFAULT_MAX_LINES);
+					let selectedLineLimit = effectiveLimit + leadingContext + trailingContext;
 					// Scale byte budget with line limit so the configured line count actually fits
 					// (~512 bytes/line, never below the shared default). Pages that would otherwise
 					// spill also stop at the spill threshold: past it the page would be middle-elided
@@ -2395,36 +2416,51 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// `:N` continuation. Row prefixes (`N|`/`N:`) count against that threshold, so
 					// their worst-case width is reserved (at most half the threshold). Artifact-storage
 					// pages never spill, so they keep the full budget.
-					const scaledBudget = Math.max(DEFAULT_MAX_BYTES, maxLinesToCollect * 512);
-					let maxBytesForRead = scaledBudget;
-					if (!located?.spec.artifactStore) {
+					const budgetFor = (firstLine: number, lineCount: number): number => {
+						const scaled = Math.max(DEFAULT_MAX_BYTES, lineCount * 512);
+						if (located?.spec.artifactStore) return scaled;
 						const threshold = resolveArtifactSpillThreshold(this.session.settings);
 						const prefixWidth =
-							!rawSelector && displayMode.lineNumbers ? String(startLine + maxLinesToCollect).length + 1 : 0;
-						const prefixReserve = Math.min(maxLinesToCollect * prefixWidth, Math.floor(threshold / 2));
-						maxBytesForRead = Math.min(scaledBudget, threshold - prefixReserve);
-					}
+							!rawSelector && displayMode.lineNumbers ? String(firstLine + lineCount).length + 1 : 0;
+						const prefixReserve = Math.min(lineCount * prefixWidth, Math.floor(threshold / 2));
+						return Math.min(scaled, threshold - prefixReserve);
+					};
+					const collectWindow = async (
+						firstLine: number,
+						lineCount: number,
+						maxBytes: number,
+						selectedLimit: number,
+					) =>
+						buffered
+							? collectLineWindowFromBuffer(buffered, firstLine, lineCount, maxBytes, selectedLimit)
+							: await streamLinesFromFile(
+									absolutePath,
+									firstLine,
+									lineCount,
+									maxBytes,
+									selectedLimit,
+									undefined,
+									{
+										stopScanAfterCollect: fileSize > SNAPSHOT_MAX_BYTES,
+										seek: tailSeekTo?.(firstLine),
+									},
+								);
+					let maxBytesForRead = budgetFor(startLine, maxLinesToCollect);
 
-					const lineWindow = buffered
-						? collectLineWindowFromBuffer(
-								buffered,
-								startLine,
-								maxLinesToCollect,
-								maxBytesForRead,
-								selectedLineLimit,
-							)
-						: await streamLinesFromFile(
-								absolutePath,
-								startLine,
-								maxLinesToCollect,
-								maxBytesForRead,
-								selectedLineLimit,
-								undefined, // plain-file read: deterministic and fast, never abort mid-read
-								{
-									stopScanAfterCollect: fileSize > SNAPSHOT_MAX_BYTES,
-									seek: tailSeekTo?.(startLine),
-								},
-							);
+					let lineWindow = await collectWindow(startLine, maxLinesToCollect, maxBytesForRead, selectedLineLimit);
+
+					// Leading context is optional padding. If the byte budget stopped
+					// before any requested line, retry from the requested start so an
+					// oversized context line cannot hide the page that was asked for.
+					if (leadingContext > 0 && lineWindow.stoppedByByteLimit && lineWindow.lines.length < leadingContext) {
+						leadingContext = 0;
+						startLine = requestedStart;
+						startLineDisplay = startLine + 1;
+						maxLinesToCollect = Math.min(effectiveLimit + trailingContext, DEFAULT_MAX_LINES);
+						selectedLineLimit = effectiveLimit + trailingContext;
+						maxBytesForRead = budgetFor(startLine, maxLinesToCollect);
+						lineWindow = await collectWindow(startLine, maxLinesToCollect, maxBytesForRead, selectedLineLimit);
+					}
 
 					const {
 						lines: collectedLines,
@@ -2742,18 +2778,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							// Cheap full-file scan only when the window already showed
 							// at least one conflict — otherwise pay nothing on clean files.
 							let totalInFile = entries.length;
-							let scanTruncated = false;
+							let truncatedAtLine: number | undefined;
 							try {
 								const fileScan = await scanFileForConflicts(absolutePath);
 								totalInFile = Math.max(entries.length, fileScan.blocks.length);
-								scanTruncated = fileScan.scanTruncated;
+								truncatedAtLine = fileScan.truncatedAtLine;
 							} catch {
 								// Best-effort enrichment; fall back to window-only count.
 							}
 							outputText += formatConflictWarning(entries, {
 								totalInFile,
 								displayPath: displayPathForWarning,
-								scanTruncated,
+								truncatedAtLine,
 							});
 							details.conflictCount = entries.length;
 						}
@@ -2835,10 +2871,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}),
 		);
 
-		const summary =
-			entries.length === 0
-				? `No unresolved git merge conflicts in ${displayPath}.`
-				: formatConflictSummary(entries, { displayPath, scanTruncated: scan.scanTruncated });
+		let summary: string;
+		if (entries.length > 0) {
+			summary = formatConflictSummary(entries, { displayPath, truncatedAtLine: scan.truncatedAtLine });
+		} else if (scan.truncatedAtLine !== undefined) {
+			summary = `No unresolved git merge conflicts before line ${scan.truncatedAtLine} of ${displayPath}.\n${formatScanCapNote(displayPath, scan.truncatedAtLine)}`;
+		} else {
+			summary = `No unresolved git merge conflicts in ${displayPath}.`;
+		}
 
 		const details: ReadToolDetails = {
 			resolvedPath: absolutePath,
