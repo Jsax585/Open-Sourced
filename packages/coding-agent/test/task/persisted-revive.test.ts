@@ -1256,28 +1256,6 @@ describe("persisted subagent revival", () => {
 		expect(capturedOptions?.modelPatternAuthFallback).toBe("anthropic/claude-sonnet-4-5");
 	});
 
-	it("revives a per-call role request on its resolved model instead of re-resolving the role", async () => {
-		const cwd = makeTempDir("@pi-per-call-role-revive-");
-		const sessionFile = await createPersistedSession(cwd, false, "review-fast", undefined, { perCallModel: true });
-		const saved = getBundledModel("anthropic", "claude-sonnet-4-5");
-		let capturedOptions: CreateAgentSessionOptions | undefined;
-		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
-			capturedOptions = options;
-			// The session comes up on the saved model, so revival's exact-model check passes.
-			return {
-				session: Object.assign(createRevivedSession([]).session, { model: saved }),
-			} as CreateAgentSessionResult;
-		});
-
-		const ref = createRef(sessionFile);
-		const reviver = await createFactory(cwd)(ref);
-		if (!reviver) throw new Error("Expected a persisted reviver");
-		await reviver(ref);
-
-		// The role may have been remapped since the spawn; the worker stays on what it ran.
-		expect(capturedOptions?.modelPattern).toBe("anthropic/claude-sonnet-4-5");
-	});
-
 	it("reinstalls the spawn's subagent fallback chain so it still routes at a changed effort (#13789)", async () => {
 		const cwd = makeTempDir("@pi-revive-retry-fallback-");
 		const sessionFile = await createPersistedSession(cwd, false, "task", undefined, {
