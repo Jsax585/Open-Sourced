@@ -31,6 +31,10 @@ const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const EMPTY_STRING_ARRAYS_RECORD: Record<string, string[]> = {};
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["wait"];
 
+// Windows realizes both intent axes with the same system-awake request.
+const WINDOWS_SYSTEM_AWAKE_DESCRIPTION =
+	"Keep the system awake during active prompts. Windows uses the same mechanism for Inhibit Idle and Inhibit Suspend.";
+
 const POWER_DESCRIPTIONS: Record<string, { idle: string; system: string; display: string }> = {
 	linux: {
 		idle: "Inhibit logind's idle action during active prompts (login1 idle). Independent of screen saver inhibition.",
@@ -45,9 +49,8 @@ const POWER_DESCRIPTIONS: Record<string, { idle: string; system: string; display
 		display: "Prevent idle display sleep during active prompts.",
 	},
 	win32: {
-		idle: "Keep the system awake during active prompts. Windows uses the same mechanism for Inhibit Idle and Inhibit Suspend.",
-		system:
-			"Keep the system awake during active prompts. Windows uses the same mechanism for Inhibit Idle and Inhibit Suspend.",
+		idle: WINDOWS_SYSTEM_AWAKE_DESCRIPTION,
+		system: WINDOWS_SYSTEM_AWAKE_DESCRIPTION,
 		display: "Prevent display power-off during active prompts.",
 	},
 };
