@@ -36,7 +36,9 @@ import {
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
 	cfgProvidersMaxInFlightRequests,
-	cfgPowerSleepPrevention,
+	cfgPowerInhibitIdle,
+	cfgPowerInhibitSuspend,
+	cfgPowerKeepDisplayAwake,
 	cfgFeaturesUnexpectedStopDetection,
 	cfgRetryFallbackChains,
 	cfgProviderAppendOnlyContext,
@@ -2629,83 +2631,118 @@ describe("Settings", () => {
 			expect(fs.existsSync(`${jsonPath}.bak`)).toBe(true);
 		});
 
-		it("migrates legacy power booleans with system=true to system level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: true,
-					declareUserActive: false,
-					preventDisplaySleep: false,
+		describe("power settings migration", () => {
+			const powerValues = (settings: Settings) => [
+				cfgPowerInhibitIdle.get(settings),
+				cfgPowerInhibitSuspend.get(settings),
+				cfgPowerKeepDisplayAwake.get(settings),
+			];
+
+			it.each([
+				["off", false, false, false],
+				["idle", true, false, false],
+				["display", true, false, true],
+				["system", true, true, true],
+			] as const)(
+				"preserves the effective %s mode as independent switches",
+				async (mode, idle, suspend, display) => {
+					await writeSettings({ power: { sleepPrevention: mode } });
+					const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+					expect(settings.getGlobalSettings().power).toEqual({
+						inhibitIdle: idle,
+						inhibitSuspend: suspend,
+						keepDisplayAwake: display,
+					});
 				},
-			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("system");
-		});
+			);
 
-		it("migrates legacy power booleans with display=true to display level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: false,
-					declareUserActive: false,
-					preventDisplaySleep: true,
-				},
+			it("migrates a quoted-dotted mode without overriding explicit new switches", async () => {
+				await writeSettings({
+					"power.sleepPrevention": "system",
+					"power.inhibitIdle": false,
+					"power.keepDisplayAwake": false,
+					power: { inhibitSuspend: false },
+				});
+				const settings = await Settings.init({ cwd: projectDir, agentDir });
+				expect(powerValues(settings)).toEqual([false, false, false]);
+				cfgSetupVersion.set(settings, 1);
+				await settings.flush();
+				expect(await readSettings()).toEqual({
+					setupVersion: 1,
+					power: { inhibitIdle: false, inhibitSuspend: false, keepDisplayAwake: false },
+				});
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("display");
-		});
 
-		it("migrates legacy power booleans with declareUserActive=true to system level", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: true,
-					preventSystemSleep: false,
-					declareUserActive: true,
-					preventDisplaySleep: false,
-				},
+			it("prefers nested modes and switches over flat forms and older booleans", async () => {
+				await writeSettings({
+					power: { sleepPrevention: "off", inhibitIdle: false, preventSystemSleep: true },
+					"power.sleepPrevention": "system",
+					"power.inhibitIdle": true,
+					"power.inhibitSuspend": true,
+				});
+				const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+				expect(powerValues(settings)).toEqual([false, true, false]);
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("system");
-		});
 
-		it("preserves old idle default when only non-idle keys are set", async () => {
-			// Old default was preventIdleSleep=true; user only set display=false.
-			// Migration should yield "idle", not "off".
-			await writeSettings({
-				power: { preventDisplaySleep: false },
+			it.each([
+				[{ preventIdleSleep: false }, [false, false, false]],
+				[{ preventDisplaySleep: true }, [true, false, true]],
+				[{ preventSystemSleep: true, preventDisplaySleep: false }, [true, true, true]],
+				[{ declareUserActive: true }, [true, true, true]],
+				[{ preventDisplaySleep: false }, [true, false, false]],
+			] as const)("preserves the prior effective behavior of legacy booleans %j", async (legacy, expected) => {
+				await writeSettings({ power: legacy });
+				const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+				expect(settings.getGlobalSettings().power).toEqual({
+					inhibitIdle: expected[0],
+					inhibitSuspend: expected[1],
+					keepDisplayAwake: expected[2],
+				});
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("idle");
-		});
 
-		it("migrates all-false power booleans to off", async () => {
-			await writeSettings({
-				power: {
-					preventIdleSleep: false,
-					preventSystemSleep: false,
-					declareUserActive: false,
-					preventDisplaySleep: false,
-				},
+			it("migrates flat legacy booleans and removes retired keys on the next save", async () => {
+				await writeSettings({
+					"power.preventIdleSleep": false,
+					"power.preventDisplaySleep": true,
+					power: { declareUserActive: false, custom: "keep" },
+				});
+				const settings = await Settings.init({ cwd: projectDir, agentDir });
+				expect(powerValues(settings)).toEqual([true, false, true]);
+				cfgSetupVersion.set(settings, 1);
+				await settings.flush();
+				expect(await readSettings()).toEqual({
+					setupVersion: 1,
+					power: { custom: "keep", inhibitIdle: true, inhibitSuspend: false, keepDisplayAwake: true },
+				});
+				cfgPowerKeepDisplayAwake.set(settings, false);
+				await settings.flush();
+				const reloaded = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+				expect(powerValues(reloaded)).toEqual([true, false, false]);
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("off");
-		});
 
-		it("migrates flat-key power booleans to the enum", async () => {
-			await writeSettings({
-				"power.preventIdleSleep": true,
-				"power.preventDisplaySleep": true,
+			it("migrates project settings before applying layer precedence", async () => {
+				await writeSettings({
+					power: { inhibitIdle: true, inhibitSuspend: true, keepDisplayAwake: true },
+				});
+				await Bun.write(
+					path.join(getProjectAgentDir(projectDir), "config.yml"),
+					"power:\n  sleepPrevention: off\n",
+				);
+				const settings = await Settings.loadIsolated({ cwd: projectDir, agentDir });
+				expect(powerValues(settings)).toEqual([false, false, false]);
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("display");
-		});
 
-		it("does not overwrite an explicit power.sleepPrevention", async () => {
-			await writeSettings({
-				power: { sleepPrevention: "off", preventIdleSleep: true },
+			it("migrates runtime overrides and ignores invalid legacy modes without enabling stronger inhibitors", () => {
+				expect(
+					powerValues(Settings.isolated({ "power.sleepPrevention": "system", "power.keepDisplayAwake": false })),
+				).toEqual([true, true, false]);
+				const invalid = Settings.isolated({
+					"power.sleepPrevention": "invalid",
+					"power.preventSystemSleep": true,
+				});
+				expect(powerValues(invalid)).toEqual([true, false, false]);
+				expect(cfgPowerInhibitSuspend.isConfigured(invalid)).toBe(false);
 			});
-			const settings = await Settings.init({ cwd: projectDir, agentDir });
-			expect(cfgPowerSleepPrevention.get(settings)).toBe("off");
 		});
 
 		describe("provider request limits", () => {

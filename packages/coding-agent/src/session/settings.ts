@@ -31,41 +31,68 @@ const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const EMPTY_STRING_ARRAYS_RECORD: Record<string, string[]> = {};
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["wait"];
 
-// Power assertions: macOS IOKit, Linux login1/ScreenSaver, Windows execution state.
-export const cfgPowerSleepPrevention = register({
-	id: "power.sleepPrevention",
-	type: "enum",
-	values: ["off", "idle", "display", "system"] as const,
-	default: "idle",
+// Windows realizes both intent axes with the same system-awake request.
+const WINDOWS_SYSTEM_AWAKE_DESCRIPTION =
+	"Keep the system awake during active prompts. Windows uses the same mechanism for Inhibit Idle and Inhibit Suspend.";
+
+const POWER_DESCRIPTIONS: Record<string, { idle: string; system: string; display: string }> = {
+	linux: {
+		idle: "Inhibit logind's idle action during active prompts (login1 idle). Independent of screen saver inhibition.",
+		system:
+			"Inhibit suspend and hibernation during active prompts (login1 sleep). Independent of screen saver inhibition.",
+		display:
+			"Ask the desktop to inhibit its screen saver during active prompts (org.freedesktop.ScreenSaver). Best effort; unavailable in headless sessions.",
+	},
+	darwin: {
+		idle: "Prevent idle system sleep during active prompts without keeping the display awake.",
+		system: "Prevent system sleep on AC power during active prompts without keeping the display awake.",
+		display: "Prevent idle display sleep during active prompts.",
+	},
+	win32: {
+		idle: WINDOWS_SYSTEM_AWAKE_DESCRIPTION,
+		system: WINDOWS_SYSTEM_AWAKE_DESCRIPTION,
+		display: "Prevent display power-off during active prompts.",
+	},
+};
+const powerDescriptions = POWER_DESCRIPTIONS[process.platform] ?? {
+	idle: "Idle inhibition is unavailable on this platform.",
+	system: "Suspend inhibition is unavailable on this platform.",
+	display: "Display inhibition is unavailable on this platform.",
+};
+
+export const cfgPowerInhibitIdle = register({
+	id: "power.inhibitIdle",
+	type: "boolean",
+	default: true,
 	ui: {
 		tab: "interaction",
 		group: "Power",
-		label: "Sleep Prevention",
-		description:
-			"Prevent the system sleeping during active sessions. Each level is cumulative — it adds the flags of all lower levels.",
-		options: [
-			{
-				value: "off",
-				label: "Off",
-				description: "Do not prevent any sleep",
-			},
-			{
-				value: "idle",
-				label: "Prevent Idle Sleep",
-				description: "Keep the system awake while a session is open (macOS `caffeinate -i`)",
-			},
-			{
-				value: "display",
-				label: "Prevent Display Sleep",
-				description: "Also keep the display from idle-sleeping (macOS `caffeinate -i -d`)",
-			},
-			{
-				value: "system",
-				label: "Prevent System Sleep",
-				description:
-					"Also block all system sleep on AC and declare the user active (macOS `caffeinate -i -d -s -u`)",
-			},
-		],
+		label: "Inhibit Idle",
+		description: powerDescriptions.idle,
+	},
+});
+
+export const cfgPowerInhibitSuspend = register({
+	id: "power.inhibitSuspend",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Power",
+		label: "Inhibit Suspend",
+		description: powerDescriptions.system,
+	},
+});
+
+export const cfgPowerKeepDisplayAwake = register({
+	id: "power.keepDisplayAwake",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "interaction",
+		group: "Power",
+		label: "Keep Display Awake",
+		description: powerDescriptions.display,
 	},
 });
 

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Replaced `power.sleepPrevention` with independent `power.inhibitIdle`, `power.inhibitSuspend`, and `power.keepDisplayAwake` switches, with OS-specific descriptions and automatic migration that preserves existing modes and explicit new choices ([#17072](https://github.com/can1357/oh-my-pi/pull/17072) by [@develop7](https://github.com/develop7)).
+
 ### Added
 
 - Added `omp -p --wait-async` (setting `async.printWake`): print mode waits for the background jobs it started and wakes the same session with each result before exiting, instead of cancelling them ([#10363](https://github.com/can1357/oh-my-pi/issues/10363), [#16690](https://github.com/can1357/oh-my-pi/pull/16690) by [@trukhinyuri](https://github.com/trukhinyuri))

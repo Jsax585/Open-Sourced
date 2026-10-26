@@ -3093,24 +3093,18 @@ export interface PointerOptions {
 /**
  * Options for starting a power assertion.
  *
- * Each boolean maps to a `caffeinate(8)` flag and the closest corresponding
- * platform capability. Multiple flags can be combined; when set, one
- * assertion is taken per flag and all are released together when the
- * handle is stopped or dropped.
- *
- * If every flag is unset (or omitted), the handle behaves as if `idle`
- * were `true` — preserving the historical default of `caffeinate -i`.
+ * Each boolean requests an independent platform capability. Multiple flags
+ * can be combined; all acquired assertions are released together when the
+ * handle is stopped or dropped. If no flag is true, no inhibition is acquired.
  */
 export interface PowerAssertionOptions {
   /** Human-readable reason shown in platform power diagnostics. */
   reason?: string
-  /** `caffeinate -i`: prevent the system from idle-sleeping. */
+  /** Prevent idle system sleep (login1 idle inhibition on Linux). */
   idle?: boolean
-  /** `caffeinate -s`: prevent the system from sleeping (AC power only). */
+  /** Prevent system sleep (AC power only on macOS; login1 sleep on Linux). */
   system?: boolean
-  /** `caffeinate -u`: declare the user is active (wakes the display). */
-  user?: boolean
-  /** `caffeinate -d`: prevent the display from idle-sleeping. */
+  /** Prevent display sleep (best-effort `ScreenSaver` inhibition on Linux). */
   display?: boolean
 }
 

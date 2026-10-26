@@ -1229,10 +1229,41 @@ console.log("ok");
 	});
 
 	describe("PowerAssertion", () => {
+		it.skipIf(process.platform !== "linux")("does not contact login1 when no inhibition is requested", () => {
+			const child = Bun.spawnSync(
+				[
+					process.execPath,
+					"-e",
+					`
+					import { PowerAssertion } from ${JSON.stringify(addonUrl)};
+					const outcomes = [];
+					for (const options of [undefined, { idle: false, system: false, display: false }, { idle: true }]) {
+						try {
+							const assertion = PowerAssertion.start(options);
+							assertion.stop();
+							outcomes.push("off");
+						} catch (error) {
+							outcomes.push(error.message.startsWith("PowerBackendUnavailable:") ? "backend-unavailable" : error.message);
+						}
+					}
+					process.stdout.write(JSON.stringify(outcomes));
+					`,
+				],
+				{
+					env: { ...process.env, DBUS_SYSTEM_BUS_ADDRESS: `unix:path=/tmp/omp-no-bus-${crypto.randomUUID()}` },
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			expect(child.exitCode).toBe(0);
+			expect(child.stderr.toString()).toBe("");
+			expect(JSON.parse(child.stdout.toString())).toEqual(["off", "off", "backend-unavailable"]);
+		});
+
 		it("should create a stoppable power assertion handle, or surface a descriptive bus/service failure where the host cannot provide one", () => {
 			let assertion: PowerAssertion | undefined;
 			try {
-				assertion = PowerAssertion.start({ reason: "pi-natives test" });
+				assertion = PowerAssertion.start({ reason: "pi-natives test", idle: true });
 			} catch (error) {
 				// A host with no bus must fail in the documented bus/service vocabulary,
 				// so a wrong export or a no-op stub fails on any other message.

@@ -3004,45 +3004,49 @@ export class Settings {
 			delete hindsightObj.mentalModelRefreshIntervalMs;
 		}
 
-		// power.preventIdleSleep / power.preventSystemSleep / power.declareUserActive
-		// / power.preventDisplaySleep (four booleans) → power.sleepPrevention enum.
-		// The enum is cumulative: each level adds the flags of all lower levels.
-		// Migration picks the highest level whose condition is met, scanning from
-		// most to least aggressive so a single enum value captures the old state.
-		if (
-			!("sleepPrevention" in ((raw.power as Record<string, unknown>) ?? {})) &&
-			raw["power.sleepPrevention"] === undefined
-		) {
-			const powerObj = raw.power as Record<string, unknown> | undefined;
-			const getFlag = (key: string): boolean | undefined => {
-				const nested = powerObj?.[key];
-				const flat = raw[`power.${key}`];
-				const value = nested ?? flat;
+		// Retired power schemas migrate once into independent switches. Explicit
+		// new values win, including false; nested values precede quoted-dotted keys.
+		const powerObj = isRecord(raw.power) ? raw.power : {};
+		const legacyPowerBooleans = [
+			"preventIdleSleep",
+			"preventSystemSleep",
+			"declareUserActive",
+			"preventDisplaySleep",
+		];
+		const hasPowerMode = Object.hasOwn(powerObj, "sleepPrevention") || Object.hasOwn(raw, "power.sleepPrevention");
+		let powerMode = Object.hasOwn(powerObj, "sleepPrevention")
+			? powerObj.sleepPrevention
+			: raw["power.sleepPrevention"];
+		if (!hasPowerMode) {
+			const legacyFlags = legacyPowerBooleans.map(key => {
+				const value = powerObj[key] ?? raw[`power.${key}`];
 				return typeof value === "boolean" ? value : undefined;
-			};
-			const idle = getFlag("preventIdleSleep");
-			const system = getFlag("preventSystemSleep");
-			const user = getFlag("declareUserActive");
-			const display = getFlag("preventDisplaySleep");
-			const anySet = idle !== undefined || system !== undefined || user !== undefined || display !== undefined;
-			if (anySet) {
-				const mode = system || user ? "system" : display ? "display" : idle !== false ? "idle" : "off";
-				const powerRoot = (powerObj ?? {}) as Record<string, unknown>;
-				powerRoot.sleepPrevention = mode;
-				raw.power = powerRoot;
+			});
+			const [idle, system, user, display] = legacyFlags;
+			if (legacyFlags.some(value => value !== undefined)) {
+				// Preserve the previous booleans-to-cumulative-mode migration.
+				powerMode = system || user ? "system" : display ? "display" : idle !== false ? "idle" : "off";
 			}
-			// Clean up old keys (nested + flat)
-			if (powerObj) {
-				delete powerObj.preventIdleSleep;
-				delete powerObj.preventSystemSleep;
-				delete powerObj.declareUserActive;
-				delete powerObj.preventDisplaySleep;
-			}
-			delete raw["power.preventIdleSleep"];
-			delete raw["power.preventSystemSleep"];
-			delete raw["power.declareUserActive"];
-			delete raw["power.preventDisplaySleep"];
 		}
+		const migratedPower =
+			powerMode === "off" || powerMode === "idle" || powerMode === "display" || powerMode === "system"
+				? {
+						inhibitIdle: powerMode !== "off",
+						inhibitSuspend: powerMode === "system",
+						keepDisplayAwake: powerMode === "display" || powerMode === "system",
+					}
+				: undefined;
+		for (const key of ["inhibitIdle", "inhibitSuspend", "keepDisplayAwake"] as const) {
+			const value = powerObj[key] ?? raw[`power.${key}`] ?? migratedPower?.[key];
+			if (value !== undefined) powerObj[key] = value;
+			delete raw[`power.${key}`];
+		}
+		for (const key of ["sleepPrevention", ...legacyPowerBooleans]) {
+			delete powerObj[key];
+			delete raw[`power.${key}`];
+		}
+		if (Object.keys(powerObj).length > 0) raw.power = powerObj;
+		else if (isRecord(raw.power)) delete raw.power;
 
 		// Migration for renamed settings grep.* from search.*. (`find.*` is no
 		// longer migrated to `glob.*`: `find` is the semantic search tool now.)

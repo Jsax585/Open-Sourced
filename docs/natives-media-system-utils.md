@@ -123,7 +123,29 @@ There is no current `packages/natives` TS wrapper that emits OSC52, handles Term
 - `detectMacOSAppearance()` returns `"dark"`, `"light"`, or `null` on non-macOS.
 - `MacAppearanceObserver.start(callback)` returns a handle with `stop()`; on macOS it reports the initial appearance, then changes via distributed notifications plus a 2-second polling fallback, deduplicating repeated values. On non-macOS it is a no-op observer.
 - `PowerAssertion.start(options?)` returns a handle with idempotent `stop()` and drop-time release. It uses IOKit on macOS, login1 inhibition on Linux (plus best-effort ScreenSaver inhibition for `display`), and thread-affine execution state on Windows. Unsupported platforms receive a no-op handle.
-- Options are `{ reason?, idle?, system?, user?, display? }`; the default reason is `"omp agent session"`. If no boolean is true, idle-sleep prevention is enabled even when `idle: false` was supplied. `user` is macOS-only. Linux login1 failures reject, while display-inhibitor failures are soft.
+- Options are `{ reason?, idle?, system?, display? }`; the default reason is `"omp agent session"`. Each flag is independent; when all flags are omitted or false, the handle acquires no inhibitors. Linux login1 failures reject, while display-inhibitor failures are soft. Windows uses the same system-awake request for `idle` and `system`; macOS `system` inhibition applies on AC power.
+
+The coding agent exposes independent `power.inhibitIdle` (default `true`), `power.inhibitSuspend` (default `false`), and `power.keepDisplayAwake` (default `false`) switches in Settings → Interaction → Power. They apply during active prompts, update immediately mid-prompt, and release when the prompt ends. The settings use descriptions for the current OS.
+
+On Linux, the first two switches request login1 `idle` and `sleep` inhibitors; only `power.keepDisplayAwake` requests the desktop's best-effort ScreenSaver inhibitor. To inhibit idle and suspend while allowing the screen saver:
+
+```yaml
+power:
+  inhibitIdle: true
+  inhibitSuspend: true
+  keepDisplayAwake: false
+```
+
+Existing `power.sleepPrevention` settings migrate to independent switches when loaded:
+
+| Old mode | `inhibitIdle` | `inhibitSuspend` | `keepDisplayAwake` |
+|---|---|---|---|
+| `off` | `false` | `false` | `false` |
+| `idle` | `true` | `false` | `false` |
+| `display` | `true` | `false` | `true` |
+| `system` | `true` | `true` | `true` |
+
+Explicit new switches take precedence individually, including `false`; nested values take precedence over quoted-dotted forms. Earlier `preventIdleSleep`, `preventSystemSleep`, `declareUserActive`, and `preventDisplaySleep` configurations retain their previously migrated cumulative mode. Both historical formats accept nested and quoted-dotted keys. Retired keys are removed from the loaded configuration, and the next settings save writes only the new switches while preserving unrelated settings.
 
 ### Work profiling (`prof`)
 
