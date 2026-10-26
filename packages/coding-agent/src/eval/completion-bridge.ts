@@ -379,6 +379,9 @@ async function executeCompletion(
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
+		// The session's cost cap covers completions a cell makes, attempt by attempt.
+		const refusal = session.costGate?.check();
+		if (refusal) throw new ToolError(refusal.message);
 		const attempt: EvalCompletionMetadata["attempts"][number] | undefined = metadata
 			? {
 					candidateIndex: index,
@@ -429,6 +432,7 @@ async function executeCompletion(
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);
+			session.costGate?.record(response.usage.cost.total);
 		} catch (error) {
 			if (attempt) attempt.outcome = signal.aborted ? "cancelled" : "failed";
 			lastError = error;

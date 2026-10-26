@@ -25,6 +25,8 @@ import { executeJs } from "../../src/eval/js/executor";
 import { disposeAllKernelSessions, type PythonResult } from "../../src/eval/py/executor";
 import type { ToolSession } from "../../src/tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { CostGate } from "../../src/session/cost-gate";
+import { rejectionOf } from "../helpers/rejection";
 
 import { cfgRetryFallbackChains, cfgRetryMaxRetries } from "@oh-my-pi/pi-coding-agent/session/settings";
 
@@ -245,6 +247,45 @@ describe("runEvalCompletion", () => {
 			return `${model.provider}/${model.id}`;
 		});
 		expect(resolved).toEqual(["p/smol", "p/default", "p/slow"]);
+	});
+
+	it("counts each completion against the session's cost cap and refuses at it", async () => {
+		const billed = assistant({ text: "ok" });
+		billed.usage.cost.total = 1.2;
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(billed);
+		const costGate = new CostGate(Settings.isolated({ "session.maxCost": 1 }), 0, () => {});
+		const session = { ...makeSession(), costGate } as ToolSession;
+
+		await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+		expect(costGate.spent).toBe(1.2);
+		const refused = await rejectionOf(runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session }));
+		expect(String(refused)).toContain("Cost cap reached");
+		expect(spy).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses an over-cap fallback without recording a phantom metadata attempt", async () => {
+		const fallback = makeModel("p", "fallback");
+		const costGate = new CostGate(Settings.isolated({ "session.maxCost": 1 }), 0, () => {});
+		const session = { ...makeSession({ available: [SMOL, fallback] }), costGate } as ToolSession;
+		cfgRetryFallbackChains.set(session.settings, { smol: ["p/fallback"] });
+		const billed = assistant({ stopReason: "error", errorMessage: "primary failed" });
+		billed.usage.cost.total = 1.2;
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(billed)
+			.mockResolvedValueOnce(assistant({ text: "unexpected fallback" }));
+
+		const handle = await runEvalCompletion({ prompt: "q", model: "smol" }, { session });
+		const waited = await runEvalWait({ items: [{ kind: "completion", id: handle.id }] }, { session });
+		expect(waited.items[0]?.status).toBe("failed");
+		expect(waited.items[0]?.error).toContain("Cost cap reached");
+		expect(costGate.spent).toBe(1.2);
+		expect(spy).toHaveBeenCalledTimes(1);
+		const status = runEvalStatus({ item: { kind: "completion", id: handle.id } }, { session });
+		expect(status.metadata?.fallbackUsed).toBe(false);
+		expect(status.metadata?.attempts.map(({ model, outcome }) => ({ model, outcome }))).toEqual([
+			{ model: "p/smol", outcome: "failed" },
+		]);
 	});
 
 	it("prefers the session active model for the default tier, falling back to @default", async () => {
