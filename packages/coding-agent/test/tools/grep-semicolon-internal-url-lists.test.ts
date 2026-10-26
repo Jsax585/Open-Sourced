@@ -86,6 +86,25 @@ describe("GrepTool semicolon internal-URL path lists", () => {
 		expect(text).toContain("abs path needle");
 	});
 
+	it("searches mixed internal URL lists while excluding filesystem tails", async () => {
+		const targets = path.join(tmpDir, "targets");
+		await Bun.write(path.join(targets, "keep.md"), "included directory needle\n");
+		await Bun.write(path.join(targets, "omit.skip.md"), "excluded directory needle\n");
+		const result = await new GrepTool(createSession()).execute("mixed-exclusion", {
+			pattern: "needle",
+			path: `skill://demo;${targets};!*.skip.md`,
+		});
+		expect(getResultText(result)).toContain(skillBodyNeedle);
+		expect(getResultText(result)).toContain("included directory needle");
+		expect(getResultText(result)).not.toContain("excluded directory needle");
+		expect(await expandDelimitedPathEntries(["skill://demo;!*.md"], tmpDir)).toEqual([
+			"skill://demo;!*.md",
+		]);
+		expect(await expandDelimitedPathEntries(["skill://demo/a;"], tmpDir, { exclusionParts: true })).toEqual([
+			"skill://demo/a;",
+		]);
+	});
+
 	it("anchors file URL tails after expanding them to filesystem paths", async () => {
 		const fileUrl = `file://${absFile}`;
 		const target = `skill://demo/SKILL.md;${fileUrl}`;
