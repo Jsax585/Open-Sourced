@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Vertex AI Gemini 3+ models rejecting replayed or cross-model assistant turns whose first tool call lacks a thought signature by enabling the first-call `skip_thought_signature_validator` sentinel on `google-vertex` ([#10602](https://github.com/can1357/oh-my-pi/issues/10602), [#17150](https://github.com/can1357/oh-my-pi/pull/17150) by [@sinhduc01](https://github.com/sinhduc01))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
