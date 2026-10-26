@@ -302,7 +302,7 @@ export const cfgTaskPerCallModel = register({
 		group: "Subagents",
 		label: "Per-Call Model",
 		description:
-			"Whether a subagent call may pick its model with one exact provider/model-id[@upstream][:level] selector. An @upstream pin is part of the model identity and is supported only by aggregators. Only models the configuration already routes to are accepted.",
+			"Whether a subagent call may pick its model with an exact provider/model-id[@upstream][:level], a configured @role[:level], or an ordered list of them. An @upstream pin is part of the model identity and is supported only by aggregators. Only models the configuration already routes to are accepted.",
 		options: [
 			{ value: "off", label: "Off", description: "Reject `model` on task items and eval agent()/workpool()" },
 			{ value: "eval", label: "Eval only", description: "Accept `model` in eval agent() and workpool() only" },
@@ -318,20 +318,20 @@ export function perCallModelEnabled(settings: Settings, invocationKind: "task" |
 }
 
 /**
- * Validates `task.perCallModelAllow`: a list of exact `provider/model-id` strings. A non-string
- * entry fails load and writes instead of reaching approval as an entry that matches nothing.
+ * Validates `task.perCallModelAllow`: exact identities, configured `@role` selectors or globs.
+ * A non-string entry fails load and writes rather than silently matching nothing.
  */
 function validatePerCallModelAllow(value: unknown): void {
 	if (value === undefined || value === null) return;
 	if (!Array.isArray(value)) {
 		throw new Error(
-			`Invalid task.perCallModelAllow: expected a list of provider/model-id strings, got ${Bun.inspect(value)}.`,
+			`Invalid task.perCallModelAllow: expected a list of exact model, @role or glob strings, got ${Bun.inspect(value)}.`,
 		);
 	}
 	for (const [index, entry] of value.entries()) {
 		if (typeof entry === "string") continue;
 		throw new Error(
-			`Invalid task.perCallModelAllow[${index}]: expected a provider/model-id string, got ${Bun.inspect(entry)}.`,
+			`Invalid task.perCallModelAllow[${index}]: expected an exact model, @role or glob string, got ${Bun.inspect(entry)}.`,
 		);
 	}
 }
@@ -347,7 +347,7 @@ export const cfgTaskPerCallModelAllow = register({
 		label: "Per-Call Model Allowlist",
 		editor: "json",
 		description:
-			'Exact provider/model-id entries, e.g. ["anthropic/claude-sonnet-4-5"]. When set, a per-call model must also be listed here. Empty: every model the configuration grants.',
+			'Exact provider/model-id entries, configured @role entries or globs, e.g. ["anthropic/claude-sonnet-4-5", "@review", "openai/*"]. When set, a per-call model must also match an entry here; the list only narrows what the configuration grants. Empty: every model the configuration grants.',
 	},
 });
 

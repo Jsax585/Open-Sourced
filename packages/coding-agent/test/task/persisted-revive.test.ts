@@ -745,6 +745,43 @@ describe("persisted subagent revival", () => {
 			maxTokens: 8192,
 		});
 
+	it("revives a role request from its saved identity and effort rather than the role's current value", async () => {
+		const saved = perCallModelFixture("saved");
+		const replacement = perCallModelFixture("replacement");
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async options =>
+				({
+					session: Object.assign(createRevivedSession([]).session, {
+						model: options?.model,
+						thinkingLevel: options?.thinkingLevel,
+					}),
+				}) as CreateAgentSessionResult,
+		);
+		const cwd = makeTempDir("@pi-revive-per-call-role-");
+		const sessionFile = await createPersistedSession(cwd, undefined, "review", undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/replacement:high",
+			perCallModelIdentity: "mock/saved",
+			perCallThinkingLevel: Effort.Low,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			settings: Settings.isolated({ modelRoles: { review: "mock/replacement", smol: "mock/saved" } }),
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => [saved, replacement],
+				getAll: () => [saved, replacement],
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		const revived = await reviver(ref);
+		expect(revived.model).toBe(saved);
+		expect(revived.thinkingLevel).toBe(Effort.Low);
+		expect(create.mock.calls[0]?.[0]?.modelPattern).toBeUndefined();
+		expect(() => create.mock.calls[0]?.[0]?.assertDispatchModel?.(saved)).not.toThrow();
+	});
+
 	it.each([
 		{ identity: "mock/coding-router:low", level: Effort.High, availableId: "coding-router" },
 		{ identity: "mock/coding-router", level: Effort.Low, availableId: "coding-router:low" },

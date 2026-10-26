@@ -102,7 +102,13 @@ describe("workpool model validation", () => {
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [agent], projectAgentsDir: null });
 		const session = Object.assign(
 			makeSession({ "task.perCallModel": "eval", modelRoles: { review: "mock/mock-model" } }),
-			{ modelRegistry: { getAll: () => [approved, unapproved], getAvailable: () => [approved, unapproved] } },
+			{
+				modelRegistry: {
+					getAll: () => [approved, unapproved],
+					getAvailable: () => [approved, unapproved],
+					awaitBackgroundRefresh: async () => {},
+				},
+			},
 		);
 		await expect(
 			runEvalWorkpool({ op: "create", name: "denied", agent: "scout", model: "mock/unapproved" }, { session }),
@@ -115,10 +121,14 @@ describe("workpool model validation", () => {
 
 	for (const { mode, model, reason } of [
 		// The gate wins over the selector check, so an invalid selector still reports the disabled gate.
-		{ mode: "off", model: "@smol", reason: /task\.perCallModel: off/ },
-		{ mode: "on", model: "@smol", reason: /invalid `model` value/ },
+		{ mode: "off", model: ["p/valid", "p/*"], reason: /task\.perCallModel: off/ },
+		{ mode: "on", model: " , ", reason: /invalid `model` value/ },
+		{ mode: "on", model: [], reason: /invalid `model` value/ },
+		{ mode: "on", model: ["p/valid", ""], reason: /invalid `model` value/ },
+		{ mode: "on", model: [42], reason: /invalid `model` value/ },
+		{ mode: "on", model: "@smol", reason: /has no modelRoles entry/ },
 		{ mode: "on", model: "pi/default", reason: /invalid `model` value/ },
-		{ mode: "on", model: ["p/valid"], reason: /invalid `model` value/ },
+		{ mode: "on", model: ["p/valid", "p/*"], reason: /invalid `model` value/ },
 	]) {
 		it(`rejects ${JSON.stringify(model)} under ${mode} before registering a pool`, async () => {
 			vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
@@ -130,7 +140,11 @@ describe("workpool model validation", () => {
 		});
 	}
 
-	it.each(["on", "eval"])("hands the pool selector to workers under %s", async perCallModel => {
+	it.each([
+		["on", "p/small"],
+		["eval", "p/small"],
+		["on", ["@smol", "p/small"]],
+	] as const)("hands the pool selector to workers under %s", async (perCallModel, model) => {
 		vi.spyOn(discovery, "discoverAgents").mockResolvedValue({ agents: [SCOUT], projectAgentsDir: null });
 		const requested = Promise.withResolvers<unknown>();
 		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
@@ -138,7 +152,6 @@ describe("workpool model validation", () => {
 			throw new Error("stop after dispatch");
 		});
 		const session = makeSession({ "task.perCallModel": perCallModel, modelRoles: { smol: "p/small" } });
-		const model = "p/small";
 		await runEvalWorkpool({ op: "create", name: "picked", agent: "scout", model }, { session });
 		await runEvalWorkpool({ op: "push", name: "picked", items: ["one"] }, { session });
 		expect(await requested.promise).toEqual(model);

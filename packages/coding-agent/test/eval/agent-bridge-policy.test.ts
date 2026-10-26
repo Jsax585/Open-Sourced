@@ -365,8 +365,8 @@ describe("runEvalAgent", () => {
 		// The gate wins over the selector check, so an invalid selector still reports the disabled gate.
 		{ mode: "off", model: "@smol", error: /task\.perCallModel: off/ },
 		{ mode: "on", model: "default", error: /invalid `model`/ },
-		// The argument schema accepts only a string, so a candidate array never reaches preflight.
-		{ mode: "on", model: ["p/preferred:high", "p/alternative"], error: /model must be a string/ },
+		// A candidate list is accepted, but every entry must still be an exact id or a configured role.
+		{ mode: "on", model: ["p/preferred:high", "p/*"], error: /invalid `model`/ },
 	])("rejects agent() model $model under $mode before dispatch", async ({ mode, model, error }) => {
 		mockAgents();
 		const runSpy = vi.spyOn(taskExecutor, "runSubprocess").mockImplementation(async options => singleResult(options));

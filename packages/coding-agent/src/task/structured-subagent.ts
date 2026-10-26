@@ -10,13 +10,17 @@ import path from "node:path";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
+import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
+	formatModelStringWithRouting,
 	resolveAgentModelSelection,
 	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
 	getModelMatchPreferences,
 	resolveModelOverride,
+	resolveModelRoleValue,
 } from "../config/model-resolver";
+import { isKindRole } from "../config/model-roles";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import {
 	type CompactionThresholdPair,
@@ -136,14 +140,14 @@ export interface StructuredSubagentRequest {
 	model?: string | string[];
 	/**
 	 * Per-call `model` from the model-facing surfaces (task items, eval `agent()`
-	 * and `workpool()`): gated by `task.perCallModel`, exact-only, and limited to
-	 * operator-approved models.
+	 * and `workpool()`): gated by `task.perCallModel`, exact ids or configured
+	 * roles (one, or an ordered list), and limited to operator-approved models.
 	 */
-	perCallModel?: string;
+	perCallModel?: string | string[];
 	/**
 	 * The model-facing `model` of a task call naming the `seance` agent. Gated,
-	 * exact-only and approved whether that name resolves to the bundled seance
-	 * or a project or user agent shadowing it.
+	 * using the same selector or ordered-list grammar and approval rules whether
+	 * that name resolves to the bundled seance or a project or user agent shadowing it.
 	 */
 	seanceModel?: string | string[];
 
@@ -344,16 +348,32 @@ function assertDepthAndSpawnAllowed(request: StructuredSubagentRequest, agentNam
 	}
 }
 
+const EXACT_MODEL_SELECTOR = /^[^\s/@,*?[\]{}]+\/[^\s,*?{}]+$/;
+const ROLE_MODEL_SELECTOR = /^@[^\s/@,*?[\]{}:]+(?::[^\s/@,*?[\]{}:]+)?$/;
+
+/** Whether `model` has the per-call shape, one string or a string array; {@link invalidModelSelectorReason} checks the selectors. */
+export function isPerCallModelShape(model: unknown): model is string | string[] {
+	return typeof model === "string" || (Array.isArray(model) && model.every(entry => typeof entry === "string"));
+}
+
 /** The per-call gate's refusal for `invocationKind` calls, or `undefined` when `task.perCallModel` allows them. */
 function perCallModelDisabledReason(settings: Settings, invocationKind: "task" | "eval"): string | undefined {
 	if (perCallModelEnabled(settings, invocationKind)) return undefined;
 	return `Per-call model is disabled for ${invocationKind} calls (task.perCallModel: ${cfgTaskPerCallModel.get(settings)}). Omit model to use the agent's configured model.`;
 }
 
+/** Per-call `model` candidates in caller order: one selector, or a non-empty array of them. */
+function perCallModelCandidates(model: unknown): string[] | undefined {
+	if (!isPerCallModelShape(model)) return undefined;
+	if (typeof model === "string") return [model.trim()];
+	return model.length > 0 ? model.map(entry => entry.trim()) : undefined;
+}
+
 /**
  * Why a per-call `model` cannot be used before dispatch: the `task.perCallModel` gate first, so a
- * caller is never told to fix a selector it may not send, then anything but one exact
- * `provider/model-id[:level]` selector. `undefined` when there is no problem.
+ * caller is never told to fix a selector it may not send, then anything but an exact
+ * `provider/model-id[:level]`, a `@role[:level]`, or a non-empty ordered array of them.
+ * `undefined` when there is no problem; whether a role is configured is checked at preflight.
  */
 export function invalidModelSelectorReason(
 	model: unknown,
@@ -361,10 +381,20 @@ export function invalidModelSelectorReason(
 	gate: { settings: Settings; invocationKind: "task" | "eval" },
 ): string | undefined {
 	if (model === undefined) return undefined;
-	return (
-		perCallModelDisabledReason(gate.settings, gate.invocationKind) ??
-		invalidExactModelSelectorReason(model, label, gate.settings)
-	);
+	const disabled = perCallModelDisabledReason(gate.settings, gate.invocationKind);
+	if (disabled) return disabled;
+	const candidates = perCallModelCandidates(model);
+	if (
+		candidates?.every(
+			candidate =>
+				ROLE_MODEL_SELECTOR.test(candidate) ||
+				// Settings make a legacy `pi/<custom role>` alias read as the role it names: only `@role` selects a role.
+				(EXACT_MODEL_SELECTOR.test(candidate) && resolveExplicitModelRole(candidate, gate.settings) === undefined),
+		)
+	) {
+		return undefined;
+	}
+	return `${label} has an invalid \`model\` value ${JSON.stringify(model)}. Use an exact provider/model-id or a configured @role, optionally followed by a supported :level, or an ordered array of them. Legacy pi/<role> aliases, globs, comma lists and partial ids are not accepted.`;
 }
 
 /**
@@ -374,24 +404,33 @@ export function invalidModelSelectorReason(
 export function invalidExactModelSelectorReason(model: unknown, label: string, settings: Settings): string | undefined {
 	if (model === undefined) return undefined;
 	if (
-		typeof model !== "string" ||
-		!/^[^\s/@,*?[\]{}]+\/[^\s,*?{}]+$/.test(model.trim()) ||
-		// Settings make a legacy `pi/<custom role>` alias read as the role it names.
-		resolveExplicitModelRole(model.trim(), settings) !== undefined
+		typeof model === "string" &&
+		EXACT_MODEL_SELECTOR.test(model.trim()) &&
+		resolveExplicitModelRole(model.trim(), settings) === undefined
 	) {
-		return `${label} has an invalid \`model\` value ${JSON.stringify(model)}. Use one exact provider/model-id selector, optionally followed by a supported :level. Role aliases, patterns, and candidate arrays are not accepted.`;
+		return undefined;
 	}
-	return undefined;
+	return `${label} has an invalid \`model\` value ${JSON.stringify(model)}. Use one exact provider/model-id, optionally followed by a supported :level. Roles, arrays, globs, comma lists and partial ids are not accepted.`;
 }
 
-/** Gate, validate and approve a per-call `model`; returns the grants the running child stays held to. */
-function preflightPerCallModel(
+/** A per-call `model` that passed preflight. */
+interface PerCallModelSelection {
+	/** Grants the running child stays held to. */
+	grants: PerCallModelGrants;
+	/** Exact `provider/model-id[:level]` selectors in preference order; role candidates are expanded through their configured values. */
+	patterns: string[];
+	/** The role of a request that is one `@role` selector, reported as the spawn's role; revival still pins the resolved model. */
+	role?: string;
+}
+
+/** Gate, validate and approve a per-call `model`. */
+async function preflightPerCallModel(
 	request: StructuredSubagentRequest,
 	selector: unknown,
 	agent: AgentDefinition,
 	hasModelOverride: boolean,
 	parentModelPattern: string | undefined,
-): PerCallModelGrants {
+): Promise<PerCallModelSelection> {
 	const { settings, modelRegistry } = request.session;
 	const fail = (message: string): never => {
 		throw new StructuredSubagentError("preflight", message);
@@ -409,7 +448,29 @@ function preflightPerCallModel(
 		invocationKind: request.invocationKind,
 	});
 	if (selectorProblem) fail(selectorProblem);
-	const perCallModel = selector as string;
+	// Roles, their values and the grants come from the operator's settings, never a subagent
+	// overlay that the executor fills from advisor frontmatter or a retry-role snapshot.
+	const operatorSettings = settings.grantAuthority();
+	const candidates = perCallModelCandidates(selector) ?? [];
+	const roles = candidates.map(candidate => {
+		if (!ROLE_MODEL_SELECTOR.test(candidate)) return undefined;
+		const role = resolveExplicitModelRole(candidate, operatorSettings);
+		// An `@name` the resolver does not know is an unconfigured custom role.
+		if (role === undefined) return fail(`\`model\` ${JSON.stringify(candidate)} names no configured model role.`);
+		if (role === "default") {
+			fail(
+				`\`model\` ${JSON.stringify(candidate)} is not a per-call selector: omit model to use the agent's configured model, or name the parent's model exactly.`,
+			);
+		}
+		if (isKindRole(role))
+			fail(`\`model\` ${JSON.stringify(candidate)} names a non-chat role; a subagent needs a chat model.`);
+		if (!operatorSettings.getModelRole(role)?.trim()) {
+			fail(
+				`\`model\` ${JSON.stringify(candidate)} names role "${role}", which has no modelRoles entry. Only configured roles are per-call selectors; built-in role defaults are not.`,
+			);
+		}
+		return role;
+	});
 	const grants: PerCallModelGrants = {
 		settings,
 		agentName: agent.name,
@@ -418,38 +479,76 @@ function preflightPerCallModel(
 		parentModelPattern,
 		matchPreferences: structuredClone(getModelMatchPreferences(settings.grantAuthority())),
 	};
-	// A cold registry is checked again in the executor once models are loaded.
-	if (!modelRegistry || modelRegistry.getAvailable().length === 0) return grants;
+	const role = candidates.length === 1 ? roles[0] : undefined;
+	// A role candidate expands through its configured value; any other candidate stays literal.
+	const unresolved = candidates.flatMap((candidate, index) =>
+		roles[index] ? resolveConfiguredModelPatterns(candidate, operatorSettings) : [candidate],
+	);
+	if (!modelRegistry) return { grants, patterns: unresolved, role };
+	// Finish an in-flight catalog refresh first, even when some models are already loaded: a provider
+	// still loading would otherwise make a configured role look unavailable or a candidate be skipped.
+	await modelRegistry.awaitBackgroundRefresh();
+	// A registry that is still empty is checked again in the executor once models are loaded.
+	if (modelRegistry.getAvailable().length === 0) return { grants, patterns: unresolved, role };
+	const chat = modelRegistry.getAvailable("chat");
+	const chatRegistry = { getAvailable: () => chat };
 	const exact = { exactOnly: true };
-	const model = resolveModelOverride(
-		[perCallModel],
-		{ getAvailable: () => modelRegistry.getAvailable("chat") },
-		settings,
-		exact,
-	).model;
-	if (!model) {
+	const patterns: string[] = [];
+	for (const [index, candidate] of candidates.entries()) {
+		const candidateRole = roles[index];
+		let resolvedAny = false;
+		for (const source of candidateRole ? resolveConfiguredModelPatterns(candidate, operatorSettings) : [candidate]) {
+			// The operator's role values resolve as they do everywhere else; the caller's own ids only exactly.
+			const resolution = candidateRole
+				? resolveModelRoleValue(source, chat, {
+						settings: operatorSettings,
+						matchPreferences: grants.matchPreferences,
+					})
+				: resolveModelOverride([source], chatRegistry, operatorSettings, exact);
+			const model = resolution.model;
+			if (!model) continue;
+			try {
+				assertPerCallModelApproved(model, grants, modelRegistry);
+			} catch (error) {
+				if (!(error instanceof PerCallModelError)) throw error;
+				// A role value the grants do not cover (e.g. an alias to an unconfigured role) is skipped, not substituted.
+				if (candidateRole) continue;
+				fail(error.message);
+			}
+			resolvedAny = true;
+			// The routed identity keeps an `@upstream` pin through dispatch.
+			patterns.push(
+				formatModelSelectorValue(
+					formatModelStringWithRouting(model),
+					resolution.explicitThinkingLevel ? resolution.thinkingLevel : undefined,
+				),
+			);
+		}
+		if (resolvedAny || candidateRole) continue;
 		const other = resolveModelOverride(
-			[perCallModel],
+			[candidate],
 			{ getAvailable: () => modelRegistry.getAvailable("all") },
-			settings,
+			operatorSettings,
 			exact,
 		).model;
-		// Discovery still running may add it; the executor checks again once the refresh settles.
-		if (!other && modelRegistry.isBackgroundRefreshPending()) return grants;
-		throw new StructuredSubagentError(
-			"preflight",
-			other
-				? `\`model\` ${JSON.stringify(perCallModel)} is a ${modelKind(other)} model; a subagent needs a chat model.`
-				: `No available model matches \`model\` ${JSON.stringify(perCallModel)}. Use the exact provider/model-id and a supported thinking level. Stop and report an unavailable model instead of substituting another or dropping \`model\`.`,
+		if (other) {
+			fail(`\`model\` ${JSON.stringify(candidate)} is a ${modelKind(other)} model; a subagent needs a chat model.`);
+		}
+		// Discovery still running may add it: keep its place in the caller's order; the executor
+		// resolves it exactly and checks its approval once the refresh settles.
+		if (modelRegistry.isBackgroundRefreshPending()) patterns.push(candidate);
+	}
+	if (patterns.length === 0) {
+		const subject =
+			candidates.length === 1
+				? `\`model\` ${JSON.stringify(candidates[0])}`
+				: `any \`model\` candidate in ${JSON.stringify(candidates)}`;
+		fail(
+			`No available ${roles.some(Boolean) ? "approved " : ""}model matches ${subject}. Use the exact provider/model-id or a configured role, and a supported thinking level. Stop and report an unavailable model instead of substituting another or dropping \`model\`.`,
 		);
 	}
-	try {
-		assertPerCallModelApproved(model, grants, modelRegistry);
-	} catch (error) {
-		if (error instanceof PerCallModelError) fail(error.message);
-		throw error;
-	}
-	return grants;
+	// Unavailable candidates are skipped: the caller's later entries are its own fallback order.
+	return { grants, patterns: [...new Set(patterns)], role };
 }
 
 /**
@@ -530,16 +629,17 @@ export async function resolveEffectiveSubagentPolicy(
 		: request.session.getActiveModelString?.();
 	// Bundled and shadowing `seance` agents share the explicit per-call gate; saved seance models are checked below.
 	const perCallSelector: unknown = request.perCallModel ?? request.seanceModel;
-	let perCallModelGrants =
+	const perCall =
 		perCallSelector === undefined
 			? undefined
-			: preflightPerCallModel(
+			: await preflightPerCallModel(
 					request,
 					perCallSelector,
 					agent,
 					!isBundledSeance(agent) && Object.hasOwn(agentModelOverrides, agentName),
 					parentModelPattern,
 				);
+	let perCallModelGrants = perCall?.grants;
 	const modelFacingSeance = isBundledSeance(agent) && request.model === undefined;
 	if (modelFacingSeance && !perCallModelGrants) {
 		perCallModelGrants = {
@@ -560,7 +660,7 @@ export async function resolveEffectiveSubagentPolicy(
 				agent,
 				sourceSession: request.sourceSession,
 				model:
-					(perCallSelector as string | undefined) ??
+					perCall?.patterns ??
 					(Array.isArray(request.model) && request.model.length === 0 ? undefined : request.model),
 				modelGrants: modelFacingSeance ? perCallModelGrants : undefined,
 				exactModel: perCallSelector !== undefined,
@@ -617,11 +717,15 @@ export async function resolveEffectiveSubagentPolicy(
 	// Role identity and patterns come from one call so they cannot be derived
 	// from different sources: the expansion below discards the alias, and the
 	// child's inherited retry-fallback chain is keyed off the role. A per-call
-	// model is already one exact selector, and a model-facing seance's prepared
-	// selectors are already approved exact ones; both stay literal, never a role alias.
-	const { patterns: modelOverride, role: modelRole } = perCallModelGrants
-		? { patterns: preparedSeance?.modelPatterns ?? [(perCallSelector as string).trim()], role: undefined }
-		: resolveAgentModelSelection(modelResolution);
+	// model is never re-read as a role alias: preflight already expanded its
+	// configured `@role` candidates and kept the caller's own ids literal. Saved
+	// model-facing seance selectors are approved exact identities too.
+	const { patterns: modelOverride, role: modelRole } =
+		preparedSeance && perCallModelGrants
+			? { patterns: preparedSeance.modelPatterns, role: perCall?.role }
+			: perCall
+				? { patterns: perCall.patterns, role: perCall.role }
+				: resolveAgentModelSelection(modelResolution);
 	const isolationEnabled = cfgTaskIsolationEnabled.get(request.session.settings);
 	const isIsolated = request.isolation?.requested === true;
 	if (isIsolated && !isolationEnabled) {

@@ -248,7 +248,8 @@ export function createPersistedSubagentReviverFactory(
 			const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(ctx.settings));
 			const oauthAccountPools =
 				init.agent && Object.hasOwn(agentAccountPools, init.agent) ? agentAccountPools[init.agent] : undefined;
-			// A per-call worker revives only onto its exact saved model: no role alias, no auth fallback.
+			// A per-call worker revives only onto its exact saved identity and effort, never re-resolving
+			// a requested role whose value may have changed since. Dispatch still applies current grants.
 			const persistedModelPattern = init.perCallModel
 				? undefined
 				: restoredSeance

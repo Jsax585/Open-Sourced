@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `TaskItem.model` and `TaskParams.model` now document that the per-call model for an ordinary agent may be a configured `@role` or an ordered list of exact ids and roles, not only one exact id; the `string | string[]` type is unchanged ([#16793](https://github.com/can1357/oh-my-pi/pull/16793) by [@Xytronix](https://github.com/Xytronix))
+
 ### Added
 
 - ANSI and TSP `/pause` screens show unsettled turns and jobs, hide settled counters, and preserve counts and resume controls on short terminals ([#17073](https://github.com/can1357/oh-my-pi/pull/17073) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).

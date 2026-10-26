@@ -351,8 +351,8 @@ function validateSpawnParams(
 
 /**
  * A model-facing `model` is a per-call model for every agent, the bundled seance included: the
- * `task.perCallModel` gate first, then the exact-selector shape. A host selection (`/seance`)
- * arrives through {@link executeTaskFromHost}; it must be exact too, but the gate does not cover it.
+ * `task.perCallModel` gate first, then the selector or ordered-list grammar. A host selection
+ * (`/seance`) arrives through {@link executeTaskFromHost}; it must be exact, but is ungated.
  */
 function validateModel(
 	item: TaskItem | TaskParams,
@@ -372,8 +372,8 @@ function spawnModelFields(
 	if (hostModel !== undefined) return { model: hostModel };
 	if (params.model === undefined) return {};
 	if (params.agent === SEANCE_AGENT_NAME) return { seanceModel: params.model };
-	// Validation rejected anything but one string before dispatch.
-	return typeof params.model === "string" ? { perCallModel: params.model } : {};
+	// `validateModel` rejected anything but one selector or a list of them before dispatch.
+	return { perCallModel: params.model };
 }
 
 /**
@@ -801,6 +801,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			structured: this.#isStructured(),
 			defaultAgent: this.#defaultAgent(),
 			seanceFields: this.#seanceSchemaFields(),
+			perCallModel: perCallModelEnabled(this.session.settings, "task"),
 		});
 	}
 

@@ -5,6 +5,9 @@ import path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { factoryDroidRegistry } from "@oh-my-pi/pi-catalog/compat/factory-droid";
+import { buildFactoryDroidModel } from "@oh-my-pi/pi-catalog/discovery";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import {
 	disableProvider,
@@ -1459,6 +1462,7 @@ describe("per-call model preflight", () => {
 				modelRegistry: {
 					getAll: () => [target, painter],
 					getAvailable: (kind?: string) => (!warm ? [] : kind === "chat" ? [target] : [target, painter]),
+					awaitBackgroundRefresh: async () => {},
 					isBackgroundRefreshPending: () => refreshPending,
 				},
 			},
@@ -1502,12 +1506,28 @@ describe("per-call model preflight", () => {
 	});
 
 	it.each([
-		["a selector that is not provider/model-id", "@smol", {}, /invalid `model`/],
+		["an unconfigured role", "@smol", {}, /has no modelRoles entry/],
+		["an unknown role", "@nonexistent", {}, /names no configured model role/],
+		["a legacy default alias", "pi/default", {}, /invalid `model`/],
 		// Shaped like provider/model-id, but names the configured custom role `review`.
 		["a legacy alias of a custom role", "pi/review", {}, /invalid `model`/],
+		["@default", "@default:high", { modelRoles: { default: "mock/target" } }, /not a per-call selector/],
+		["a non-chat role", "@image", { modelRoles: { image: "mock/painter" } }, /non-chat role/],
+		["a glob", "mock/*", {}, /invalid `model`/],
+		["a bare id", "target", {}, /invalid `model`/],
+		["a comma list", "mock/target,mock/other", {}, /invalid `model`/],
+		["an empty list", [], {}, /invalid `model`/],
 		["an unavailable model", "mock/missing", {}, /No available model matches/],
+		["only unavailable candidates", ["mock/missing", "mock/gone"], {}, /any `model` candidate/],
 		["a non-chat model", "mock/painter", {}, /image model; a subagent needs a chat model/],
 		["an unapproved model", "mock/target", { modelRoles: {} }, /not approved/],
+		["an unapproved candidate in a list", ["mock/missing", "mock/target"], { modelRoles: {} }, /not approved/],
+		[
+			"a role whose value only aliases an unconfigured role",
+			"@review",
+			{ modelRoles: { review: "@smol" } },
+			/No available approved model matches/,
+		],
 		[
 			"a model for an agent with an override",
 			"mock/target",
@@ -1520,7 +1540,7 @@ describe("per-call model preflight", () => {
 			resolveEffectiveSubagentPolicy(
 				request({
 					session: perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/x" }, ...settings }),
-					perCallModel,
+					perCallModel: typeof perCallModel === "string" ? perCallModel : [...perCallModel],
 				}),
 			),
 		).rejects.toThrow(error);
@@ -1582,6 +1602,156 @@ describe("per-call model preflight", () => {
 		expect(policy.parentActiveModelPattern).toBe("mock/parent");
 	});
 
+	it.each([
+		["a configured role", "@review", "mock/target:high", ["mock/target:high"]],
+		["a role with its own level", "@review:low", "mock/target", ["mock/target:low"]],
+		["a role with a fuzzy value", "@review", "target", ["mock/target"]],
+	] as const)("expands %s through its configured value", async (_name, perCallModel, value, expected) => {
+		mockDiscovery({ ...AGENT, model: ["mock/agent-own"] });
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				session: perCallSession({ "task.perCallModel": "on", modelRoles: { review: value } }),
+				perCallModel,
+			}),
+		);
+		expect(policy.modelOverride).toEqual([...expected]);
+		// A single role request keeps its identity for the inherited retry chain and revival.
+		expect(policy.modelRole).toBe("review");
+		expect(policy.parentActiveModelPattern).toBeUndefined();
+	});
+
+	it("resolves role selectors against the operator's settings, not a subagent overlay", async () => {
+		mockDiscovery();
+		const base = perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } });
+		// An overlay (advisor frontmatter, a retry-role snapshot) injects a role the operator never configured.
+		const overlaid = Object.assign(base, {
+			settings: base.settings.overlay(
+				{ modelRoles: { ...base.settings.getModelRoles(), sneaky: "mock/target" } },
+				{ derived: true },
+			),
+		});
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: overlaid, perCallModel: "@sneaky" })),
+		).rejects.toThrow(/names no configured model role/);
+	});
+
+	it("honors a configured role from an SDK host overlay", async () => {
+		mockDiscovery();
+		const base = perCallSession({ "task.perCallModel": "on" });
+		base.settings = base.settings.overlay({ modelRoles: { review: "mock/target" } });
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+	});
+
+	it("expands role values with preferences captured before discovery settles", async () => {
+		mockDiscovery();
+		const first = createMockModel({ id: "worker-a" });
+		const second = createMockModel({ id: "worker-b" });
+		const usageOrder = ["mock/worker-a", "mock/worker-b"];
+		const base = perCallSession({ "task.perCallModel": "on" });
+		base.settings = Settings.isolated(
+			{ "task.perCallModel": "on", modelRoles: { review: "mock/worker" } },
+			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
+		);
+		Object.assign(base, {
+			modelRegistry: {
+				getAll: () => [first, second],
+				getAvailable: () => [first, second],
+				awaitBackgroundRefresh: async () => {
+					usageOrder.reverse();
+				},
+			},
+		});
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/worker-a"]);
+		expect(policy.perCallModelGrants?.matchPreferences?.usageOrder).toEqual(["mock/worker-a", "mock/worker-b"]);
+	});
+
+	it("refuses a role candidate with Factory server-side fallbacks even when its target is granted", async () => {
+		mockDiscovery();
+		const fable = buildModel(
+			buildFactoryDroidModel(
+				factoryDroidRegistry().find(entry => entry.spec.id === "claude-fable-5")!,
+				{ apiProviders: ["anthropic"] },
+			),
+		);
+		const base = perCallSession({
+			"task.perCallModel": "on",
+			modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" },
+		});
+		Object.assign(base, {
+			modelRegistry: {
+				getAll: () => [fable],
+				getAvailable: () => [fable],
+				awaitBackgroundRefresh: async () => {},
+			},
+		});
+		await expect(resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }))).rejects.toThrow(
+			/No available approved model matches/,
+		);
+	});
+
+	it("skips unavailable candidates in caller order and drops the role identity of a list", async () => {
+		mockDiscovery();
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				session: perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
+				perCallModel: ["mock/missing", "@review", "mock/target"],
+			}),
+		);
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+		expect(policy.modelRole).toBeUndefined();
+	});
+
+	it("waits for a cold registry before expanding a role", async () => {
+		mockDiscovery();
+		let warm = false;
+		const coldSession = Object.assign(
+			perCallSession({ "task.perCallModel": "on", modelRoles: { review: "target" } }),
+			{
+				modelRegistry: {
+					getAll: () => [target],
+					getAvailable: () => (warm ? [target] : []),
+					awaitBackgroundRefresh: async () => {
+						warm = true;
+					},
+				},
+			},
+		);
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: coldSession, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+	});
+
+	it.each([
+		["a configured role", "@review"],
+		["a later list candidate", ["mock/missing", "mock/target"]],
+	] as const)("waits for a partly loaded registry before resolving %s", async (_name, perCallModel) => {
+		mockDiscovery();
+		// Built-in models are already listed while the role's provider is still loading.
+		const builtIn = createMockModel({ provider: "builtin", id: "other" });
+		let loaded = false;
+		const partialSession = Object.assign(
+			perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
+			{
+				modelRegistry: {
+					getAll: () => [builtIn, target],
+					getAvailable: () => (loaded ? [builtIn, target] : [builtIn]),
+					awaitBackgroundRefresh: async () => {
+						loaded = true;
+					},
+					isBackgroundRefreshPending: () => !loaded,
+				},
+			},
+		);
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({
+				session: partialSession,
+				perCallModel: typeof perCallModel === "string" ? perCallModel : [...perCallModel],
+			}),
+		);
+		expect(policy.modelOverride).toEqual(["mock/target"]);
+	});
+
 	describe("an agent shadowing the seance name", () => {
 		const shadow: AgentDefinition = { ...AGENT, name: "seance", source: "project", model: ["mock/agent-own"] };
 
@@ -1618,17 +1788,17 @@ describe("per-call model preflight", () => {
 			).rejects.toThrow(/conflicts with task\.agentModelOverrides/);
 		});
 
-		it("rejects a candidate array instead of routing it", async () => {
+		it("routes a candidate array as a per-call worker", async () => {
 			mockDiscovery(shadow);
-			await expect(
-				resolveEffectiveSubagentPolicy(
-					request({
-						session: perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
-						agent: "seance",
-						seanceModel: ["mock/target"],
-					}),
-				),
-			).rejects.toThrow(/invalid `model`/);
+			const policy = await resolveEffectiveSubagentPolicy(
+				request({
+					session: perCallSession({ "task.perCallModel": "on", modelRoles: { review: "mock/target" } }),
+					agent: "seance",
+					seanceModel: ["mock/target"],
+				}),
+			);
+			expect(policy.modelOverride).toEqual(["mock/target"]);
+			expect(policy.perCallModelGrants?.agentName).toBe("seance");
 		});
 
 		it("routes an approved model as a per-call worker", async () => {

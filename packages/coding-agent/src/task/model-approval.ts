@@ -8,7 +8,7 @@
  * parent's live model. Catalog membership, credentials, built-in role
  * defaults, project agent frontmatter, other agents' frontmatter and saved
  * transcripts grant nothing. `task.perCallModelAllow`, when set, narrows the
- * result to the exact models it lists.
+ * result to the models its exact, `@role` or glob entries match.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { factoryDroidServerSideFallbackModels, isFactoryDroidModel } from "@oh-my-pi/pi-ai/providers/factory-droid";
@@ -166,9 +166,7 @@ function isGranted(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Ap
 	const settings = grants.settings.grantAuthority();
 	const target = formatModelStringWithRouting(model);
 	if (!chat.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return false;
-	const allow = cfgTaskPerCallModelAllow.get(settings);
-	if (allow.length > 0 && !allow.some(entry => entry.trim() === target)) return false;
-	return perCallModelGrantPatterns(grants).some(pattern => {
+	const patternGrants = (pattern: string): boolean => {
 		// Full-catalog literals win even when unavailable, so :low and [1m] never broaden a grant.
 		const exact = exactIdentity(pattern, catalog);
 		if (exact !== undefined) return exact === target;
@@ -182,7 +180,23 @@ function isGranted(model: Model<Api>, grants: PerCallModelGrants, chat: Model<Ap
 		const candidates = knownLiteralId ? chat.filter(candidate => candidate.id === pattern) : chat;
 		const resolved = resolveModelRoleValue(pattern, candidates, { matchPreferences: grants.matchPreferences }).model;
 		return resolved !== undefined && formatModelStringWithRouting(resolved) === target;
-	});
+	};
+	const allow = cfgTaskPerCallModelAllow.get(settings);
+	if (
+		allow.length > 0 &&
+		!allow.some(entry => {
+			const selector = entry.trim();
+			const role = resolveExplicitModelRole(selector, settings);
+			if (role !== undefined) {
+				return !isKindRole(role) && modelGrantPatterns(settings.getModelRole(role), settings).some(patternGrants);
+			}
+			// Exact allowlist entries are literal identities, never suffix or fuzzy selectors.
+			return selector === target || (/[*?]/.test(selector) && globGrants(selector, model));
+		})
+	) {
+		return false;
+	}
+	return perCallModelGrantPatterns(grants).some(patternGrants);
 }
 
 /**
@@ -222,7 +236,7 @@ export function assertPerCallModelApproved(
 	}
 	const allowGuidance =
 		cfgTaskPerCallModelAllow.get(grants.settings.grantAuthority()).length > 0
-			? " It must also be listed in task.perCallModelAllow."
+			? " It must also match an entry in task.perCallModelAllow."
 			: "";
 	throw new PerCallModelError(
 		`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${grants.agentName}": use a model named by a configured chat role, the selected agent's own frontmatter (bundled or user-level agents only), or the parent's model.${allowGuidance} Catalog or credentials alone do not approve a model.`,

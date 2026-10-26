@@ -128,7 +128,7 @@ describe("eval tool description", () => {
 					for (const guidance of [
 						"model?=None",
 						"`model`: one exact",
-						"Approved:",
+						"Approved roles:",
 						"Allowlist:",
 						"anthropic/claude-haiku-4-5",
 						"openai/gpt-5.5",
@@ -141,10 +141,12 @@ describe("eval tool description", () => {
 			expect((tool.docTopics().agents ?? "").match(/model\?=None/g)).toHaveLength(2);
 			for (const text of [tool.docTopics().agents ?? "", tool.description]) {
 				expect(text).toContain(
-					"Approved: `anthropic/claude-haiku-4-5` (smol), `openai/gpt-5.5` (slow); your own current model; the selected bundled/user agent's own configured model.",
+					"Approved roles: `@smol` (`anthropic/claude-haiku-4-5`), `@slow` (`openai/gpt-5.5`). Also approved: your own current model; the selected bundled/user agent's own configured model.",
 				);
 				expect(text).toContain("Allowlist: `openai/gpt-5.5` (must also be approved).");
-				expect(text).toContain("Unavailable → stop and report; NEVER substitute another.");
+				expect(text).toContain("Requested model unavailable → stop and report; NEVER substitute another.");
+				expect(text).toContain("a configured `@role[:level]` listed in Approved roles, or an ordered array");
+				expect(text).not.toContain("no roles, arrays");
 			}
 		}
 	});
@@ -171,17 +173,16 @@ describe("eval tool description", () => {
 		);
 		for (const text of [tool.docTopics().agents ?? "", tool.description]) {
 			expect(text).toContain(
-				"Approved: `anthropic/claude-haiku-4-5` (smol), `openai/gpt-5.5` (slow); your own current model; the selected bundled/user agent's own configured model.",
+				"Approved roles: `@smol` (`anthropic/claude-haiku-4-5`), `@slow` (`openai/gpt-5.5`). Also approved: your own current model; the selected bundled/user agent's own configured model.",
 			);
 			for (const omitted of [
 				"hidden/image",
 				"hidden/judge",
-				"(alias)",
-				"(legacyAlias)",
-				"(wildcardAlias)",
-				"(useDefault)",
-				"(inherited)",
-				"`@smol`",
+				"`@alias`",
+				"`@legacyAlias`",
+				"`@wildcardAlias`",
+				"`@useDefault`",
+				"`@inherited`",
 				"`pi/slow`",
 				"`*`",
 				"`default`",
@@ -205,7 +206,7 @@ describe("eval tool description", () => {
 		const tool = new EvalTool(session);
 		for (const text of [tool.docTopics().agents ?? "", tool.description]) {
 			expect(text).toContain(
-				"Approved: `mock/second:high`, `mock/*`, `mock/first` (review); your own current model; the selected bundled/user agent's own configured model.",
+				"Approved roles: `@review` (`mock/second:high`, `mock/*`, `mock/first`). Also approved: your own current model; the selected bundled/user agent's own configured model.",
 			);
 			expect(text).toContain("A listed glob approves matching exact IDs; write the exact ID, NEVER the glob.");
 			expect(text).not.toContain("mock/registry-expanded");
@@ -225,14 +226,14 @@ describe("eval tool description", () => {
 			},
 		};
 		for (const text of [getEvalDocTopics(options).agents ?? "", getEvalToolDescription(options)]) {
-			expect(text).toContain("Approved: `custom/first`, `custom/*` (review);");
+			expect(text).toContain("Approved roles: `@review` (`custom/first`, `custom/*`).");
 			expect(text).toContain("Allowlist: `custom/first` (must also be approved).");
-			expect(text).toContain("Unavailable → stop and report; NEVER substitute another.");
+			expect(text).toContain("Requested model unavailable → stop and report; NEVER substitute another.");
 		}
 		const disabled = { ...options, perCallModel: false };
 		for (const text of [getEvalDocTopics(disabled).agents ?? "", getEvalToolDescription(disabled)]) {
 			expect(text).not.toContain("`model`: one exact");
-			expect(text).not.toContain("Approved:");
+			expect(text).not.toContain("Approved roles:");
 			expect(text).not.toContain("Allowlist:");
 			expect(text).not.toContain("custom/first");
 			expect(text).not.toContain("custom/*");
@@ -250,7 +251,7 @@ describe("eval tool description", () => {
 			getEvalToolDescription({ perCallModel: true, inlineTopics: true }),
 		]) {
 			expect(text).toContain(
-				"Approved: your own current model; the selected bundled/user agent's own configured model.",
+				"Approved roles: none. Also approved: your own current model; the selected bundled/user agent's own configured model.",
 			);
 			expect(text).not.toContain("Allowlist:");
 		}
@@ -267,21 +268,21 @@ describe("eval tool description", () => {
 		});
 		const tool = new EvalTool(session);
 		for (const text of [tool.docTopics().agents ?? "", tool.description]) {
-			expect(text).toContain("Approved: `mock/original` (smol);");
+			expect(text).toContain("Approved roles: `@smol` (`mock/original`).");
 			expect(text).toContain("Allowlist: `mock/original` (must also be approved).");
 		}
 
 		session.settings.overrideModelRoles({ smol: "mock/replacement" });
 		cfgTaskPerCallModelAllow.override(session.settings, ["mock/replacement"]);
 		for (const text of [tool.docTopics().agents ?? "", tool.description]) {
-			expect(text).toContain("Approved: `mock/replacement` (smol);");
+			expect(text).toContain("Approved roles: `@smol` (`mock/replacement`).");
 			expect(text).toContain("Allowlist: `mock/replacement` (must also be approved).");
 			expect(text).not.toContain("mock/original");
 		}
 
 		cfgTaskPerCallModel.override(session.settings, "off");
 		for (const text of [tool.docTopics().agents ?? "", tool.description]) {
-			expect(text).not.toContain("Approved:");
+			expect(text).not.toContain("Approved roles:");
 			expect(text).not.toContain("Allowlist:");
 			expect(text).not.toContain("mock/replacement");
 		}

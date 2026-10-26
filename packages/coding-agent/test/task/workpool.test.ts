@@ -526,7 +526,7 @@ describe("WorkPool model selection", () => {
 
 	it("keeps independent selections for separate pools", async () => {
 		const session = makeSession();
-		const selections = new Map<string, string | undefined>();
+		const selections = new Map<string, string | string[] | undefined>();
 		vi.spyOn(structured, "runStructuredSubagent").mockImplementation(async request => {
 			const id = request.identity?.id ?? "missing";
 			selections.set(id, request.perCallModel);

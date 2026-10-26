@@ -188,9 +188,9 @@ const rows: Row[] = [
 		approved: false,
 	},
 	{
-		name: "the allowlist never expands a glob",
+		name: "the allowlist expands provider-scoped globs",
 		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/*"] },
-		approved: false,
+		approved: true,
 	},
 	{
 		name: "the allowlist trims literal entries",
@@ -198,6 +198,61 @@ const rows: Row[] = [
 		approved: true,
 	},
 	{ name: "allowlist alone grants nothing", settings: { "task.perCallModelAllow": ["mock/target"] }, approved: false },
+	{
+		name: "allowlist role entry admits what the role grants",
+		settings: { modelRoles: { review: "mock/target", smol: "mock/other" }, "task.perCallModelAllow": ["@review"] },
+		approved: true,
+	},
+	{
+		name: "allowlist role entry excludes another role's model",
+		settings: { modelRoles: { review: "mock/other", smol: "mock/target" }, "task.perCallModelAllow": ["@review"] },
+		approved: false,
+	},
+	{
+		name: "allowlist entry for an unconfigured role admits nothing",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["@smol"] },
+		approved: false,
+	},
+	{
+		name: "allowlist glob entry",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["mock/t*"] },
+		approved: true,
+	},
+	{
+		name: "an allowlist bare-id glob matches only the bare id",
+		settings: { modelRoles: { review: "mock/target" }, "task.perCallModelAllow": ["tar?et"] },
+		approved: true,
+	},
+	{
+		name: "brackets in an allowlist glob are literal",
+		settings: { modelRoles: { review: "mock/*" }, "task.perCallModelAllow": ["mock/glm[1m]*"] },
+		model: bracketImposter,
+		approved: false,
+	},
+	{
+		name: "an allowlist bracketed glob admits the literal brackets",
+		settings: { modelRoles: { review: "mock/*" }, "task.perCallModelAllow": ["mock/glm[1m]*"] },
+		model: bracketed,
+		approved: true,
+	},
+	{
+		name: "an unpinned allowlist glob does not admit a pinned route",
+		settings: {
+			modelRoles: { review: "openrouter/anthropic/claude-sonnet-4.5@anthropic" },
+			"task.perCallModelAllow": ["openrouter/*"],
+		},
+		model: pinnedSonnet,
+		approved: false,
+	},
+	{
+		name: "an allowlist glob keeps an explicit upstream pin",
+		settings: {
+			modelRoles: { review: "openrouter/anthropic/claude-sonnet-4.5@anthropic" },
+			"task.perCallModelAllow": ["openrouter/*@anthropic"],
+		},
+		model: pinnedSonnet,
+		approved: true,
+	},
 	{
 		name: "brackets in a literal id are not a glob",
 		settings: { modelRoles: { review: "mock/glm[1m]" } },
@@ -302,6 +357,16 @@ const rows: Row[] = [
 			modelRoles: { review: "nanogpt/*" },
 			"task.perCallModelAllow": ["nanogpt/nanogpt/coding-router:low"],
 		},
+		model: codingRouter,
+		approved: false,
+	},
+	{
+		name: "an allowlist role never splits an unavailable literal's level-shaped suffix",
+		settings: {
+			modelRoles: { review: "nanogpt/nanogpt/coding-router:low", smol: "nanogpt/nanogpt/coding-router" },
+			"task.perCallModelAllow": ["@review"],
+		},
+		unavailable: codingRouterLow,
 		model: codingRouter,
 		approved: false,
 	},
@@ -443,7 +508,7 @@ describe("per-call model grants", () => {
 		const second = createMockModel({ id: "worker-b" });
 		const usageOrder = ["mock/worker-a", "mock/worker-b"];
 		const settings = Settings.isolated(
-			{ modelRoles: { review: "mock/worker" } },
+			{ modelRoles: { review: "mock/worker" }, "task.perCallModelAllow": ["@review"] },
 			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
 		);
 		const grants: PerCallModelGrants = {
@@ -524,5 +589,23 @@ describe("per-call model grants", () => {
 	it("names the allowlist in the rejection when one is set", () => {
 		const grants = { settings: Settings.isolated({ "task.perCallModelAllow": ["mock/other"] }), agentName: "worker" };
 		expect(() => assertPerCallModelApproved(target, grants, registry)).toThrow(/task\.perCallModelAllow/);
+	});
+
+	it.each([
+		["a provider glob", ["openai/*"], true],
+		["a literal level-shaped glob", ["openai/*:high"], false],
+		["a role whose value is a provider glob", ["@scope"], true],
+	])("keeps %s in the allowlist on that provider", (_name, allow, directApproved) => {
+		const direct = createMockModel({ provider: "openai", id: "gpt-5" });
+		const routed = createMockModel({ provider: "openrouter", id: "openai/gpt-5" });
+		const providers = { getAll: () => [direct, routed], getAvailable: () => [direct, routed] };
+		const settings = Settings.isolated({
+			modelRoles: { review: "openrouter/openai/gpt-5", fast: "openai/gpt-5", scope: "openai/*" },
+			"task.perCallModelAllow": allow,
+		});
+		const grants = { settings, agentName: "worker" };
+		// Granted by `review`, but its bare id `openai/gpt-5` must not satisfy an `openai/*` entry.
+		expect(approved(routed, grants, providers)).toBe(false);
+		expect(approved(direct, grants, providers)).toBe(directApproved);
 	});
 });
