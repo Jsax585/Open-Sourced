@@ -64,6 +64,7 @@ export type KnownProvider =
 	| "openrouter"
 	| "qianfan"
 	| "qwen-portal"
+	| "refuseless"
 	| "sakana"
 	| "sambanova"
 	| "siliconflow"
