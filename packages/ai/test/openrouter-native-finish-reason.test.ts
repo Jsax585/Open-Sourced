@@ -59,12 +59,7 @@ describe("OpenRouter native generation failures", () => {
 		expect(result.responseId).toBe(responseId);
 		expect(result.usage.output).toBe(604);
 		expect(result.usage.reasoningTokens).toBe(590);
-		expect(requests).toEqual([
-			`POST ${model.baseUrl}/responses`,
-			`GET ${model.baseUrl}/generation?id=${responseId}`,
-			`POST ${model.baseUrl}/responses`,
-			`GET ${model.baseUrl}/generation?id=${responseId}`,
-		]);
+		expect(requests).toEqual([`POST ${model.baseUrl}/responses`, `GET ${model.baseUrl}/generation?id=${responseId}`]);
 	});
 
 	it("rejects an explicit native failure before promoting an earlier tool call", async () => {
@@ -94,16 +89,52 @@ describe("OpenRouter native generation failures", () => {
 
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("MALFORMED_RESPONSE");
+		expect(result.errorMessage).toContain("inferred");
 		expect(result.responseId).toBe(responseId);
 		expect(result.usage.output).toBe(604);
 		expect(result.usage.reasoningTokens).toBe(590);
-		expect(requests).toEqual([
-			`POST ${model.baseUrl}/responses`,
-			`GET ${model.baseUrl}/generation?id=${responseId}`,
-			`POST ${model.baseUrl}/responses`,
-			`GET ${model.baseUrl}/generation?id=${responseId}`,
-		]);
+		expect(requests).toEqual([`POST ${model.baseUrl}/responses`, `GET ${model.baseUrl}/generation?id=${responseId}`]);
 	});
+
+	it.each([
+		["metadata authentication failure", () => new Response("unauthorized", { status: 401 })],
+		["metadata permission failure", () => new Response("forbidden", { status: 403 })],
+		["metadata rate limit", () => new Response("rate limited", { status: 429 })],
+		["invalid diagnostic JSON", () => new Response("{")],
+		[
+			"diagnostic network failure",
+			() => {
+				throw new Error("fetch failed");
+			},
+		],
+	] as const)("preserves the empty stop without replay for %s", async (_name, metadata) => {
+		const requests: string[] = [];
+		const result = await streamOpenAIResponses(model, context, {
+			apiKey: "test-key",
+			fetch: async (input, init) => {
+				const url = String(input);
+				requests.push(`${init?.method ?? "GET"} ${url}`);
+				return url.endsWith("/responses") ? responseStream({ output: [] }) : metadata();
+			},
+		}).result();
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.usage.output).toBe(604);
+		expect(requests).toEqual([`POST ${model.baseUrl}/responses`, `GET ${model.baseUrl}/generation?id=${responseId}`]);
+	});
+
+	it.each(["MALFORMED_RESPONSE", "UNEXPECTED_TOOL_CALL", "network_error"])(
+		"leaves terminal %s retries to the appropriate layer",
+		async reason => {
+			const { fetchImpl, requests } = createFetch({ output: [], native_finish_reason: reason }, generation("STOP"));
+			const result = await streamOpenAIResponses(model, context, { apiKey: "test-key", fetch: fetchImpl }).result();
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toContain(reason);
+			expect(requests).toEqual(
+				Array.from({ length: reason === "network_error" ? 2 : 1 }, () => `POST ${model.baseUrl}/responses`),
+			);
+		},
+	);
 
 	it("runs generation lookup when compat.isOpenRouterHost is set even if provider differs", async () => {
 		const { compat: _compat, ...baseSpec } = model;

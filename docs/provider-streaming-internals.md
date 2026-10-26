@@ -116,12 +116,15 @@ For a terminal `stop` with no content blocks, native output items, or progress
 marker, the Responses adapter performs one best-effort `GET /generation?id=...`
 against the configured base URL per attempt. It reuses request authentication,
 the custom fetch implementation, and cancellation, with a two-second deadline.
-Matching generation metadata with a recognized failure changes the result; when
-metadata lags (`404`) or fails on a turn that billed non-reasoning output tokens
-with zero output items, the adapter falls back to `MALFORMED_RESPONSE` so
-malformed-call recovery and fallback chains can intervene. Reasoning-only or
-unknown metadata preserves existing empty-stop recovery. Visible output, signed
-reasoning, and provider-hosted tool progress do not incur this lookup. Existing provider-error retry budgets still apply;
+Matching generation metadata with a recognized failure changes the result. A
+metadata `404` on a zero-item turn with non-reasoning output usage triggers an
+explicitly **inferred** `MALFORMED_RESPONSE` recovery, not a confirmed native
+reason. Other HTTP failures, transport/JSON errors, reasoning-only usage, and
+unknown or mismatched metadata preserve existing empty-stop recovery.
+Visible output, signed reasoning, and provider-hosted tool progress do not incur
+this lookup. Terminal malformed Responses bypass adapter-level replay so the
+agent can add its corrective reminder before retrying. Transient network errors
+retain adapter-level retries; existing agent retry budgets still apply, and
 retries can issue fresh billable generations.
 
 Provider-reported output counts can include reasoning and failed structured

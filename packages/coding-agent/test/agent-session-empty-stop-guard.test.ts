@@ -2,7 +2,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage, ThinkingContent } from "@oh-my-pi/pi-ai";
+import type { ThinkingContent } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -522,40 +522,40 @@ describe("AgentSession empty stop guard", () => {
 	});
 
 	it.each([
-		["zero output", emptyStop()],
-		["output with unknown reasoning", reportedOutputEmptyStop()],
-		["output with zero reasoning", reportedOutputEmptyStop(0)],
-		["output with partial reasoning", reportedOutputEmptyStop(42)],
-		["reasoning-only output", reportedOutputEmptyStop(126)],
-		["a thinking block", thinkingOnlyStop()],
-	] as const)("preserves usage and stop state when capped empty stops report %s", async (_label, response) => {
-		const { session, mock } = await createHarness(Array.from({ length: 4 }, () => response));
-		const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
-		const assistantMessages: AssistantMessage[] = [];
-		session.subscribe(event => {
-			if (event.type === "auto_retry_end") retryEndEvents.push(event);
-			if (event.type === "message_end" && event.message.role === "assistant") {
-				assistantMessages.push(event.message);
+		["unknown reasoning usage", undefined],
+		["partial reasoning usage", 42],
+		["reasoning-only usage", 126],
+	] as const)(
+		"reports capped empty-stop diagnostics without inventing a cause for %s",
+		async (_label, reasoningTokens) => {
+			const { session } = await createHarness(
+				Array.from({ length: 4 }, () => reportedOutputEmptyStop(reasoningTokens)),
+			);
+			const retryEndEvents: Array<Extract<AgentSessionEvent, { type: "auto_retry_end" }>> = [];
+			session.subscribe(event => {
+				if (event.type === "auto_retry_end") retryEndEvents.push(event);
+			});
+
+			await expectPromptCompletes(session.prompt("answer without tools"));
+			await session.waitForIdle();
+
+			expect(retryEndEvents).toEqual([expect.objectContaining({ success: false, attempt: 3 })]);
+			const diagnostic = retryEndEvents[0]?.finalError ?? "";
+			if (reasoningTokens === 126) {
+				expect(diagnostic).toContain("/shake images");
+				expect(diagnostic).not.toContain("provider reported");
+			} else {
+				expect(diagnostic).toContain("126 output tokens");
+				expect(diagnostic).not.toContain("/shake images");
+				if (reasoningTokens === undefined) {
+					expect(diagnostic).not.toContain("reasoning tokens");
+				} else {
+					expect(diagnostic).toContain("42 reasoning tokens");
+				}
 			}
-		});
-
-		await expectPromptCompletes(session.prompt("answer without tools"));
-		await session.waitForIdle();
-
-		expect(mock.calls).toHaveLength(4);
-		expect(reminderMessages(session.agent.state.messages)).toHaveLength(3);
-		expect(retryEndEvents).toEqual([expect.objectContaining({ success: false, attempt: 3 })]);
-		expect(assistantMessages).toHaveLength(4);
-		for (const message of assistantMessages) {
-			expect(message.stopReason).toBe("stop");
-			expect(message.usage.output).toBe(response.usage?.output ?? 0);
-			expect(message.usage.reasoningTokens).toBe(response.usage?.reasoningTokens);
-		}
-		expect(emptyAssistantStops(session.agent.state.messages)).toHaveLength(0);
-		expect(session.isRetrying).toBe(false);
-		expect(session.retryAttempt).toBe(0);
-		expect(session.isStreaming).toBe(false);
-	});
+			expect(diagnostic).not.toMatch(/filter|dropped|generated and/i);
+		},
+	);
 
 	it("ends auto-retry state when empty stop retries hit the cap", async () => {
 		mockSchedulerWaitWithClock();

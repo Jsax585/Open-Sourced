@@ -204,6 +204,15 @@ function isOpenAIResponsesReplayUnsafeEvent(event: ResponseStreamEvent): boolean
 }
 
 function isRetryableOpenAIResponsesStreamFailure(error: unknown): boolean {
+	// Terminal malformed output needs the agent's corrective reminder, not an
+	// identical billable replay inside the transport adapter.
+	if (
+		error instanceof AIError.ProviderResponseError &&
+		error.kind === "output" &&
+		AIError.is(AIError.classify(error), AIError.Flag.MalformedFunctionCall)
+	) {
+		return false;
+	}
 	return (
 		AIError.isTransientStreamParseError(error) ||
 		(error instanceof AIError.ProviderResponseError && error.kind === "incomplete-stream") ||

@@ -3,10 +3,9 @@ import { getNativeFinishReasonError } from "./native-finish-reason";
 
 /**
  * Responses can normalize upstream failures to completed without exposing the
- * native reason. When metadata is unavailable (404 lag) on a turn that billed
- * non-reasoning output tokens yet delivered zero output items, fall back to a
- * malformed-response error so the caller's malformed-call recovery and fallback
- * chain can intervene instead of spinning in a cache-pinned empty-stop loop.
+ * native reason. Only a metadata-lag 404 with non-reasoning output usage triggers
+ * inferred malformed-response recovery; usage does not confirm the native reason.
+ * Other diagnostic failures leave the original empty-stop recovery unchanged.
  */
 export async function readOpenRouterGenerationError(args: {
 	baseUrl: string;
@@ -29,7 +28,7 @@ export async function readOpenRouterGenerationError(args: {
 		});
 		if (!response.ok) {
 			await response.body?.cancel();
-			return fallbackDroppedOutputError(args);
+			return response.status === 404 ? fallbackDroppedOutputError(args) : undefined;
 		}
 		const body: unknown = await response.json();
 		if (!body || typeof body !== "object" || !("data" in body)) return undefined;
@@ -39,9 +38,9 @@ export async function readOpenRouterGenerationError(args: {
 		const error = getNativeFinishReasonError(data.native_finish_reason);
 		return error ? `${error}; response ID: ${args.responseId}` : undefined;
 	} catch {
-		// Metadata can lag the completed stream or be unavailable on a gateway.
+		// Unavailable diagnostics do not establish a native generation failure.
 		// Cancellation is checked by the caller.
-		return fallbackDroppedOutputError(args);
+		return undefined;
 	}
 }
 
@@ -52,6 +51,5 @@ function fallbackDroppedOutputError(args: {
 }): string | undefined {
 	const nonReasoningOutputTokens = Math.max(0, (args.outputTokens ?? 0) - (args.reasoningTokens ?? 0));
 	if (nonReasoningOutputTokens <= 0) return undefined;
-	const error = getNativeFinishReasonError("MALFORMED_RESPONSE");
-	return error ? `${error}; response ID: ${args.responseId}` : undefined;
+	return `Provider returned error (inferred MALFORMED_RESPONSE: empty output with non-reasoning usage; generation metadata not ready); response ID: ${args.responseId}`;
 }
