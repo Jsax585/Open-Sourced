@@ -20,18 +20,19 @@ const PROVIDER_NAME = "Xiaomi MiMo";
 const STANDARD_AUTH_URL = "https://platform.xiaomimimo.com/#/console/api-keys";
 const STANDARD_API_BASE_URL = "https://api.xiaomimimo.com/v1";
 /**
- * Request-time base URL for a Xiaomi `tp-`/`ttp-` key. Bundled and cached catalog rows
- * keep the standard host (`api.xiaomimimo.com`), which rejects Token Plan keys,
- * so a Xiaomi row on any `xiaomimimo.com` host resolves to the Token Plan
- * cluster of the region stored at login (provider id or host), else SGP. A
- * non-Xiaomi host is a deliberate override and is kept, as is any non-`tp-`/`ttp-` key.
+ * Request-time base URL for a Xiaomi `tp-`/`ttp-` key. Bundled and cached generic
+ * Xiaomi rows pin the standard host, which rejects Token Plan keys. Only that
+ * standard host (or a missing URL) is redirected. Explicit regional providers
+ * select their region; generic Xiaomi login stores no region and defaults to SGP.
+ * Every deliberate custom or regional endpoint and every ordinary key is kept.
  */
 export function resolveXiaomiRequestBaseUrl(
 	model: { provider?: string; baseUrl?: string },
 	apiKey: string | undefined,
 ): string | undefined {
 	const provider = model.provider ?? "";
-	if (provider !== PROVIDER_ID && !provider.startsWith("xiaomi-token-plan-")) return model.baseUrl;
+	const region = /^xiaomi-token-plan-(sgp|ams|cn)$/.exec(provider)?.[1];
+	if (provider !== PROVIDER_ID && region === undefined) return model.baseUrl;
 	if (apiKey === undefined || !isXiaomiTokenPlanKey(apiKey)) return model.baseUrl;
 	if (model.baseUrl !== undefined) {
 		let hostname: string;
@@ -40,11 +41,8 @@ export function resolveXiaomiRequestBaseUrl(
 		} catch {
 			return model.baseUrl;
 		}
-		if (hostname !== "xiaomimimo.com" && !hostname.endsWith(".xiaomimimo.com")) return model.baseUrl;
+		if (hostname !== "api.xiaomimimo.com") return model.baseUrl;
 	}
-	const region =
-		/^xiaomi-token-plan-(sgp|ams|cn)$/.exec(provider)?.[1] ??
-		/token-plan-(sgp|ams|cn)\./.exec(model.baseUrl ?? "")?.[1];
 	// Each regional Token Plan host lives once, in its auth policy; reuse it instead of a second table.
 	const login = authPolicyFor(`xiaomi-token-plan-${region ?? "sgp"}`)?.login;
 	if (login?.kind !== "api-key" || login.validate?.kind !== "chat-completions") return model.baseUrl;
