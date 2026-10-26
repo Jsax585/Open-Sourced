@@ -147,6 +147,13 @@ import {
 } from "../session/context-settings";
 import { matchModelCompactionThreshold } from "./compaction-threshold";
 
+/** One macrotask turn: lets pending input and render work run before continuing. */
+function yieldToEventLoop(): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setImmediate(resolve);
+	return promise;
+}
+
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
 // requests; the pi-ai provider resolves it just-in-time per request.
 setCodexAttestationProvider(generateCodexAttestation);
@@ -2202,32 +2209,22 @@ export class ModelRegistry {
 			return { models: [], authoritativeProviders: new Set(), replaceRuntimeProviders: new Set() };
 		}
 		const writesBefore = getModelCacheWriteStats();
-		// Kick off every discovery immediately — cold caches pay real network
-		// latency here and it must stay fully parallel — but consume the
-		// settled results one at a time with a macrotask yield in between.
-		// Each discovery's continuation runs sizeable synchronous work on the
-		// main thread (multi-MB cache payload reads/parses, static catalog
-		// materialization, per-provider merge). On a warm cache every promise
-		// settles in the same turn and the continuations run back-to-back,
-		// blocking the interactive loop for seconds right after first paint
-		// (see `LoopWatchdog` `ui.loop-blocked`). Yielding between consumers
-		// gives pending input and render work a turn without slowing the I/O.
-		const discoveryPromises = managerOptions.map(options => this.#discoverWithModelManager(options, strategy));
-		const discoveries: BuiltInDiscoveryResult[] = [];
-		// Every promise is awaited exactly once so no rejection goes unhandled;
-		// the first rejection (in provider order) is rethrown after the loop,
-		// matching `Promise.all`'s fail-fast contract as observed by
-		// `refreshInBackground`'s catch.
-		let firstError: unknown;
-		for (const discoveryPromise of discoveryPromises) {
-			try {
-				discoveries.push(await discoveryPromise);
-			} catch (error) {
-				firstError ??= error;
-			}
-			await new Promise<void>(resolve => setImmediate(resolve));
+		// Start discoveries one per event-loop turn. Each discovery runs a
+		// sizeable synchronous prefix when it starts (bundled-model
+		// materialization, multi-MB cache payload read/parse, per-provider
+		// merge — all before its first `await`), so starting them all inside
+		// one `.map()` runs those prefixes back-to-back and blocks the
+		// interactive loop for seconds on warm caches (see `LoopWatchdog`
+		// `ui.loop-blocked`). Yielding between starts interleaves the
+		// prefixes with pending input and render work; the network fetches
+		// themselves still overlap because each refresh starts its fetch
+		// before its first awaited continuation.
+		const discoveryPromises: Promise<BuiltInDiscoveryResult>[] = [];
+		for (const options of managerOptions) {
+			await yieldToEventLoop();
+			discoveryPromises.push(this.#discoverWithModelManager(options, strategy));
 		}
-		if (firstError !== undefined) throw firstError;
+		const discoveries: BuiltInDiscoveryResult[] = await Promise.all(discoveryPromises);
 		const writesAfter = getModelCacheWriteStats();
 		const rewrittenRows = writesAfter.payloadWrites - writesBefore.payloadWrites;
 		if (rewrittenRows > MODEL_CACHE_REWRITE_LOG_THRESHOLD) {
