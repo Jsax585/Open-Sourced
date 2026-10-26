@@ -3004,6 +3004,50 @@ export class Settings {
 			delete hindsightObj.mentalModelRefreshIntervalMs;
 		}
 
+		// Retired power schemas migrate once into independent switches. Explicit
+		// new values win, including false; nested values precede quoted-dotted keys.
+		const powerObj = isRecord(raw.power) ? raw.power : {};
+		const legacyPowerBooleans = [
+			"preventIdleSleep",
+			"preventSystemSleep",
+			"declareUserActive",
+			"preventDisplaySleep",
+		];
+		const hasPowerMode = Object.hasOwn(powerObj, "sleepPrevention") || Object.hasOwn(raw, "power.sleepPrevention");
+		let powerMode = Object.hasOwn(powerObj, "sleepPrevention")
+			? powerObj.sleepPrevention
+			: raw["power.sleepPrevention"];
+		if (!hasPowerMode) {
+			const legacyFlags = legacyPowerBooleans.map(key => {
+				const value = powerObj[key] ?? raw[`power.${key}`];
+				return typeof value === "boolean" ? value : undefined;
+			});
+			const [idle, system, user, display] = legacyFlags;
+			if (legacyFlags.some(value => value !== undefined)) {
+				// Preserve the previous booleans-to-cumulative-mode migration.
+				powerMode = system || user ? "system" : display ? "display" : idle !== false ? "idle" : "off";
+			}
+		}
+		const migratedPower =
+			powerMode === "off" || powerMode === "idle" || powerMode === "display" || powerMode === "system"
+				? {
+						inhibitIdle: powerMode !== "off",
+						inhibitSuspend: powerMode === "system",
+						keepDisplayAwake: powerMode === "display" || powerMode === "system",
+					}
+				: undefined;
+		for (const key of ["inhibitIdle", "inhibitSuspend", "keepDisplayAwake"] as const) {
+			const value = powerObj[key] ?? raw[`power.${key}`] ?? migratedPower?.[key];
+			if (value !== undefined) powerObj[key] = value;
+			delete raw[`power.${key}`];
+		}
+		for (const key of ["sleepPrevention", ...legacyPowerBooleans]) {
+			delete powerObj[key];
+			delete raw[`power.${key}`];
+		}
+		if (Object.keys(powerObj).length > 0) raw.power = powerObj;
+		else if (isRecord(raw.power)) delete raw.power;
+
 		// Migration for renamed settings grep.* from search.*. (`find.*` is no
 		// longer migrated to `glob.*`: `find` is the semantic search tool now.)
 		// 1. Nested settings: search -> grep (per-property merge to avoid clobbering)

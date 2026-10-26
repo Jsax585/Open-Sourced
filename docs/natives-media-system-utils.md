@@ -136,7 +136,16 @@ power:
   keepDisplayAwake: false
 ```
 
-These switches replace `power.sleepPrevention`; the retired enum and legacy power booleans are not migrated. Set the new switches explicitly when updating an existing configuration.
+Existing `power.sleepPrevention` settings migrate to independent switches when loaded:
+
+| Old mode | `inhibitIdle` | `inhibitSuspend` | `keepDisplayAwake` |
+|---|---|---|---|
+| `off` | `false` | `false` | `false` |
+| `idle` | `true` | `false` | `false` |
+| `display` | `true` | `false` | `true` |
+| `system` | `true` | `true` | `true` |
+
+Explicit new switches take precedence individually, including `false`; nested values take precedence over quoted-dotted forms. Earlier `preventIdleSleep`, `preventSystemSleep`, `declareUserActive`, and `preventDisplaySleep` configurations retain their previously migrated cumulative mode. Both historical formats accept nested and quoted-dotted keys. Retired keys are removed from the loaded configuration, and the next settings save writes only the new switches while preserving unrelated settings.
 
 ### Work profiling (`prof`)
 
