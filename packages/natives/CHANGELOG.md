@@ -36,6 +36,7 @@
 - Reduced native word-diff allocation overhead when joining tokens and deduplicating boundary whitespace ([#16922](https://github.com/can1357/oh-my-pi/pull/16922) by [@GTanger](https://github.com/GTanger))
 
 ### Fixed
+- Fixed `grep` searching the file its own output is redirected into, including standard input redirected from that same file: that input is now refused with `input file is also the output` ([#14808](https://github.com/can1357/oh-my-pi/issues/14808), [#16489](https://github.com/can1357/oh-my-pi/pull/16489) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed macOS `ax()` and `find()` leaving a text field with no label of its own, such as Reminders' Add Date and Add Location fields, unnamed; such a field is now named by its placeholder ([#16915](https://github.com/can1357/oh-my-pi/pull/16915) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed minimized `ruff check --output-format full` output counting code-frame lines with function calls, such as `14 | assert skill.read() == …`, as diagnostics and files, which inflated the `N diagnostics in M files` summary ([#16837](https://github.com/can1357/oh-my-pi/issues/16837))
