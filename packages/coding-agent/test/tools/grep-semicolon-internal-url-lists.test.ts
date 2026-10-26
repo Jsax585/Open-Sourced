@@ -105,6 +105,83 @@ describe("GrepTool semicolon internal-URL path lists", () => {
 		]);
 	});
 
+	it("review regression: reads searches and finds a literal selector-shaped local tail", async () => {
+		const literal = path.join(tmpDir, "log:1-2");
+		await Bun.write(literal, "literal colon filename needle\n");
+		const target = `skill://demo;${literal}`;
+		const session = createSession();
+		const searched = await new GrepTool(session).execute("literal-colon-search", { pattern: "needle", path: target });
+		expect(getResultText(searched)).toContain(skillBodyNeedle);
+		expect(getResultText(searched)).toContain("literal colon filename needle");
+		const found = await new GlobTool(session).execute("literal-colon-find", { path: target });
+		expect(found.details?.files?.some(file => file.endsWith("log:1-2"))).toBe(true);
+		const read = await new ReadTool(session).execute("literal-colon-read", { path: target });
+		expect(getResultText(read)).toContain("literal colon filename needle");
+	});
+
+	it("review regression: never truncates a routed MCP component query into a cwd read", async () => {
+		await Bun.write(path.join(tmpDir, "tail.md"), "unrelated cwd needle\n");
+		const uri = "custom://host/doc?q=x;tail.md";
+		const readUris: string[] = [];
+		MCPManager.setInstance({
+			getConnectedServers: () => ["custom"],
+			getServerResources: () => ({
+				resources: [{ uri, name: "exact" }],
+				templates: [{ uriTemplate: "custom://host/{path}", name: "broad" }],
+			}),
+			waitForPendingConnections: async () => {},
+			ensureServerResources: async () => {},
+			readServerResource: async (_server: string, requested: string) => {
+				readUris.push(requested);
+				return { contents: [{ uri: requested, text: "routed MCP needle" }] };
+			},
+		} as unknown as MCPManager);
+		const target = `skill://demo;${uri}`;
+		await expect(new ReadTool(createSession()).execute("routed-query", { path: target })).rejects.toThrow(
+			"Unknown skill: demo;custom:",
+		);
+		expect(readUris).toEqual([]);
+	});
+
+	it("review regression: reads an exact native MCP semicolon URI rather than its local tail", async () => {
+		const uri = `custom:item;${absFile}`;
+		MCPManager.setInstance({
+			getConnectedServers: () => ["custom"],
+			getServerResources: () => ({
+				resources: [{ uri, name: "exact" }, { uri: "custom:item", name: "prefix" }],
+				templates: [],
+			}),
+			waitForPendingConnections: async () => {},
+			ensureServerResources: async () => {},
+			readServerResource: async (_server: string, requested: string) => ({
+				contents: [{ uri: requested, text: requested === uri ? "whole native MCP needle" : "wrong prefix needle" }],
+			}),
+		} as unknown as MCPManager);
+		const result = await new ReadTool(createSession()).execute("exact-native", { path: uri });
+		expect(getResultText(result)).toContain("whole native MCP needle");
+		expect(getResultText(result)).not.toContain("wrong prefix needle");
+		expect(getResultText(result)).not.toContain("abs path needle");
+	});
+
+	it("review regression: refuses uncertain discovery for a server registered during the wait", async () => {
+		let registered = false;
+		MCPManager.setInstance({
+			getAllServerNames: () => (registered ? ["late"] : []),
+			getConnectedServers: () => [],
+			getServerResources: () => undefined,
+			waitForPendingConnections: async () => {
+				registered = true;
+			},
+			ensureServerResources: async () => {},
+		} as unknown as MCPManager);
+		await expect(
+			new GrepTool(createSession()).execute("late-failed-server", {
+				pattern: "needle",
+				path: `skill://demo;${absFile}`,
+			}),
+		).rejects.toThrow("cannot safely split");
+	});
+
 	it("anchors file URL tails after expanding them to filesystem paths", async () => {
 		const fileUrl = `file://${absFile}`;
 		const target = `skill://demo/SKILL.md;${fileUrl}`;

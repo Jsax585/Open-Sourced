@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed search and find treating `;`-separated lists of internal URLs and local paths as one target; valid lists fan out, while literal `;` in a resource name or query stays intact ([#15637](https://github.com/can1357/oh-my-pi/pull/15637) by [@Komzpa](https://github.com/Komzpa))
+- Fixed exact MCP resource discovery waiting on unrelated stalled catalogs, rejecting recovered catalog retries, or splitting URLs after source-less server handshakes fail ([#15637](https://github.com/can1357/oh-my-pi/pull/15637) by [@Komzpa](https://github.com/Komzpa))
 - Fixed advisors dropping their review and showing a rate-limit error when the provider returns a timed 429 such as Codex's `turn_rate_limit_exceeded`; the advisor now waits out the Retry-After (within `retry.maxDelayMs`) and retries like the main agent ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.0] - 2026-10-26
@@ -599,8 +601,6 @@
 - Fixed the startup status bar preview showing a previous session's model instead of the default model ([#15865](https://github.com/can1357/oh-my-pi/issues/15865)).
 - Fixed `length`-stop recovery with a lowered `compaction.thresholdTokens` counting the discarded output against the threshold, so a reasoning-only cut compacted without the retry hint and a truncated answer was discarded instead of kept ([#15870](https://github.com/can1357/oh-my-pi/issues/15870))
 - Fixed `read` on a directory showing `(empty directory)` when the directory itself is unreadable, and silently omitting subdirectories it cannot list; it now errors for an unreadable root and marks unreadable subdirectories `[unreadable: …]` ([#15769](https://github.com/can1357/oh-my-pi/issues/15769)).
-- Fixed search and find treating `;`-separated lists of internal URLs and local paths as one target; valid lists fan out, while literal `;` in a resource name or query stays intact ([#15637](https://github.com/can1357/oh-my-pi/pull/15637) by [@Komzpa](https://github.com/Komzpa))
-- Fixed exact MCP resource discovery waiting on unrelated stalled catalogs, rejecting recovered catalog retries, or splitting URLs after source-less server handshakes fail ([#15637](https://github.com/can1357/oh-my-pi/pull/15637) by [@Komzpa](https://github.com/Komzpa))
 - Fixed isolated tasks losing the commits of a submodule added inside the isolation, leaving the merged checkout pinned to an unreachable commit ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
 - Fixed isolated task startup hanging or detaching an unrelated checkout when `.gitmodules` lists a submodule path that is absolute or contains `.`/`..` ([#15459](https://github.com/can1357/oh-my-pi/pull/15459))
 - Fixed `/live` and Ctrl+L starting live mode while the composer microphone was still loading its recognizer, which opened a second recorder and dictated into the hidden editor ([#15759](https://github.com/can1357/oh-my-pi/pull/15759))
