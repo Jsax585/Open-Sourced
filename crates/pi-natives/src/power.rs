@@ -19,7 +19,7 @@ pub struct PowerAssertionOptions {
 	pub idle:    Option<bool>,
 	/// Prevent system sleep (AC power only on macOS; login1 sleep on Linux).
 	pub system:  Option<bool>,
-	/// Prevent display sleep (best-effort ScreenSaver inhibition on Linux).
+	/// Prevent display sleep (best-effort `ScreenSaver` inhibition on Linux).
 	pub display: Option<bool>,
 }
 

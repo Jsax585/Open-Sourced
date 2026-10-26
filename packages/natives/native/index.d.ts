@@ -3104,7 +3104,7 @@ export interface PowerAssertionOptions {
   idle?: boolean
   /** Prevent system sleep (AC power only on macOS; login1 sleep on Linux). */
   system?: boolean
-  /** Prevent display sleep (best-effort ScreenSaver inhibition on Linux). */
+  /** Prevent display sleep (best-effort `ScreenSaver` inhibition on Linux). */
   display?: boolean
 }
 
