@@ -816,4 +816,53 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(mock.calls).toHaveLength(1);
 		expect(requestsContaining(mock, "CARD_OLD_SESSION")).toBe(0);
 	});
+
+	it("keeps the agent_end of the session it lands in open when a new session starts during startup extension loading", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		const { session, mock, agentEnds } = await createHarness();
+		const loadStarted = Promise.withResolvers<void>();
+		const releaseLoad = Promise.withResolvers<void>();
+		session.setDeferredExtensionLoader(async () => {
+			loadStarted.resolve();
+			await releaseLoad.promise;
+		});
+		try {
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			const sent = session.sendCustomMessage(imageCard("CARD_AFTER_LOAD"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+			await loadStarted.promise;
+
+			// The send is still waiting for the extensions when the new session commits; it goes on
+			// into the new session once they load.
+			expect(await session.newSession()).toBe(true);
+			releaseLoad.resolve();
+			await normalizeStarted.promise;
+			await session.prompt("NEW_SESSION_TURN");
+			await settle(session);
+
+			// The aside's turn in this session is still being prepared, so that run did not end the work.
+			expect(agentEnds).toEqual([false]);
+
+			releaseNormalize.resolve();
+			await sent;
+			await settle(session);
+		} finally {
+			releaseLoad.resolve();
+			releaseNormalize.resolve();
+			normalizeSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(2);
+		expect(requestsContaining(mock, "CARD_AFTER_LOAD")).toBe(1);
+		expect(agentEnds).toEqual([false, true]);
+	});
 });

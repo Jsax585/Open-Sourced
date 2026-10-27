@@ -759,7 +759,7 @@ type PromptDispatchOutcome = { sessionClaimed: boolean };
 type TurnRequestingAsideAdmission = {
 	/** {@link AgentSession} `#userInterruptCount` when the send was made; a later interrupt folds the aside. */
 	userInterruptCount: number;
-	/** {@link AgentSession} `#sessionGeneration` when the send was made; a committed transition drops the aside. */
+	/** {@link AgentSession} `#sessionGeneration` of the session the record is sent to; a committed transition drops the aside. */
 	sessionGeneration: number;
 	/** Closes the window; safe to call more than once. */
 	settle: () => void;
@@ -1684,7 +1684,11 @@ export class AgentSession implements SettingsScope {
 					// restores it and reconnects without draining it. Resume once the transition
 					// settles so a restored record waits for a turn of its own, not for the next
 					// unrelated prompt. After a commit the queue is empty and this is a no-op.
-					void this.waitForSessionTransition().then(() => this.#resumeStrandedIrcAsides());
+					void this.waitForSessionTransition()
+						.then(() => this.#resumeStrandedIrcAsides())
+						.catch(error =>
+							logger.warn("IRC wake resume after a session transition failed", { error: String(error) }),
+						);
 					return;
 				}
 				// The checks below are synchronous and atomic with the dispatch:
@@ -1961,9 +1965,10 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Opens the window in which a `triggerTurn` aside is promised a turn but has no record queued
 	 * yet, for {@link #flushPendingAgentEnd}. The caller settles it once the record is queued,
-	 * folded or prompted. The admission belongs to the session that took it: a send still
-	 * normalizing across a committed `/new` or `switchSession` holds no `agent_end` of the
-	 * replacement transcript open, since its own record is dropped by the generation check.
+	 * folded or prompted. The admission belongs to the session its record is sent to (the dispatch
+	 * re-takes the generation after any startup-deferred extension load): a send still normalizing
+	 * across a committed `/new` or `switchSession` holds no `agent_end` of the replacement
+	 * transcript open, since its own record is dropped by the generation check.
 	 */
 	#admitTurnRequestingAside(userInterruptCount: number): TurnRequestingAsideAdmission {
 		const admission: TurnRequestingAsideAdmission = {
@@ -10173,6 +10178,9 @@ export class AgentSession implements SettingsScope {
 	): Promise<boolean> {
 		// Captured before the awaits below — see #sessionGeneration's doc comment.
 		const sessionGeneration = this.#sessionGeneration;
+		// The record belongs to the session current here, after any startup-deferred extension load
+		// the send waited for: count its admission in that session too.
+		if (admission) admission.sessionGeneration = sessionGeneration;
 		// `userInterruptCount` is the caller's parameter, taken at the public send (see
 		// sendCustomMessage): a triggerTurn aside folds only for a user interrupt after that point.
 		// A message that may start a turn waits out idle compaction, as prompt() does; plain appends do not.
