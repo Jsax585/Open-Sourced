@@ -7,6 +7,7 @@ import type { FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { stream } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
@@ -3155,6 +3156,220 @@ describe("ModelRegistry runtime discovery", () => {
 		const unknown = registry.find("openai-test", "unknown-proxy-model");
 		expect(unknown?.contextWindow).toBe(128000);
 		expect(unknown?.reasoning).toBe(false);
+	});
+
+	test("openai-models-list discovery keeps borrowed non-OpenAI efforts usable below target compatibility gates", async () => {
+		const id = "tenant/catalog-bedrock-effort-fixture";
+		const ids = [id, "tenant/catalog-wire-effort-fixture"];
+		const efforts = [Effort.Low, Effort.High, Effort.Max];
+		const reference = buildModel({
+			id: "catalog-bedrock-effort-fixture",
+			name: "Bedrock effort fixture",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock.example",
+			requestModelId: "source-only-deployment",
+			headers: { "X-Source": "source-only" },
+			reasoning: true,
+			thinking: { mode: "effort", efforts, defaultLevel: Effort.Max, requiresEffort: true },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		expect(reference.compat).not.toHaveProperty("supportsReasoningEffort");
+		const wireReference = buildModel({
+			id: "catalog-wire-effort-fixture",
+			name: "Source wire effort fixture",
+			api: "openai-completions",
+			provider: "source-wire-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		// Catalog rows can carry a pure ladder independently of source wire
+		// controls; those controls are not target compatibility overrides.
+		const sourceWireReference: Model<"openai-completions"> = {
+			...wireReference,
+			compat: {
+				...wireReference.compat,
+				supportsReasoningEffort: false,
+				omitReasoningEffort: true,
+				reasoningEffortMap: { [Effort.Max]: "source-max" },
+			},
+		};
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference, sourceWireReference]));
+		try {
+			const apis = ["openai-completions", "openai-responses"] as const;
+			const configuredProviders: Record<string, unknown> = {};
+			for (const api of apis) {
+				const providerConfig = {
+					api,
+					baseUrl: "https://proxy.example/v1",
+					auth: "none",
+					headers: { "X-Proxy": "local" },
+					discovery: { type: "openai-models-list" },
+				};
+				configuredProviders[`provider-disabled-${api}`] = {
+					...providerConfig,
+					compat: { supportsReasoningEffort: false },
+				};
+				configuredProviders[`model-disabled-${api}`] = {
+					...providerConfig,
+					modelOverrides: { [id]: { compat: { supportsReasoningEffort: false } } },
+				};
+			}
+			writeRawModelsJson(configuredProviders);
+			const discoveryFetch: FetchImpl = async input => {
+				expect(String(input)).toBe("https://proxy.example/v1/models");
+				return Response.json({ data: ids.map(id => ({ id })) });
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: discoveryFetch });
+			await registry.refresh();
+			for (const api of apis) {
+				const models: Model[] = [];
+				for (const provider of ["list-effort-fixture", "commandcode"]) {
+					const discovered = await discoverOpenAIModelsList(
+						{
+							provider,
+							api,
+							baseUrl: "https://proxy.example",
+							headers: { "X-Proxy": "local" },
+							discovery: { type: "openai-models-list" },
+						},
+						{ fetch: discoveryFetch, getBearerApiKeyResolver: async () => undefined },
+					);
+					expect(discovered.map(model => model.id)).toEqual(ids);
+					models.push(...discovered);
+				}
+				for (const provider of [`provider-disabled-${api}`, `model-disabled-${api}`]) {
+					const model = registry.find(provider, id);
+					if (!model) throw new Error(`Missing configured model: ${provider}/${id}`);
+					models.push(model);
+				}
+				for (const model of models) {
+					const enabled = model.provider === "list-effort-fixture";
+					expect(ids).toContain(model.id);
+					expect(model).toMatchObject({
+						api,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						compat: { supportsReasoningEffort: enabled, omitReasoningEffort: !enabled },
+					});
+					expect(model.requestModelId).toBeUndefined();
+					expect(Object.hasOwn(model, "referenceThinkingEfforts")).toBe(false);
+					if (enabled) {
+						expect(model.thinking).toEqual({ mode: "effort", efforts });
+						expect(model.compatConfig).not.toHaveProperty("supportsReasoningEffort");
+						expect(model.compatConfig).not.toHaveProperty("reasoningEffortMap");
+						expect(model.compatConfig).not.toHaveProperty("omitReasoningEffort");
+					} else if (api === "openai-responses") {
+						expect(model.thinking).toBeUndefined();
+					}
+
+					let body: Record<string, unknown> | undefined;
+					let requestUrl: string | undefined;
+					let requestHeaders: Headers | undefined;
+					const requestFetch: FetchImpl = async (input, init) => {
+						requestUrl = String(input);
+						requestHeaders = new Headers(init?.headers);
+						body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+						if (api === "openai-completions") {
+							return new Response(
+								'data: {"id":"borrowed-effort","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+								{ headers: { "Content-Type": "text/event-stream" } },
+							);
+						}
+						const events = [
+							{
+								type: "response.output_item.added",
+								output_index: 0,
+								item: { type: "message", id: "msg_effort", role: "assistant", content: [] },
+							},
+							{ type: "response.output_text.delta", item_id: "msg_effort", content_index: 0, delta: "ok" },
+							{
+								type: "response.completed",
+								response: {
+									id: "resp_effort",
+									status: "completed",
+									usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+								},
+							},
+						];
+						return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+							headers: { "Content-Type": "text/event-stream" },
+						});
+					};
+					const context = { messages: [{ role: "user" as const, content: "hi", timestamp: 0 }] };
+					const options = { apiKey: "local-secret", reasoning: "max" as const, fetch: requestFetch };
+					const result = await stream(model, context, options).result();
+					expect(result.stopReason).toBe("stop");
+					const path = api === "openai-completions" ? "chat/completions" : "responses";
+					expect(requestUrl).toBe(`https://proxy.example/v1/${path}`);
+					expect(requestHeaders?.get("X-Proxy")).toBe("local");
+					expect(requestHeaders?.get("X-Source")).toBeNull();
+					expect(requestHeaders?.get("Authorization")).toBe("Bearer local-secret");
+					expect(body?.model).toBe(model.id);
+					expect(body?.thinking).toBeUndefined();
+					expect(body?.additionalModelRequestFields).toBeUndefined();
+					if (api === "openai-completions") {
+						expect(body?.reasoning_effort).toBe(enabled ? "max" : undefined);
+					} else if (enabled) {
+						expect(body?.reasoning).toMatchObject({ effort: "max" });
+					} else {
+						expect(body?.reasoning).toBeUndefined();
+					}
+				}
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+	});
+
+	test("openai-models-list discovery preserves same-provider effort compatibility disables", async () => {
+		const reference = buildModel({
+			id: "catalog-local-effort-fixture",
+			name: "Local effort fixture",
+			api: "openai-completions",
+			provider: "list-effort-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High], defaultLevel: Effort.Low },
+			compat: { supportsReasoningEffort: false },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		try {
+			for (const api of ["openai-completions", "openai-responses"] as const) {
+				const [sameProvider] = await discoverOpenAIModelsList(
+					{
+						provider: reference.provider,
+						api,
+						baseUrl: "https://proxy.example",
+						discovery: { type: "openai-models-list" },
+					},
+					{
+						fetch: async () => Response.json({ data: [{ id: reference.id }] }),
+						getBearerApiKeyResolver: async () => undefined,
+					},
+				);
+				expect(sameProvider?.compatConfig).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider?.compat).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider?.thinking).toEqual(api === "openai-completions" ? reference.thinking : undefined);
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
 	});
 
 	test("openai-models-list discovery marks advertised reasoning ladders reasoning-capable (codex-lb metadata shape)", async () => {

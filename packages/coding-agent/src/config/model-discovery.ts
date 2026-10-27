@@ -1171,11 +1171,20 @@ export async function discoverOpenAIModelsList(
 			compat: {
 				supportsStore: false,
 				supportsDeveloperRole: false,
-				supportsReasoningEffort: referenceCompat?.supportsReasoningEffort ?? advertisedReasoning !== undefined,
-				...(referenceCompat?.reasoningEffortMap ? { reasoningEffortMap: referenceCompat.reasoningEffortMap } : {}),
-				...(referenceCompat?.omitReasoningEffort !== undefined
-					? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
-					: {}),
+				// A borrowed ladder describes the model, not its source wire:
+				// leave effort support, remaps, and omission to target policy.
+				...(referenceThinkingEfforts === undefined
+					? {
+							supportsReasoningEffort:
+								referenceCompat?.supportsReasoningEffort ?? advertisedReasoning !== undefined,
+							...(referenceCompat?.reasoningEffortMap
+								? { reasoningEffortMap: referenceCompat.reasoningEffortMap }
+								: {}),
+							...(referenceCompat?.omitReasoningEffort !== undefined
+								? { omitReasoningEffort: referenceCompat.omitReasoningEffort }
+								: {}),
+						}
+					: undefined),
 			},
 		} as ModelSpec<Api>);
 	}
