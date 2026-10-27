@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -48,17 +48,29 @@ describe("AgentSession triggerTurn aside", () => {
 		agentEnds: Array<boolean | undefined>;
 	}
 
-	/** `onSessionStop` runs while the finished run still holds the session: after the loop's last aside poll, before it settles. */
-	async function createHarness(onSessionStop?: () => Promise<void>): Promise<Harness> {
+	/**
+	 * `onSessionStop` runs while the finished run still holds the session: after the loop's last aside poll, before it settles.
+	 * `responses` answer the first model requests; later ones answer "Acknowledged.".
+	 */
+	async function createHarness(onSessionStop?: () => Promise<void>, responses?: MockResponse[]): Promise<Harness> {
 		const modelRegistry = new ModelRegistry(authStorage);
-		const mock = createMockModel({ provider: "openai", id: "gpt-test", handler: { content: ["Acknowledged."] } });
+		const mock = createMockModel({
+			provider: "openai",
+			id: "gpt-test",
+			responses,
+			handler: { content: ["Acknowledged."] },
+		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
 			convertToLlm,
 			streamFn: mock.stream,
 		});
-		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"todo.enabled": false,
+			"retry.enabled": false,
+		});
 		settings.setModelRole("default", `${mock.model.provider}/${mock.model.id}`);
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		let extensionRunner: ExtensionRunner | undefined;
@@ -256,5 +268,23 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(mock.calls).toHaveLength(2);
 		expect(JSON.stringify(mock.calls[1]!.context.messages)).toContain("PLAN_AFTER_POLL");
 		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("of two sent at once to an idle session after an interrupt, the queued one gets a turn when the first run ends before its aside poll", async () => {
+		// The first run fails, so its loop ends without the stop-boundary aside poll that would take the queued aside.
+		const { session, mock } = await createHarness(undefined, [
+			{ stopReason: "error", errorMessage: "400 bad request" },
+		]);
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+
+		await Promise.all([
+			session.sendCustomMessage(card("FIRST_CARD"), { deliverAs: "aside", triggerTurn: true }),
+			session.sendCustomMessage(card("SECOND_CARD"), { deliverAs: "aside", triggerTurn: true }),
+		]);
+		await settle(session);
+
+		expect(mock.calls).toHaveLength(2);
+		expect(requestsContaining(mock, "FIRST_CARD")).toBeGreaterThan(0);
+		expect(requestsContaining(mock, "SECOND_CARD")).toBeGreaterThan(0);
 	});
 });

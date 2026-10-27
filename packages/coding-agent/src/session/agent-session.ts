@@ -9936,6 +9936,9 @@ export class AgentSession implements SettingsScope {
 			// AgentBusyError; no await sits between this check and #beginInFlight below.
 			if (this.isStreaming) {
 				outcome.sessionClaimed = this.agent.state.isStreaming;
+				// Keep the turn request, as the streaming branch does, in case that turn ends
+				// before its aside poll and the settle drain has to decide.
+				if (options.triggerTurn) this.#turnRequestingAsides.set(normalizedAppMessage, userInterruptCount);
 				this.#irc.queueAside([normalizedAppMessage]);
 				return false;
 			}
