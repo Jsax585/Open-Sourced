@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Interactive startup warns when omp runs on Bun older than 1.4, which still works but uses noticeably more memory and CPU; turning off `startup.checkUpdate` silences it too ([#14635](https://github.com/can1357/oh-my-pi/pull/14635) by [@jorgoose](https://github.com/jorgoose))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
