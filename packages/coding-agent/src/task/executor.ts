@@ -2547,6 +2547,9 @@ async function driveSessionToResult(
 			// failures keep the old path.
 			const recoverableStop = monitor.budgetStopRequested() || monitor.yieldTurnStopRequested();
 			if (!recoverableStop || abortSignal.aborted || err instanceof PromptDispatchError) throw err;
+		} finally {
+			const ref = AgentRegistry.global().get(session.getAgentId() ?? "");
+			if (ref?.session === session) ref.initialPromptPending = false;
 		}
 
 		// The forced final turn must answer through `yield`, or with no tools at all.
@@ -3916,6 +3919,7 @@ interface SubagentSessionSpec {
 		| "systemPrompt"
 		| "resolveServiceTierByFamily"
 		| "onFirstChatDispatch"
+		| "initialPromptPending"
 	>;
 	preparedSession?: Pick<PreparedSeanceSession, "promptSuffix">;
 	prompt: SubagentPromptInputs;
@@ -3924,6 +3928,7 @@ interface SubagentSessionSpec {
 /** Launch-only session inputs: a revived session restores these from its transcript or goes without. */
 interface SubagentLaunchInputs {
 	workPoolYieldItems: readonly WorkPoolYieldItem[];
+	initialPromptPending?: boolean;
 	resolveServiceTierByFamily?: CreateAgentSessionOptions["resolveServiceTierByFamily"];
 	onFirstChatDispatch?: () => void;
 }
@@ -3954,6 +3959,7 @@ function buildSubagentSessionOptions(
 		expectedAgentRef,
 		resolveServiceTierByFamily: launch?.resolveServiceTierByFamily,
 		onFirstChatDispatch: launch?.onFirstChatDispatch,
+		initialPromptPending: launch?.initialPromptPending,
 		systemPrompt: defaultPrompt => {
 			// A revive shows the roster the parked session's prompt held, and a rebuild that leaves the
 			// rest of the prompt unchanged keeps the roster the prompt it replaces showed: peer rows carry
@@ -4791,6 +4797,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			try {
 				sessionPromise = createAgentSession(
 					buildSubagentSessionOptions(sessionSpec, subagentSettings, sessionManager, null, {
+						initialPromptPending: true,
 						workPoolYieldItems: options.workPoolYieldItems ?? [],
 						// A revived session restores the tier history it persisted (including
 						// tiers a provider rejected or an extension changed since spawn); only
@@ -4798,6 +4805,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						resolveServiceTierByFamily,
 						onFirstChatDispatch: () => {
 							firstChatDispatchAt ??= performance.now();
+							const ref = AgentRegistry.global().get(id);
+							if (ref?.session === session) ref.initialPromptPending = false;
 						},
 					}),
 				);
