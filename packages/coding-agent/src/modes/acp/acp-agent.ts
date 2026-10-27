@@ -333,6 +333,16 @@ function steeringQueueFromMeta(meta: unknown): "steering" | "followUp" {
 	return "steering";
 }
 
+function isAsyncTaskUpdate(event: AgentSessionEvent): boolean {
+	if (event.type !== "tool_execution_update") return false;
+	const result: unknown = event.partialResult;
+	if (typeof result !== "object" || result === null || !("details" in result)) return false;
+	const details = result.details;
+	if (typeof details !== "object" || details === null || !("async" in details)) return false;
+	const async = details.async;
+	return typeof async === "object" && async !== null && "type" in async && async.type === "task";
+}
+
 type ManagedSessionRecord = {
 	session: AgentSession;
 	setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined;
@@ -358,11 +368,13 @@ type ManagedSessionRecord = {
 	liveMessageProgress: { textEmitted: boolean; thoughtEmitted: boolean } | undefined;
 	toolArgsById: Map<string, unknown>;
 	extensionsConfigured: boolean;
-	// Installed inside `#scheduleBootstrapUpdates` (post-race-guard); released
-	// in `#disposeSessionRecord`. Lives independent of any prompt turn.
+	// Task progress is subscribed at registration; config/command notifications
+	// remain behind the bootstrap guard until the client knows this session id.
+	lifetimeReady: boolean;
 	lifetimeUnsubscribe: (() => void) | undefined;
 	closedError: RequestError | undefined;
 	promptEventHandlers: Set<Promise<void>>;
+	taskUpdateDeliveries: Set<Promise<void>>;
 	extensionUserMessageTasks: Set<Promise<void>>;
 };
 
@@ -987,13 +999,12 @@ export class AcpAgent implements Agent {
 		// For `model`/`thinking`, `#setModelById`/`#setThinkingLevelById` change
 		// the session model/thinking level through AgentSession, which now emits
 		// a lifetime event (`model_changed`/`thinking_level_changed`) that
-		// `#handleLifetimeEvent` turns into a push once the subscription is
-		// installed. Only push here when that subscription is not yet
-		// installed, so pre-bootstrap callers still see the change without a
-		// post-bootstrap duplicate.
+		// `#handleLifetimeEvent` turns into a push once config delivery is ready.
+		// The task subscription is installed earlier, so its existence does not
+		// mean it handles config changes yet. Keep the explicit pre-bootstrap
+		// push without introducing a post-bootstrap duplicate.
 		const handledBySubscription =
-			(params.configId === THINKING_CONFIG_ID || params.configId === MODEL_CONFIG_ID) &&
-			record.lifetimeUnsubscribe !== undefined;
+			(params.configId === THINKING_CONFIG_ID || params.configId === MODEL_CONFIG_ID) && record.lifetimeReady;
 		if (!handledBySubscription) {
 			await this.#pushConfigOptionUpdate(record);
 		}
@@ -1237,12 +1248,11 @@ export class AcpAgent implements Agent {
 				});
 			},
 			notifyConfigChanged: async options => {
-				// Mirrors `setSessionConfigOption`: once the session-lifetime
-				// subscription is installed, `model_changed`/`thinking_level_changed`
-				// already reach `#handleLifetimeEvent`, which pushes the
-				// `config_option_update`. Pushing again here would make clients
-				// redraw their config UI twice for a single change.
-				if (options?.handledBySessionEvent && record.lifetimeUnsubscribe !== undefined) {
+				// Mirrors `setSessionConfigOption`: once lifetime config delivery
+				// is ready, `model_changed`/`thinking_level_changed` already reach
+				// `#handleLifetimeEvent`. Before then, only this explicit push
+				// notifies the client, even though task delivery is subscribed.
+				if (options?.handledBySessionEvent && record.lifetimeReady) {
 					await this.#waitForPromptEventHandlers(record);
 					return;
 				}
@@ -1696,12 +1706,15 @@ export class AcpAgent implements Agent {
 		// own (ACP sessions run with `enableMCP: false`); read it live so every
 		// reconfiguration's `refreshMCPTools` rebuild renders its instructions.
 		session.setMcpServerInstructionsSource(() => record.mcpManager?.getServerInstructions());
-		// `record.lifetimeUnsubscribe` is installed in `#scheduleBootstrapUpdates`
-		// so it shares the bootstrap race guard — see that comment for why.
+		// Install task delivery before the first prompt can run, including inside
+		// the bootstrap window. Config notifications still honor that race guard.
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
 			this.#sessions.set(session.sessionId, record);
+			record.lifetimeUnsubscribe = session.subscribe(event => {
+				void this.#handleLifetimeEvent(record, event);
+			});
 			return record;
 		} catch (error) {
 			await this.#disposeSessionRecord(record);
@@ -1727,30 +1740,45 @@ export class AcpAgent implements Agent {
 			extensionsConfigured: false,
 			closedError: undefined,
 			promptEventHandlers: new Set(),
+			taskUpdateDeliveries: new Set(),
 			pendingPromptDispatches: [],
 			extensionUserMessageTasks: new Set(),
+			lifetimeReady: false,
 			lifetimeUnsubscribe: undefined,
 		};
 	}
 
 	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "thinking_level_changed" && event.type !== "model_changed") {
+		if (this.#connection.signal.aborted || this.#sessions.get(record.session.sessionId) !== record) return;
+		let delivery: Promise<void>;
+		if (isAsyncTaskUpdate(event)) {
+			// Sole owner of these frames, even during a prompt: changing prompt
+			// subscriptions cannot duplicate or drop a retained task callback.
+			delivery = this.#deliverTaskUpdate(record, event);
+			record.taskUpdateDeliveries.add(delivery);
+		} else if (record.lifetimeReady && (event.type === "thinking_level_changed" || event.type === "model_changed")) {
+			delivery = this.#pushConfigOptionUpdate(record);
+		} else {
 			return;
 		}
-		// Config delivery is part of command completion, even though the
-		// subscription lives beyond an individual prompt turn.
-		const delivery = this.#pushConfigOptionUpdate(record);
 		record.promptEventHandlers.add(delivery);
 		try {
 			await delivery;
 		} catch (error) {
-			logger.warn("Failed to push config_option_update after a lifetime event", {
+			logger.warn("Failed to push ACP session lifetime update", {
 				sessionId: record.session.sessionId,
 				eventType: event.type,
 				error,
 			});
 		} finally {
 			record.promptEventHandlers.delete(delivery);
+			record.taskUpdateDeliveries.delete(delivery);
+		}
+	}
+
+	async #deliverTaskUpdate(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
+		for (const notification of this.#mapSessionEventUpdates(record, event)) {
+			await this.#connection.sessionUpdate(notification);
 		}
 	}
 
@@ -1792,6 +1820,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
+		if (isAsyncTaskUpdate(event)) return;
 		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;
@@ -1802,26 +1831,11 @@ export class AcpAgent implements Agent {
 		}
 
 		this.#prepareLiveAssistantMessage(record, event);
-		const imageDataCache = new Map<string, string>();
-		const resolveImageDataForAcp = (data: string, mimeType: string | undefined): string => {
-			const key = `${mimeType ?? ""}\u0000${data}`;
-			const cached = imageDataCache.get(key);
-			if (cached !== undefined) return cached;
-			const resolved = resolveImageDataSync(this.#blobs, data);
-			imageDataCache.set(key, resolved);
-			return resolved;
-		};
 		const streamedAssistantError =
 			event.type === "message_update" &&
 			event.message.role === "assistant" &&
 			event.assistantMessageEvent.type === "error";
-		for (const notification of mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
-			getMessageId: message => this.#getLiveMessageId(record, message),
-			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
-			getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
-			cwd: record.session.sessionManager.getCwd(),
-			resolveImageData: resolveImageDataForAcp,
-		})) {
+		for (const notification of this.#mapSessionEventUpdates(record, event)) {
 			const delivery = this.#connection.sessionUpdate(notification);
 			if (streamedAssistantError) {
 				// Resolves true only once the error chunk actually reached the
@@ -1845,6 +1859,12 @@ export class AcpAgent implements Agent {
 			await this.#flushUnreportedTurnError(record, event);
 			await this.#emitEndOfTurnUpdates(record);
 			await this.#waitForAcpPromptIdle(record);
+			while (record.taskUpdateDeliveries.size > 0) {
+				await Promise.allSettled(Array.from(record.taskUpdateDeliveries));
+			}
+			if (record.promptTurn !== promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
+				return;
+			}
 			record.liveMessageId = undefined;
 			record.liveMessageProgress = undefined;
 			this.#finishPrompt(record, {
@@ -1852,6 +1872,24 @@ export class AcpAgent implements Agent {
 				usage: this.#buildTurnUsage(promptTurn.usageBaseline, record.session.sessionManager.getUsageStatistics()),
 			});
 		}
+	}
+
+	#mapSessionEventUpdates(record: ManagedSessionRecord, event: AgentSessionEvent): SessionNotification[] {
+		const imageDataCache = new Map<string, string>();
+		return mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
+			getMessageId: message => this.#getLiveMessageId(record, message),
+			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
+			getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
+			cwd: record.session.sessionManager.getCwd(),
+			resolveImageData: (data, mimeType) => {
+				const key = `${mimeType ?? ""}\u0000${data}`;
+				const cached = imageDataCache.get(key);
+				if (cached !== undefined) return cached;
+				const resolved = resolveImageDataSync(this.#blobs, data);
+				imageDataCache.set(key, resolved);
+				return resolved;
+			},
+		});
 	}
 
 	/**
@@ -2473,13 +2511,9 @@ export class AcpAgent implements Agent {
 		// enough that the response future has scheduled before our timer fires
 		// on stdio-only transports.
 		//
-		// The session-lifetime subscription is installed inside the same timer
-		// so it shares this guard — without it, an extension's `session_start`
-		// handler (or any async work it schedules) calling `setThinkingLevel`
-		// would push a `config_option_update` for a session id the client
-		// hasn't been told about yet. The pre-bootstrap thinking level is
-		// reported in the response's `configOptions`, so deferring the
-		// notification loses no state.
+		// Config and command notifications share this guard. Task updates are
+		// subscribed at registration, because a client may start and finish its
+		// first prompt before this timer fires.
 		setTimeout(() => {
 			if (this.#connection.signal.aborted) {
 				return;
@@ -2488,10 +2522,9 @@ export class AcpAgent implements Agent {
 			if (!record) {
 				return;
 			}
-			if (!record.lifetimeUnsubscribe) {
-				const unsubscribeEvents = record.session.subscribe(event => {
-					void this.#handleLifetimeEvent(record, event);
-				});
+			if (!record.lifetimeReady) {
+				record.lifetimeReady = true;
+				const unsubscribeEvents = record.lifetimeUnsubscribe;
 				// Skills/commands rediscovery (live `skills.*`/`commands.*` edits, MCP
 				// prompts, manage_skill) re-advertises the palette.
 				const unsubscribeCommands = record.session.subscribeCommandMetadataChanged(() => {
@@ -2500,7 +2533,7 @@ export class AcpAgent implements Agent {
 					});
 				});
 				record.lifetimeUnsubscribe = () => {
-					unsubscribeEvents();
+					unsubscribeEvents?.();
 					unsubscribeCommands();
 				};
 			}
@@ -3191,6 +3224,9 @@ export class AcpAgent implements Agent {
 
 	async #disposeSessionRecord(record: ManagedSessionRecord, reason?: postmortem.Reason): Promise<void> {
 		record.lifetimeUnsubscribe?.();
+		record.lifetimeUnsubscribe = undefined;
+		record.lifetimeReady = false;
+		record.toolArgsById.clear();
 		if (record.mcpManager) {
 			try {
 				await record.mcpManager.disconnectAll();
