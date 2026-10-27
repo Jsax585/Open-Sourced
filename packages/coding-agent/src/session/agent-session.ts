@@ -1429,17 +1429,21 @@ export class AgentSession implements SettingsScope {
 		// Parked wake records resume alongside ordinary stranded asides; they were
 		// already decided wake-intended at deferral time.
 		const records = [...this.#irc.drainDeferredWakes(), ...this.#irc.drainPending()];
-		const wake: AgentMessage[] = [];
-		const fold: AgentMessage[] = [];
-		for (const record of records) {
-			if (this.#strandedRecordWakes(record)) wake.push(record);
-			else fold.push(record);
-		}
-		this.#foldStrandedIrcAsidesIntoContext(fold);
+		const wake = this.#foldStrandedIrcAsidesBeforeWake(records);
 		if (wake.length > 0) this.#wakeForIrc(wake);
 	}
 
-	/** Whether a stranded IRC/aside record starts a turn in #resumeStrandedIrcAsides, or folds into context. */
+	/** Folds the records ahead of the first one that starts a turn (#strandedRecordWakes) into
+	 *  context and returns that record with every record after it, for one turn: records keep the
+	 *  order IrcBridge queued them in. Returns nothing to wake when no record starts a turn. */
+	#foldStrandedIrcAsidesBeforeWake(records: AgentMessage[]): AgentMessage[] {
+		const firstWake = records.findIndex(record => this.#strandedRecordWakes(record));
+		const foldCount = firstWake < 0 ? records.length : firstWake;
+		this.#foldStrandedIrcAsidesIntoContext(records.slice(0, foldCount));
+		return records.slice(foldCount);
+	}
+
+	/** Whether a stranded IRC/aside record starts a turn, or folds into context when no earlier record starts one. */
 	#strandedRecordWakes(record: AgentMessage): boolean {
 		// An extension aside sent with `triggerTurn` asked for a turn, the way a steer or follow-up
 		// with `triggerTurn` does. It gets one unless a user interrupt happened after it was sent;
@@ -1504,7 +1508,8 @@ export class AgentSession implements SettingsScope {
 			const held = records.filter(record => this.#irc.isPeerMessage(record));
 			if (held.length > 0) {
 				this.#irc.queueDeferredWake(held);
-				records = records.filter(record => !this.#irc.isPeerMessage(record));
+				// Classify what is left again: a record that only rode a held peer's wake folds.
+				records = this.#foldStrandedIrcAsidesBeforeWake(records.filter(record => !this.#irc.isPeerMessage(record)));
 				if (records.length === 0) return;
 			}
 		}
@@ -1533,6 +1538,8 @@ export class AgentSession implements SettingsScope {
 		// delaying the observation's finish and mis-attributing the successor's RPC
 		// progress to this now-dead wake monitor.
 		const generation = this.#promptGeneration;
+		// The interrupt count the records were classified at (#strandedRecordWakes), rechecked at dispatch.
+		const userInterruptCount = this.#userInterruptCount;
 		const inFlightEpoch = this.#beginInFlight();
 		let turnError: unknown;
 		// A pooled-turn yield transition (item-set mutation + prompt rebuild) may be
@@ -1559,6 +1566,12 @@ export class AgentSession implements SettingsScope {
 					this.#irc.queueAside(records);
 					logger.debug("IRC wake turn deferred behind the running turn");
 					return;
+				}
+				// A user interrupt during the wait above folds the records it would have folded
+				// had it come first: a triggerTurn aside sent before it no longer starts this turn.
+				if (this.#userInterruptCount !== userInterruptCount) {
+					records = this.#foldStrandedIrcAsidesBeforeWake(records);
+					if (records.length === 0) return;
 				}
 				observation = this.#startTurnObservation(records);
 				return this.agent.prompt(records);
@@ -9858,6 +9871,18 @@ export class AgentSession implements SettingsScope {
 			}
 			if (options?.deliverAs === "aside") {
 				if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
+				// The generation await above can span the run's settle. As in the idle branch below, an
+				// ACP client cannot show or cancel a turn the agent starts after the client's turn ended,
+				// so keep the message for the client's next turn.
+				if (
+					!this.isStreaming &&
+					this.#clientBridge?.deferAgentInitiatedTurns &&
+					!this.#allowAcpAgentInitiatedTurns
+				) {
+					outcome.sessionClaimed = false;
+					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
+					return false;
+				}
 				// Non-interrupting: the agent loop's step-boundary poll (see the setAsideMessageProvider
 				// registration in the constructor) picks this up without interrupting the current tool
 				// batch. Not an agent-core queue entry, so no drain-retry latch and no idle-queue drain
