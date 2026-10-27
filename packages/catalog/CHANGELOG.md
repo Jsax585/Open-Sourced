@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Munito (`munito`) as an open-model provider: OpenAI-compatible chat completions at `api.munito.ai/inference/v1` with keyless-authoritative `/models` discovery that owns the chat roster and its retirement, the roster-derived judge lanes (rebased onto a configured endpoint, pruned when the roster drops them), canonical-reference hydration, and `omp login munito` ([#15546](https://github.com/can1357/oh-my-pi/pull/15546) by [@jpds](https://github.com/jpds))
+
+### Changed
+
+- Munito chat completions now send the session-stable `prompt_cache_key`, so a cached prefix routes to the host that holds it; the tier rejects `prompt_cache_retention`, so no breakpoint or TTL is requested
+
 ## [18.13.1] - 2026-10-27
 
 ### Added
