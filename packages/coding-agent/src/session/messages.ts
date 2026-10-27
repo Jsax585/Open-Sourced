@@ -4,7 +4,7 @@
  * Extends the base AgentMessage type with coding-agent specific message types,
  * and provides a transformer to convert them to LLM-compatible messages.
  */
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, isProviderRefusalMessage } from "@oh-my-pi/pi-agent-core";
 import {
 	isUserInterruptAbort,
 	isCustomMessageContent,
@@ -397,6 +397,9 @@ export const INTERRUPTED_THINKING_MESSAGE_TYPE = "interrupted-thinking";
 
 /** Custom message type for the transient checkpoint-active reminder. */
 export const CHECKPOINT_ACTIVE_REMINDER_TYPE = "checkpoint-active-reminder";
+
+/** Custom message type carrying a completed rewind's report into model context. */
+export const REWIND_REPORT_MESSAGE_TYPE = "rewind-report";
 
 /** Metadata persisted with a hidden interrupted-thinking continuity message. */
 export interface InterruptedThinkingDetails {
@@ -1193,6 +1196,55 @@ function convertOne(m: AgentMessage, interruptedNext: boolean): Message[] {
 	}
 }
 
+/**
+ * Converts `messages[index]` with its neighbor-sensitive state.
+ * {@link convertToLlm} and {@link convertMessagesForContextView} both go
+ * through here so the viewer cannot drift from the per-message conversion that
+ * gets sent; a filter or reorder added outside this helper must be mirrored in
+ * both.
+ */
+function convertMessageAt(
+	messages: AgentMessage[],
+	index: number,
+	convert: (m: AgentMessage, interruptedNext: boolean) => Message[],
+): Message[] {
+	const m = messages[index];
+	return convert(m, m.role === "assistant" && followedByInterruptedThinking(messages, index));
+}
+
+/** A converted viewer message and its position in the source and converted histories. */
+export interface ContextViewMessage {
+	message: Message;
+	sourceIndex: number;
+	convertedIndex: number;
+}
+
+/**
+ * Convert history for inspection without reading or populating the per-message
+ * and array conversion caches. Steering messages show the envelope
+ * {@link wrapSteeringForModel} sends (sharing its wrapper cache); it maps
+ * one-to-one, so source indices hold. Mirrors the {@link convertToLlm} loop
+ * through {@link convertMessageAt}, then drops API-level provider refusals
+ * like the send path's `filterProviderReplayMessages`, since they are never
+ * replayed.
+ *
+ * Kept separate from `convertToLlm` because the viewer needs source indices:
+ * reporting them from `convertToLlm` would add a per-message callback and
+ * disable its cache shortcuts, a cost every request would pay even when
+ * `/context` is never opened.
+ */
+export function convertMessagesForContextView(messages: AgentMessage[]): ContextViewMessage[] {
+	const modelMessages = wrapSteeringForModel(messages);
+	const result: ContextViewMessage[] = [];
+	for (let sourceIndex = 0; sourceIndex < modelMessages.length; sourceIndex++) {
+		for (const message of convertMessageAt(modelMessages, sourceIndex, convertOne)) {
+			if (message.role === "assistant" && isProviderRefusalMessage(message)) continue;
+			result.push({ message, sourceIndex, convertedIndex: result.length });
+		}
+	}
+	return result;
+}
+
 /** Cached per-message conversion. Reuses the stored fragment while identity and
  *  `interruptedNext` neighbor state hold; recomputes on a neighbor flip. */
 function convertOneCached(m: AgentMessage, interruptedNext: boolean): Message[] {
@@ -1245,6 +1297,9 @@ function appendedResultReachesOlderCall(messages: readonly AgentMessage[], from:
  * When a new user turn arrives on the same growing array, only the previously
  * protected turn is reconverted. A pending call that gets its result on the same
  * array is reconverted at the boundary, so it shrinks on the next send.
+ * {@link convertMessagesForContextView} mirrors this loop through
+ * {@link convertMessageAt}; it stays separate so the index mapping `/context`
+ * needs adds no cost here.
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	const len = messages.length;
@@ -1304,10 +1359,10 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 	for (let i = start; i < len; i++) {
 		if (i === len - 1) prefixOutputLen = out.length;
 		if (i === turnStart) turnOutputLen = out.length;
-		const m = messages[i];
-		const interruptedNext = m.role === "assistant" && followedByInterruptedThinking(messages, i);
-		const source = shrinkToolHistoryMessage(m, completedToolCallIds(messages, i), i < turnStart);
-		const fragment = convertOneCached(source, interruptedNext);
+		const fragment = convertMessageAt(messages, i, (m, interruptedNext) => {
+			const source = shrinkToolHistoryMessage(m, completedToolCallIds(messages, i), i < turnStart);
+			return convertOneCached(source, interruptedNext);
+		});
 		for (const msg of fragment) out.push(msg);
 	}
 	if (len === 0) prefixOutputLen = 0;
