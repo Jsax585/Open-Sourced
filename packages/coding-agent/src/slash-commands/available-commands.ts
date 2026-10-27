@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { SkillsSettings } from "../extensibility/settings";
@@ -65,8 +66,8 @@ export async function buildAvailableSlashCommands(
 		for (const skill of session.skills) {
 			appendCommand({
 				name: getSkillSlashCommandName(skill),
-				description: skill.description || `Run ${skill.name} skill`,
-				input: { hint: "arguments" },
+				description: skill.description || t("Run {0} skill", `${skill.name}`),
+				input: { hint: t("arguments") },
 				source: "skill",
 			});
 		}
@@ -78,8 +79,8 @@ export async function buildAvailableSlashCommands(
 			if (isAcpBuiltinShadowedName(command.name)) continue;
 			appendCommand({
 				name: command.name,
-				description: command.description ?? "(extension command)",
-				input: { hint: "arguments" },
+				description: command.description ?? t("(extension command)"),
+				input: { hint: t("arguments") },
 				source: "extension",
 			});
 		}
@@ -90,7 +91,7 @@ export async function buildAvailableSlashCommands(
 		appendCommand({
 			name: command.command.name,
 			description: command.command.description,
-			input: { hint: "arguments" },
+			input: { hint: t("arguments") },
 			source,
 		});
 	}

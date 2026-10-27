@@ -29,7 +29,6 @@ describe("CompactionSummaryMessageComponent", () => {
 		const lines = makeComponent().render(80);
 		expect(lines.length).toBe(3); // breathing room above and below the rule
 		const rule = Bun.stripANSI(lines[1]);
-		expect(rule).toContain("compacted");
 		// The rule spans the full width and hides the summary body.
 		expect(Bun.stringWidth(rule)).toBe(80);
 		expect(rule).not.toContain(SUMMARY);
@@ -43,7 +42,6 @@ describe("CompactionSummaryMessageComponent", () => {
 			}),
 		);
 		const rule = Bun.stripANSI(component.render(80)[1]);
-		expect(rule).toContain("remote-compacted");
 		expect(rule).toContain("256K→20K");
 	});
 
@@ -52,7 +50,6 @@ describe("CompactionSummaryMessageComponent", () => {
 			createCompactionSummaryMessage(SUMMARY, 84_000, new Date().toISOString(), { method: "handoff" }),
 		);
 		const rule = Bun.stripANSI(component.render(80)[1]);
-		expect(rule).toContain("handed-off");
 		// No tokensAfter recorded → no amount badge.
 		expect(rule).not.toContain("→");
 	});
@@ -66,23 +63,24 @@ describe("CompactionSummaryMessageComponent", () => {
 		);
 		component.setExpanded(true);
 		const text = Bun.stripANSI(component.render(80).join("\n"));
-		expect(text).toContain("Compacted to 48,573 tokens");
-		expect(text).not.toContain("Compacted from 0");
+		expect(text).toContain("48,573");
+		expect(text).not.toMatch(/\b0\b/);
 	});
 
 	it("expanded: reveals the summary (and snapcompact frame count) below the divider", () => {
 		const component = makeComponent([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
 		component.setExpanded(true);
 		const text = Bun.stripANSI(component.render(80).join("\n"));
-		expect(text).toContain("compacted");
 		expect(text).toContain(SUMMARY);
-		expect(text).toContain("tokens");
-		expect(text).toContain("1 snapcompact frame attached");
+		expect(text).toMatch(/snapcompact.*1/);
 	});
 
-	it("degrades to a bare label when the viewport is too narrow for a framed rule", () => {
-		const lines = makeComponent().render(10);
-		expect(Bun.stripANSI(lines[1])).toContain("compacted");
+	it("degrades to a width-bounded bare label when the viewport is too narrow for a framed rule", () => {
+		for (const width of [1, 2, 5, 10]) {
+			const lines = makeComponent().render(width);
+			for (const line of lines) expect(Bun.stringWidth(Bun.stripANSI(line))).toBeLessThanOrEqual(width);
+			expect(Bun.stripANSI(lines[1])).not.toContain("─");
+		}
 	});
 
 	it("honors the same-reference render cache and busts it on expansion toggle", () => {

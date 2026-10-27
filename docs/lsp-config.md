@@ -1,52 +1,52 @@
-# LSP configuration in OMP
+# OMP의 LSP 설정
 
-This guide explains how to configure language servers for the OMP coding agent.
+이 안내서는 OMP 코딩 에이전트의 언어 서버 설정 방법을 설명합니다.
 
-Source of truth in code:
+기준이 되는 코드:
 
-- Server config type: `packages/coding-agent/src/lsp/types.ts` (`ServerConfig`)
-- Config loader: `packages/coding-agent/src/lsp/config.ts`
-- Built-in server definitions: `packages/coding-agent/src/lsp/defaults.json`
+- 서버 설정 타입: `packages/coding-agent/src/lsp/types.ts` (`ServerConfig`)
+- 설정 로더: `packages/coding-agent/src/lsp/config.ts`
+- 내장 서버 정의: `packages/coding-agent/src/lsp/defaults.json`
 
-## Auto-detection
+## 자동 감지
 
-OMP starts from the built-in server definitions, applies config overrides, then keeps enabled servers that meet both conditions:
+OMP는 내장 서버 정의에 설정 재정의를 적용한 뒤, 다음 두 조건을 모두 만족하는 활성 서버를 사용합니다.
 
-1. The current working directory contains at least one of the server's `rootMarkers`.
-2. The server binary is available — checked in supported project-local bin directories first (for example `node_modules/.bin/`, Python virtual environments, Ruby binstubs, and project `bin/` for Go), then `$PATH`.
+1. 현재 작업 디렉터리에 서버의 `rootMarkers` 중 하나 이상이 있습니다.
+2. 서버 실행 파일을 사용할 수 있습니다. 지원하는 프로젝트 로컬 실행 파일 디렉터리(예: `node_modules/.bin/`, Python 가상 환경, Ruby binstub, Go의 프로젝트 `bin/`)를 먼저 확인하고, 이어서 `$PATH`를 확인합니다.
 
-Root-marker detection at startup is cwd-only; it does not search parent directories. Wildcard markers such as `*.cabal` match entries directly inside the cwd and do not recurse. No configuration is required for common setups; see [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json) for the full built-in set.
+시작 시 루트 마커는 cwd 안에서만 감지하며 상위 디렉터리를 검색하지 않습니다. `*.cabal` 같은 와일드카드는 cwd 바로 아래 항목에만 일치하며 재귀적으로 검색하지 않습니다. 일반적인 구성에는 별도 설정이 필요하지 않습니다. 전체 내장 목록은 [`defaults.json`](../packages/coding-agent/src/lsp/defaults.json)을 참조하세요.
 
-## Config file locations
+## 설정 파일 위치
 
-OMP merges LSP config from multiple sources, lowest to highest precedence:
+OMP는 여러 출처의 LSP 설정을 다음과 같이 낮은 우선순위부터 병합합니다.
 
-| Precedence | Location                                                                                                     |
+| 우선순위 | 위치 |
 | ---------: | ------------------------------------------------------------------------------------------------------------ |
-|     Lowest | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml`, `~/lsp.yml`, `~/.lsp.yml`                          |
-|            | Plugin LSP configs (marketplace / `--plugin-dir` roots)                                                      |
-|            | User config dirs: active native agent directory, then `~/.claude/lsp.*`, `~/.codex/lsp.*`, `~/.gemini/lsp.*` |
-|            | Cwd config dirs: `<cwd>/.omp/lsp.*`, `<cwd>/.claude/lsp.*`, `<cwd>/.codex/lsp.*`, `<cwd>/.gemini/lsp.*`      |
-|    Highest | Cwd root: `<cwd>/lsp.*` and `<cwd>/.lsp.*`                                                                   |
+| 가장 낮음 | `~/lsp.json`, `~/.lsp.json`, `~/lsp.yaml`, `~/.lsp.yaml`, `~/lsp.yml`, `~/.lsp.yml` |
+| | 플러그인 LSP 설정(마켓플레이스 / `--plugin-dir` 루트) |
+| | 사용자 설정 디렉터리: 활성 네이티브 에이전트 디렉터리, 이어서 `~/.claude/lsp.*`, `~/.codex/lsp.*`, `~/.gemini/lsp.*` |
+| | cwd 설정 디렉터리: `<cwd>/.omp/lsp.*`, `<cwd>/.claude/lsp.*`, `<cwd>/.codex/lsp.*`, `<cwd>/.gemini/lsp.*` |
+| 가장 높음 | cwd 루트: `<cwd>/lsp.*` 및 `<cwd>/.lsp.*` |
 
-Within each config-directory row, directories are listed highest to lowest priority. Each location accepts `.json`, `.yaml`, and `.yml`, including hidden variants. When multiple variants coexist in one location, precedence from highest to lowest is `lsp.json`, `.lsp.json`, `lsp.yaml`, `.lsp.yaml`, `lsp.yml`, `.lsp.yml`. All readable variants are merged; this is not a first-file-only search.
+각 설정 디렉터리 행 안에서는 높은 우선순위부터 나열합니다. 각 위치는 숨김 파일을 포함한 `.json`, `.yaml`, `.yml`을 지원합니다. 한 위치에 여러 형식이 있으면 높은 우선순위부터 `lsp.json`, `.lsp.json`, `lsp.yaml`, `.lsp.yaml`, `lsp.yml`, `.lsp.yml` 순입니다. 읽을 수 있는 모든 파일을 병합하며 첫 번째 파일만 사용하는 방식이 아닙니다.
 
-Merging is shallow per server: a higher-precedence server object overrides only its top-level fields, but object-valued fields such as `settings`, `initOptions`, `capabilities`, and `workspaceReadyTimings` replace the lower value as a whole rather than deep-merging it. Servers absent from override files remain at built-in defaults.
+서버별 병합은 얕은 병합입니다. 우선순위가 높은 서버 객체는 최상위 필드만 덮어쓰지만, `settings`, `initOptions`, `capabilities`, `workspaceReadyTimings` 같은 객체 필드는 깊이 병합하지 않고 전체를 대체합니다. 재정의 파일에 없는 서버는 내장 기본값을 유지합니다.
 
-The native user config directory follows `PI_CONFIG_DIR` and active profiles; `~/.omp/agent/lsp.json` is the default-profile spelling. This shared config lookup does not use `PI_CODING_AGENT_DIR` as an arbitrary replacement base. Claude's user directory honors `CLAUDE_CONFIG_DIR`. Foreign user sources (Claude, Codex, Gemini) are opt-in through the enabled-provider configuration; setting `CLAUDE_CONFIG_DIR` also opts Claude in unless explicitly disabled. Project and cwd sources do not walk ancestors and are not subject to that user-source opt-in.
+네이티브 사용자 설정 디렉터리는 `PI_CONFIG_DIR`과 활성 프로필을 따릅니다. `~/.omp/agent/lsp.json`은 기본 프로필의 경로입니다. 이 공통 설정 검색은 `PI_CODING_AGENT_DIR`를 임의의 대체 기준 경로로 사용하지 않습니다. Claude 사용자 디렉터리는 `CLAUDE_CONFIG_DIR`를 따릅니다. 외부 사용자 설정(Claude, Codex, Gemini)은 활성 제공업체 설정에서 명시적으로 선택해야 합니다. `CLAUDE_CONFIG_DIR`를 설정하면 명시적으로 비활성화하지 않는 한 Claude도 선택됩니다. 프로젝트 및 cwd 출처는 상위 디렉터리를 탐색하지 않으며 이 사용자 출처 선택 조건의 영향을 받지 않습니다.
 
-**Recommended locations:**
+**권장 위치:**
 
-- User-wide preferences → active native agent directory's `lsp.json`
-- Project-specific overrides → `<cwd>/.omp/lsp.json`
+- 사용자 공통 환경설정 → 활성 네이티브 에이전트 디렉터리의 `lsp.json`
+- 프로젝트별 재정의 → `<cwd>/.omp/lsp.json`
 
-> **Note:** There is no separate configured-server mode: built-in defaults, partial overrides, and new custom servers all pass through the same root-marker/binary/`disabled` filter. A config that only sets `idleTimeoutMs` leaves server selection unchanged.
+> **참고:** 별도의 설정 서버 모드는 없습니다. 내장 기본값, 부분 재정의, 새 사용자 지정 서버는 모두 동일한 루트 마커/실행 파일/`disabled` 필터를 거칩니다. `idleTimeoutMs`만 설정하면 서버 선택은 바뀌지 않습니다.
 
-Config is cached per cwd. After changing LSP files, root markers, or installed binaries, call the `lsp` tool with `action: "reload", file: "*"` (or omit `file`) to reread config and shut down clients whose configuration is no longer current.
+설정은 cwd별로 캐시됩니다. LSP 파일, 루트 마커 또는 설치된 실행 파일을 변경한 뒤에는 `lsp` 도구를 `action: "reload", file: "*"`로 호출하거나 `file`을 생략하여 설정을 다시 읽고 더 이상 최신 설정을 사용하지 않는 클라이언트를 종료하세요.
 
-## File shape
+## 파일 구조
 
-Both JSON and YAML are accepted. The top-level object can use either a `servers` wrapper key or a flat map directly:
+JSON과 YAML을 모두 지원합니다. 최상위 객체는 `servers` 래퍼 키 또는 직접적인 평면 맵을 사용할 수 있습니다.
 
 ```json
 {
@@ -57,7 +57,7 @@ Both JSON and YAML are accepted. The top-level object can use either a `servers`
 }
 ```
 
-or (flat, without the `servers` wrapper):
+또는 다음과 같이 `servers` 래퍼 없이 평면 구조를 사용합니다.
 
 ```json
 {
@@ -66,37 +66,38 @@ or (flat, without the `servers` wrapper):
 }
 ```
 
-Top-level keys:
+최상위 키:
 
-- `servers` — map of server name to `ServerConfig` (optional wrapper; flat form is equivalent)
-- `idleTimeoutMs` — shut down idle language servers after this many milliseconds; omitted, zero, and negative values leave idle shutdown disabled
+- `servers` — 서버 이름을 `ServerConfig`에 연결하는 맵(선택적 래퍼이며 평면 형식과 동등)
+- `idleTimeoutMs` — 지정한 밀리초 동안 유휴 상태인 언어 서버 종료. 생략하거나 0 또는 음수이면 유휴 종료를 사용하지 않음
 
-Do not mix wrapped and flat server entries: when `servers` is an object, sibling keys other than `idleTimeoutMs` are not treated as servers.
+래퍼 형식과 평면 서버 항목을 섞지 마세요. `servers`가 객체이면 `idleTimeoutMs` 이외의 형제 키는 서버로 처리하지 않습니다.
 
-## ServerConfig fields
+## ServerConfig 필드
 
-| Field                   | Type       | Required for a new server | Description                                                                                              |
+| 필드 | 타입 | 새 서버에 필수 | 설명 |
 | ----------------------- | ---------- | ------------------------: | -------------------------------------------------------------------------------------------------------- |
-| `command`               | `string`   |                       yes | Binary name (resolved through local bins / PATH) or absolute path                                        |
-| `args`                  | `string[]` |                        no | Arguments passed to the binary                                                                           |
-| `fileTypes`             | `string[]` |                       yes | Extensions or basenames, for example `[".ts", ".tsx", "Dockerfile"]`; case-insensitive, with or without a leading dot |
-| `languageId`            | `string`   |                        no | LSP language id sent in `textDocument/didOpen`; inferred from the file path when omitted                 |
-| `rootMarkers`           | `string[]` |                       yes | Files/directories indicating a project root; one-level wildcard patterns such as `*.cabal` are supported |
-| `initOptions`           | `object`   |                        no | Sent as `initializationOptions` during the LSP handshake                                                 |
-| `settings`              | `object`   |                        no | Pushed via `workspace/didChangeConfiguration`                                                            |
-| `disabled`              | `boolean`  |                        no | Set `true` to disable this server                                                                        |
-| `warmupTimeoutMs`       | `number`   |                        no | Warmup initialize timeout in milliseconds (default 5000; built-in marksman uses 2000) |
-| `isLinter`              | `boolean`  |                        no | Marks a dedicated linter/formatter server: excluded from type-intelligence, but preferred over type-checkers when choosing the `formatOnWrite` formatter |
-| `capabilities`          | `object`   |                        no | Opt-in server-specific features; see [Capabilities](#capabilities)                                       |
-| `workspaceReadyTimings` | `object`   |                        no | Advanced rust-analyzer workspace-readiness timing overrides; see below                                   |
+| `command` | `string` | 예 | 실행 파일 이름(로컬 실행 파일 디렉터리 / PATH에서 확인) 또는 절대 경로 |
+| `args` | `string[]` | 아니요 | 실행 파일에 전달할 인수 |
+| `fileTypes` | `string[]` | 예 | 확장자 또는 파일 이름. 예: `[".ts", ".tsx", "Dockerfile"]`. 대소문자를 구분하지 않으며 앞의 점은 있어도 없어도 됨 |
+| `languageId` | `string` | 아니요 | `textDocument/didOpen`에 전달할 LSP 언어 ID. 생략하면 파일 경로에서 추론 |
+| `rootMarkers` | `string[]` | 예 | 프로젝트 루트를 나타내는 파일/디렉터리. `*.cabal` 같은 단일 단계 와일드카드 지원 |
+| `initOptions` | `object` | 아니요 | LSP 핸드셰이크에서 `initializationOptions`로 전달 |
+| `settings` | `object` | 아니요 | `workspace/didChangeConfiguration`으로 전달 |
+| `disabled` | `boolean` | 아니요 | `true`이면 이 서버 비활성화 |
+| `warmupTimeoutMs` | `number` | 아니요 | 준비 초기화 제한 시간(밀리초). 기본값 5000, 내장 marksman은 2000 |
+| `isLinter` | `boolean` | 아니요 | 전용 린터/포매터 서버로 표시. 타입 분석에서는 제외하지만 `formatOnWrite` 포매터 선택 시 타입 검사 서버보다 우선 |
+| `capabilities` | `object` | 아니요 | 서버별 선택 기능. [기능](#capabilities) 참조 |
+| `workspaceReadyTimings` | `object` | 아니요 | 고급 rust-analyzer 워크스페이스 준비 시간 재정의. 아래 참조 |
 
-The required fields may be omitted from an override of a built-in server because they are inherited before validation. A genuinely new server normally needs all three. `resolvedCommand` and `createClient` are runtime-owned fields and must not be configured.
+내장 서버 재정의에서는 검증 전에 필수 필드를 상속하므로 생략할 수 있습니다. 완전히 새로운 서버는 일반적으로 세 필드가 모두 필요합니다. `resolvedCommand`와 `createClient`는 런타임이 관리하는 필드이므로 설정하지 마세요.
 
-For plugin-compatible definitions, `initializationOptions` is accepted when `initOptions` is not an object. `extensionToLanguage` can supply `fileTypes` from its keys and defaults missing `rootMarkers` to `["."]`; its values do not set per-extension language IDs. Marketplace entries can provide an inline `lspServers` map or a config-file path contained within the plugin root.
+플러그인 호환 정의에서는 `initOptions`가 객체가 아니면 `initializationOptions`를 허용합니다. `extensionToLanguage`의 키로 `fileTypes`를 제공할 수 있으며, `rootMarkers`가 없으면 `["."]`를 사용합니다. 그 값은 확장자별 언어 ID를 설정하지 않습니다. 마켓플레이스 항목은 인라인 `lspServers` 맵 또는 플러그인 루트 안의 설정 파일 경로를 제공할 수 있습니다.
 
-### Capabilities
+<a id="capabilities"></a>
+### 기능
 
-The `capabilities` object enables optional server-specific features that OMP supports on a per-server basis:
+`capabilities` 객체는 OMP가 서버별로 지원하는 선택 기능을 활성화합니다.
 
 ```json
 {
@@ -110,11 +111,11 @@ The `capabilities` object enables optional server-specific features that OMP sup
 }
 ```
 
-All fields are boolean and optional. They are currently used by `rust-analyzer`.
+모든 필드는 선택적 불리언 값입니다. 현재 `rust-analyzer`에서 사용합니다.
 
-### Advanced rust-analyzer readiness timings
+### 고급 rust-analyzer 준비 시간
 
-`workspaceReadyTimings` tunes rust-analyzer's workspace-ready polling:
+`workspaceReadyTimings`는 rust-analyzer의 워크스페이스 준비 상태 폴링을 조정합니다.
 
 ```json
 {
@@ -131,13 +132,13 @@ All fields are boolean and optional. They are currently used by `rust-analyzer`.
 }
 ```
 
-All four fields are optional millisecond values. Defaults are `timeoutMs: 5000`, `pollMs: 100`, `settleMs: 2000`, and `statusRequestTimeoutMs: 1000`. This is an advanced tuning surface; normal configurations should use the defaults.
+네 필드는 모두 선택적인 밀리초 값입니다. 기본값은 `timeoutMs: 5000`, `pollMs: 100`, `settleMs: 2000`, `statusRequestTimeoutMs: 1000`입니다. 고급 조정용 설정이므로 일반적인 구성에서는 기본값을 사용하세요.
 
-## Common recipes
+## 자주 사용하는 구성
 
-### Override a built-in server's settings
+### 내장 서버 설정 재정의
 
-Partial overrides are merged onto the built-in defaults. You only need to specify the fields you want to change.
+부분 재정의는 내장 기본값에 병합됩니다. 바꾸려는 필드만 지정하면 됩니다.
 
 ```json
 {
@@ -158,7 +159,7 @@ servers:
         staticcheck: false
 ```
 
-### Disable a built-in server
+### 내장 서버 비활성화
 
 ```json
 {
@@ -170,9 +171,9 @@ servers:
 }
 ```
 
-### Register a custom server
+### 사용자 지정 서버 등록
 
-New native-format servers require non-empty `command`, `fileTypes`, and `rootMarkers`. Invalid new definitions are ignored with a warning; invalid overrides retain the previous server definition. An unreadable file or invalid JSON/YAML is ignored; the loader continues with the remaining sources.
+새 네이티브 형식 서버는 비어 있지 않은 `command`, `fileTypes`, `rootMarkers`가 필요합니다. 잘못된 새 정의는 경고와 함께 무시하며, 잘못된 재정의는 이전 서버 정의를 유지합니다. 읽을 수 없는 파일이나 잘못된 JSON/YAML은 무시하고 나머지 출처를 계속 읽습니다.
 
 ```json
 {
@@ -187,9 +188,9 @@ New native-format servers require non-empty `command`, `fileTypes`, and `rootMar
 }
 ```
 
-### Set a global idle timeout
+### 전역 유휴 제한 시간 설정
 
-Shut down language servers that have been inactive for more than five minutes:
+5분 이상 사용하지 않은 언어 서버를 종료합니다.
 
 ```json
 {
@@ -197,9 +198,9 @@ Shut down language servers that have been inactive for more than five minutes:
 }
 ```
 
-### Disable a server for one project, keep it globally
+### 전역 설정을 유지하면서 한 프로젝트에서만 서버 비활성화
 
-Place the override in `<project>/.omp/lsp.json`:
+재정의를 `<project>/.omp/lsp.json`에 넣습니다.
 
 ```json
 {
@@ -211,13 +212,13 @@ Place the override in `<project>/.omp/lsp.json`:
 }
 ```
 
-The user-level config in `~/.omp/agent/lsp.json` is unaffected; pylsp is only suppressed in this project.
+`~/.omp/agent/lsp.json`의 사용자 설정에는 영향이 없습니다. pylsp는 이 프로젝트에서만 비활성화됩니다.
 
-## Built-in server list
+## 내장 서버 목록
 
-The following servers ship in `defaults.json` and are eligible for auto-detection:
+다음 서버는 `defaults.json`에 포함되며 자동 감지 대상입니다.
 
-| Server key                    | Language(s)                   | Binary                            |
+| 서버 키 | 언어 | 실행 파일 |
 | ----------------------------- | ----------------------------- | --------------------------------- |
 | `rust-analyzer`               | Rust                          | `rust-analyzer`                   |
 | `clangd`                      | C, C++, ObjC, CUDA            | `clangd`                          |
@@ -226,8 +227,8 @@ The following servers ship in `defaults.json` and are eligible for auto-detectio
 | `typescript-language-server`  | TypeScript, JavaScript (≤ 6)  | `typescript-language-server`      |
 | `typescript-native`           | TypeScript, JavaScript (7+)   | `tsc --lsp --stdio`               |
 | `denols`                      | TypeScript, JavaScript (Deno) | `deno`                            |
-| `biome`                       | TS/JS/JSON/CSS (linter)       | `biome`                           |
-| `eslint`                      | TS/JS/Vue/Svelte (linter)     | `vscode-eslint-language-server`   |
+| `biome` | TS/JS/JSON/CSS (린터) | `biome` |
+| `eslint` | TS/JS/Vue/Svelte (린터) | `vscode-eslint-language-server` |
 | `vscode-html-language-server` | HTML                          | `vscode-html-language-server`     |
 | `vscode-css-language-server`  | CSS, SCSS, Less               | `vscode-css-language-server`      |
 | `vscode-json-language-server` | JSON                          | `vscode-json-language-server`     |
@@ -239,7 +240,7 @@ The following servers ship in `defaults.json` and are eligible for auto-detectio
 | `basedpyright`                | Python                        | `basedpyright-langserver`         |
 | `pylsp`                       | Python                        | `pylsp`                           |
 | `ty`                          | Python                        | `ty`                              |
-| `ruff`                        | Python (linter)               | `ruff`                            |
+| `ruff` | Python (린터) | `ruff` |
 | `jdtls`                       | Java                          | `jdtls`                           |
 | `kotlin-lsp`                  | Kotlin                        | `kotlin-lsp`                      |
 | `metals`                      | Scala                         | `metals`                          |
@@ -251,7 +252,7 @@ The following servers ship in `defaults.json` and are eligible for auto-detectio
 | `gleam`                       | Gleam                         | `gleam`                           |
 | `solargraph`                  | Ruby                          | `solargraph`                      |
 | `ruby-lsp`                    | Ruby                          | `ruby-lsp`                        |
-| `rubocop`                     | Ruby (linter)                 | `rubocop`                         |
+| `rubocop` | Ruby (린터) | `rubocop` |
 | `bashls`                      | Bash, Zsh                     | `bash-language-server`            |
 | `lua-language-server`         | Lua                           | `lua-language-server`             |
 | `intelephense`                | PHP                           | `intelephense`                    |
@@ -275,4 +276,4 @@ The following servers ship in `defaults.json` and are eligible for auto-detectio
 | `swiftlint`                   | Swift (linter)                | `swiftlint`                       |
 | `tlaplus`                     | TLA+                          | `tlapm_lsp`                       |
 
-Only one TypeScript server is kept per project: when the resolved `tsc` belongs to a TypeScript install without `lib/tsserver.js` (TypeScript 7+), `typescript-native` wins and `typescript-language-server` is dropped, since it cannot drive that install; otherwise `typescript-native` is dropped because older `tsc` rejects `--lsp`.
+프로젝트마다 TypeScript 서버는 하나만 유지합니다. 확인된 `tsc`가 `lib/tsserver.js`가 없는 TypeScript 설치(TypeScript 7+)에 속하면 해당 설치를 구동할 수 없는 `typescript-language-server` 대신 `typescript-native`를 사용합니다. 그 외에는 이전 `tsc`가 `--lsp`를 거부하므로 `typescript-native`를 제외합니다.

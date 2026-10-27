@@ -21,6 +21,7 @@
  * - real child session ids (OOPIFs, workers) — created by Chrome under the
  *   shared root session and passed through verbatim
  */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { createHash } from "node:crypto";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
 import {
@@ -1229,7 +1230,7 @@ export class RelayBridge {
 				}
 				if (!(await this.#ensureAttached(tab))) {
 					const reason = tab.refusal ? `: ${tab.refusal}` : "";
-					this.#replyError(conn, msg, `Cannot attach to tab ${tab.tabKey} (${tab.url})${reason}`);
+					this.#replyError(conn, msg, localize("Cannot attach to tab {0} ({1}){2}", `${tab.tabKey}`, `${tab.url}`, `${reason}`));
 					return;
 				}
 				const sessionId = this.#mintSession(conn, parsed.kind, tab);
@@ -1287,7 +1288,7 @@ export class RelayBridge {
 				if (conn.autoAttach && created && !(await this.#ensureAttached(created)) && created.refusal) {
 					const refusal = created.refusal;
 					await this.#closeTab(createdKey, created.tabId, inst).catch(() => undefined);
-					this.#replyError(conn, msg, `Chrome refused to attach to the new tab: ${refusal}`);
+					this.#replyError(conn, msg, localize("Chrome refused to attach to the new tab: {0}", `${refusal}`));
 					return;
 				}
 				this.#reply(conn, msg, { targetId: pageTargetIdFromKey(createdKey) });
@@ -1477,7 +1478,7 @@ export class RelayBridge {
 		// another extension's frame (a password manager's inline menu) starts loading in the tab: that tab
 		// stays adoptable and is announced again at once; an attach Chrome refuses still bans it (#ensureAttached).
 		const cancelledByUser = reason === "canceled_by_user";
-		if (cancelledByUser) tab.refusal = "the user cancelled Chrome's debugging bar";
+		if (cancelledByUser) tab.refusal = localize("the user cancelled Chrome's debugging bar");
 		// A user cancel releases the tab's omp-group membership; any other detach keeps it.
 		this.#syncTabGrouping(tab);
 		// Relay-private event, ahead of the sessions' detach: a client driving the tab learns that Chrome
@@ -1885,7 +1886,7 @@ export class RelayBridge {
 				const error = err instanceof Error ? err.message : String(err);
 				this.#log("attach failed", { tabKey: tab.tabKey, url: tab.url, error });
 				if (!(err instanceof ExtensionReplacedError) && generation === tab.attachGeneration) {
-					tab.refusal = error || "Chrome refused the attach";
+					tab.refusal = error || localize("Chrome refused the attach");
 				}
 				return false;
 			})

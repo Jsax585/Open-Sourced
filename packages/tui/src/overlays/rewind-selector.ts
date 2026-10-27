@@ -29,6 +29,7 @@
  * surface of the transcript's own blocks with `pick`/`drop` marks in place of
  * the dotted outline (see `describeScreen`).
  */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import {
 	type Component,
@@ -714,7 +715,7 @@ export class RewindSelectorComponent implements Component {
 					page.push(this.#marked(blocks[i]!, picked ? "pick" : undefined));
 			}
 			if (matches.length === 0) {
-				page.push(text([span(`No turns match "${filter}"`, "muted")], { role: "omp.rewind.empty" }));
+				page.push(text([span(localize("No turns match \"{0}\"", `${filter}`), "muted")], { role: "omp.rewind.empty" }));
 			}
 			return page;
 		}
@@ -779,14 +780,14 @@ export class RewindSelectorComponent implements Component {
 		const below = targets.length - picked - 1;
 		const spans = [
 			span(`${theme.icon.rewind} `, "accent"),
-			span(target.isUserTurn ? "Rewind to here" : "Continue from here", "accent strong"),
+			span(target.isUserTurn ? localize("Rewind to here") : localize("Continue from here"), "accent strong"),
 		];
-		if (target.isUserTurn) spans.push(span(`${theme.sep.dot}the prompt returns to the editor`, "dim"));
+		if (target.isUserTurn) spans.push(span(localize("{0}the prompt returns to the editor", `${theme.sep.dot}`), "dim"));
 		spans.push(
 			span(
 				below > 0
-					? `${theme.sep.dot}${below} turn${below === 1 ? "" : "s"} below dropped`
-					: `${theme.sep.dot}nothing below to drop`,
+					? localize("{0}{1} turn{2} below dropped", `${theme.sep.dot}`, `${below}`, `${below === 1 ? "" : "s"}`)
+					: localize("{0}nothing below to drop", `${theme.sep.dot}`),
 				"dim",
 			),
 		);
@@ -832,9 +833,9 @@ export class RewindSelectorComponent implements Component {
 		const memo = `${this.#selected}|${this.#activeVariant}|${this.#siblingSelected}|${this.#truncated}|${columns.length}|${filter ?? "\0"}`;
 		if (this.#bar?.memo === memo && this.#bar.targets === this.#targets) return this.#bar.node;
 
-		const title = text([span(`${theme.icon.rewind} `, "accent"), span("Rewind", "strong")], { wrap: "none" });
+		const title = text([span(`${theme.icon.rewind} `, "accent"), span(localize("Rewind"), "strong")], { wrap: "none" });
 		const upDown = actionHint(["tui.select.up", "tui.select.down"], "step");
-		const rewind = actionButton("Rewind here", "rewind", { keys: "enter", tone: "accent" });
+		const rewind = actionButton(localize("Rewind here"), "rewind", { keys: "enter", tone: "accent" });
 		let children: NativeChild[];
 		if (filter === undefined) {
 			const column = columns[this.#activeVariant - 1];
@@ -845,11 +846,11 @@ export class RewindSelectorComponent implements Component {
 				text([span(`${at + 1}/${of}`, "dim")], { wrap: "none" }),
 				hintsRow([
 					upDown,
-					{ keys: ["left", "right"], label: columns.length > 0 ? "branches" : "user turns" },
-					{ keys: ["f"], label: "filter" },
-					this.#truncated ? { keys: ["a"], label: "earlier turns" } : undefined,
+					{ keys: ["left", "right"], label: columns.length > 0 ? localize("branches") : localize("user turns") },
+					{ keys: ["f"], label: localize("filter") },
+					this.#truncated ? { keys: ["a"], label: localize("earlier turns") } : undefined,
 				]),
-				actionBar([null, actionButton("Cancel", "cancel", { keys: "escape" }), rewind]),
+				actionBar([null, actionButton(localize("Cancel"), "cancel", { keys: "escape" }), rewind]),
 			];
 		} else {
 			const matches = this.#filterMatches();
@@ -860,13 +861,13 @@ export class RewindSelectorComponent implements Component {
 				text(
 					[
 						matches.length === 0
-							? span("no matches", "error")
+							? span(localize("no matches"), "error")
 							: span(`${at >= 0 ? at + 1 : "-"}/${matches.length}`, "dim"),
 					],
 					{ wrap: "none" },
 				),
-				hintsRow([upDown, { keys: ["left", "right"], label: "user turns" }]),
-				actionBar([null, actionButton("Show all", "cancel", { keys: "escape" }), rewind]),
+				hintsRow([upDown, { keys: ["left", "right"], label: localize("user turns") }]),
+				actionBar([null, actionButton(localize("Show all"), "cancel", { keys: "escape" }), rewind]),
 			];
 		}
 		const root = node("row", { role: "omp.rewind.bar", gap: "md", align: "center", wrap: true }, children);
@@ -926,8 +927,8 @@ export class RewindSelectorComponent implements Component {
 		const position = this.#targets.length > 0 ? `${this.#selected + 1}/${this.#targets.length}  ` : "";
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const leftRight = formatKeyHints(["left", "right"]);
-		const lateral = columns.length > 0 ? `${leftRight} branches` : `${leftRight} user turns`;
-		const keys = `${upDown} step  ${lateral}  ${formatKeyHint("f")} filter  ${formatKeyHint("enter")} rewind  ${this.#truncated ? `${formatKeyHint("a")} earlier turns  ` : ""}${expandKeyHint()} expand  ${editorKey("tui.select.cancel")} cancel`;
+		const lateral = columns.length > 0 ? localize("{0} branches", `${leftRight}`) : localize("{0} user turns", `${leftRight}`);
+		const keys = localize("{0} step  {1}  {2} filter  {3} rewind  {4}{5} expand  {6} cancel", `${upDown}`, `${lateral}`, `${formatKeyHint("f")}`, `${formatKeyHint("enter")}`, `${this.#truncated ? localize("{0} earlier turns  ", `${formatKeyHint("a")}`) : ""}`, `${expandKeyHint()}`, `${editorKey("tui.select.cancel")}`);
 		return {
 			header: [this.#header()],
 			body: {
@@ -939,7 +940,7 @@ export class RewindSelectorComponent implements Component {
 	}
 
 	#header(): string {
-		return `${theme.icon.rewind} ${theme.bold("Rewind")}${theme.sep.dot}${theme.fg("dim", "pick the point to continue from")}`;
+		return `${theme.icon.rewind} ${theme.bold(localize("Rewind"))}${theme.sep.dot}${theme.fg("dim", "pick the point to continue from")}`;
 	}
 
 	/** Only the matching items of the current path, concatenated; no branch strip. */
@@ -962,10 +963,10 @@ export class RewindSelectorComponent implements Component {
 		const lines = matches.length > 0 ? composed.lines : [theme.fg("muted", `  No items match "${query}"`)];
 		const count =
 			matches.length === 0
-				? theme.fg("error", "no matches")
+				? theme.fg("error", localize("no matches"))
 				: theme.fg("dim", `${selected >= 0 ? selected + 1 : "-"}/${matches.length}`);
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
-		const keys = `${upDown} step  ${formatKeyHints(["left", "right"])} user turns  ${formatKeyHint("enter")} rewind  ${editorKey("tui.select.cancel")} show all`;
+		const keys = localize("{0} step  {1} user turns  {2} rewind  {3} show all", `${upDown}`, `${formatKeyHints(["left", "right"])}`, `${formatKeyHint("enter")}`, `${editorKey("tui.select.cancel")}`);
 		return {
 			header: [this.#header()],
 			body: {

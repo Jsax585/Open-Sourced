@@ -1,54 +1,54 @@
-# Auth Broker and Auth Gateway
+# 인증 브로커와 인증 게이트웨이
 
-The auth broker centralizes credential storage and OAuth refreshes. The auth gateway lets clients make provider requests without receiving provider credentials. Direct broker clients are trusted: snapshots expose OAuth access tokens and stored API keys, but never the real OAuth refresh token.
+인증 브로커는 자격 증명 저장과 OAuth 갱신을 중앙화합니다. 인증 게이트웨이는 클라이언트가 제공업체 자격 증명을 받지 않고 제공업체에 요청할 수 있게 합니다. 브로커에 직접 연결하는 클라이언트는 신뢰할 수 있어야 합니다. 스냅샷에는 OAuth 액세스 토큰과 저장된 API 키가 노출되지만 실제 OAuth 갱신 토큰은 노출되지 않습니다.
 
-- **`omp auth-broker serve`** holds the canonical SQLite credential vault, performs OAuth refreshes, and exposes snapshot, credential, block, usage, and health APIs under `/v1`.
-- **`omp auth-gateway serve`** is a forward-proxy. It accepts OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, pi-native stream, TypeSafe System One judgment, and OpenAI/OpenRouter-style image, speech, transcription, embedding, rerank, and video requests, resolves the broker-backed credential, and dispatches through `pi-ai` provider logic. Clients (containerised omp, llm-git, the macOS usage widget, …) never see the access token.
-- **`omp auth-gateway stdio`** serves the same routes to its parent process as JSON lines on stdin/stdout, on the CLI's own credentials and model roles; see [stdio](#stdio).
+- **`omp auth-broker serve`**는 기준 SQLite 자격 증명 저장소를 유지하고 OAuth를 갱신하며 `/v1` 아래에서 스냅샷, 자격 증명, 차단, 사용량, 상태 API를 제공합니다.
+- **`omp auth-gateway serve`**는 전달 프록시입니다. OpenAI Chat Completions, Anthropic Messages, OpenAI Responses, pi-native 스트림, TypeSafe System One 판정과 OpenAI/OpenRouter 형식의 이미지, 음성, 전사, 임베딩, 재정렬, 동영상 요청을 받아 브로커 기반 자격 증명을 결정하고 `pi-ai` 제공업체 로직으로 전달합니다. 클라이언트(컨테이너화된 omp, llm-git, macOS 사용량 위젯 등)에는 액세스 토큰이 노출되지 않습니다.
+- **`omp auth-gateway stdio`**는 CLI 자체 자격 증명과 모델 역할을 사용하여 같은 경로를 표준 입력/출력의 JSON 줄로 상위 프로세스에 제공합니다. [stdio](#stdio)를 참고하세요.
 
-Transport security between operator, broker, and gateway is delegated to the operator (Tailscale / Wireguard / reverse proxy + TLS). Every endpoint except `/v1/healthz` (broker) and `/healthz` (gateway) requires a bearer token by default. The gateway also answers CORS `OPTIONS` preflights without authentication; `--no-auth` disables inbound gateway authentication.
+운영자, 브로커, 게이트웨이 간 전송 보안은 운영자 책임입니다(Tailscale / Wireguard / 역방향 프록시 + TLS). 브로커의 `/v1/healthz`와 게이트웨이의 `/healthz`를 제외한 모든 엔드포인트에는 기본적으로 Bearer 토큰이 필요합니다. 게이트웨이는 CORS `OPTIONS` 사전 요청에도 인증 없이 응답합니다. `--no-auth`는 게이트웨이 수신 인증을 끕니다.
 
-Source: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packages/ai/src/auth/`, `packages/coding-agent/src/cli/auth-broker-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-stdio.ts`, `packages/coding-agent/src/session/auth-broker-config.ts`.
+소스: `packages/ai/src/auth-broker/`, `packages/ai/src/auth-gateway/`, `packages/ai/src/auth/`, `packages/coding-agent/src/cli/auth-broker-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-cli.ts`, `packages/coding-agent/src/cli/auth-gateway-stdio.ts`, `packages/coding-agent/src/session/auth-broker-config.ts`.
 
-## Data flow
+## 데이터 흐름
 
 ```
                 ┌────────────────────────────────────────────────────────────┐
-                │ broker host                                                │
+                │ 브로커 호스트                                               │
                 │                                                            │
-  developer ──▶ │  ┌──────────────────────────┐    ┌────────────────────┐    │
-  laptop /      │  │  omp auth-broker serve   │◀──▶│  SQLite agent.db    │    │
-  CI / robomp   │  │  - holds refresh tokens  │    │  (canonical writer)│    │
-                │  │  - background refresher  │    └────────────────────┘    │
+  개발자 ─────▶ │  ┌──────────────────────────┐    ┌────────────────────┐    │
+  노트북 /      │  │  omp auth-broker serve   │◀──▶│  SQLite agent.db    │    │
+  CI / robomp   │  │  - 갱신 토큰 보관       │    │  (기준 기록 주체)  │    │
+                │  │  - 백그라운드 갱신기    │    └────────────────────┘    │
                 │  │  /v1/{snapshot,refresh,…}│                              │
                 │  └─────────┬────────────────┘                              │
-                │            │  bearer ($CONFIG_DIR/auth-broker.token)       │
+                │            │  Bearer ($CONFIG_DIR/auth-broker.token)       │
                 │            ▼                                               │
                 │  ┌──────────────────────────┐                              │
                 │  │  omp auth-gateway serve  │  RemoteAuthCredentialStore   │
-                │  │  /v1/{chat,messages,…}   │  receives snapshot stream,   │
-                │  │  /v1/usage,/v1/models    │  refreshes credentials by id │
-                │  │  /v1/credentials/check   │  via the broker on expiry    │
+                │  │  /v1/{chat,messages,…}   │  스냅샷 스트림 수신,         │
+                │  │  /v1/usage,/v1/models    │  만료 시 브로커를 통해       │
+                │  │  /v1/credentials/check   │  ID별 자격 증명 갱신         │
                 │  └─────────┬────────────────┘                              │
                 └────────────┼───────────────────────────────────────────────┘
-                             │  bearer ($CONFIG_DIR/auth-gateway.token)
+                             │  Bearer ($CONFIG_DIR/auth-gateway.token)
                              ▼
-                  gateway clients
-                  (llm-git, macOS widget, robomp containers, IDE plugins, …)
+                  게이트웨이 클라이언트
+                  (llm-git, macOS 위젯, robomp 컨테이너, IDE 플러그인 등)
                                 │
-                                ▼ provider request with broker-resolved credential
+                                ▼ 브로커가 결정한 자격 증명으로 제공업체 요청
                   api.anthropic.com / api.openai.com / …
 ```
 
-The broker is the only writer of OAuth refresh tokens. Clients (including the gateway itself) load a redacted snapshot in which every `refresh` field has been replaced with `REMOTE_REFRESH_SENTINEL`; when an access token expires the client calls `POST /v1/credential/:id/refresh` and the broker performs the refresh server-side. Credential writes through `RemoteAuthCredentialStore` await broker persistence and update its local snapshot before returning; the broker remains the authoritative writer.
+브로커만 OAuth 갱신 토큰을 기록합니다. 게이트웨이를 포함한 클라이언트는 모든 `refresh` 필드가 `REMOTE_REFRESH_SENTINEL`로 대체된 스냅샷을 로드합니다. 액세스 토큰이 만료되면 클라이언트가 `POST /v1/credential/:id/refresh`를 호출하고 브로커가 서버에서 갱신합니다. `RemoteAuthCredentialStore`를 통한 자격 증명 쓰기는 브로커 저장이 완료될 때까지 기다리고 로컬 스냅샷을 갱신한 뒤 반환합니다. 쓰기의 기준은 계속 브로커입니다.
 
 ## auth-broker
 
 ### CLI
 
 ```
-omp auth-broker serve     [--bind=host:port] [--trust-proxy-headers]  # boot the broker
-omp auth-broker token     [--regenerate] [--json]               # print or rotate the bearer token
+omp auth-broker serve     [--bind=host:port] [--trust-proxy-headers]  # 브로커 시작
+omp auth-broker token     [--regenerate] [--json]               # Bearer 토큰 출력 또는 교체
 omp auth-broker login     [<provider>] [--via=user@host] [--dry-run]
 omp auth-broker logout    [<provider>]
 omp auth-broker list      [--json]
@@ -57,93 +57,75 @@ omp auth-broker migrate   --from-local [--include-oauth] [--include-env] [--dry-
 omp auth-broker status    [--json]
 ```
 
-- `serve` opens the local SQLite store at `getAgentDbPath()` and binds an HTTP listener (default `127.0.0.1:8765`). On startup a token is ensured at `<config-dir>/auth-broker.token` (mode `0600`, newly created parent directory `0700`). The background refresher runs immediately and then every `refreshIntervalMs` (default 60 s), targeting OAuth credentials whose expiry is within `refreshSkewMs` (default 5 min).
-- Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer, and paths outside the broker's routes are logged as `<unrouted>`.
-- `token` prints the stored bearer or generates a new one. `--regenerate` replaces the token file; restart a running broker to load the replacement into its in-memory allow-list.
-- `login [<provider>]` runs the registered sign-in flow locally (OAuth or a provider's API-key login). With no provider it shows an interactive numbered picker. With `--via=user@host` it runs `ssh -L <callback-port>:127.0.0.1:<callback-port> -o ExitOnForwardFailure=yes user@host omp auth-broker login <provider>`; the credential is written on the remote host (`--via` requires `<provider>`, and `--dry-run` applies only to this remote path). Ports are derived from the auth registry: `anthropic:54545`, `openai-codex:1455`, `google-gemini-cli:8085`, `google-antigravity:51121`, `gitlab-duo:8080`, `devin:59653`, `openrouter:54549`, `stencil:54547`. `gitlab-duo-agent` and `zai-coding-plan` use non-loopback/manual callbacks rather than the old `8080`/`9999` listeners; run those flows on the host directly. Login is driven in-process through `AuthStorage.oauth.login()`.
-- `logout [<provider>]` disables the provider's active rows with cause `logged out by user`; disabled tombstones remain available through the broker API. With no argument it shows an interactive numbered picker of stored providers.
-- `list` enumerates the sign-in providers returned by `getOAuthProviders()` (visible built-ins plus `registerOAuthProvider` custom providers), not the stored accounts. `--json` emits an array of `{ id, name }`.
-- `import <file|dir>` imports CLIProxyAPI-style JSON credentials into the local SQLite store. Maps `type` field → omp provider (`claude → anthropic`, `codex → openai-codex`, `gemini → google-gemini-cli`, `antigravity → google-antigravity`, `gemini-cli → google-gemini-cli`).
-- `migrate --from-local` uploads local SQLite credentials to the configured broker (`POST /v1/credential`). Local API keys are included by default; local OAuth rows are skipped unless `--include-oauth` is set; environment-derived API keys are skipped unless `--include-env` is set. Re-runs are idempotent against the broker snapshot.
-- `status` health-pings the configured remote broker.
+- `serve`는 `getAgentDbPath()`의 로컬 SQLite 저장소를 열고 HTTP 리스너에 바인딩합니다(기본값 `127.0.0.1:8765`). 시작할 때 `<config-dir>/auth-broker.token`에 토큰을 준비합니다(모드 `0600`, 새 상위 디렉터리 `0700`). 백그라운드 갱신기는 즉시 실행되고 이후 `refreshIntervalMs`마다 실행되며(기본 60초), 만료까지 `refreshSkewMs` 이내인 OAuth 자격 증명을 대상으로 합니다(기본 5분).
+- 요청 로그는 소켓 상대 주소에 귀속됩니다. 신뢰할 수 있는 역방향 프록시 뒤에서는 `--trust-proxy-headers`를 전달해 인증된 요청에 `X-Forwarded-For` / `X-Real-IP`를 사용하세요. 미인증 요청은 항상 소켓 상대 주소로 기록하고 브로커 경로 밖의 경로는 `<unrouted>`로 기록합니다.
+- `token`은 저장된 Bearer 토큰을 출력하거나 새 토큰을 생성합니다. `--regenerate`는 토큰 파일을 교체합니다. 실행 중인 브로커는 재시작해야 새 토큰을 메모리 허용 목록에 로드합니다.
+- `login [<provider>]`은 등록된 로그인 흐름(OAuth 또는 제공업체 API 키 로그인)을 로컬에서 실행합니다. 제공업체를 생략하면 대화형 번호 선택기를 표시합니다. `--via=user@host`를 사용하면 `ssh -L <callback-port>:127.0.0.1:<callback-port> -o ExitOnForwardFailure=yes user@host omp auth-broker login <provider>`를 실행하며 자격 증명은 원격 호스트에 기록합니다(`--via`에는 `<provider>`가 필요하고 `--dry-run`은 이 원격 경로에만 적용). 포트는 인증 레지스트리에서 가져옵니다: `anthropic:54545`, `openai-codex:1455`, `google-gemini-cli:8085`, `google-antigravity:51121`, `gitlab-duo:8080`, `devin:59653`, `openrouter:54549`, `stencil:54547`. `gitlab-duo-agent`와 `zai-coding-plan`은 이전 `8080`/`9999` 리스너 대신 비루프백/수동 콜백을 사용하므로 호스트에서 직접 실행하세요. 로그인은 프로세스 내 `AuthStorage.oauth.login()`으로 진행합니다.
+- `logout [<provider>]`은 원인 `logged out by user`와 함께 제공업체의 활성 행을 비활성화합니다. 비활성화된 삭제 표식은 브로커 API에서 계속 조회할 수 있습니다. 인수를 생략하면 저장된 제공업체의 대화형 번호 선택기를 표시합니다.
+- `list`는 저장된 계정이 아니라 `getOAuthProviders()`가 반환하는 로그인 제공업체(표시되는 내장 제공업체와 `registerOAuthProvider` 사용자 지정 제공업체)를 나열합니다. `--json`은 `{ id, name }` 배열을 출력합니다.
+- `import <file|dir>`는 CLIProxyAPI 형식 JSON 자격 증명을 로컬 SQLite 저장소로 가져옵니다. `type` 필드를 omp 제공업체에 매핑합니다(`claude → anthropic`, `codex → openai-codex`, `gemini → google-gemini-cli`, `antigravity → google-antigravity`, `gemini-cli → google-gemini-cli`).
+- `migrate --from-local`은 로컬 SQLite 자격 증명을 설정된 브로커에 업로드합니다(`POST /v1/credential`). 로컬 API 키는 기본 포함하고, 로컬 OAuth 행은 `--include-oauth`가 없으면 건너뛰며 환경에서 얻은 API 키는 `--include-env`가 없으면 건너뜁니다. 재실행은 브로커 스냅샷을 기준으로 멱등적입니다.
+- `status`는 설정된 원격 브로커의 상태를 확인합니다.
 
-### Endpoints
+### 엔드포인트
 
-| Method   | Path                         | Auth   | Purpose                                                            |
-| -------- | ---------------------------- | ------ | ------------------------------------------------------------------ |
-| `GET`    | `/v1/healthz`                | none   | Liveness + version                                                 |
-| `GET`    | `/v1/snapshot`               | bearer | Redacted snapshot (refresh tokens replaced by sentinel)            |
-| `GET`    | `/v1/snapshot/stream`        | bearer | SSE snapshot stream with delta events and keepalives               |
-| `POST`   | `/v1/credential`             | bearer | Upsert one OAuth or API-key credential                             |
-| `POST`   | `/v1/credential/:id/refresh` | bearer | Force-refresh one OAuth credential                                 |
-| `POST`   | `/v1/credential/:id/disable` | bearer | Disable one credential with a recorded cause                       |
-| `GET`    | `/v1/credentials/disabled`   | bearer | List disabled credentials; optional `provider` query filter        |
-| `POST`   | `/v1/credential/:id/block`   | bearer | Upsert a provider/scope rate-limit block                           |
-| `DELETE` | `/v1/credential/:id/block`   | bearer | Delete one block named by body `providerKey` and `blockScope`       |
-| `DELETE` | `/v1/credential/:id/blocks`  | bearer | Delete all rate-limit blocks for a credential                      |
-| `GET`    | `/v1/usage`                  | bearer | Aggregate current `UsageReport[]` across credentials               |
-| `GET`    | `/v1/usage/history`          | bearer | Persisted usage history; optional `sinceMs` and `provider` filters |
-| `POST`   | `/v1/usage/observed`         | bearer | Record usage observed by a broker client                           |
-| `GET`    | `/v1/usage/clients`          | bearer | Summarize client-observed usage since optional `sinceMs`           |
-| `POST`   | `/v1/usage/stale`            | bearer | Invalidate the broker's usage cache; optional `provider` scope     |
+| 메서드 | 경로 | 인증 | 용도 |
+| --- | --- | --- | --- |
+| `GET` | `/v1/healthz` | 없음 | 생존 상태와 버전 |
+| `GET` | `/v1/snapshot` | Bearer | 갱신 토큰을 센티널로 대체한 스냅샷 |
+| `GET` | `/v1/snapshot/stream` | Bearer | 변경 이벤트와 연결 유지 메시지가 있는 SSE 스냅샷 스트림 |
+| `POST` | `/v1/credential` | Bearer | OAuth 또는 API 키 자격 증명 하나 추가/갱신 |
+| `POST` | `/v1/credential/:id/refresh` | Bearer | OAuth 자격 증명 하나 강제 갱신 |
+| `POST` | `/v1/credential/:id/disable` | Bearer | 원인을 기록하고 자격 증명 하나 비활성화 |
+| `GET` | `/v1/credentials/disabled` | Bearer | 비활성 자격 증명 목록, 선택적 `provider` 쿼리 필터 |
+| `POST` | `/v1/credential/:id/block` | Bearer | 제공업체/범위별 속도 제한 차단 추가/갱신 |
+| `DELETE` | `/v1/credential/:id/block` | Bearer | 본문의 `providerKey`와 `blockScope`가 지정한 차단 삭제 |
+| `DELETE` | `/v1/credential/:id/blocks` | Bearer | 자격 증명의 모든 속도 제한 차단 삭제 |
+| `GET` | `/v1/usage` | Bearer | 자격 증명 전체의 현재 `UsageReport[]` 집계 |
+| `GET` | `/v1/usage/history` | Bearer | 저장된 사용량 기록, 선택적 `sinceMs` 및 `provider` 필터 |
+| `POST` | `/v1/usage/observed` | Bearer | 브로커 클라이언트가 관측한 사용량 기록 |
+| `GET` | `/v1/usage/clients` | Bearer | 선택적 `sinceMs` 이후 클라이언트 관측 사용량 요약 |
+| `POST` | `/v1/usage/stale` | Bearer | 브로커 사용량 캐시 무효화, 선택적 `provider` 범위 |
 
-Requests use `Authorization: Bearer <token>`. The server compares against an in-memory token allow-list; the gateway’s implementation uses a timing-safe comparison.
+요청은 `Authorization: Bearer <token>`을 사용합니다. 서버는 메모리 내 토큰 허용 목록과 비교하며 게이트웨이 구현은 타이밍 안전 비교를 사용합니다.
 
-A snapshot contains `generation`, `generatedAt`, `serverNowMs`, `refresher`
-(`enabled`, `intervalMs`, `skewMs`, `nextSweepInMs`), and `credentials`.
-Each credential carries its id/provider/redacted credential/`identityKey`,
-`rotatesInMs`, and optional rate-limit `blocks`.
+스냅샷은 `generation`, `generatedAt`, `serverNowMs`, `refresher`(`enabled`, `intervalMs`, `skewMs`, `nextSweepInMs`), `credentials`를 포함합니다.
+각 자격 증명은 ID/제공업체/민감 정보가 제거된 자격 증명/`identityKey`, `rotatesInMs`, 선택적 속도 제한 `blocks`를 포함합니다.
 
-The SSE stream starts with a full `snapshot` event, followed by changed `entry`
-and deleted/disabled `removed` events. The SSE event name also appears as JSON
-`kind`; deltas carry `generation`, `serverNowMs`, and `refresher`, plus `entry`
-or the removed `id`. Keepalives are SSE comments, not JSON events.
+SSE 스트림은 전체 `snapshot` 이벤트로 시작하며 이후 변경된 `entry`와 삭제/비활성화된 `removed` 이벤트를 전송합니다. SSE 이벤트 이름은 JSON `kind`에도 나타납니다. 변경 데이터는 `generation`, `serverNowMs`, `refresher`와 함께 `entry` 또는 제거된 `id`를 포함합니다. 연결 유지 메시지는 JSON 이벤트가 아닌 SSE 주석입니다.
 
-Direct `POST /v1/credential/:id/refresh` forces a refresh. The
-`?reason=auth-recovery` form may reuse a still-usable token that the broker
-minted within the preceding five minutes, preventing repeated remints during
-an upstream outage.
+직접 `POST /v1/credential/:id/refresh`를 호출하면 강제로 갱신합니다. `?reason=auth-recovery` 형식은 업스트림 장애 중 반복 발급을 막기 위해 브로커가 지난 5분 이내에 발급한, 아직 사용 가능한 토큰을 재사용할 수 있습니다.
 
-#### Conditional snapshot long polling
+#### 조건부 스냅샷 롱 폴링
 
-`GET /v1/snapshot?wait=<ms>` supports generation-based conditional polling.
-Send the generation from a previous response in `If-None-Match`. The broker
-accepts a non-negative integer generation as a bare tag, a quoted tag such as
-`"42"`, or a weak quoted tag such as `W/"42"`.
+`GET /v1/snapshot?wait=<ms>`는 세대 기반 조건부 폴링을 지원합니다.
+이전 응답의 세대를 `If-None-Match`로 보내세요. 브로커는 음수가 아닌 정수 세대를 단독 태그, `"42"` 같은 따옴표 태그, `W/"42"` 같은 약한 따옴표 태그로 받습니다.
 
-`wait` is parsed as a number, truncated to whole milliseconds, and clamped to
-the range 0–30,000 ms; an absent or non-numeric value behaves as `0`. The
-response state machine is:
+`wait`는 숫자로 해석하여 밀리초 정수로 자르고 0~30,000ms 범위로 제한합니다. 없거나 숫자가 아니면 `0`으로 처리합니다. 응답 상태 전이는 다음과 같습니다.
 
-- If the tag is absent/invalid, differs from the current generation, or
-  `wait <= 0`, return the current redacted snapshot immediately with `200`.
-- If the tag matches and `wait > 0`, wait for the generation to change. Return
-  the new snapshot with `200` when it changes, an empty `304` when the wait
-  expires unchanged, or an empty `499` when the caller disconnects.
+- 태그가 없거나 잘못되었거나 현재 세대와 다르거나 `wait <= 0`이면 현재 민감 정보 제거 스냅샷을 `200`으로 즉시 반환합니다.
+- 태그가 일치하고 `wait > 0`이면 세대가 바뀔 때까지 기다립니다. 변경되면 새 스냅샷을 `200`으로, 변경 없이 시간이 초과되면 빈 `304`를, 호출자가 연결을 끊으면 빈 `499`를 반환합니다.
 
-Every `200`, `304`, and `499` snapshot response carries a quoted generation
-`ETag`, plus `Cache-Control: no-store` and
-`Vary: OMP-Auth-Broker-Capabilities`. A disconnect response uses the generation
-captured before waiting.
+모든 `200`, `304`, `499` 스냅샷 응답에는 따옴표로 감싼 세대 `ETag`, `Cache-Control: no-store`, `Vary: OMP-Auth-Broker-Capabilities`가 포함됩니다. 연결 종료 응답은 대기 전에 캡처한 세대를 사용합니다.
 
-### Codex block-scope compatibility
+### Codex 차단 범위 호환성
 
-Clients that understand per-meter Codex blocks send `OMP-Auth-Broker-Capabilities: codex-meter-block-scopes`. Snapshot responses then carry the canonical `chat` and `spark` scopes. Without that capability, the broker projects those rows to the legacy `shared` scope on the wire.
+계량 단위별 Codex 차단을 이해하는 클라이언트는 `OMP-Auth-Broker-Capabilities: codex-meter-block-scopes`를 보냅니다. 이 경우 스냅샷 응답은 기준 범위 `chat`과 `spark`를 포함합니다. 이 기능을 알리지 않으면 브로커는 전송 시 해당 행을 이전 `shared` 범위로 투영합니다.
 
-Local SQLite schema 8 keeps `chat` and `spark` as the canonical scopes exposed by current store APIs. It also maintains a physical `shared` compatibility mirror for pre-meter binaries that read `agent.db` directly. SQLite triggers derive that mirror's deadline and update time independently from the meter rows, and copy a legacy process's `shared` writes back to both meters. Current store APIs omit the physical mirror, so broker snapshots and model selection do not double-count it.
+로컬 SQLite 스키마 8은 현재 저장소 API가 노출하는 기준 범위로 `chat`과 `spark`를 유지합니다. 또한 `agent.db`를 직접 읽는 계량 단위 도입 전 바이너리를 위해 물리적인 `shared` 호환 미러를 유지합니다. SQLite 트리거는 계량 행에서 미러의 기한과 갱신 시간을 각각 계산하고, 이전 프로세스의 `shared` 쓰기를 두 계량 단위로 복사합니다. 현재 저장소 API는 물리적 미러를 생략하므로 브로커 스냅샷과 모델 선택에서 중복 계산하지 않습니다.
 
-Clients released before this capability, including 17.1.4, receive the conservative `shared` projection until they are upgraded. Those clients are indistinguishable on the existing wire, so mixed-version deployments favor keeping a rate-limited credential blocked over allowing repeated provider requests and 429 responses.
+17.1.4를 포함해 이 기능 이전에 출시된 클라이언트는 업그레이드할 때까지 보수적인 `shared` 투영을 받습니다. 기존 프로토콜에서는 이 클라이언트들을 구별할 수 없으므로 혼합 버전 배포에서는 반복 제공업체 요청과 429 응답을 허용하기보다 속도 제한된 자격 증명을 계속 차단하는 쪽을 택합니다.
 
-Capability-dependent responses include `Vary: OMP-Auth-Broker-Capabilities` so intermediaries do not reuse one representation for another client. The encrypted client snapshot cache also uses a new format version: older cache files are ignored and fetched again, preventing legacy and meter-scoped representations from being mixed across client versions.
+기능에 따라 달라지는 응답은 `Vary: OMP-Auth-Broker-Capabilities`를 포함해 중간 계층이 다른 클라이언트에 같은 표현을 재사용하지 못하게 합니다. 암호화된 클라이언트 스냅샷 캐시도 새 형식 버전을 사용합니다. 이전 캐시 파일은 무시하고 다시 가져와 클라이언트 버전 간 이전 표현과 계량 범위 표현이 섞이지 않도록 합니다.
 
-### Background refresher
+### 백그라운드 갱신기
 
-`AuthBrokerRefresher` reloads active credentials before each sweep and does not overlap sweeps. Manual and background refreshes share the per-credential single-flight in `OAuthRefresher`; SQLite refresh leases also coordinate writers across processes.
+`AuthBrokerRefresher`는 매 순회 전에 활성 자격 증명을 다시 로드하며 순회를 겹쳐 실행하지 않습니다. 수동/백그라운드 갱신은 `OAuthRefresher`의 자격 증명별 단일 실행을 공유합니다. SQLite 갱신 임대도 프로세스 간 쓰기를 조정합니다.
 
-- **Definitive failures**, as classified by `isDefinitiveOAuthFailure()`, disable only the credential version that failed. Compare-and-set persistence protects a credential rotated by a concurrent login/refresh; the refresher logs the result rather than disabling the row again.
-- **Transient failures** (for example network timeouts) leave the credential in place for the next sweep.
+- `isDefinitiveOAuthFailure()`가 분류한 **확정적 실패**는 실패한 자격 증명 버전만 비활성화합니다. 비교 후 저장 방식이 동시 로그인/갱신으로 교체된 자격 증명을 보호하며, 갱신기는 해당 행을 다시 비활성화하지 않고 결과를 기록합니다.
+- 네트워크 시간 초과 같은 **일시적 실패**는 자격 증명을 그대로 두고 다음 순회에서 다시 시도합니다.
 
-The CLI broker refresh hook also handles managed `mcp_oauth:*` credentials using their stored MCP token endpoint/client metadata; it does not need to load the MCP manager.
+CLI 브로커 갱신 훅은 저장된 MCP 토큰 엔드포인트/클라이언트 메타데이터를 사용해 관리형 `mcp_oauth:*` 자격 증명도 처리하며 MCP 관리자를 로드할 필요가 없습니다.
 
 ## auth-gateway
 
@@ -157,14 +139,14 @@ omp auth-gateway status  [--json]
 omp auth-gateway check   [--strict] [--json]
 ```
 
-- `serve` requires `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in `config.yml`) — the gateway is itself a broker client. It fetches a live snapshot, wraps it in `RemoteAuthCredentialStore`, and constructs `AuthStorage` with the configured account pool and account policies. Unlike normal client discovery, gateway startup does not use the encrypted snapshot cache. Default bind is `127.0.0.1:4000`. The gateway token is stored at `<config-dir>/auth-gateway.token` (`0600`); `--no-auth` disables the bearer check entirely. Use that flag only on trusted loopback listeners; it does not enforce a loopback bind.
-- Logs attribute requests to the socket peer address. Behind a trusted reverse proxy, pass `--trust-proxy-headers` to use `X-Forwarded-For` / `X-Real-IP` for authenticated requests; unauthorized requests are always logged with the socket peer. An authenticated request that also carries the gateway token, or its own client token, in its URL or in a forwarded, logged, or identity header is rejected with `400` before any credential lookup. Each `auth-gateway request` log line carries the broker `credentialId` the request started on, and `client` for a [client token](#client-tokens).
-- `token` manages the token file; `--regenerate` requires a running gateway to restart before accepting the replacement. `status` checks the local token file and an authenticated broker snapshot; it does not probe the gateway listener.
-- `check` constructs its own broker-backed store and probes the credentials the gateway would use, without calling a running gateway. Without `--strict` it uses provider usage probes. `--strict` additionally tries suitable bundled chat models and can consume quota; providers with no suitable candidate (including pi-native forwarding, Bedrock, Vertex, and Cursor transports) cannot be completion-probed.
+- `serve`에는 `OMP_AUTH_BROKER_URL`(또는 `config.yml`의 `auth.broker.url`)이 필요합니다. 게이트웨이 자체가 브로커 클라이언트입니다. 실시간 스냅샷을 `RemoteAuthCredentialStore`로 감싸고 계정 풀/정책으로 `AuthStorage`를 구성합니다. 일반 클라이언트와 달리 시작 시 암호화된 스냅샷 캐시를 사용하지 않습니다. 기본 바인딩은 `127.0.0.1:4000`, 토큰 파일은 `<config-dir>/auth-gateway.token`(`0600`)입니다. `--no-auth`는 Bearer 검사를 완전히 끕니다. 신뢰할 수 있는 루프백 리스너에서만 사용하세요. 루프백 바인딩을 강제하지는 않습니다.
+- 요청 로그는 소켓 상대 주소에 귀속됩니다. 신뢰할 수 있는 역방향 프록시 뒤에서는 `--trust-proxy-headers`로 인증된 요청에 `X-Forwarded-For` / `X-Real-IP`를 사용하세요. 미인증 요청은 항상 소켓 상대 주소로 기록합니다. 인증된 요청이 URL 또는 전달/기록/식별 헤더에도 게이트웨이 토큰이나 자체 클라이언트 토큰을 포함하면 자격 증명 조회 전에 `400`으로 거부합니다. 각 `auth-gateway request` 로그에는 요청 시작 시 브로커 `credentialId`와 [클라이언트 토큰](#클라이언트-토큰)의 `client`가 기록됩니다.
+- `token`은 토큰 파일을 관리합니다. `--regenerate`로 교체한 토큰을 받으려면 실행 중인 게이트웨이를 재시작해야 합니다. `status`는 로컬 토큰 파일과 인증된 브로커 스냅샷을 확인하며 게이트웨이 리스너는 검사하지 않습니다.
+- `check`는 실행 중인 게이트웨이를 호출하지 않고 자체 브로커 기반 저장소로 게이트웨이가 사용할 자격 증명을 검사합니다. `--strict`가 없으면 제공업체 사용량 검사를 사용합니다. `--strict`는 적합한 번들 채팅 모델도 시도하므로 할당량을 사용할 수 있습니다. pi-native 전달, Bedrock, Vertex, Cursor 전송 등 적합한 후보가 없는 제공업체는 완성 요청으로 검사할 수 없습니다.
 
-### Client tokens
+### 클라이언트 토큰
 
-`serve --clients=<file>` admits bearers besides the gateway token, each limited by the gateway itself. The file maps each client name to its token digest and limits:
+`serve --clients=<file>`은 게이트웨이 토큰 외에 게이트웨이 자체에서 제한하는 Bearer 토큰을 허용합니다. 파일은 각 클라이언트 이름을 토큰 다이제스트와 제한에 매핑합니다.
 
 ```json
 {
@@ -179,17 +161,17 @@ omp auth-gateway check   [--strict] [--json]
 }
 ```
 
-- `tokenSha256` is the hex SHA-256 of the token the client sends as `Authorization: Bearer <token>` (`printf %s "$TOKEN" | shasum -a 256`); the file never holds a raw token. A digest shared by two clients, or equal to the gateway token's, is rejected.
-- `models` lists exact `provider/id` grants or `provider/*`. Absent allows every served model; `[]` allows none. A model outside the list answers `404 Unknown model` before any credential lookup, and `GET /v1/models` lists only granted models. A bare id resolves to the first served model of that id the client may call; a provider-qualified id is never reread as another provider's bare id.
-- `accounts` maps a provider to the OAuth identity keys (the `identityKey` values of [account pools](#client-account-pools-routing-not-authorization), which `omp usage accounts` lists) its requests to that provider may use. Selection, refresh, usage-limit blocking and auth-recovery rotation stay inside the list, stored, runtime and environment API keys are never used, and a request fails rather than borrow another account. An empty list allows no account. When `accounts` is present it is also a provider allow-list: a provider it omits is refused like a model outside `models`, so a binding cannot be sidestepped through another provider. A `models` grant for a provider `accounts` omits rejects the file, as does a provider id with surrounding whitespace. Without `accounts`, every provider resolves credentials as for the gateway token.
-- A client's conversations share one account pin per listed provider: with several accounts listed, the client's traffic stays on one of them until usage-limit blocking or auth recovery moves it, rather than spreading conversations across them. They never share retained provider state (learned fallbacks, Codex transport sessions) with another client's or with gateway-token traffic.
-- `/v1/usage` and `/v1/credentials/check` cover every account the gateway holds, so client tokens get `403` there.
-- The gateway token stays valid and unscoped. `--clients` cannot be combined with `--no-auth`.
-- An unknown field or malformed entry rejects the whole file; `serve` fails to start on it. While serving, the file is re-read every 10 s: a removed or changed token is refused from its next request, while a request already in flight finishes, retries included, on the model and accounts it was admitted with. A changed entry starts a new account pin. A file that cannot be read or parsed refuses every client token until it is fixed, and every client starts a new account pin once it is; replace the file atomically (write a temporary file, then rename it over the original) so a reload never reads it half-written.
+- `tokenSha256`은 클라이언트가 `Authorization: Bearer <token>`으로 보내는 토큰의 16진수 SHA-256입니다(`printf %s "$TOKEN" | shasum -a 256`). 파일에는 원본 토큰을 저장하지 않습니다. 두 클라이언트가 공유하거나 게이트웨이 토큰과 같은 다이제스트는 거부합니다.
+- `models`는 정확한 `provider/id` 허용 항목이나 `provider/*`를 나열합니다. 생략하면 제공되는 모든 모델을 허용하고 `[]`이면 아무것도 허용하지 않습니다. 목록 밖 모델은 자격 증명 조회 전에 `404 Unknown model`로 응답하며 `GET /v1/models`는 허용된 모델만 표시합니다. 단독 ID는 클라이언트가 호출할 수 있는 같은 ID의 첫 제공 모델로 해석합니다. 제공업체가 붙은 ID를 다른 제공업체의 단독 ID로 다시 해석하지 않습니다.
+- `accounts`는 제공업체별 요청에 사용할 수 있는 OAuth 식별 키([계정 풀](#클라이언트-계정-풀)의 `identityKey`, `omp usage accounts`로 조회)를 매핑합니다. 선택, 갱신, 사용량 제한 차단, 인증 복구 교체는 목록 안에서만 수행합니다. 저장된/런타임/환경 API 키는 사용하지 않으며 다른 계정을 빌리는 대신 요청이 실패합니다. 빈 목록은 계정을 허용하지 않습니다. `accounts`가 있으면 제공업체 허용 목록 역할도 합니다. 빠진 제공업체는 `models` 밖 모델처럼 거부하므로 다른 제공업체로 우회할 수 없습니다. `accounts`에 없는 제공업체를 `models`에서 허용하거나 제공업체 ID 앞뒤에 공백이 있으면 파일을 거부합니다. `accounts`가 없으면 모든 제공업체에서 게이트웨이 토큰과 같은 방식으로 자격 증명을 결정합니다.
+- 클라이언트의 모든 대화는 나열된 제공업체마다 계정 고정 하나를 공유합니다. 여러 계정이 있어도 대화를 분산하지 않고 사용량 제한 차단이나 인증 복구로 이동할 때까지 같은 계정에 트래픽을 유지합니다. 학습한 대체 경로나 Codex 전송 세션 같은 제공업체 상태는 다른 클라이언트나 게이트웨이 토큰 트래픽과 공유하지 않습니다.
+- `/v1/usage`와 `/v1/credentials/check`는 게이트웨이의 모든 계정을 다루므로 클라이언트 토큰에는 `403`을 반환합니다.
+- 게이트웨이 토큰은 제한 없이 계속 유효합니다. `--clients`와 `--no-auth`는 함께 사용할 수 없습니다.
+- 알 수 없는 필드나 잘못된 항목이 있으면 파일 전체를 거부하고 `serve`가 시작되지 않습니다. 실행 중에는 10초마다 다시 읽습니다. 삭제/변경된 토큰은 다음 요청부터 거부하지만 진행 중인 요청은 승인 당시 모델과 계정으로 재시도를 포함해 완료합니다. 항목이 바뀌면 새 계정 고정을 시작합니다. 파일을 읽거나 파싱할 수 없으면 수정될 때까지 모든 클라이언트 토큰을 거부하며 수정 후 모두 새 계정 고정을 시작합니다. 일부만 기록된 파일을 읽지 않도록 임시 파일을 쓴 뒤 원본으로 이름을 바꾸는 원자적 교체를 사용하세요.
 
 ### stdio
 
-`omp auth-gateway stdio` is the gateway for one trusted parent process (an editor, a terminal's git UI, a script): no listener, no token, no broker requirement. It uses the credentials, models (`models.yml` and extension providers included) and settings any other `omp` command would: the broker when one is configured, else the local store. Requests and responses are JSON lines:
+`omp auth-gateway stdio`는 신뢰할 수 있는 상위 프로세스 하나(편집기, 터미널의 git UI, 스크립트)를 위한 게이트웨이입니다. 리스너, 토큰, 브로커가 필요하지 않습니다. 다른 `omp` 명령과 같은 자격 증명, 모델(`models.yml`과 확장 제공업체 포함), 설정을 사용하며 브로커가 설정되어 있으면 브로커를, 아니면 로컬 저장소를 사용합니다. 요청과 응답은 JSON 줄입니다.
 
 ```
 → {"id": 1, "path": "/v1/chat/completions", "body": {"model": "@commit,@smol", "messages": [...]}}
@@ -197,87 +179,89 @@ omp auth-gateway check   [--strict] [--json]
 ← {"id": 1, "status": 200, "body": {"object": "chat.completion", "choices": [...]}}
 ```
 
-- The first output line is `{"ready": true, "version": …}`. `method` defaults to `POST` when the request has a `body`, else `GET`; every route in [Endpoints](#endpoints-1) except `/healthz` is served.
-- Requests run concurrently and answer in completion order; `id` (string or number) matches them up. A line that is not a request answers `400` with its `id` when it had one.
-- A JSON response body is embedded as JSON; a text body (the SSE of a `stream: true` request) as one string once the stream ends; anything else (audio, video) as base64 with `"encoding": "base64"`.
-- `model` takes any `--model` selector: `provider/id`, a fuzzy name, a role (`@smol`), or a comma list whose first entry that resolves wins. An attempt that fails with a status above `400` (other than `499`) moves on along that model's `retry.fallbackChains`, the role's chain when the entry named a role; the response's `model` names the model that answered.
-- The process serves until stdin ends, answers what is in flight, and exits.
+- 첫 출력 줄은 `{"ready": true, "version": …}`입니다. 요청에 `body`가 있으면 `method` 기본값은 `POST`, 없으면 `GET`입니다. [엔드포인트](#엔드포인트-1)의 `/healthz`를 제외한 모든 경로를 제공합니다.
+- 요청은 동시에 실행되며 완료 순서로 응답합니다. 문자열 또는 숫자 `id`로 대응시킵니다. 요청이 아닌 줄에는 원래 `id`가 있으면 이를 포함해 `400`으로 응답합니다.
+- JSON 본문은 JSON으로 포함합니다. 텍스트 본문(`stream: true` 요청의 SSE)은 스트림 종료 후 문자열 하나로, 오디오/동영상 등은 `"encoding": "base64"`와 함께 base64로 제공합니다.
+- `model`은 모든 `--model` 선택기를 받습니다. `provider/id`, 퍼지 이름, 역할(`@smol`), 처음 해석되는 항목을 사용하는 쉼표 목록을 지원합니다. 시도가 `400` 초과 상태(`499` 제외)로 실패하면 모델의 `retry.fallbackChains`를 따르며 역할 항목이면 역할의 체인을 사용합니다. 응답의 `model`은 실제 응답한 모델입니다.
+- 표준 입력이 끝날 때까지 요청을 처리하고 진행 중인 요청에 응답한 뒤 종료합니다.
 
-### Endpoints
+### 엔드포인트
 
-| Method | Path                    | Auth   | Purpose                                                      |
-| ------ | ----------------------- | ------ | ------------------------------------------------------------ |
-| `GET`  | `/healthz`              | none   | Liveness + version                                           |
-| `GET`  | `/v1/usage`             | bearer | Aggregate `UsageReport[]` (proxied through `AuthStorage`)    |
-| `GET`  | `/v1/models`            | bearer | Registry catalog filtered to providers with credentials |
-| `GET`  | `/v1/credentials/check` | bearer | Per-credential auth health probe                             |
-| `POST` | `/v1/chat/completions`  | bearer | OpenAI Chat Completions wire format                          |
-| `POST` | `/v1/messages`          | bearer | Anthropic Messages wire format                               |
-| `POST` | `/v1/responses`         | bearer | OpenAI Responses wire format                                 |
-| `POST` | `/v1/pi/stream`         | bearer | Native `pi-ai` stream wire format                            |
-| `POST` | `/v1/systemone`         | bearer | TypeSafe System One judgments (`judge` models, e.g. `typesafe/jev-latest`); `/alpha/decisions` is the OpenRouter Decisions alias |
-| `POST` | `/v1/images/generations` | bearer | Image generation, OpenAI Images JSON wire; `/v1/images` is the OpenRouter alias (`image` models) |
-| `POST` | `/v1/images/edits`      | bearer | Image edits: OpenAI multipart or OpenRouter JSON input images |
-| `POST` | `/v1/audio/speech`      | bearer | Text-to-speech, OpenAI/OpenRouter JSON wire; answers raw audio bytes (`tts` models: `xai-tts`, `openai-speech`) |
-| `POST` | `/v1/audio/transcriptions` | bearer | Speech-to-text, OpenAI multipart `file` or OpenRouter JSON `input_audio` base64 (`stt` models on `openai-transcriptions`; 25 MiB cap) |
-| `POST` | `/v1/embeddings`        | bearer | Embeddings, OpenAI wire (`embedding` models on `openai-embeddings`; OpenAI + OpenRouter; 8 MiB cap) |
-| `POST` | `/v1/rerank`            | bearer | Rerank, OpenRouter wire (`rerank` models on `openrouter-rerank`) |
-| `POST` | `/v1/videos`            | bearer | Submit a video generation job, OpenRouter wire (`video` models on `openrouter-video`); answers `202` with gateway-rewritten polling/content URLs |
-| `GET`  | `/v1/videos/:id`        | bearer | Poll a video job. `:id` is gateway-issued and stateless: it encodes provider, model, and upstream job id |
-| `GET`  | `/v1/videos/:id/content` | bearer | Stream the finished video bytes with the upstream content type |
+| 메서드 | 경로 | 인증 | 용도 |
+| --- | --- | --- | --- |
+| `GET` | `/healthz` | 없음 | 생존 상태와 버전 |
+| `GET` | `/v1/usage` | Bearer | `UsageReport[]` 집계(`AuthStorage`를 통해 프록시) |
+| `GET` | `/v1/models` | Bearer | 자격 증명이 있는 제공업체로 필터링한 레지스트리 카탈로그 |
+| `GET` | `/v1/credentials/check` | Bearer | 자격 증명별 인증 상태 검사 |
+| `POST` | `/v1/chat/completions` | Bearer | OpenAI Chat Completions 전송 형식 |
+| `POST` | `/v1/messages` | Bearer | Anthropic Messages 전송 형식 |
+| `POST` | `/v1/responses` | Bearer | OpenAI Responses 전송 형식 |
+| `POST` | `/v1/pi/stream` | Bearer | 네이티브 `pi-ai` 스트림 전송 형식 |
+| `POST` | `/v1/systemone` | Bearer | TypeSafe System One 판정(`typesafe/jev-latest` 등의 `judge` 모델). `/alpha/decisions`는 OpenRouter Decisions 별칭 |
+| `POST` | `/v1/images/generations` | Bearer | 이미지 생성, OpenAI Images JSON 형식. `/v1/images`는 OpenRouter 별칭(`image` 모델) |
+| `POST` | `/v1/images/edits` | Bearer | 이미지 편집: OpenAI multipart 또는 OpenRouter JSON 입력 이미지 |
+| `POST` | `/v1/audio/speech` | Bearer | 텍스트 음성 변환, OpenAI/OpenRouter JSON 형식. 원본 오디오 바이트 반환(`tts` 모델: `xai-tts`, `openai-speech`) |
+| `POST` | `/v1/audio/transcriptions` | Bearer | 음성 텍스트 변환, OpenAI multipart `file` 또는 OpenRouter JSON `input_audio` base64(`openai-transcriptions`의 `stt` 모델, 최대 25MiB) |
+| `POST` | `/v1/embeddings` | Bearer | 임베딩, OpenAI 형식(`openai-embeddings`의 `embedding` 모델, OpenAI + OpenRouter, 최대 8MiB) |
+| `POST` | `/v1/rerank` | Bearer | 재정렬, OpenRouter 형식(`openrouter-rerank`의 `rerank` 모델) |
+| `POST` | `/v1/videos` | Bearer | 동영상 생성 작업 제출, OpenRouter 형식(`openrouter-video`의 `video` 모델). 게이트웨이가 다시 쓴 폴링/콘텐츠 URL과 함께 `202` 반환 |
+| `GET` | `/v1/videos/:id` | Bearer | 동영상 작업 조회. 게이트웨이가 발급하는 무상태 `:id`는 제공업체, 모델, 업스트림 작업 ID를 인코딩 |
+| `GET` | `/v1/videos/:id/content` | Bearer | 업스트림 콘텐츠 타입으로 완성된 동영상 바이트 스트리밍 |
 
-For `POST /v1/systemone`, TypeSafe models accept TypeSafe's inline `assets` form (`data_base64` only; multipart `part` assets are rejected), and every asset must be referenced in `state`, `instructions`, or `criteria`; other native APIs reject that form with `422`. The existing `images` field remains available for compatible backends and accepts inline data only, for example `images: [{type:'image',data:'<base64>',mimeType:'image/png',detail:'high'}]`; file paths are not supported. Image data must be non-empty standard base64 with valid padding and canonical trailing bits; padding may be omitted. Optional `detail` must be `auto`, `low`, `high`, or `original`. Invalid image fields, or images sent to a judge model without image input, return `422` before provider credential lookup or any upstream request; images are never silently dropped.
+`POST /v1/systemone`에서 TypeSafe 모델은 TypeSafe 인라인 `assets` 형식을 받습니다(`data_base64`만 지원, multipart `part` 자산은 거부). 모든 자산은 `state`, `instructions`, `criteria`에서 참조해야 하며 다른 네이티브 API는 이 형식에 `422`를 반환합니다. 호환 백엔드에서는 기존 `images` 필드도 사용할 수 있으나 인라인 데이터만 허용합니다. 예: `images: [{type:'image',data:'<base64>',mimeType:'image/png',detail:'high'}]`. 파일 경로는 지원하지 않습니다. 이미지 데이터는 유효한 패딩과 정규 마지막 비트를 갖춘 비어 있지 않은 표준 base64여야 하며 패딩은 생략할 수 있습니다. 선택적 `detail`은 `auto`, `low`, `high`, `original` 중 하나여야 합니다. 잘못된 이미지 필드나 이미지 입력을 지원하지 않는 판정 모델에 보낸 이미지는 제공업체 자격 증명 조회나 업스트림 요청 전에 `422`를 반환합니다. 이미지를 알림 없이 버리지 않습니다.
 
-Image inputs to `POST /v1/images/generations` (and its `/v1/images` alias) and `POST /v1/images/edits` must contain non-empty canonical base64 data (padding may be omitted) and a syntactically valid image MIME type. Data-URL inputs reject MIME types containing `#`, which data URLs cannot carry; multipart file types may contain it, but providers that receive images as data URLs reject such inputs. After gateway bearer authentication, malformed input returns `400 invalid_request_error` before provider credential lookup or refresh. Supported image formats remain provider-specific.
+`POST /v1/images/generations`(및 별칭 `/v1/images`)과 `POST /v1/images/edits`의 이미지 입력은 비어 있지 않은 정규 base64 데이터(패딩 생략 가능)와 문법적으로 유효한 이미지 MIME 타입을 포함해야 합니다. 데이터 URL은 `#`를 담을 수 없으므로 해당 문자가 있는 MIME 타입을 거부합니다. multipart 파일 타입에는 허용하지만 이미지를 데이터 URL로 받는 제공업체는 이를 거부합니다. 게이트웨이 Bearer 인증 이후 잘못된 입력은 제공업체 자격 증명 조회나 갱신 전에 `400 invalid_request_error`를 반환합니다. 지원 이미지 형식은 제공업체마다 다릅니다.
 
-The model id is read from the top-level `model` field for foreign wire formats and from the pi-native request body for `/v1/pi/stream`. It may be provider-qualified (`typesafe/jev-latest`) or bare (`jev-latest`). The gateway resolves it against the served catalog — every registry model of a kind the gateway has a route for (`chat`, `judge`, `image`, `tts`, `stt`, `embedding`, `rerank`, `video`), scoped to providers the broker holds credentials for — parses the inbound wire format, resolves the provider credential from broker-backed `AuthStorage`, dispatches through the matching `pi-ai` client (`streamSimple()` for chat, `NativeJudge` for judgments (translated to the resolved model's own judgment API, e.g. OpenAI Decisions), `generateImage` / `synthesizeSpeech` / `transcribeAudio` / `embed` / `rerank` / `submitVideo` for the modality routes), and re-encodes the result to the inbound format (SSE for streamed chat responses).
+외부 전송 형식에서는 최상위 `model` 필드에서, `/v1/pi/stream`에서는 pi-native 요청 본문에서 모델 ID를 읽습니다. 제공업체가 붙은 ID(`typesafe/jev-latest`)나 단독 ID(`jev-latest`)를 사용할 수 있습니다. 게이트웨이는 브로커에 자격 증명이 있으며 경로가 제공되는 종류(`chat`, `judge`, `image`, `tts`, `stt`, `embedding`, `rerank`, `video`)의 모든 레지스트리 모델로 구성된 카탈로그에서 모델을 결정합니다. 수신 형식을 파싱하고 브로커 기반 `AuthStorage`에서 자격 증명을 결정한 뒤 해당 `pi-ai` 클라이언트로 전달합니다. 채팅은 `streamSimple()`, 판정은 모델 고유 판정 API(예: OpenAI Decisions)로 변환하는 `NativeJudge`, 모달리티 경로는 `generateImage` / `synthesizeSpeech` / `transcribeAudio` / `embed` / `rerank` / `submitVideo`를 사용합니다. 결과는 수신 형식으로 다시 인코딩합니다(스트리밍 채팅 응답은 SSE).
 
-Chat routes reject non-chat models with a `400` that names the route to use instead (`Model typesafe/jev-latest is a judge model; use POST /v1/systemone`). `GET /v1/models` marks such rows with `kind` (`judge` | `image` | `tts` | `stt` | `embedding` | `rerank` | `video`); absent means chat.
+채팅 경로는 채팅 이외 모델에 사용할 경로를 명시한 `400`을 반환합니다(`Model typesafe/jev-latest is a judge model; use POST /v1/systemone`). `GET /v1/models`는 이런 행에 `kind`(`judge` | `image` | `tts` | `stt` | `embedding` | `rerank` | `video`)를 표시하며 없으면 채팅입니다.
 
-The served catalog includes bundled, cached, and broker-discovered models. The gateway ignores the host's `models.yml` overrides/custom models so local base URLs, headers, and keys cannot redirect broker-backed traffic. Providers listed in `disabledProviders` of the gateway's effective settings (the same `config.yml` that supplies `auth.accountPolicies`) are neither discovered, advertised, nor routable; `serve` leaves their accounts out of `/v1/usage` and `/v1/credentials/check`, and `check` skips their credentials. The gateway rebuilds the catalog every 15 minutes and checks credential changes every 10 seconds; credential changes force online discovery. Provider-qualified IDs are unambiguous; bare IDs use the first matching registry entry. Model-list rows also include `api`, `display_name`, `input_modalities`, available `context_length`/`max_output_tokens`, and `supports_tools: false` only when the catalog explicitly says tools are unsupported.
+제공 카탈로그에는 번들, 캐시, 브로커 검색 모델이 포함됩니다. 호스트의 `models.yml` 재정의/사용자 지정 모델은 무시하여 로컬 기본 URL, 헤더, 키가 브로커 기반 트래픽을 다른 곳으로 보내지 못하게 합니다. 게이트웨이 유효 설정(`auth.accountPolicies`를 제공하는 동일한 `config.yml`)의 `disabledProviders`에 있는 제공업체는 검색/공개/라우팅하지 않습니다. `serve`는 이 계정을 `/v1/usage`와 `/v1/credentials/check`에서 제외하고 `check`도 건너뜁니다. 카탈로그는 15분마다 다시 만들고 자격 증명 변경은 10초마다 확인합니다. 변경 시 온라인 검색을 강제합니다. 제공업체가 붙은 ID는 명확하며 단독 ID는 첫 일치 항목을 사용합니다. 모델 목록에는 `api`, `display_name`, `input_modalities`, 제공되는 `context_length`/`max_output_tokens`도 포함하며, 카탈로그가 도구 미지원을 명시한 경우에만 `supports_tools: false`를 포함합니다.
 
-Live OpenRouter discovery covers image and Decisions rosters, `/embeddings/models`, `/videos/models`, and rerank-flagged `/models` rows. Speech/transcription models use catalog kinds and seeds. Bundled fallbacks and `kind-apis` runner mappings are authored in `packages/catalog/src/compat/rules/providers/openrouter.kdl`. Per-search, per-second, and per-character billing have no catalog cost axis, so those rows carry zero token cost and the provider-reported `cost` in the response is authoritative.
+실시간 OpenRouter 검색은 이미지/Decisions 목록, `/embeddings/models`, `/videos/models`, `/models`의 재정렬 표시 행을 다룹니다. 음성/전사 모델은 카탈로그 종류와 초기 목록을 사용합니다. 번들 대체 목록과 `kind-apis` 실행기 매핑은 `packages/catalog/src/compat/rules/providers/openrouter.kdl`에 정의합니다. 검색별/초별/문자별 과금에는 카탈로그 비용 축이 없으므로 해당 행의 토큰 비용은 0이며 응답의 제공업체 보고 `cost`가 기준입니다.
 
-Inference routes record observed usage against `x-omp-install-id`, `x-omp-hostname`, and `x-omp-app`; unlabeled requests fall back to the gateway host's identity. These attribution headers are not forwarded upstream. Completed non-streaming responses carry computed cost in `x-litellm-response-cost` when known; streaming chat responses send headers before usage arrives and do not include that cost header. Video cost may become available only while polling. Upstreams that report tokens only (TypeSafe) are priced from the catalog model; the response body's own `cost` field (OpenRouter shape) is only present when the upstream billed one.
+추론 경로는 `x-omp-install-id`, `x-omp-hostname`, `x-omp-app`에 관측 사용량을 귀속합니다. 표시가 없는 요청은 게이트웨이 호스트의 식별 정보를 사용합니다. 이 귀속 헤더는 업스트림에 전달하지 않습니다. 완료된 비스트리밍 응답은 비용을 알면 `x-litellm-response-cost`에 계산된 비용을 포함합니다. 스트리밍 채팅은 사용량이 오기 전에 헤더를 보내므로 비용 헤더를 포함하지 않습니다. 동영상 비용은 폴링 중에야 확인될 수 있습니다. 토큰만 보고하는 업스트림(TypeSafe)은 카탈로그 모델로 가격을 계산하며 응답 본문의 `cost`(OpenRouter 형식)는 업스트림이 과금한 경우에만 존재합니다.
 
-TypeSafe clients using the default base-URL resolver can set `TYPESAFE_BASE_URL=http://gateway:4000` with `TYPESAFE_API_KEY=<gateway token>`. omp's catalog-backed `judge` role passes the model's explicit `baseUrl`, which takes precedence over that environment fallback; configure the TypeSafe provider's `baseUrl` and `apiKey` in `models.yml` to use the gateway. OpenAI-SDK-style clients use `http://gateway:4000/v1`.
+기본 URL 해석기를 쓰는 TypeSafe 클라이언트는 `TYPESAFE_BASE_URL=http://gateway:4000`과 `TYPESAFE_API_KEY=<gateway token>`을 설정할 수 있습니다. omp의 카탈로그 기반 `judge` 역할은 환경 대체값보다 우선하는 모델의 명시적 `baseUrl`을 전달합니다. 게이트웨이를 사용하려면 `models.yml`에서 TypeSafe 제공업체의 `baseUrl`과 `apiKey`를 설정하세요. OpenAI SDK 형식 클라이언트는 `http://gateway:4000/v1`을 사용합니다.
 
-There is no raw provider passthrough path. All supported routes go through `pi-ai` provider logic so credential-specific request shaping, OAuth refresh-on-auth-error, and provider quirks stay centralized.
+원본 제공업체 요청을 그대로 통과시키는 경로는 없습니다. 모든 지원 경로는 `pi-ai` 제공업체 로직을 거쳐 자격 증명별 요청 구성, 인증 오류 시 OAuth 갱신, 제공업체 특이 동작을 중앙화합니다.
 
-`idleTimeout` on the underlying `Bun.serve` is set to `255 s` so long thinking-budget calls do not get killed by Bun’s default idle timeout.
+기반 `Bun.serve`의 `idleTimeout`은 `255 s`로 설정하여 긴 추론 예산 호출이 Bun 기본 유휴 시간 제한으로 종료되지 않도록 합니다.
 
-## Usage cache: server-side 5-min jitter + client-side 15 s single-flight
+## 사용량 캐시: 서버 측 5분 지터 + 클라이언트 측 15초 단일 실행
 
-Two layers cache the aggregate provider-usage report. Both are intentional and stacked.
+집계 제공업체 사용량 보고서를 두 계층으로 캐시합니다. 두 계층은 의도적으로 함께 사용합니다.
 
-### Server-side cache (broker `AuthStorage`)
+### 서버 측 캐시(브로커 `AuthStorage`)
 
-`AuthStorage` caches successful per-credential `UsageReport`s in the broker's SQLite store with a **5-minute TTL and ±25 % jitter** to stagger upstream probes. Cached good values are retained for 24 hours after their last successful fetch (`fetchedAt`). On fetch failure, providers normally retain the last-good report and apply a short jittered cooldown (default 10 s); a provider can override this policy. Repeated failures never extend the 24-hour window: past it, the account reports no usage until a fetch succeeds. Definitive auth failures (a thrown 401/403 from the usage provider) purge stale usage, and explicit invalidation does not replay invalidated last-good data.
+`AuthStorage`는 자격 증명별 성공한 `UsageReport`를 브로커 SQLite 저장소에 **5분 TTL과 ±25% 지터**로 캐시하여 업스트림 검사를 분산합니다. 정상 캐시값은 마지막 성공 조회(`fetchedAt`) 이후 24시간 유지됩니다. 조회가 실패하면 일반적으로 마지막 정상 보고서를 유지하고 짧은 지터 대기(기본 10초)를 적용하며 제공업체가 정책을 재정의할 수 있습니다. 반복 실패가 24시간 창을 늘리지는 않습니다. 이후에는 조회가 성공할 때까지 사용량을 보고하지 않습니다. 확정적인 인증 실패(사용량 제공업체가 발생시킨 401/403)는 오래된 사용량을 지우며 명시적 무효화는 무효화한 마지막 정상 데이터를 재사용하지 않습니다.
 
-Constants: `USAGE_REPORT_TTL_MS = 5 * 60_000` in `packages/ai/src/auth/sqlite-credential-store.ts`; `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000` and `USAGE_FAILURE_BACKOFF_MS = 10_000` in `packages/ai/src/auth/usage-cache.ts`. Fetch policy is in `packages/ai/src/auth/usage.ts`.
+상수: `packages/ai/src/auth/sqlite-credential-store.ts`의 `USAGE_REPORT_TTL_MS = 5 * 60_000`, `packages/ai/src/auth/usage-cache.ts`의 `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000`, `USAGE_FAILURE_BACKOFF_MS = 10_000`. 조회 정책은 `packages/ai/src/auth/usage.ts`에 있습니다.
 
-### Client-side single-flight (`RemoteAuthCredentialStore`)
+### 클라이언트 측 단일 실행(`RemoteAuthCredentialStore`)
 
-When the gateway (or any other broker client) calls `fetchUsageReports()` / `getUsageReport(provider, credential)`, `RemoteAuthCredentialStore` coalesces concurrent calls into a single `GET /v1/usage` round-trip and caches the result for **15 s** in memory.
+게이트웨이 또는 다른 브로커 클라이언트가 `fetchUsageReports()` / `getUsageReport(provider, credential)`을 호출하면 `RemoteAuthCredentialStore`는 동시 호출을 단일 `GET /v1/usage` 왕복으로 합치고 결과를 메모리에 **15초** 캐시합니다.
 
-- `USAGE_CACHE_TTL_MS = 15_000` (`packages/ai/src/auth-broker/remote-store.ts`).
-- A single `#usageInflight` promise is shared across all callers; a per-caller `AbortSignal` is **raced** against the shared promise, not threaded into it, so one caller’s abort never cascades into a peer’s in-flight request.
-- On fetch failure the error is logged and `null` is cached for 15 s, so sequential callers do not immediately retry a failed broker. Aggregate usage returns `null`; a per-credential lookup may still use a fresh client-observed header overlay.
-- Fresh provider response-header hints are overlaid on matching reports for up to 15 s.
+- `USAGE_CACHE_TTL_MS = 15_000`(`packages/ai/src/auth-broker/remote-store.ts`).
+- 단일 `#usageInflight` 프로미스를 모든 호출자가 공유합니다. 호출자별 `AbortSignal`은 공유 프로미스에 전달하지 않고 **경쟁 대기**하므로 한 호출자의 취소가 다른 호출자의 진행 중 요청을 취소하지 않습니다.
+- 조회 실패 시 오류를 기록하고 `null`을 15초 캐시하여 연속 호출이 실패한 브로커를 즉시 재시도하지 않게 합니다. 집계 사용량은 `null`을 반환하지만 자격 증명별 조회는 최신 클라이언트 관측 헤더 보정값을 사용할 수 있습니다.
+- 최신 제공업체 응답 헤더 힌트는 최대 15초 동안 일치하는 보고서에 덧씌웁니다.
 
-The client window is shorter than the broker's per-credential cache and coalesces the usage lookups used by `CredentialSelector` (`packages/ai/src/auth/select.ts`) into a single broker round-trip.
+클라이언트 캐시 기간은 브로커의 자격 증명별 캐시보다 짧으며 `CredentialSelector`(`packages/ai/src/auth/select.ts`)가 사용하는 사용량 조회를 브로커 왕복 한 번으로 합칩니다.
 
-## Client snapshot cache
+## 클라이언트 스냅샷 캐시
 
-`discoverAuthStorage()` delegates to `packages/ai/src/auth-broker/discover.ts`, which persists the initial live snapshot and later broker-sourced full snapshots to `~/.omp/cache/auth-broker-snapshot.enc` by default. The file is AES-256-GCM encrypted with SHA-256 of the resolved broker bearer token (whether from env, config, or file) and authenticated with the broker URL and cache format metadata. Changing the token or URL makes the cache unreadable. Writes are atomic with mode `0600`.
+`discoverAuthStorage()`는 `packages/ai/src/auth-broker/discover.ts`에 위임합니다. 기본적으로 최초 실시간 스냅샷과 이후 브로커 전체 스냅샷을 `~/.omp/cache/auth-broker-snapshot.enc`에 저장합니다. 환경/구성/파일에서 결정된 브로커 Bearer 토큰의 SHA-256으로 AES-256-GCM 암호화하고 브로커 URL 및 캐시 형식 메타데이터로 인증합니다. 토큰이나 URL이 바뀌면 캐시를 읽을 수 없습니다. 쓰기는 `0600` 모드로 원자적으로 수행합니다.
 
-Freshness is anchored to `snapshot.generatedAt`, not local write time. Default TTL is 1 h (`OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`); `0` disables cache reads and writes. A fresh cache is used immediately without a blocking revalidation or startup request budget. `RemoteAuthCredentialStore` then synchronizes through SSE/long polling in the background, so one-shot commands are not guaranteed to observe changes made after the cache was written. Revocation of the broker token surfaces through that background path rather than necessarily failing cached startup. Expired OAuth access tokens still require the broker refresh endpoint.
+최신성은 로컬 기록 시각이 아니라 `snapshot.generatedAt`을 기준으로 합니다. 기본 TTL은 1시간(`OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`)이며 `0`은 캐시 읽기/쓰기를 끕니다. 유효한 캐시는 차단형 재검증이나 시작 요청 예산 없이 즉시 사용합니다. 이후 `RemoteAuthCredentialStore`가 백그라운드 SSE/롱 폴링으로 동기화하므로 일회성 명령에서 캐시 기록 후 변경을 반드시 확인하는 것은 아닙니다. 브로커 토큰 폐기는 캐시 기반 시작을 즉시 실패시키는 대신 이 백그라운드 경로에서 드러날 수 있습니다. 만료된 OAuth 액세스 토큰에는 여전히 브로커 갱신 엔드포인트가 필요합니다.
 
-If the broker is down at boot and a fresh cache exists, startup succeeds from the cache. If the cache is missing, expired, corrupt, incompatible, written for another URL, or encrypted with another token, startup requires a live snapshot and fails when that fetch fails; it never silently opens the local credential store instead.
+시작 시 브로커가 중단되어도 유효한 캐시가 있으면 캐시로 시작합니다. 캐시가 없거나 만료/손상/비호환 상태이거나 다른 URL용이거나 다른 토큰으로 암호화되었다면 실시간 스냅샷이 필요하며 조회 실패 시 시작도 실패합니다. 알림 없이 로컬 자격 증명 저장소를 대신 열지 않습니다.
 
-## Client account pools
+<a id="client-account-pools"></a>
+<a id="client-account-pools-routing-not-authorization"></a>
+## 클라이언트 계정 풀
 
-Broker clients can restrict which broker credentials they see by setting `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` to a JSON file. Each key is a provider ID (or `"*"`, see below); each value is a rule for that provider's credentials:
+브로커 클라이언트는 `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE`에 JSON 파일을 지정하여 보이는 브로커 자격 증명을 제한할 수 있습니다. 각 키는 제공업체 ID(또는 아래의 `"*"`)이며 값은 해당 제공업체 자격 증명의 규칙입니다.
 
 ```json
 {
@@ -286,17 +270,16 @@ Broker clients can restrict which broker credentials they see by setting `OMP_AU
 }
 ```
 
-An array lists exact `identityKey` values from the broker snapshot protocol. `identityKey` is the token-free identity field already carried by each authenticated `/v1/snapshot` credential entry. Operator tooling should project only `provider` and `identityKey`; it must not retain or print the accompanying credential payload. A dedicated account-listing CLI is intentionally outside this routing feature's scope.
+배열은 브로커 스냅샷 프로토콜의 정확한 `identityKey` 값을 나열합니다. `identityKey`는 인증된 `/v1/snapshot`의 각 자격 증명 항목에 이미 포함되는 토큰 없는 식별 필드입니다. 운영 도구는 `provider`와 `identityKey`만 추출해야 하며 함께 오는 자격 증명 페이로드를 보관하거나 출력해서는 안 됩니다. 전용 계정 목록 CLI는 의도적으로 이 라우팅 기능의 범위 밖입니다.
 
-| Value | OAuth accounts visible | API keys visible |
+| 값 | 표시되는 OAuth 계정 | 표시되는 API 키 |
 | --- | --- | --- |
-| `["id", …]` | only exact identity matches, including organization/workspace qualifiers; `[]` hides all | yes |
-| `true` | all | yes |
-| `false` | none | no |
-| `{ "accounts"?: ["id", …], "apiKeys"?: boolean }` | `accounts` as with the array form; omitted means all | `apiKeys`; omitted means yes |
+| `["id", …]` | 조직/워크스페이스 한정자를 포함해 식별자가 정확히 일치하는 계정만 표시. `[]`는 모두 숨김 | 표시 |
+| `true` | 모두 | 표시 |
+| `false` | 없음 | 숨김 |
+| `{ "accounts"?: ["id", …], "apiKeys"?: boolean }` | `accounts`는 배열 형식과 동일하며 생략하면 모두 표시 | `apiKeys`에 따름. 생략하면 표시 |
 
-Providers without their own key follow the `"*"` rule, and with no `"*"` key they are unrestricted. `"*": false` turns the file into an allow-list: only listed providers are visible, OAuth and API keys alike. For example, this exposes one Codex account and OpenRouter API keys, and nothing else:
-
+자체 키가 없는 제공업체는 `"*"` 규칙을 따르며 `"*"`도 없으면 제한하지 않습니다. `"*": false`는 파일을 허용 목록으로 만듭니다. OAuth와 API 키 모두 나열된 제공업체만 보입니다. 예를 들어 다음은 Codex 계정 하나와 OpenRouter API 키만 노출합니다.
 ```json
 {
   "*": false,
@@ -305,83 +288,83 @@ Providers without their own key follow the `"*"` rule, and with no `"*"` key the
 }
 ```
 
-SDK hosts can supply the same rules as `accountPool` in `discoverAuthStorage()` or `RemoteAuthCredentialStore` (a `Set` of identities, or `{ accounts?: Set, apiKeys?: boolean }`, keyed by provider or `"*"`). An explicit programmatic pool takes precedence over the environment file.
+SDK 호스트는 `discoverAuthStorage()` 또는 `RemoteAuthCredentialStore`의 `accountPool`에 같은 규칙을 제공할 수 있습니다(제공업체 또는 `"*"`를 키로 하는 식별자 `Set` 또는 `{ accounts?: Set, apiKeys?: boolean }`). 명시적인 프로그래밍 방식 풀은 환경 파일보다 우선합니다.
 
-The file is parsed once when broker-backed auth storage starts. An unreadable file, malformed JSON, or invalid entry aborts initialization rather than silently broadening the pool. Full snapshots, SSE updates, refresh responses, and aggregate usage are filtered consistently. For a provider whose OAuth accounts or API keys are restricted, aggregate reports are returned only when they can be attributed to a visible OAuth identity; reports attributable only to an API key or lacking matching identity metadata fail closed. The encrypted snapshot cache remains a raw broker snapshot so trusted processes sharing that cache can apply different pools.
+파일은 브로커 기반 인증 저장소 시작 시 한 번 파싱합니다. 읽을 수 없는 파일, 잘못된 JSON, 잘못된 항목은 풀을 알림 없이 넓히지 않고 초기화를 중단합니다. 전체 스냅샷, SSE 갱신, 갱신 응답, 집계 사용량을 일관되게 필터링합니다. OAuth 계정이나 API 키가 제한된 제공업체는 표시되는 OAuth 식별자에 귀속할 수 있을 때만 집계 보고서를 반환합니다. API 키에만 귀속되거나 일치하는 식별 메타데이터가 없는 보고서는 안전하게 거부합니다. 암호화된 스냅샷 캐시는 원본 브로커 스냅샷으로 유지하여 이를 공유하는 신뢰 프로세스가 서로 다른 풀을 적용할 수 있게 합니다.
 
-Where the pool applies decides what it protects:
+풀 적용 위치에 따라 보호 범위가 달라집니다.
 
-- **Direct broker clients:** a **trusted-client routing policy, not an authorization boundary**. The client holds the broker bearer token, receives raw broker responses before applying its local view, and can call broker endpoints directly.
-- **Clients of `omp auth-gateway serve`:** the pool runs inside the gateway process, and the gateway's clients hold only the gateway token. Credentials the pool hides are not in the gateway's credential view, so its routes cannot list, use, or report them. For those clients the pool is the effective boundary, provided they cannot read the gateway host's environment, the pool file, or the broker token.
+- **직접 연결하는 브로커 클라이언트:** **신뢰 클라이언트의 라우팅 정책이며 권한 경계가 아닙니다.** 클라이언트는 브로커 Bearer 토큰을 보유하고 로컬 보기를 적용하기 전 원본 응답을 받으며 브로커 엔드포인트를 직접 호출할 수 있습니다.
+- **`omp auth-gateway serve` 클라이언트:** 풀은 게이트웨이 프로세스 안에서 실행되며 클라이언트는 게이트웨이 토큰만 가집니다. 풀이 숨긴 자격 증명은 게이트웨이 자격 증명 보기에 없으므로 경로에서 나열/사용/보고할 수 없습니다. 클라이언트가 게이트웨이 호스트 환경, 풀 파일, 브로커 토큰을 읽을 수 없다면 풀은 실질적인 경계입니다.
 
-Use server-side broker authorization, not account pools, when a process holding the broker token must be prevented from retrieving other credentials.
+브로커 토큰을 가진 프로세스가 다른 자격 증명을 가져오지 못하게 해야 한다면 계정 풀이 아닌 서버 측 브로커 권한 제어를 사용하세요.
 
-### Per-agent and per-session pools
+### 에이전트별 및 세션별 풀
 
-A process-wide pool decides which accounts a client sees; a session pool narrows one session further with the same identity keys, which `omp usage accounts` lists for every OAuth account the process sees (with organization names and no tokens). Set `task.agentAccountPools` to pool a task agent by exact name ([Settings](./settings.md#providers-and-services)), pass `oauthAccountPools` to `createAgentSession()`, or call `authStorage.sessions.restrict(provider, sessionId, identityKeys)` directly. For each listed provider the session authenticates only with visible OAuth accounts in its list: selection, pins, fallback passes, rotation, and saved-reset restores stay inside it, stored, runtime, and environment API keys are never used, and a request fails rather than borrow another account when none can serve. A config key (a `models.yml` `apiKey`, often for a proxy `baseUrl`) also fails a pooled request, so no pooled OAuth token is sent to that endpoint. An empty list allows no account. Saved resets about to expire are still salvaged on every account, pooled or not, because salvage serves the account that holds the reset. A session created with `oauthAccountPools` enforces its pools on every key lookup through its model registry, whatever provider session id the lookup carries (title generation, skill compression, advisors, and subagents it spawns without their own entry); a lookup with no session id resolves under the session's own id. It lifts its pools when it is disposed, or, when a run outlives the dispose deadline, once that run settles. A direct `restrict` caller passes the lease that `restrict` returned to `authStorage.sessions.unrestrict(provider, sessionId, lease)` once that session ends; a lease never lifts a restriction installed on the same session since. `authStorage.sessions.permits(provider, sessionId, credentialId)` tells whether a stored account may serve a session. Session pools are the same trusted-client routing policy as client pools, not an authorization boundary.
+프로세스 전체 풀은 클라이언트에 보이는 계정을 결정하고 세션 풀은 같은 식별 키로 특정 세션을 더 제한합니다. `omp usage accounts`는 프로세스에 보이는 모든 OAuth 계정의 키를 조직 이름과 함께 토큰 없이 나열합니다. 정확한 이름의 작업 에이전트에 풀을 적용하려면 `task.agentAccountPools`를 설정하거나([설정](./settings.md#providers-and-services)), `createAgentSession()`에 `oauthAccountPools`를 전달하거나, `authStorage.sessions.restrict(provider, sessionId, identityKeys)`를 직접 호출하세요. 나열된 제공업체에서 세션은 목록 안의 표시 가능한 OAuth 계정으로만 인증합니다. 선택, 고정, 대체 시도, 교체, 저장된 초기화 복원은 모두 그 안에서 수행합니다. 저장된/런타임/환경 API 키는 사용하지 않으며 사용 가능한 계정이 없으면 다른 계정을 빌리는 대신 요청이 실패합니다. 구성 키(`models.yml`의 `apiKey`, 대개 프록시 `baseUrl`용)도 풀 요청을 실패시키므로 해당 엔드포인트에 풀 OAuth 토큰이 전송되지 않습니다. 빈 목록은 계정을 허용하지 않습니다. 만료가 임박한 저장된 초기화는 풀 적용 여부와 관계없이 모든 계정에서 여전히 복구합니다. 복구는 초기화를 보유한 계정에 도움이 되기 때문입니다. `oauthAccountPools`로 만든 세션은 조회에 담긴 제공업체 세션 ID와 관계없이 모델 레지스트리를 통한 모든 키 조회에 풀을 강제합니다(제목 생성, 스킬 압축, 조언자, 자체 항목 없이 생성한 하위 에이전트 포함). 세션 ID 없는 조회는 세션 자체 ID로 해석합니다. 세션을 해제하면 풀을 해제하며, 실행이 해제 기한을 넘기면 실행 종료 후 해제합니다. `restrict` 직접 호출자는 세션 종료 시 반환받은 임대를 `authStorage.sessions.unrestrict(provider, sessionId, lease)`에 전달해야 합니다. 임대는 이후 같은 세션에 설치된 제한을 해제하지 않습니다. `authStorage.sessions.permits(provider, sessionId, credentialId)`는 저장된 계정이 세션을 처리할 수 있는지 알려줍니다. 세션 풀도 클라이언트 풀과 같은 신뢰 클라이언트 라우팅 정책이며 권한 경계가 아닙니다.
 
-## Operator opt-in
+## 운영자 활성화
 
-Broker-backed credential storage is **off** unless `OMP_AUTH_BROKER_URL` (or `auth.broker.url` in the agent's `config.yml`/`config.yaml`) is set. SDK discovery delegates through `packages/coding-agent/src/session/auth-broker-config.ts` to the shared `pi-ai` resolver and selects `RemoteAuthCredentialStore` instead of local SQLite. Runtime/config/env key overrides still participate in the normal credential ladder; selecting broker storage does not make those keys remote.
+`OMP_AUTH_BROKER_URL`(또는 에이전트 `config.yml`/`config.yaml`의 `auth.broker.url`)이 없으면 브로커 기반 자격 증명 저장은 **꺼져 있습니다**. SDK 검색은 `packages/coding-agent/src/session/auth-broker-config.ts`를 통해 공유 `pi-ai` 해석기에 위임하고 로컬 SQLite 대신 `RemoteAuthCredentialStore`를 선택합니다. 런타임/구성/환경 키 재정의는 여전히 일반 자격 증명 우선순위에 참여합니다. 브로커 저장소를 선택해도 이 키가 원격 키가 되는 것은 아닙니다.
 
-### Environment variables
+### 환경 변수
 
-| Variable                            | Purpose                                                                                                                                                                | Required when                                                                                                             |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `OMP_AUTH_BROKER_URL`               | Base URL of the remote auth-broker (e.g. `https://broker.tailnet:8765`). Selecting this puts the client in broker mode — local SQLite is bypassed.                     | Any time the omp client should resolve credentials through a broker (and required by `omp auth-gateway serve`).           |
-| `OMP_AUTH_BROKER_TOKEN`             | Bearer token used for every broker endpoint except `/v1/healthz`.                                                                                                      | When `OMP_AUTH_BROKER_URL` is set and no token is available from `auth.broker.token` or `<config-dir>/auth-broker.token`. |
-| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS`   | Freshness window for the encrypted local snapshot cache. Default `3600000` (1 h); `0` disables cache reads and writes.                                                 | Optional in broker mode.                                                                                                  |
-| `OMP_AUTH_BROKER_SNAPSHOT_CACHE`    | Path override for the encrypted local snapshot cache. Default `~/.omp/cache/auth-broker-snapshot.enc` (or XDG cache equivalent).                                       | Optional in broker mode.                                                                                                  |
-| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | JSON file of per-provider visibility rules for broker credentials (OAuth `identityKey` lists, API-key toggle, `"*"` default for unlisted providers). Parsed once; invalid files abort initialization. | Optional in broker mode.                                                                                                  |
+| 변수 | 용도 | 필요한 경우 |
+| --- | --- | --- |
+| `OMP_AUTH_BROKER_URL` | 원격 인증 브로커 기본 URL(예: `https://broker.tailnet:8765`). 설정하면 브로커 모드로 전환하여 로컬 SQLite를 우회합니다. | omp 클라이언트가 브로커로 자격 증명을 결정해야 할 때. `omp auth-gateway serve`에도 필수 |
+| `OMP_AUTH_BROKER_TOKEN` | `/v1/healthz`를 제외한 모든 브로커 엔드포인트용 Bearer 토큰 | URL이 설정되어 있고 `auth.broker.token`이나 `<config-dir>/auth-broker.token`에서 토큰을 얻을 수 없을 때 |
+| `OMP_AUTH_BROKER_SNAPSHOT_TTL_MS` | 암호화된 로컬 스냅샷 캐시 유효 기간. 기본 `3600000`(1시간), `0`이면 캐시 읽기/쓰기 비활성화 | 브로커 모드에서 선택 |
+| `OMP_AUTH_BROKER_SNAPSHOT_CACHE` | 암호화된 로컬 스냅샷 캐시 경로 재정의. 기본 `~/.omp/cache/auth-broker-snapshot.enc` 또는 대응 XDG 캐시 경로 | 브로커 모드에서 선택 |
+| `OMP_AUTH_BROKER_ACCOUNT_POOL_FILE` | 제공업체별 브로커 자격 증명 표시 규칙 JSON 파일(OAuth `identityKey` 목록, API 키 토글, 미지정 제공업체의 `"*"` 기본값). 한 번 파싱하며 잘못된 파일은 초기화를 중단합니다. | 브로커 모드에서 선택 |
 
-Resolution order in `resolveAuthBrokerConfig()`:
+`resolveAuthBrokerConfig()`의 해석 순서:
 
-1. `OMP_AUTH_BROKER_URL` env (else `auth.broker.url` from `config.yml`, resolved through `resolveConfigValue`);
-2. `OMP_AUTH_BROKER_TOKEN` env (else `auth.broker.token` from `config.yml`, else `<config-dir>/auth-broker.token`);
-3. URL set but no token resolvable → hard error pointing at the token file path.
+1. 환경 변수 `OMP_AUTH_BROKER_URL`, 없으면 `config.yml`의 `auth.broker.url`을 `resolveConfigValue`로 해석합니다.
+2. 환경 변수 `OMP_AUTH_BROKER_TOKEN`, 없으면 `config.yml`의 `auth.broker.token`, 그것도 없으면 `<config-dir>/auth-broker.token`을 사용합니다.
+3. URL은 있지만 토큰을 결정할 수 없으면 토큰 파일 경로를 안내하는 복구 불가 오류를 발생시킵니다.
 
-The gateway uses the same broker URL/token resolution and account-pool environment file. Its `serve`/`check` commands fetch a live snapshot directly, so the client snapshot-cache path/TTL variables do not affect those commands.
+게이트웨이는 같은 브로커 URL/토큰 해석 및 계정 풀 환경 파일을 사용합니다. `serve`/`check`는 직접 실시간 스냅샷을 가져오므로 클라이언트 스냅샷 캐시 경로/TTL 변수의 영향을 받지 않습니다.
 
-### `config.yml` keys
+### `config.yml` 키
 
-| Key                 | Default | Purpose                                                                                                                                                                            |
-| ------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.broker.url`   | unset   | Same as `OMP_AUTH_BROKER_URL`; env wins. Hidden from the settings UI. Values are resolved as a literal, an environment variable name, or `!<shell command>` to use trimmed stdout. |
-| `auth.broker.token` | unset   | Same as `OMP_AUTH_BROKER_TOKEN`; env wins. Values are resolved the same way.                                                                                                       |
-| `auth.accountPolicies` | `[]` | Per-account OAuth routing rules: `provider`, identity selector `account` (`email`, `accountId`, `projectId`, optional `orgId`), optional `priority`, `reservePct` (0–100) and `reclaimAbovePct`. With `reclaimAbovePct` (above the account's effective reserve, at most 100), sessions automatically pinned to a lower-priority account move back on their next request once this account has that much quota left; explicitly chosen accounts never move. |
-| `retry.usageReservePct` | `10` | Default protected remaining-quota percentage when an account has no `reservePct` override. |
+| 키 | 기본값 | 용도 |
+| --- | --- | --- |
+| `auth.broker.url` | 미설정 | `OMP_AUTH_BROKER_URL`과 같으며 환경 변수가 우선합니다. 설정 UI에는 숨겨져 있습니다. 값은 리터럴, 환경 변수 이름, 또는 앞뒤 공백을 제거한 표준 출력을 사용하는 `!<shell command>`로 해석합니다. |
+| `auth.broker.token` | 미설정 | `OMP_AUTH_BROKER_TOKEN`과 같으며 환경 변수가 우선합니다. 같은 방식으로 값을 해석합니다. |
+| `auth.accountPolicies` | `[]` | 계정별 OAuth 라우팅 규칙: `provider`, 식별 선택자 `account`(`email`, `accountId`, `projectId`, 선택적 `orgId`), 선택적 `priority`, `reservePct`(0~100), `reclaimAbovePct`. `reclaimAbovePct`는 계정의 유효 예비량보다 크고 최대 100입니다. 이만큼 할당량이 남으면 우선순위가 낮은 계정에 자동 고정된 세션이 다음 요청에서 돌아옵니다. 명시적으로 선택한 계정은 이동하지 않습니다. |
+| `retry.usageReservePct` | `10` | 계정에 `reservePct` 재정의가 없을 때 보호할 기본 잔여 할당량 비율 |
 
-Broker connection values come from the agent's main config file, not project settings. Account policies/reserve use effective settings (including project/explicit config layers). Long-lived SDK sessions follow policy changes and can replace the credential store in place when effective broker settings change; failed changes leave the current store active.
+브로커 연결 값은 프로젝트 설정이 아닌 에이전트 주 구성 파일에서 가져옵니다. 계정 정책/예비량은 프로젝트/명시적 구성 계층을 포함한 유효 설정을 사용합니다. 장기 실행 SDK 세션은 정책 변경을 따르며 유효 브로커 설정이 바뀌면 자격 증명 저장소를 제자리에서 교체할 수 있습니다. 변경 실패 시 현재 저장소를 유지합니다.
 
-#### How sessions choose and keep an account
+#### 세션의 계정 선택과 유지 방식
 
-When a provider has account policies, OMP ranks its accounts whenever it selects or reconsiders one (not on every request: a warm explicit pin, or a sole account, skips ranking). In order, an account loses when it is blocked (hit a limit), outside a required plan, past its renewable allowance, or inside its reserve; then Codex accounts with an untouched 5-hour window are preferred, accounts whose 5-hour window is at least 85% used fall back, accounts with a usage report beat accounts whose report could not be fetched, and only then does higher `priority` win. Ties go to the account whose quota would otherwise expire unused soonest. So `priority` orders healthy, measured accounts; it does not override reserve or the safety checks before it.
+제공업체에 계정 정책이 있으면 OMP는 계정을 선택하거나 재검토할 때 순위를 매깁니다. 매 요청마다 수행하지는 않으며 유효한 명시적 고정이나 단일 계정이면 생략합니다. 순서대로 차단(제한 도달), 필수 요금제 불충족, 갱신 가능 허용량 소진, 예비량 진입 계정이 불리합니다. 그다음 5시간 창을 아직 쓰지 않은 Codex 계정을 우선하고, 5시간 창을 85% 이상 사용한 계정은 뒤로 보냅니다. 사용량 보고서가 있는 계정이 조회 실패 계정보다 우선하며 그 후에야 높은 `priority`가 우선합니다. 동률이면 사용하지 않을 경우 할당량이 가장 빨리 만료되는 계정을 택합니다. 즉 `priority`는 정상이며 측정된 계정의 순서를 정할 뿐 예비량이나 앞선 안전 검사를 무시하지 않습니다.
 
-That ranking picks the account for a **new** session. A running session remembers the account it used last (its pin) and keeps it while the pin is warm, so the provider's prompt cache and signed reasoning stay valid:
+이 순위는 **새** 세션의 계정을 고릅니다. 실행 중인 세션은 마지막 계정(고정)을 기억하고 고정이 유효한 동안 유지하여 제공업체 프롬프트 캐시와 서명된 추론을 보존합니다.
 
-- Anthropic pins go cold after an hour without a request; other providers' pins stay warm indefinitely. A cold or blocked pin re-ranks.
-- A warm pin moves only away from a bad account: when the pinned account enters its reserve and another account is measured outside its own reserve, or when its allowance is spent and an unblocked sibling still has allowance.
-- A warm pin does not move back when a higher-priority account recovers. New sessions use the recovered account; running ones stay where they are until one of the cases above applies.
-- An account the user chose explicitly for a session is never moved by ranking or reserve. It is still skipped while blocked, after a failed token refresh, or when it fails a required plan check; the session then falls through to a sibling.
-- Pins are saved with the session. A resumed session restores its pin with its original last-use time, and subagents start on their parent's pins. When a parked subagent is revived in the same session, its saved pin wins over the parent's automatic affinity; an explicit parent pin still wins, subject to the child's account pool.
+- Anthropic 고정은 요청 없이 한 시간이 지나면 만료되며 다른 제공업체 고정은 무기한 유효합니다. 만료되거나 차단된 고정은 순위를 다시 매깁니다.
+- 유효한 고정은 계정 상태가 나쁠 때만 이동합니다. 고정 계정이 예비량에 진입하고 다른 계정은 자체 예비량 밖으로 측정되었거나, 허용량을 소진했고 차단되지 않은 다른 계정에 허용량이 남아 있는 경우입니다.
+- 우선순위 높은 계정이 회복되어도 유효한 고정은 돌아가지 않습니다. 새 세션은 회복된 계정을 사용하고 실행 중인 세션은 위 조건이 적용될 때까지 유지합니다.
+- 사용자가 세션용으로 명시적으로 선택한 계정은 순위나 예비량 때문에 이동하지 않습니다. 다만 차단 중이거나 토큰 갱신 실패 또는 필수 요금제 검사 실패 시 건너뛰고 다른 계정을 시도합니다.
+- 고정은 세션과 함께 저장합니다. 재개한 세션은 원래 마지막 사용 시각과 함께 고정을 복원하고 하위 에이전트는 상위 고정에서 시작합니다. 같은 세션에서 보류된 하위 에이전트를 되살리면 저장된 고정이 상위의 자동 선호보다 우선합니다. 명시적 상위 고정은 하위 계정 풀의 제약 안에서 여전히 우선합니다.
 
-### Token files
+### 토큰 파일
 
-| Path                              | Owner                                                | Mode                          |
-| --------------------------------- | ---------------------------------------------------- | ----------------------------- |
-| `<config-dir>/auth-broker.token`  | `omp auth-broker token` or `serve` | `0600`; new parent directory `0700` |
-| `<config-dir>/auth-gateway.token` | `omp auth-gateway token` or `serve` (serve skips it under `--no-auth`) | `0600`; new parent directory `0700` |
+| 경로 | 관리 명령 | 모드 |
+| --- | --- | --- |
+| `<config-dir>/auth-broker.token` | `omp auth-broker token` 또는 `serve` | `0600`, 새 상위 디렉터리 `0700` |
+| `<config-dir>/auth-gateway.token` | `omp auth-gateway token` 또는 `serve`(`--no-auth`이면 생성 생략) | `0600`, 새 상위 디렉터리 `0700` |
 
-`<config-dir>` is `getConfigRootDir()`: `~/.omp/` by default, respecting `PI_CONFIG_DIR` and the active profile (`~/.omp/profiles/<name>/` for the default profile layout). Creating a token does not tighten permissions on an already-existing parent directory.
+`<config-dir>`는 `getConfigRootDir()`입니다. 기본값은 `~/.omp/`이며 `PI_CONFIG_DIR`와 활성 프로필을 따릅니다(기본 프로필 구조에서는 `~/.omp/profiles/<name>/`). 토큰을 생성해도 이미 있는 상위 디렉터리의 권한은 강화하지 않습니다.
 
-## Interaction with the local API-key resolution order
+## 로컬 API 키 해석 순서와의 상호작용
 
-The broker owns credentials written on its host or uploaded through its API. The standard credential ladder in [models.md](./models.md) is preserved:
+브로커는 호스트에 기록되거나 API로 업로드된 자격 증명을 소유합니다. [models.md](./models.md)의 표준 자격 증명 우선순위는 유지됩니다.
 
-- `AuthStorage.keys.setConfig()` / `.removeConfig()` / `.clearConfig()` manage config keys. An explicit `models.yml` `apiKey` beats stored OAuth **without** overriding `--api-key`; `setConfig(..., { fallback: true })` instead ranks a default key reference below stored OAuth and `/login` keys. The gateway deliberately ignores local model-config overrides.
+- `AuthStorage.keys.setConfig()` / `.removeConfig()` / `.clearConfig()`는 구성 키를 관리합니다. 명시적 `models.yml`의 `apiKey`는 `--api-key`를 덮어쓰지 **않으면서** 저장된 OAuth보다 우선합니다. 반면 `setConfig(..., { fallback: true })`는 기본 키 참조를 저장된 OAuth와 `/login` 키보다 낮게 배치합니다. 게이트웨이는 의도적으로 로컬 모델 구성 재정의를 무시합니다.
 
-## See also
+## 관련 문서
 
-- [`secrets.md`](./secrets.md) — secret obfuscation around tokens that _do_ leak through (e.g. `OMP_AUTH_BROKER_TOKEN` in shell output).
-- [`models.md`](./models.md) — provider auth resolution order; the broker supplies the stored-credential layers.
-- [`environment-variables.md`](./environment-variables.md) — full env reference including `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`.
+- [`secrets.md`](./secrets.md) — 실제로 유출되는 토큰의 비밀값 가리기(예: 셸 출력의 `OMP_AUTH_BROKER_TOKEN`).
+- [`models.md`](./models.md) — 제공업체 인증 해석 순서. 브로커는 저장된 자격 증명 계층을 제공합니다.
+- [`environment-variables.md`](./environment-variables.md) — `OMP_AUTH_BROKER_URL` / `OMP_AUTH_BROKER_TOKEN`을 포함한 전체 환경 변수 참조.

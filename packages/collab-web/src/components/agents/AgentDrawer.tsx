@@ -1,9 +1,10 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { AgentSnapshot, SessionEntry, SubagentLifecyclePayload, SubagentProgressPayload } from "@oh-my-pi/pi-wire";
 import { OctagonX, RotateCcw, SendHorizontal, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { GuestClient } from "../../lib/client";
-import { fmtCost, fmtDuration, fmtTokens } from "../../lib/format";
+import { fmtCost, fmtDuration, fmtTokens, formatStatus } from "../../lib/format";
 import { decideTranscriptPoll } from "../../lib/transcript-poll";
 import type { TranscriptProps } from "../transcript/Transcript";
 import { Transcript } from "../transcript/Transcript";
@@ -142,7 +143,7 @@ export function AgentDrawer(props: {
 			<header className="ag-drawer-head">
 				<div className="ag-drawer-title">
 					<span className="ag-drawer-name">{agent.displayName}</span>
-					<span className={`ag-chip ag-chip--${agent.status}`}>{agent.status}</span>
+					<span className={`ag-chip ag-chip--${agent.status}`}>{formatStatus(agent.status)}</span>
 					{model ? <span className="ag-chip ag-chip--model">{model}</span> : null}
 				</div>
 				<div className="ag-drawer-actions">
@@ -152,17 +153,13 @@ export function AgentDrawer(props: {
 							className="ag-btn ag-btn--danger"
 							onClick={() => client.sendAgentCmd("kill", agent.id)}
 						>
-							<OctagonX size={13} aria-hidden />
-							kill
-						</button>
+							<OctagonX size={13} aria-hidden />{t("kill")}</button>
 					) : null}
 					{(agent.status === "parked" || agent.status === "aborted") && !readOnly ? (
 						<button type="button" className="ag-btn" onClick={() => client.sendAgentCmd("revive", agent.id)}>
-							<RotateCcw size={13} aria-hidden />
-							revive
-						</button>
+							<RotateCcw size={13} aria-hidden />{t("revive")}</button>
 					) : null}
-					<button type="button" className="ag-iconbtn" aria-label="close" onClick={onClose}>
+					<button type="button" className="ag-iconbtn" aria-label={t("close")} onClick={onClose}>
 						<X size={15} aria-hidden />
 					</button>
 				</div>
@@ -170,12 +167,12 @@ export function AgentDrawer(props: {
 			{p ? (
 				<div className="ag-stats">
 					<span className="ag-stat">
-						<span className="ag-stat-label">tok</span>
+						<span className="ag-stat-label">{t("tok")}</span>
 						<span className="ag-stat-value">{fmtTokens(p.tokens)}</span>
 					</span>
 					{ctxPct !== null ? (
-						<span className="ag-stat" title={`context ${fmtTokens(p.contextTokens ?? 0)}`}>
-							<span className="ag-stat-label">ctx</span>
+						<span className="ag-stat" title={t("context {0}", `${fmtTokens(p.contextTokens ?? 0)}`)}>
+							<span className="ag-stat-label">{t("ctx")}</span>
 							<span className="ag-gauge">
 								<span
 									className={ctxPct > 80 ? "ag-gauge-fill ag-gauge-fill--warn" : "ag-gauge-fill"}
@@ -185,11 +182,11 @@ export function AgentDrawer(props: {
 						</span>
 					) : null}
 					<span className="ag-stat">
-						<span className="ag-stat-label">cost</span>
+						<span className="ag-stat-label">{t("cost")}</span>
 						<span className="ag-stat-value">{fmtCost(p.cost)}</span>
 					</span>
 					<span className="ag-stat">
-						<span className="ag-stat-label">tools</span>
+						<span className="ag-stat-label">{t("tools")}</span>
 						<span className="ag-stat-value">{p.toolCount}</span>
 					</span>
 					<span className="ag-stat">
@@ -210,13 +207,11 @@ export function AgentDrawer(props: {
 							host={host}
 						/>
 						{fetchError !== null ? (
-							<div className="ag-fetch-error" role="alert">
-								transcript unavailable: {fetchError}
-							</div>
+							<div className="ag-fetch-error" role="alert">{t("transcript unavailable: {0}", `${fetchError}`)}</div>
 						) : null}
 					</>
 				) : (
-					<div className="ag-empty">no transcript available</div>
+					<div className="ag-empty">{t("no transcript available")}</div>
 				)}
 			</div>
 			{!readOnly && (
@@ -230,10 +225,10 @@ export function AgentDrawer(props: {
 					<input
 						className="ag-chat-input"
 						value={draft}
-						placeholder={`message ${agent.displayName}…`}
+						placeholder={t("message {0}…", `${agent.displayName}`)}
 						onChange={e => setDraft(e.target.value)}
 					/>
-					<button type="submit" className="ag-iconbtn" aria-label="send" disabled={draft.trim().length === 0}>
+					<button type="submit" className="ag-iconbtn" aria-label={t("send")} disabled={draft.trim().length === 0}>
 						<SendHorizontal size={15} aria-hidden />
 					</button>
 				</form>

@@ -3,6 +3,7 @@
  * card heads, error views, notes and notices. No layout: every helper returns
  * semantic nodes/spans only, with ANSI-free, sanitized text.
  */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { TspSpan, TspText, TspTone } from "@oh-my-pi/pi-wire";
 import { ansi, code, compact, keyed, node, row, span, text } from "../native/describe";
@@ -149,7 +150,7 @@ export function errorView(title: string, message: string, ...meta: readonly (str
 	return {
 		head: toolHead(title, ...meta),
 		tone: "error",
-		body: [errorText(plainText(message).trim() || `${title} failed`)],
+		body: [errorText(plainText(message).trim() || localize("{0} failed\u0004packages/tui/src/tools/native-view.ts:errorView.body", `${title}`))],
 	};
 }
 
@@ -200,12 +201,12 @@ export const RUN_INPUT_PREVIEW_LINES = 6;
 export type RunState = "running" | "background" | "done" | "failed" | "cancelled" | "timed-out";
 
 const RUN_STATE: Record<RunState, { readonly word: string; readonly tone: TspTone }> = {
-	running: { word: "Running", tone: "pending" },
-	background: { word: "In background", tone: "pending" },
-	done: { word: "Done", tone: "success" },
-	failed: { word: "Failed", tone: "error" },
-	cancelled: { word: "Cancelled", tone: "muted" },
-	"timed-out": { word: "Timed out", tone: "warning" },
+	running: { word: localize("Running"), tone: "pending" },
+	background: { word: localize("In background"), tone: "pending" },
+	done: { word: localize("Done"), tone: "success" },
+	failed: { word: localize("Failed"), tone: "error" },
+	cancelled: { word: localize("Cancelled"), tone: "muted" },
+	"timed-out": { word: localize("Timed out"), tone: "warning" },
 };
 
 /** Inputs of {@link runFoot}. */
@@ -229,7 +230,7 @@ export interface RunFootInput {
 export function runFoot(input: RunFootInput): NativeNode {
 	const failedWithCode = input.state === "failed" && input.exitCode !== undefined && input.exitCode !== 0;
 	const state = failedWithCode
-		? { word: `exit ${input.exitCode}`, tone: RUN_STATE.failed.tone }
+		? { word: localize("exit {0}", `${input.exitCode}`), tone: RUN_STATE.failed.tone }
 		: RUN_STATE[input.state];
 	const facts = (input.facts ?? []).map(fact => plainText(fact).trim()).filter(fact => fact.length > 0);
 	const notices: string[] = [];
@@ -363,12 +364,12 @@ export function diagnosticsSection(
 	const shown = rows.slice(0, DIAGNOSTIC_ROWS);
 	const hidden = rows.length - shown.length;
 	if (hidden > 0) {
-		shown.push(text([span(`+${hidden} more`, "muted")], { role: "omp.tool.stats", key: "more" }));
+		shown.push(text([span(localize("+{0} more\u0004packages/tui/src/tools/native-view.ts:diagnosticsSection", `${hidden}`), "muted")], { role: "omp.tool.stats", key: "more" }));
 	}
 	return node(
 		"section",
 		{
-			head: [span("Diagnostics")],
+			head: [span(localize("Diagnostics"))],
 			tone: diagnostics.errored ? "error" : "warning",
 			role: "omp.tool.diagnostics",
 		},
@@ -389,5 +390,5 @@ export function diagnosticsBadge(
 		errored ||= file.errored;
 	}
 	if (count === 0) return undefined;
-	return { text: count === 1 ? "1 diagnostic" : `${count} diagnostics`, tone: errored ? "error" : "warning" };
+	return { text: localize("{0} diagnostics", `${count}`), tone: errored ? "error" : "warning" };
 }

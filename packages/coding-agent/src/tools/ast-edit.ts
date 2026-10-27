@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AstEditToolDetails } from "@oh-my-pi/pi-tui/tools/ast-edit";
 import { type } from "@oh-my-pi/omptype";
 import type {
@@ -174,18 +175,18 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 		const ops = Array.isArray(params.ops) ? params.ops : [];
 		const firstOp = ops[0];
 		if (firstOp) {
-			lines.push(`Pattern: ${truncateForPrompt(firstOp.pat)}`);
-			lines.push(`Replacement: ${truncateForPrompt(firstOp.out)}`);
+			lines.push(t("Pattern: {0}", `${truncateForPrompt(firstOp.pat)}`));
+			lines.push(t("Replacement: {0}", `${truncateForPrompt(firstOp.out)}`));
 			if (ops.length > 1) {
-				lines.push(`+${ops.length - 1} more op${ops.length === 2 ? "" : "s"}`);
+				lines.push(t("+{0} more op{1}", `${ops.length - 1}`, `${ops.length === 2 ? "" : "s"}`));
 			}
 		}
 		if (Array.isArray(params.paths) && params.paths.length > 0) {
-			lines.push(`Paths: ${truncateForPrompt(params.paths.join(", "))}`);
+			lines.push(t("Paths: {0}", `${truncateForPrompt(params.paths.join(", "))}`));
 		}
 		return lines;
 	};
-	readonly label = "AST Edit";
+	readonly label = t("AST Edit");
 	readonly summary = "Perform AST-aware code edits (structural refactoring)";
 	readonly description: string;
 	readonly parameters = astEditSchema;
@@ -435,10 +436,8 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 
 			// Register pending action so `resolve` can apply or discard these previewed changes
 			if (!result.applied && result.totalReplacements > 0) {
-				const previewReplacementPlural = result.totalReplacements !== 1 ? "s" : "";
-				const previewFilePlural = result.filesTouched !== 1 ? "s" : "";
 				queueResolveHandler(this.session, {
-					label: `AST Edit: ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}`,
+					label: t("AST Edit: {1} replacement{2} in {0} file{3}", `${result.filesTouched}`, `${result.totalReplacements}`, `${result.totalReplacements !== 1 ? "s" : ""}`, `${result.filesTouched !== 1 ? "s" : ""}`),
 					sourceToolName: this.name,
 					apply: async (_reason: string) => {
 						// The apply outlives the preview call: its filesystem carries no signal.
@@ -513,7 +512,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 						if (stalePreview) {
 							const staleText =
 								applyResult.totalReplacements === 0
-									? `Preview is stale / no longer matches; no replacements were applied. Preview expected ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}.`
+									? `Preview is stale / no longer matches; no replacements were applied. Preview expected ${result.totalReplacements} replacement${result.totalReplacements !== 1 ? "s" : ""} in ${result.filesTouched} file${result.filesTouched !== 1 ? "s" : ""}.`
 									: applyResult.totalReplacements < result.totalReplacements
 										? `Preview is stale / no longer matches; only ${applyResult.totalReplacements} of ${result.totalReplacements} replacements were applied in ${applyResult.filesTouched} of ${result.filesTouched} files.`
 										: `Preview is stale / no longer matches; applied ${applyResult.totalReplacements} replacements but preview expected ${result.totalReplacements}.`;

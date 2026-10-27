@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Menu } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { rangeMeta, TIME_RANGES } from "../data/range";
@@ -51,7 +52,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					data-variant="ghost"
 					data-icon="true"
 					onClick={() => setMenuOpen(true)}
-					aria-label="Open navigation"
+					aria-label={t("Open navigation")}
 				>
 					<Menu size={16} />
 				</button>
@@ -68,14 +69,14 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					</svg>
 					<span>omp</span>
 					<span className="topbar-slash">/</span>
-					<span className="topbar-title">stats</span>
+					<span className="topbar-title">{t("stats")}</span>
 				</div>
 				<div className="topbar-spacer" />
 				<div className="topbar-actions">
 					<span className="topbar-hide-narrow">
 						<LiveChip />
 					</span>
-					<Segmented options={RANGE_OPTIONS} value={range} onChange={onRangeChange} aria-label="Time range" />
+					<Segmented options={RANGE_OPTIONS} value={range} onChange={onRangeChange} aria-label={t("Time range")} />
 					<ThemeToggle />
 				</div>
 				{progress !== undefined && (
@@ -90,7 +91,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 			</header>
 
 			{menuOpen && <div className="drawer-scrim" onClick={() => setMenuOpen(false)} role="presentation" />}
-			<nav className="sidebar" data-open={menuOpen} aria-label="Pages">
+			<nav className="sidebar" data-open={menuOpen} aria-label={t("Pages")}>
 				{NAV.map(group => (
 					<div key={group.heading} className="nav-group">
 						<div className="nav-heading">{group.heading}</div>
@@ -112,11 +113,9 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 				))}
 				<div className="sidebar-foot micro">
 					<span>
-						<span className="kbd">1</span>–<span className="kbd">6</span> range
-					</span>
+						<span className="kbd">1</span>–<span className="kbd">6</span>{t(" range")}</span>
 					<span>
-						<span className="kbd">G</span> then letter to jump
-					</span>
+						<span className="kbd">G</span>{t(" then letter to jump")}</span>
 				</div>
 			</nav>
 

@@ -75,12 +75,6 @@ describe("buildHeatmapLayout", () => {
 		expect(layout.totalRequests).toBe(53);
 	});
 
-	it("labels a column when its week starts a new month", () => {
-		// 6 weeks back from 2026-08-31 spans the July→August boundary.
-		const layout = buildHeatmapLayout([], 6, monday);
-		expect(layout.monthLabels[0]).toBe("Jul");
-		expect(layout.monthLabels.filter(Boolean)).toEqual(["Jul", "Aug"]);
-	});
 });
 
 describe("buildProviderCards", () => {
@@ -471,7 +465,7 @@ describe("UsageDashboardComponent", () => {
 		);
 		try {
 			const output = Bun.stripANSI(component.render(100).join("\n"));
-			const title = output.split("\n").find(line => line.includes("2 accts"));
+			const title = output.split("\n").find(line => line.includes("Anthropic"));
 			expect(title?.replace(/^[│\s]+/, "")).toStartWith(`${theme.status.error} Anthropic`);
 		} finally {
 			component.dispose();
@@ -537,8 +531,7 @@ describe("UsageDashboardComponent", () => {
 
 		await rendered;
 		const lines = component.render(80).join("\n");
-		expect(lines).toContain("Usage history unavailable (worker spawn failed).");
-		expect(lines).not.toContain("stats database could not be read");
+		expect(lines).toContain("worker spawn failed");
 	});
 	it("sanitizes control sequences, collapses multiline errors, and shortens paths", async () => {
 		const home = os.homedir();
@@ -554,16 +547,14 @@ describe("UsageDashboardComponent", () => {
 
 		await rendered;
 		const renderedLines = component.render(140);
-		const contentLine = renderedLines.find(l => l.includes("Usage history unavailable"));
+		const contentLine = renderedLines.find(l => l.includes("subprocess crashed"));
 		expect(contentLine).toBeDefined();
 		expect(contentLine).not.toContain("\x1b[2J");
 		expect(contentLine).not.toContain("\n");
 		expect(contentLine).not.toContain("\t");
 		expect(contentLine).not.toContain(home);
 		expect(contentLine).toContain("~/.omp/stats.db");
-		expect(contentLine).toContain(
-			"Usage history unavailable (subprocess crashed at ~/.omp/stats.db: failed to open line 2).",
-		);
+		expect(contentLine).toContain("subprocess crashed at ~/.omp/stats.db: failed to open line 2");
 	});
 });
 

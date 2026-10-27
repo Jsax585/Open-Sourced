@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -73,8 +74,8 @@ export function FrustrationRoute({ active, range }: FrustrationRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Frustration"
-				description={`How often your messages sound annoyed, per model version, in ${meta.windowLabel}.`}
+				title={t("Frustration")}
+				description={t("How often your messages sound annoyed, per model version, in {0}.", `${meta.windowLabel}`)}
 			/>
 
 			<QueryView query={stats} skeleton={<ChartSkeleton height={96} />}>
@@ -101,7 +102,7 @@ export function FrustrationRoute({ active, range }: FrustrationRouteProps) {
 			<QueryView
 				query={stats}
 				skeleton={
-					<Card index={2} title="Frustration by model version">
+					<Card index={2} title={t("Frustration by model version")}>
 						<ChartSkeleton height={340} />
 						<TableSkeleton rows={6} />
 					</Card>
@@ -138,33 +139,33 @@ function FrustrationSummary({ overall }: { overall: FrustrationCounts }) {
 	return (
 		<StatGrid min={170}>
 			<Stat
-				label="User messages"
-				title="User messages with prose in range"
+				label={t("User messages")}
+				title={t("User messages with prose in range")}
 				value={formatInteger(overall.messages)}
 			/>
 			<Stat
-				label="Judge coverage"
-				title="Messages with a cached judge verdict; the rest use regex signals"
+				label={t("Judge coverage")}
+				title={t("Messages with a cached judge verdict; the rest use regex signals")}
 				value={rate(overall.judged, overall.messages)}
-				hint={`${formatInteger(overall.judged)} judged · ${formatInteger(regex)} regex`}
+				hint={t("{0} judged · {1} regex", `${formatInteger(overall.judged)}`, `${formatInteger(regex)}`)}
 			/>
 			<Stat
-				label="Annoyed"
-				title="Messages annoyed at any target"
+				label={t("Annoyed")}
+				title={t("Messages annoyed at any target")}
 				value={rate(overall.annoyed, overall.messages)}
-				hint={`${formatInteger(overall.annoyed)} messages`}
+				hint={t("{0} messages", `${formatInteger(overall.annoyed)}`)}
 			/>
 			<Stat
-				label="At assistant"
-				title="Messages annoyed at the assistant"
+				label={t("At assistant")}
+				title={t("Messages annoyed at the assistant")}
 				value={rate(overall.atAssistant, overall.messages)}
-				hint={`${formatInteger(overall.atAssistant)} messages`}
+				hint={t("{0} messages", `${formatInteger(overall.atAssistant)}`)}
 			/>
 			<Stat
-				label="Angry"
-				title="Messages angry or hostile toward the assistant"
+				label={t("Angry")}
+				title={t("Messages angry or hostile toward the assistant")}
 				value={rate(overall.angry, overall.messages)}
-				hint={`${formatInteger(overall.angry)} messages`}
+				hint={t("{0} messages", `${formatInteger(overall.angry)}`)}
 			/>
 		</StatGrid>
 	);
@@ -189,7 +190,7 @@ interface JudgePanelProps {
 }
 
 const UNAVAILABLE_HINT =
-	"Judging needs the omp host process: open the dashboard with omp stats and configure a judge model. Until then messages are classified by regex signals.";
+	t("Judging needs the omp host process: open the dashboard with omp stats and configure a judge model. Until then messages are classified by regex signals.");
 
 function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunChanged }: JudgePanelProps) {
 	const [modalOpen, setModalOpen] = useState(false);
@@ -265,10 +266,10 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 	const quote = estimate.status === "ready" ? estimate.estimate : null;
 	const primaryAction =
 		estimate.status === "loading"
-			? { label: "Proceed", onClick: proceed, disabled: true }
+			? { label: t("Proceed"), onClick: proceed, disabled: true }
 			: quote?.available
 				? {
-						label: starting ? "Starting…" : "Proceed",
+						label: starting ? t("Starting…") : t("Proceed"),
 						onClick: proceed,
 						disabled: starting || quote.messages === 0,
 					}
@@ -278,11 +279,10 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 		<Card
 			index={1}
 			title={
-				<>
-					Judge classification <JobBadge job={job} judgeAvailable={judgeAvailable} />
+				<>{t("Judge classification ")}<JobBadge job={job} judgeAvailable={judgeAvailable} />
 				</>
 			}
-			description="Cached LLM verdicts replace the regex heuristics; unjudged messages fall back to regex signals."
+			description={t("Cached LLM verdicts replace the regex heuristics; unjudged messages fall back to regex signals.")}
 			actions={
 				<button
 					type="button"
@@ -295,12 +295,11 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 						!judgeAvailable
 							? UNAVAILABLE_HINT
 							: running
-								? "A judge run is in progress"
-								: "Quote the cost of judging every unjudged message in range"
+								? t("A judge run is in progress")
+								: t("Quote the cost of judging every unjudged message in range")
 					}
 				>
-					<Sparkles size={13} /> Classify with judge
-				</button>
+					<Sparkles size={13} />{t(" Classify with judge")}</button>
 			}
 		>
 			<div className="stack frustration-judge">
@@ -317,7 +316,7 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 				)}
 			</div>
 
-			<Modal open={modalOpen} title="Classify with judge" onClose={closeModal} primaryAction={primaryAction}>
+			<Modal open={modalOpen} title={t("Classify with judge")} onClose={closeModal} primaryAction={primaryAction}>
 				<EstimateBody estimate={estimate} />
 				{startError && (
 					<p className="micro tone-bad" role="alert">
@@ -334,46 +333,42 @@ function JobBadge({ job, judgeAvailable }: { job: FrustrationJobStatus; judgeAva
 		case "running":
 			return (
 				<Badge tone="ok">
-					<Dot tone="live" pulse /> Running
-				</Badge>
+					<Dot tone="live" pulse />{t(" Running")}</Badge>
 			);
 		case "done":
-			return <Badge tone="ok">Last run done</Badge>;
+			return <Badge tone="ok">{t("Last run done")}</Badge>;
 		case "cancelled":
-			return <Badge tone="warn">Last run cancelled</Badge>;
+			return <Badge tone="warn">{t("Last run cancelled")}</Badge>;
 		case "failed":
-			return <Badge tone="bad">Last run failed</Badge>;
+			return <Badge tone="bad">{t("Last run failed")}</Badge>;
 		case "idle":
-			return <Badge>{judgeAvailable ? "Not run yet" : "Regex only"}</Badge>;
+			return <Badge>{judgeAvailable ? t("Not run yet") : t("Regex only")}</Badge>;
 	}
 }
 
 function EstimateBody({ estimate }: { estimate: EstimateState }) {
-	if (estimate.status === "loading") return <p className="muted">Estimating cost…</p>;
+	if (estimate.status === "loading") return <p className="muted">{t("Estimating cost…")}</p>;
 	if (estimate.status === "error") return <p className="tone-bad">{estimate.message}</p>;
 	const quote = estimate.estimate;
 	if (!quote.available) return <p>{quote.reason}</p>;
 	if (quote.messages === 0) {
-		return <p>Everything in this range is already judged. There is nothing left to classify.</p>;
+		return <p>{t("Everything in this range is already judged. There is nothing left to classify.")}</p>;
 	}
 	return (
 		<>
 			<div className="frustration-quote">
-				<span className="dim micro">Estimated cost</span>
+				<span className="dim micro">{t("Estimated cost")}</span>
 				<span className="num frustration-quote-value">≈ {formatCost(quote.cost)}</span>
 			</div>
 			<KeyValues
 				items={[
-					{ key: "messages", label: "Unjudged unique messages", value: formatInteger(quote.messages) },
-					{ key: "chars", label: "Prose characters", value: formatInteger(quote.chars) },
-					{ key: "tokens", label: "Estimated input tokens", value: formatInteger(quote.inputTokens) },
-					{ key: "judge", label: "Judge", value: quote.judge },
+					{ key: "messages", label: t("Unjudged unique messages"), value: formatInteger(quote.messages) },
+					{ key: "chars", label: t("Prose characters"), value: formatInteger(quote.chars) },
+					{ key: "tokens", label: t("Estimated input tokens"), value: formatInteger(quote.inputTokens) },
+					{ key: "judge", label: t("Judge"), value: quote.judge },
 				]}
 			/>
-			<p className="micro dim">
-				Identical messages share one verdict, and verdicts are cached, so later runs only pay for new messages.
-				Nothing is spent until you proceed.
-			</p>
+			<p className="micro dim">{t("Identical messages share one verdict, and verdicts are cached, so later runs only pay for new messages. Nothing is spent until you proceed.")}</p>
 		</>
 	);
 }
@@ -392,9 +387,7 @@ function JudgeProgress({
 	return (
 		<div className="stack frustration-progress">
 			<div className="row frustration-progress-head">
-				<span className="num">
-					{formatInteger(job.done)}/{formatInteger(job.total)} judged
-				</span>
+				<span className="num">{t("{0}/{1} judged", `${formatInteger(job.done)}`, `${formatInteger(job.total)}`)}</span>
 				<span className="num dim">{formatPercent(share)}</span>
 				<span className="frustration-spacer" />
 				<button
@@ -405,7 +398,7 @@ function JudgeProgress({
 					onClick={onCancel}
 					disabled={cancelling}
 				>
-					{cancelling ? "Cancelling…" : "Cancel run"}
+					{cancelling ? t("Cancelling…") : t("Cancel run")}
 				</button>
 			</div>
 			<div
@@ -418,58 +411,46 @@ function JudgeProgress({
 				<div className="meter-fill frustration-progress-fill" style={{ width: `${share * 100}%` }} />
 			</div>
 			<div className="row micro muted frustration-progress-meta">
-				<span className={job.failed > 0 ? "tone-bad" : undefined}>{formatInteger(job.failed)} failed</span>
-				<span>
-					cost so far <span className="num">{formatCost(job.cost)}</span>
+				<span className={job.failed > 0 ? "tone-bad" : undefined}>{t("{0} failed\u0004packages/stats/src/client/routes/FrustrationRoute.tsx:JudgeProgress", `${formatInteger(job.failed)}`)}</span>
+				<span>{t("cost so far ")}<span className="num">{formatCost(job.cost)}</span>
 				</span>
 				{job.judge && <span className="mono">{job.judge}</span>}
-				{job.startedAt !== null && <span>elapsed {formatElapsed(Date.now() - job.startedAt)}</span>}
+				{job.startedAt !== null && <span>{t("elapsed {0}", `${formatElapsed(Date.now() - job.startedAt)}`)}</span>}
 				{job.startedAt !== null && job.done > 0 && (
 					<span className="num">{(job.done / Math.max(1, (Date.now() - job.startedAt) / 1000)).toFixed(0)}/s</span>
 				)}
-				{job.concurrency > 0 && <span className="num">{formatInteger(job.concurrency)} in flight</span>}
+				{job.concurrency > 0 && <span className="num">{t("{0} in flight", `${formatInteger(job.concurrency)}`)}</span>}
 			</div>
 		</div>
 	);
 }
 
 function JudgeResultLine({ job }: { job: FrustrationJobStatus }) {
-	const progress = `${formatInteger(job.done)}/${formatInteger(job.total)} messages`;
-	const failed = job.failed > 0 ? `, ${formatInteger(job.failed)} failed` : "";
-	const judge = job.judge ? ` with ${job.judge}` : "";
+	const progress = t("{0}/{1} messages", `${formatInteger(job.done)}`, `${formatInteger(job.total)}`);
+	const failed = job.failed > 0 ? t(", {0} failed", `${formatInteger(job.failed)}`) : "";
+	const judge = job.judge ? t(" with {0}", `${job.judge}`) : "";
 	const elapsed =
-		job.startedAt !== null && job.finishedAt !== null ? ` in ${formatElapsed(job.finishedAt - job.startedAt)}` : "";
+		job.startedAt !== null && job.finishedAt !== null ? t(" in {0}", `${formatElapsed(job.finishedAt - job.startedAt)}`) : "";
 	switch (job.state) {
 		case "idle":
 			return (
-				<p className="muted">
-					No judge run yet. Classify the unjudged messages to replace regex estimates with verdicts.
-				</p>
+				<p className="muted">{t("No judge run yet. Classify the unjudged messages to replace regex estimates with verdicts.")}</p>
 			);
 		case "running":
 			return null;
 		case "done":
 			return (
-				<p className="muted">
-					Last run judged {progress}
-					{failed}
-					{judge}
-					{elapsed} for <span className="num">{formatCost(job.cost)}</span>.
+				<p className="muted">{t("Last run judged {0}{1}{2}{3} for ", `${progress}`, `${failed}`, `${judge}`, `${elapsed}`)}<span className="num">{formatCost(job.cost)}</span>.
 				</p>
 			);
 		case "cancelled":
 			return (
-				<p className="muted">
-					Last run cancelled after {progress}
-					{failed}; spent <span className="num">{formatCost(job.cost)}</span>.
+				<p className="muted">{t("Last run cancelled after {0}{1}; spent ", `${progress}`, `${failed}`)}<span className="num">{formatCost(job.cost)}</span>.
 				</p>
 			);
 		case "failed":
 			return (
-				<p className="muted">
-					Last run failed after {progress}
-					{failed}: <span className="tone-bad">{job.error ?? "unknown error"}</span>. Spent{" "}
-					<span className="num">{formatCost(job.cost)}</span>.
+				<p className="muted">{t("Last run failed after {0}{1}: ", `${progress}`, `${failed}`)}<span className="tone-bad">{job.error ?? t("unknown error")}</span>{t(". Spent{0}", `${" "}`)}<span className="num">{formatCost(job.cost)}</span>.
 				</p>
 			);
 	}
@@ -533,9 +514,9 @@ function layerColor(hue: string, layer: Layer): string {
  * differences draws each bar to the `annoyed` height with the subsets inside.
  */
 const LAYERS = [
-	{ key: "angry", label: "Angry at assistant" },
-	{ key: "assistant", label: "At assistant, not angry" },
-	{ key: "other", label: "Annoyed at other targets" },
+	{ key: "angry", label: t("Angry at assistant") },
+	{ key: "assistant", label: t("At assistant, not angry") },
+	{ key: "other", label: t("Annoyed at other targets") },
 ] as const;
 type Layer = (typeof LAYERS)[number]["key"];
 
@@ -588,11 +569,11 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 
 	const classOptions = useMemo(
 		() => [
-			{ value: ALL_CLASSES, label: "All", title: "Every model class" },
+			{ value: ALL_CLASSES, label: t("All"), title: t("Every model class") },
 			...[...classes].map(([modelClass, messages]) => ({
 				value: modelClass,
 				label: modelClass,
-				title: `${formatInteger(messages)} messages`,
+				title: t("{0} messages", `${formatInteger(messages)}`),
 			})),
 		],
 		[classes],
@@ -638,8 +619,8 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 
 	if (models.length === 0) {
 		return (
-			<Card index={2} title="Frustration by model version" stale={stale}>
-				<EmptyState title="No user messages in this range" hint="Try a longer range." />
+			<Card index={2} title={t("Frustration by model version")} stale={stale}>
+				<EmptyState title={t("No user messages in this range")} hint={t("Try a longer range.")} />
 			</Card>
 		);
 	}
@@ -650,15 +631,15 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 		<>
 			<Card
 				index={2}
-				title="Frustration by model version"
-				description="Share of user messages per model version. Each bar reaches the annoyed rate; the subsets aimed at the assistant stack inside it."
+				title={t("Frustration by model version")}
+				description={t("Share of user messages per model version. Each bar reaches the annoyed rate; the subsets aimed at the assistant stack inside it.")}
 				stale={stale}
 			>
 				<div className="stack frustration-chart-body">
 					<div className="frustration-classes">
 						<Segmented
 							size="sm"
-							aria-label="Model class"
+							aria-label={t("Model class")}
 							options={classOptions}
 							value={activeClass}
 							onChange={setSelectedClass}
@@ -676,17 +657,13 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 							onToggle={toggleFamily}
 						/>
 						<span className="frustration-spacer" />
-						<label className="check" title={`Models with fewer than ${MIN_MESSAGES} messages have noisy rates`}>
-							<input type="checkbox" checked={showSmall} onChange={e => setShowSmall(e.target.checked)} />
-							Include &lt; {MIN_MESSAGES} messages{smallCount > 0 ? ` (${smallCount})` : ""}
-						</label>
+						<label className="check" title={t("Models with fewer than {0} messages have noisy rates", `${MIN_MESSAGES}`)}>
+							<input type="checkbox" checked={showSmall} onChange={e => setShowSmall(e.target.checked)} />{t("Include < {0} messages{1}", `${MIN_MESSAGES}`, `${smallCount > 0 ? ` (${smallCount})` : ""}`)}</label>
 						<label
 							className="check"
-							title={`Hide models with under ${MIN_JUDGED_SHARE * 100}% judged messages (rates from regex signals)`}
+							title={t("Hide models with under {0}% judged messages (rates from regex signals)", `${MIN_JUDGED_SHARE * 100}`)}
 						>
-							<input type="checkbox" checked={hideRegex} onChange={e => setHideRegex(e.target.checked)} />
-							Hide mostly regex{regexCount > 0 ? ` (${regexCount})` : ""}
-						</label>
+							<input type="checkbox" checked={hideRegex} onChange={e => setHideRegex(e.target.checked)} />{t("Hide mostly regex{0}", `${regexCount > 0 ? ` (${regexCount})` : ""}`)}</label>
 					</div>
 					<EncodingKey hasRegexRows={hasRegexRows} />
 					<FrustrationChart rows={rows} familyColors={familyColors} />
@@ -702,29 +679,19 @@ function EncodingKey({ hasRegexRows }: { hasRegexRows: boolean }) {
 	return (
 		<div className="legend frustration-key">
 			<span className="legend-item">
-				<span className="swatch frustration-key-swatch" data-variant="angry" />
-				Angry at assistant
-			</span>
+				<span className="swatch frustration-key-swatch" data-variant="angry" />{t("Angry at assistant")}</span>
 			<span className="legend-item">
-				<span className="swatch frustration-key-swatch" data-variant="assistant" />
-				At assistant
-			</span>
+				<span className="swatch frustration-key-swatch" data-variant="assistant" />{t("At assistant")}</span>
 			<span className="legend-item">
-				<span className="swatch frustration-key-swatch" data-variant="other" />
-				Annoyed at other targets
-			</span>
+				<span className="swatch frustration-key-swatch" data-variant="other" />{t("Annoyed at other targets")}</span>
 			<span className="legend-item">
-				<span className="frustration-key-line" />
-				At assistant trend
-			</span>
+				<span className="frustration-key-line" />{t("At assistant trend")}</span>
 			<span
 				className="legend-item frustration-key-wide"
-				title={`Under ${MIN_JUDGED_SHARE * 100}% of these messages are judged; their rates come from regex signals`}
+				title={t("Under {0}% of these messages are judged; their rates come from regex signals", `${MIN_JUDGED_SHARE * 100}`)}
 			>
-				<span className="swatch frustration-key-swatch" data-variant="hatch" />
-				Hatched: mostly regex fallback{hasRegexRows ? " (run the judge)" : ""}
-			</span>
-			<span className="legend-item dim">Hue = model family</span>
+				<span className="swatch frustration-key-swatch" data-variant="hatch" />{t("Hatched: mostly regex fallback{0}", `${hasRegexRows ? t(" (run the judge)") : ""}`)}</span>
+			<span className="legend-item dim">{t("Hue = model family")}</span>
 		</div>
 	);
 }
@@ -764,7 +731,7 @@ function FrustrationChart({
 		}
 		out.push({
 			key: "trend",
-			label: "At assistant (total)",
+			label: t("At assistant (total)"),
 			color: "var(--ink-1)",
 			values: rows.map(row => percent(row.atAssistant, row.messages)),
 			kind: "line",
@@ -777,7 +744,7 @@ function FrustrationChart({
 	if (rows.length === 0) {
 		return (
 			<div className="frustration-chart-empty">
-				<EmptyState title="No model versions match the filters" />
+				<EmptyState title={t("No model versions match the filters")} />
 			</div>
 		);
 	}
@@ -791,19 +758,16 @@ function FrustrationChart({
 			format={v => `${v}%`}
 			formatTooltip={v => `${v.toFixed(1)}%`}
 			showTotal={false}
-			emptyLabel="No frustrated messages for these models"
+			emptyLabel={t("No frustrated messages for these models")}
 			tooltipExtra={i => {
 				const row = rows[i];
 				return (
 					<div className="frustration-tooltip-extra">
 						<div className="chart-tooltip-row chart-tooltip-total">
-							<span className="chart-tooltip-label">Annoyed, any target</span>
+							<span className="chart-tooltip-label">{t("Annoyed, any target")}</span>
 							<span className="chart-tooltip-value">{rate(row.annoyed, row.messages)}</span>
 						</div>
-						<div className="micro dim">
-							{formatInteger(row.messages)} messages · judged {formatInteger(row.judged)} (
-							{rate(row.judged, row.messages)}){isMostlyRegex(row) ? " · mostly regex fallback" : ""}
-						</div>
+						<div className="micro dim">{t("{0} messages · judged {1} ({2}){3}", `${formatInteger(row.messages)}`, `${formatInteger(row.judged)}`, `${rate(row.judged, row.messages)}`, `${isMostlyRegex(row) ? " · mostly regex fallback" : ""}`)}</div>
 					</div>
 				);
 			}}
@@ -824,7 +788,7 @@ function FrustrationTable({
 		(): Column<FrustrationModelStats>[] => [
 			{
 				key: "model",
-				header: "Model",
+				header: t("Model"),
 				sort: row => row.label,
 				render: row => (
 					<span className="row" title={row.key}>
@@ -838,29 +802,29 @@ function FrustrationTable({
 			},
 			{
 				key: "ids",
-				header: "Model IDs",
+				header: t("Model IDs"),
 				wrap: true,
 				render: row => <span className="mono micro dim">{row.models.join(", ")}</span>,
 			},
 			{
 				key: "messages",
-				header: "Messages",
+				header: t("Messages"),
 				align: "right",
 				sort: row => row.messages,
 				render: row => <span className="num">{formatInteger(row.messages)}</span>,
 			},
 			{
 				key: "judged",
-				header: "Judged",
+				header: t("Judged"),
 				align: "right",
 				sort: row => (row.messages > 0 ? row.judged / row.messages : 0),
 				render: row =>
 					isMostlyRegex(row) ? (
 						<span
 							className="row frustration-judged"
-							title="Mostly regex fallback: run the judge for accurate rates"
+							title={t("Mostly regex fallback: run the judge for accurate rates")}
 						>
-							<Badge tone="warn">regex</Badge>
+							<Badge tone="warn">{t("regex")}</Badge>
 							<span className="num dim">{rate(row.judged, row.messages)}</span>
 						</span>
 					) : (
@@ -869,33 +833,33 @@ function FrustrationTable({
 			},
 			{
 				key: "annoyed",
-				header: "Annoyed",
+				header: t("Annoyed"),
 				align: "right",
 				sort: row => percent(row.annoyed, row.messages),
 				render: row => (
-					<span className="num" title={`${formatInteger(row.annoyed)} messages`}>
+					<span className="num" title={t("{0} messages", `${formatInteger(row.annoyed)}`)}>
 						{rate(row.annoyed, row.messages)}
 					</span>
 				),
 			},
 			{
 				key: "atAssistant",
-				header: "At assistant",
+				header: t("At assistant"),
 				align: "right",
 				sort: row => percent(row.atAssistant, row.messages),
 				render: row => (
-					<span className="num" title={`${formatInteger(row.atAssistant)} messages`}>
+					<span className="num" title={t("{0} messages", `${formatInteger(row.atAssistant)}`)}>
 						{rate(row.atAssistant, row.messages)}
 					</span>
 				),
 			},
 			{
 				key: "angry",
-				header: "Angry",
+				header: t("Angry"),
 				align: "right",
 				sort: row => percent(row.angry, row.messages),
 				render: row => (
-					<span className={row.angry > 0 ? "num tone-bad" : "num"} title={`${formatInteger(row.angry)} messages`}>
+					<span className={row.angry > 0 ? "num tone-bad" : "num"} title={t("{0} messages", `${formatInteger(row.angry)}`)}>
 						{rate(row.angry, row.messages)}
 					</span>
 				),
@@ -907,8 +871,8 @@ function FrustrationTable({
 	return (
 		<Card
 			index={3}
-			title="Model versions"
-			description="Rates are shares of user messages; rows follow the chart filters."
+			title={t("Model versions")}
+			description={t("Rates are shares of user messages; rows follow the chart filters.")}
 			flush
 			stale={stale}
 		>
@@ -917,7 +881,7 @@ function FrustrationTable({
 				rowKey={row => row.key}
 				columns={columns}
 				dense
-				empty={<EmptyState title="No model versions match the filters" />}
+				empty={<EmptyState title={t("No model versions match the filters")} />}
 			/>
 		</Card>
 	);

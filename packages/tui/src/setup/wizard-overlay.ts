@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, type OverlayFocusOwner } from "../tui";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
@@ -36,7 +37,7 @@ const DONE_NODE = col([]);
 
 function sceneFooterHint(): string {
 	const navKeys = editorKeys("tui.select.up", "tui.select.down");
-	return `${navKeys} select · ${editorKey("tui.select.confirm")} confirm · ${editorKey("tui.select.cancel")} skip · ${formatKeyHint("ctrl+c")} exit setup`;
+	return t("{0} select · {1} confirm · {2} skip · {3} exit setup", `${navKeys}`, `${editorKey("tui.select.confirm")}`, `${editorKey("tui.select.cancel")}`, `${formatKeyHint("ctrl+c")}`);
 }
 
 function indentLine(line: string, width: number, indent: number): string {
@@ -246,7 +247,7 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 	#describeScene(): NativeNode {
 		const scene = this.scenes[this.#sceneIndex];
 		const active = this.#activeScene;
-		const title = active?.title ?? scene?.title ?? "Setup";
+		const title = active?.title ?? scene?.title ?? t("Setup");
 		const subtitle = active?.subtitle;
 		const footer = sceneFooterHint();
 		return this.#nativeScene.get([this.#sceneIndex, this.scenes.length, active, title, subtitle, footer], () => {
@@ -258,7 +259,7 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 						[
 							logoNode(PI_LOGO, false),
 							text([span(APP_NAME, "accent strong")], { wrap: "none" }),
-							text([span(`Setup step ${this.#sceneIndex + 1} of ${this.scenes.length}`, "muted")], {
+							text([span(t("Setup step {0} of {1}", `${this.#sceneIndex + 1}`, `${this.scenes.length}`), "muted")], {
 								wrap: "none",
 							}),
 						],
@@ -276,7 +277,7 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 
 	#renderScene(width: number, height: number): string[] {
 		const scene = this.scenes[this.#sceneIndex];
-		const title = this.#activeScene?.title ?? scene?.title ?? "Setup";
+		const title = this.#activeScene?.title ?? scene?.title ?? t("Setup");
 		const subtitle = this.#activeScene?.subtitle;
 		const contentWidth = Math.max(MIN_CONTENT_WIDTH, width - SCENE_MARGIN_X * 2);
 		const logo = gradientLogo(PI_LOGO, 0);
@@ -284,7 +285,7 @@ export class SetupWizardComponent implements Component, OverlayFocusOwner {
 			"",
 			...logo.map(line => centerLine(line, width)),
 			centerLine(theme.bold(theme.fg("accent", APP_NAME)), width),
-			centerLine(theme.fg("muted", `Setup step ${this.#sceneIndex + 1} of ${this.scenes.length}`), width),
+			centerLine(theme.fg("muted", t("Setup step {0} of {1}", `${this.#sceneIndex + 1}`, `${this.scenes.length}`)), width),
 			"",
 			indentLine(theme.bold(title), width, SCENE_MARGIN_X),
 		];

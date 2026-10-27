@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as Module from "node:module";
@@ -432,7 +433,7 @@ async function runRuntimeInstall(runtimeDir: string): Promise<void> {
 	if (exitCode === 0) return;
 	const output = `${stdout}\n${stderr}`.trim();
 	throw new Error(
-		`Failed to install runtime at ${runtimeDir} with ${process.execPath} install (exit ${exitCode}): ${output}`,
+		t("Failed to install runtime at {0} with {1} install (exit {2}): {3}", `${runtimeDir}`, `${process.execPath}`, `${exitCode}`, `${output}`),
 	);
 }
 
@@ -456,7 +457,7 @@ export async function ensureRuntimeInstalled(options: EnsureRuntimeInstalledOpti
 			break;
 		}
 	}
-	if (!probePackage) throw new Error(`Runtime install at ${runtimeDir} declares no dependencies`);
+	if (!probePackage) throw new Error(t("Runtime install at {0} declares no dependencies", `${runtimeDir}`));
 	const probeManifest = Bun.file(path.join(runtimeDir, "node_modules", ...probePackage.split("/"), "package.json"));
 	if (await probeManifest.exists()) return runtimeDir;
 

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
@@ -110,7 +111,7 @@ export async function invokeSkillCommandFromText(
 		if (options?.propagateErrors) {
 			throw err;
 		}
-		ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+		ctx.showError(t("Failed to load skill: {0}", `${err instanceof Error ? err.message : String(err)}`));
 		return true;
 	} finally {
 		if (optimistic && ctx.optimisticSkillMessagePending) {

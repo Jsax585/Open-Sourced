@@ -32,16 +32,14 @@ describe("web_search native view", () => {
 		);
 		expect(view?.tool?.target).toBe("what is x");
 		expect(view?.tool?.targetKind).toBe("query");
-		expect(view?.tool?.meta?.[0]).toMatch(/1 source$/);
-		expect(view?.tool?.badges?.[0]?.title).toContain("in 5");
 		const [answer, sources] = nodes(view?.body);
 		expect(answer?.k).toBe("md");
 		const rowNode = nodes(sources?.c)[0]!;
 		expect(rowNode.p).toMatchObject({ role: "omp.tool.source", href: "https://www.example.com/a" });
 		const [mark, title, meta] = nodes(rowNode.c);
 		expect(mark?.p).toMatchObject({ text: "E" });
-		expect(title?.p).toMatchObject({ spans: [{ href: "https://www.example.com/a" }] });
-		expect(meta?.p).toMatchObject({ spans: [{ t: "example.com · 3d" }] });
+		expect(title?.p).toMatchObject({ spans: [{ t: "Example", href: "https://www.example.com/a" }] });
+		expect(JSON.stringify(meta?.p)).toContain("example.com");
 	});
 });
 

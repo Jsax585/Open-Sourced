@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Korean dashboard labels, tooltips, accessibility text, and localized date and number formatting.
+
 ## [18.12.0] - 2026-10-17
 
 ### Fixed

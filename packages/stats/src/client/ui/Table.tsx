@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { formatInteger } from "../data/formatters";
@@ -154,9 +155,7 @@ export function Table<T>({
 			</div>
 			{limit !== undefined && sorted.length > limit && (
 				<div className="table-more">
-					<span className="micro">
-						{formatInteger(visible.length)} of {formatInteger(sorted.length)}
-					</span>
+					<span className="micro">{t("{1} of {0}", `${formatInteger(sorted.length)}`, `${formatInteger(visible.length)}`)}</span>
 					{sorted.length > shown && (
 						<button
 							type="button"
@@ -164,9 +163,7 @@ export function Table<T>({
 							data-size="sm"
 							data-variant="ghost"
 							onClick={() => setShown(n => n + limit * 4)}
-						>
-							Show more
-						</button>
+						>{t("Show more")}</button>
 					)}
 					{shown > limit && (
 						<button
@@ -175,9 +172,7 @@ export function Table<T>({
 							data-size="sm"
 							data-variant="ghost"
 							onClick={() => setShown(limit)}
-						>
-							Show fewer
-						</button>
+						>{t("Show fewer")}</button>
 					)}
 				</div>
 			)}

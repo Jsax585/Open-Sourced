@@ -1,118 +1,116 @@
-# System Prompt Customization
+# 시스템 프롬프트 사용자 지정
 
-How the coding agent assembles its system prompt and what users can control with `SYSTEM_TEMPLATE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `TITLE_SYSTEM.md`, and CLI flags. Programmatic API options are called out where they expose the same routes or full replacement.
+코딩 에이전트가 시스템 프롬프트를 조합하는 방식과 `SYSTEM_TEMPLATE.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `TITLE_SYSTEM.md`, CLI 플래그로 제어할 수 있는 내용을 설명합니다. 같은 경로나 전체 교체 기능을 제공하는 프로그래밍 API 옵션도 함께 안내합니다.
 
-Primary implementation:
+주요 구현:
 
 - `packages/coding-agent/src/main.ts` (`applyResolvedSystemPromptInputs`)
-- `packages/coding-agent/src/sdk.ts` (`CreateAgentSessionOptions`, prompt construction)
+- `packages/coding-agent/src/sdk.ts` (`CreateAgentSessionOptions`, 프롬프트 구성)
 - `packages/coding-agent/src/system-prompt.ts` (`discoverSystemPromptOverride`, `buildSystemPrompt`, `BuildSystemPromptOptions`)
-- `packages/coding-agent/src/prompts/system/system-prompt.md` (default instruction template)
-- `packages/coding-agent/src/prompts/system/custom-system-prompt.md` (plain `SYSTEM.md` template)
-- `packages/coding-agent/src/prompts/system/project-prompt.md` (generated `<project-context>` footer)
+- `packages/coding-agent/src/prompts/system/system-prompt.md` (기본 지침 템플릿)
+- `packages/coding-agent/src/prompts/system/custom-system-prompt.md` (일반 텍스트 `SYSTEM.md` 템플릿)
+- `packages/coding-agent/src/prompts/system/project-prompt.md` (생성되는 `<project-context>` 푸터)
 
-## Block layout and prompt caching
+## 블록 구성과 프롬프트 캐싱
 
-The provider-facing prompt is an ordered block array. Static, cwd-independent blocks come first: block 0 (the default, custom, or template instruction block) and eval-prelude guidance. Every working-directory-derived section follows in one trailing footer block that opens with `<project-context>`: workstation data, context files with their paths (`<repo-rules>`), `<dir-context>` pointers, `<workspace-tree>`, `<workspace-roots>`, active nested-repository context, the final completion requirements, and the append text. Task subagents append their per-spawn role/assignment block after the footer.
+제공업체에 전달하는 프롬프트는 순서가 있는 블록 배열입니다. 작업 디렉터리와 무관한 정적 블록이 먼저 나옵니다. 블록 0(기본, 사용자 지정 또는 템플릿 지침 블록)과 eval 프렐류드 안내가 여기에 해당합니다. 작업 디렉터리에서 파생되는 모든 섹션은 `<project-context>`로 시작하는 마지막 푸터 블록에 배치됩니다. 여기에는 워크스테이션 정보, 경로가 포함된 컨텍스트 파일(`<repo-rules>`), `<dir-context>` 포인터, `<workspace-tree>`, `<workspace-roots>`, 활성 중첩 저장소 컨텍스트, 최종 완료 요구사항, 추가 텍스트가 포함됩니다. 작업 하위 에이전트는 푸터 뒤에 실행별 역할/할당 블록을 추가합니다.
 
-On Anthropic, the system cache breakpoint lands on the last block before the first `<project-context>` (or `<memories>`) block, so sessions and subagent spawns of the same agent in different directories (for example one git worktree per task) share the static prompt as a cached prefix. Other providers receive the same ordered blocks.
+Anthropic에서는 첫 `<project-context>`(또는 `<memories>`) 블록 직전의 마지막 블록에 시스템 캐시 중단점이 배치됩니다. 따라서 같은 에이전트가 서로 다른 디렉터리(예: 작업마다 별도의 git 워크트리)에서 실행한 세션과 하위 에이전트가 정적 프롬프트를 캐시된 접두부로 공유합니다. 다른 제공업체에도 동일한 순서의 블록이 전달됩니다.
 
-## Inputs and precedence
+## 입력과 우선순위
 
-| Input                                   | Source                 | Effect                                                                                                                             |
+| 입력 | 출처 | 효과 |
 | --------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `--system-prompt-template <path>`       | CLI                    | Strictly reads `<path>` as Handlebars source and replaces the bundled default instruction block. Highest custom-prompt precedence. |
-| `--system-prompt <text-or-file>`        | CLI                    | Existing plain-text custom route. Highest custom-prompt precedence. Mutually exclusive with the template flag.                     |
-| `SYSTEM_TEMPLATE.md`                    | Discovered config file | Raw Handlebars source. Used only when no explicit override and no discovered `SYSTEM.md` is supplied.                              |
-| `SYSTEM.md`                             | Discovered config file | Existing plain-text custom route. Used only when no explicit override is supplied.                                                 |
-| `--append-system-prompt <text-or-file>` | CLI                    | Adds plain text to the rendered prompt. Highest append precedence.                                                                 |
-| `APPEND_SYSTEM.md`                      | Discovered config file | Existing plain-text append route; used when the append flag is absent.                                                             |
+| `--system-prompt-template <path>` | CLI | `<path>`를 반드시 Handlebars 소스로 읽고 번들 기본 지침 블록을 교체합니다. 사용자 지정 프롬프트의 최우선 입력입니다. |
+| `--system-prompt <text-or-file>` | CLI | 기존 일반 텍스트 사용자 지정 경로입니다. 사용자 지정 프롬프트의 최우선 입력이며 템플릿 플래그와 함께 사용할 수 없습니다. |
+| `SYSTEM_TEMPLATE.md` | 검색된 설정 파일 | 원시 Handlebars 소스입니다. 명시적 재정의와 검색된 `SYSTEM.md`가 모두 없을 때만 사용합니다. |
+| `SYSTEM.md` | 검색된 설정 파일 | 기존 일반 텍스트 사용자 지정 경로입니다. 명시적 재정의가 없을 때만 사용합니다. |
+| `--append-system-prompt <text-or-file>` | CLI | 렌더링된 프롬프트에 일반 텍스트를 추가합니다. 추가 텍스트의 최우선 입력입니다. |
+| `APPEND_SYSTEM.md` | 검색된 설정 파일 | 기존 일반 텍스트 추가 경로이며 추가 플래그가 없을 때 사용합니다. |
 
-**CLI precedence:** An explicit `--system-prompt` or `--system-prompt-template` flag wins over discovered `SYSTEM_TEMPLATE.md` and `SYSTEM.md`; an explicit `--append-system-prompt` wins over discovered `APPEND_SYSTEM.md`. The two custom-prompt flags are mutually exclusive, and supplying both fails clearly. An explicitly supplied empty `--system-prompt` literal still counts as explicit and suppresses custom-prompt discovery.
+**CLI 우선순위:** 명시적인 `--system-prompt` 또는 `--system-prompt-template` 플래그가 검색된 `SYSTEM_TEMPLATE.md`와 `SYSTEM.md`보다 우선합니다. 명시적인 `--append-system-prompt`는 검색된 `APPEND_SYSTEM.md`보다 우선합니다. 두 사용자 지정 프롬프트 플래그는 상호 배타적이며 함께 지정하면 명확한 오류가 발생합니다. 명시적으로 지정한 빈 `--system-prompt` 리터럴도 명시적 입력으로 취급하여 사용자 지정 프롬프트 검색을 억제합니다.
 
-Programmatic API options use separate contracts, not CLI flags; see [Programmatic API options](#programmatic-api-options).
+프로그래밍 API 옵션은 CLI 플래그와 별도의 계약을 사용합니다. [프로그래밍 API 옵션](#프로그래밍-api-옵션)을 참고하세요.
 
-That empty literal suppresses discovered `SYSTEM.md` and `SYSTEM_TEMPLATE.md`, but does not disable OMP-generated instructions; only the programmatic `CreateAgentSessionOptions.systemPrompt` full-replacement option does that.
+이 빈 리터럴은 검색된 `SYSTEM.md`와 `SYSTEM_TEMPLATE.md`를 억제하지만 OMP가 생성하는 지침을 비활성화하지는 않습니다. 이를 비활성화하는 것은 프로그래밍 API의 전체 교체 옵션인 `CreateAgentSessionOptions.systemPrompt`뿐입니다.
 
-Without an explicit custom source, discovery is project-first, then user-level. Within each scope a literal beats a template: project `SYSTEM.md` beats project `SYSTEM_TEMPLATE.md`, which beats user `SYSTEM.md`, which beats user `SYSTEM_TEMPLATE.md`. `SYSTEM.md` is the long-established override, so an existing literal keeps working until its author deliberately removes it in favor of a template. Both filenames resolve through the same capability providers, so ancestor walk-up (repo-root `.omp` from a nested cwd) and `.agent` / `.agents` directories apply to templates exactly as they do to literals. `.claude`, `.codex`, and `.gemini` project bases resolve at the launch cwd. Foreign user bases require `enabledProviders` opt-in; `CLAUDE_CONFIG_DIR` also opts in and relocates the Claude user base.
+명시적인 사용자 지정 소스가 없으면 프로젝트를 먼저 검색하고 사용자 수준을 검색합니다. 같은 범위에서는 리터럴이 템플릿보다 우선합니다. 프로젝트 `SYSTEM.md`, 프로젝트 `SYSTEM_TEMPLATE.md`, 사용자 `SYSTEM.md`, 사용자 `SYSTEM_TEMPLATE.md` 순입니다. `SYSTEM.md`는 오랫동안 사용된 재정의 방식이므로 작성자가 템플릿을 사용하려고 의도적으로 제거하기 전까지 기존 리터럴이 계속 동작합니다. 두 파일명은 같은 기능 제공업체를 통해 확인하므로 상위 디렉터리 탐색(중첩 cwd에서 저장소 루트 `.omp` 검색)과 `.agent` / `.agents` 디렉터리가 리터럴과 템플릿에 동일하게 적용됩니다. `.claude`, `.codex`, `.gemini` 프로젝트 기준 경로는 실행 시 cwd에서 확인합니다. 다른 도구의 사용자 기준 경로는 `enabledProviders`로 명시적으로 활성화해야 합니다. `CLAUDE_CONFIG_DIR`도 Claude 사용자 기준 경로를 활성화하고 그 위치를 변경합니다.
 
-The native user path follows the active profile: with `omp --profile work`, `~/.omp/agent` becomes `~/.omp/profiles/work/agent`. `PI_CONFIG_DIR` changes the native config-directory name. Capability discovery for `SYSTEM.md` and `SYSTEM_TEMPLATE.md` uses `getAgentDir()` and therefore honors `PI_CODING_AGENT_DIR`. The shared config-base lookup for `APPEND_SYSTEM.md` and `TITLE_SYSTEM.md` does not use that variable as an arbitrary replacement base. An explicit CLI flag or programmatic API option still wins over every discovered file. See [Configuration usage](./config-usage.md) for the shared config-directory contract.
+네이티브 사용자 경로는 활성 프로필을 따릅니다. `omp --profile work`에서는 `~/.omp/agent`가 `~/.omp/profiles/work/agent`로 바뀝니다. `PI_CONFIG_DIR`는 네이티브 설정 디렉터리 이름을 변경합니다. `SYSTEM.md`와 `SYSTEM_TEMPLATE.md`의 기능 검색은 `getAgentDir()`를 사용하므로 `PI_CODING_AGENT_DIR`를 따릅니다. `APPEND_SYSTEM.md`와 `TITLE_SYSTEM.md`의 공통 설정 기준 경로 조회는 이 변수를 임의의 대체 기준 경로로 사용하지 않습니다. 명시적 CLI 플래그나 프로그래밍 API 옵션은 모든 검색된 파일보다 우선합니다. 공통 설정 디렉터리 계약은 [설정 사용법](./config-usage.md)을 참고하세요.
 
-`--system-prompt-template <path>` is a strict file path: a missing, unreadable, empty, or malformed template is an error, never a literal prompt. An empty discovered `SYSTEM_TEMPLATE.md` is skipped (the discovered literal, if any, already won discovery). Malformed templates discovered directly by `buildSystemPrompt()` warn and render the bundled prompt. CLI discovery forwards the loaded source as an explicit SDK template, so a malformed discovered template fails CLI startup. A same-scope literal always wins discovery, so a malformed template beside a literal is never rendered. Discovered templates are read once through capability discovery; later runtime rebuilds re-render that in-memory source.
+`--system-prompt-template <path>`는 엄격한 파일 경로입니다. 템플릿이 없거나 읽을 수 없거나 비어 있거나 형식이 잘못되면 오류이며 리터럴 프롬프트로 처리하지 않습니다. 검색된 빈 `SYSTEM_TEMPLATE.md`는 건너뜁니다(검색된 리터럴이 있으면 이미 검색에서 우선합니다). `buildSystemPrompt()`가 직접 검색한 잘못된 템플릿은 경고 후 번들 프롬프트를 렌더링합니다. CLI 검색은 읽은 소스를 명시적 SDK 템플릿으로 전달하므로 검색된 템플릿의 형식이 잘못되면 CLI 시작이 실패합니다. 같은 범위의 리터럴은 항상 검색에서 우선하므로 리터럴 옆의 잘못된 템플릿은 렌더링되지 않습니다. 검색된 템플릿은 기능 검색 중 한 번만 읽으며 이후 런타임 재구성에서는 메모리의 소스를 다시 렌더링합니다.
 
-### Text or file resolution
+### 텍스트 또는 파일 확인
 
-The existing plain-text flags keep their resolution rules. For a single-line `--system-prompt` or `--append-system-prompt` value, OMP first tries to read that value as a file path. If reading fails because the path does not exist (or is too long to be a path), the value is used literally. A value containing a newline is used literally without a file read. Other file-read failures are logged and the original value is still used literally. This fallback does **not** apply to `--system-prompt-template`.
+기존 일반 텍스트 플래그의 확인 규칙은 유지됩니다. `--system-prompt` 또는 `--append-system-prompt` 값이 한 줄이면 OMP는 먼저 해당 값을 파일 경로로 읽으려고 합니다. 경로가 없거나 경로로 쓰기에 너무 길어 읽기가 실패하면 값을 리터럴로 사용합니다. 줄바꿈이 포함된 값은 파일을 읽지 않고 리터럴로 사용합니다. 그 밖의 파일 읽기 실패는 기록하고 원래 값을 리터럴로 사용합니다. 이 대체 동작은 `--system-prompt-template`에는 적용되지 **않습니다**.
 
-## What plain `SYSTEM.md` replaces
+## 일반 `SYSTEM.md`가 교체하는 내용
 
-`SYSTEM.md` does not become a raw, sole system message. The CLI stores it as `CreateAgentSessionOptions.customSystemPrompt`, and `buildSystemPrompt` renders `custom-system-prompt.md` instead of the default `system-prompt.md`.
+`SYSTEM.md`가 유일한 원시 시스템 메시지가 되는 것은 아닙니다. CLI는 이를 `CreateAgentSessionOptions.customSystemPrompt`로 저장하고, `buildSystemPrompt`는 기본 `system-prompt.md` 대신 `custom-system-prompt.md`를 렌더링합니다.
 
-The plain custom template keeps these generated surfaces:
+일반 사용자 지정 템플릿은 다음 생성 내용을 유지합니다.
 
-- the custom text;
-- discovered skills;
-- always-apply rules and the rulebook listing;
-- secret-redaction guidance when enabled.
+- 사용자 지정 텍스트
+- 검색된 스킬
+- 항상 적용되는 규칙과 규칙집 목록
+- 활성화된 경우 비밀정보 마스킹 지침
 
-The separate `<project-context>` footer remains and carries workstation data, discovered context files, deeper-directory context pointers, optional workspace information, active nested-repository context, the final completion requirements, and the append text. Optional extra system blocks, such as computer-tool safety, also remain when applicable. Provider-callable tool schemas are still generated by the provider-facing session.
+별도의 `<project-context>` 푸터도 유지되며 워크스테이션 정보, 검색된 컨텍스트 파일, 하위 디렉터리 컨텍스트 포인터, 선택적 작업 공간 정보, 활성 중첩 저장소 컨텍스트, 최종 완료 요구사항, 추가 텍스트를 담습니다. 컴퓨터 도구 안전 지침 같은 선택적 추가 시스템 블록도 해당할 때 유지됩니다. 제공업체가 호출할 수 있는 도구 스키마는 여전히 제공업체 대상 세션이 생성합니다.
 
-What disappears is the content unique to the default instruction template: its built-in role/personality text, tool inventory and general tool policy, internal-URL catalog, exploration/delegation/workflow rules, and `xd://` protocol guidance. Generated skills and rules are **not** lost; the bundled plain custom template renders them explicitly.
+사라지는 것은 기본 지침 템플릿에만 있는 내용입니다. 기본 역할/성격 텍스트, 도구 목록과 일반 도구 정책, 내부 URL 목록, 탐색/위임/워크플로 규칙, `xd://` 프로토콜 안내가 여기에 해당합니다. 생성된 스킬과 규칙은 **사라지지 않습니다**. 번들 일반 사용자 지정 템플릿이 이를 명시적으로 렌더링합니다.
 
-Consequences:
+따라서 다음과 같이 선택하세요.
 
-- To add a few instructions while retaining the complete default prompt, use only `APPEND_SYSTEM.md` or `--append-system-prompt`.
-- To replace the default instruction template while retaining the bundled plain-custom generated sections, use `SYSTEM.md` or `--system-prompt`.
-- If a plain custom prompt still needs the default tool policy or workflow, copy and maintain the required guidance yourself; selective inheritance from `system-prompt.md` is not supported.
+- 완전한 기본 프롬프트를 유지하면서 지침을 조금 추가하려면 `APPEND_SYSTEM.md` 또는 `--append-system-prompt`만 사용합니다.
+- 번들 일반 사용자 지정 생성 섹션을 유지하면서 기본 지침 템플릿을 교체하려면 `SYSTEM.md` 또는 `--system-prompt`를 사용합니다.
+- 일반 사용자 지정 프롬프트에도 기본 도구 정책이나 워크플로가 필요하면 필요한 지침을 직접 복사하고 관리해야 합니다. `system-prompt.md`의 선택적 상속은 지원하지 않습니다.
 
-### Append placement
+### 추가 텍스트의 배치
 
-Without `SYSTEM.md` or `SYSTEM_TEMPLATE.md`, append text is rendered at the end of `project-prompt.md`, after the default instruction block and project/environment content.
+`SYSTEM.md`나 `SYSTEM_TEMPLATE.md`가 없으면 추가 텍스트는 기본 지침 블록과 프로젝트/환경 내용 뒤인 `project-prompt.md` 끝에 렌더링됩니다.
 
-With `SYSTEM.md`, append text is also rendered at the end of `project-prompt.md`; `custom-system-prompt.md` carries the custom text, skills, and rules, and the footer (with context files and append text) follows that block.
+`SYSTEM.md`가 있어도 추가 텍스트는 `project-prompt.md` 끝에 렌더링됩니다. `custom-system-prompt.md`가 사용자 지정 텍스트, 스킬, 규칙을 담고, 컨텍스트 파일과 추가 텍스트를 포함하는 푸터가 그 블록 뒤에 옵니다.
 
-With `SYSTEM_TEMPLATE.md` (or `--system-prompt-template`), append text remains generated by the normal project/footer route; the raw template controls block 0 and does not receive an implicit copy of the append text.
+`SYSTEM_TEMPLATE.md`(또는 `--system-prompt-template`)가 있으면 추가 텍스트는 여전히 일반 프로젝트/푸터 경로에서 생성됩니다. 원시 템플릿은 블록 0을 제어하며 추가 텍스트의 암묵적 사본을 받지 않습니다.
 
-OMP-generated append content (for enabled memory/auto-learn features and MCP guidance) is combined before the user-supplied append text.
-Those generated blocks can end with `## MCP Server Instructions`, whose text declares
-itself server-controlled and unverified. Whenever a generated block precedes the
-user-supplied text, the text is rendered under its own `## User Instructions` heading
-so it cannot read as a trailing paragraph of a server-owned section. On its own — no
-generated block — the append text is emitted unchanged, without a heading.
+OMP가 생성하는 추가 내용(활성화된 메모리/자동 학습 기능 및 MCP 안내)은 사용자가 제공한 추가 텍스트 앞에 결합됩니다.
+이 생성 블록은 서버가 제어하며 검증되지 않은 텍스트라고 명시하는 `## MCP Server Instructions`로 끝날 수 있습니다.
+생성 블록이 사용자 제공 텍스트보다 앞서면 사용자 텍스트는 별도의 `## User Instructions` 제목 아래 렌더링되므로 서버 소유 섹션의 마지막 문단처럼 보이지 않습니다.
+생성 블록 없이 추가 텍스트만 있으면 제목 없이 그대로 출력합니다.
 
-## Inputs by session type
+## 세션 유형별 입력
 
-Which automatic inputs reach each kind of session. An input applies only when it exists or is enabled, and Personality means the default template's personality block. Advisors build a dedicated prompt that also carries memory instructions and the shared and per-advisor instructions; `@path` imports in `WATCHDOG.md` are expanded.
+각 세션 유형에 전달되는 자동 입력입니다. 입력은 존재하거나 활성화된 경우에만 적용되며, 성격은 기본 템플릿의 성격 블록을 뜻합니다. 조언자는 메모리 지침과 공통 및 조언자별 지침을 포함하는 전용 프롬프트를 구성합니다. `WATCHDOG.md`의 `@path` 가져오기는 확장됩니다.
 
-| Session type     | `AGENTS.md`   | `CLAUDE.md` / `GEMINI.md` | `APPEND_SYSTEM.md` / `--append-system-prompt` | MCP tools | MCP server instructions | `WATCHDOG.md` | Personality |
+| 세션 유형 | `AGENTS.md` | `CLAUDE.md` / `GEMINI.md` | `APPEND_SYSTEM.md` / `--append-system-prompt` | MCP 도구 | MCP 서버 지침 | `WATCHDOG.md` | 성격 |
 | ---------------- | ------------- | ------------------------- | --------------------------------------------- | --------- | ----------------------- | ------------- | ----------- |
-| Main session     | Discovered    | Discovered                | Yes                                           | Yes       | Yes                     | No            | Configured  |
-| Task subagent    | Not inherited | Inherited                 | No                                            | Inherited | Inherited               | No            | `none`      |
-| Advisor/watchdog | Inherited     | Inherited                 | No                                            | No        | No                      | Yes           | None        |
+| 주 세션 | 검색 | 검색 | 예 | 예 | 예 | 아니요 | 설정값 |
+| 작업 하위 에이전트 | 상속 안 함 | 상속 | 아니요 | 상속 | 상속 | 아니요 | `none` |
+| 조언자/감시자 | 상속 | 상속 | 아니요 | 아니요 | 아니요 | 예 | 없음 |
 
-1. Task subagents drop every context file whose basename is `agents.md` (case-insensitive), whether inherited from the parent or discovered for an additional workspace root, including the user-level `~/.omp/agent/AGENTS.md`. Text pulled in through `@` imports is not filtered.
-2. Context discovery selects one user file and one project file per directory depth, and higher-priority providers win. Foreign user files require `enabledProviders` opt-in. A standalone `CLAUDE.md` is supported; `GEMINI.md` is read from the user and project `.gemini` directories.
-3. A task agent's `tools:` list does not remove MCP tools or server instructions: the tools stay available top-level or under `xd://`. Plan-mode tasks and children of restricted sessions run with `restrictToolNames`, which drops both.
+1. Task 하위 에이전트는 상위 에이전트에서 상속했거나 추가 작업 공간 루트에서 검색한 컨텍스트 파일 중 기본 파일명이 `agents.md`인 파일을 모두 제외합니다(대소문자 구분 없음). 사용자 수준 `~/.omp/agent/AGENTS.md`도 포함됩니다. `@` 가져오기로 불러온 텍스트는 필터링하지 않습니다.
+2. 컨텍스트 검색은 디렉터리 깊이마다 사용자 파일 하나와 프로젝트 파일 하나를 선택하며 우선순위가 높은 제공업체가 우선합니다. 다른 도구의 사용자 파일은 `enabledProviders`로 명시적으로 활성화해야 합니다. 독립적인 `CLAUDE.md`를 지원하며 `GEMINI.md`는 사용자 및 프로젝트 `.gemini` 디렉터리에서 읽습니다.
+3. 작업 에이전트의 `tools:` 목록은 MCP 도구나 서버 지침을 제거하지 않습니다. 도구는 최상위 또는 `xd://`에서 계속 사용할 수 있습니다. 계획 모드 작업과 제한된 세션의 하위 에이전트는 `restrictToolNames`를 사용하여 둘 다 제거합니다.
 
-## Handlebars template route
+## Handlebars 템플릿 경로
 
-`SYSTEM_TEMPLATE.md` and `--system-prompt-template <path>` select raw Handlebars source from a file. Programmatic callers can instead pass raw Handlebars source through `CreateAgentSessionOptions.systemPromptTemplate` or `buildSystemPrompt({ systemPromptTemplate })`; those programmatic options are the template itself, not a path. Each route is rendered instead of the bundled `system-prompt.md` with the same live data and registered helpers as that bundled template.
+`SYSTEM_TEMPLATE.md`와 `--system-prompt-template <path>`는 파일에서 원시 Handlebars 소스를 선택합니다. 프로그래밍 호출자는 대신 `CreateAgentSessionOptions.systemPromptTemplate` 또는 `buildSystemPrompt({ systemPromptTemplate })`로 원시 Handlebars 소스를 전달할 수 있습니다. 이 프로그래밍 옵션은 경로가 아니라 템플릿 자체입니다. 각 경로는 번들 템플릿과 동일한 실시간 데이터 및 등록된 헬퍼를 사용하여 번들 `system-prompt.md` 대신 렌더링됩니다.
 
-Generated blocks that are outside block 0 remain normal: the `<project-context>` footer (including generated context, active nested-repository context, and append material), computer safety, and provider tool schemas are retained. Data-driven sections that normally live inside the bundled template are not appended by magic. `skills`, `rules`, `alwaysApplyRules`, `toolInventory`, `internalUrls` (one rendered line per internal URL scheme available in the session), `xdevTools`, and `xdevDocs` are available to the template, but each is emitted only if the template references it. In particular, omitting `{{toolInventory}}` or `{{xdevDocs}}` omits that in-block catalog. Mount-notice dedupe follows the rendered output: a template whose block 0 contains an `xd://` reference claims the catalog, one that omits it does not.
+블록 0 밖의 생성 블록은 그대로 유지됩니다. `<project-context>` 푸터(생성 컨텍스트, 활성 중첩 저장소 컨텍스트, 추가 내용 포함), 컴퓨터 안전 지침, 제공업체 도구 스키마가 여기에 해당합니다. 원래 번들 템플릿 안에 있는 데이터 기반 섹션은 자동으로 추가되지 않습니다. 템플릿은 `skills`, `rules`, `alwaysApplyRules`, `toolInventory`, `internalUrls`(세션에서 사용 가능한 내부 URL 스킴마다 렌더링된 한 줄), `xdevTools`, `xdevDocs`를 사용할 수 있지만 각각 참조할 때만 출력됩니다. 특히 `{{toolInventory}}`나 `{{xdevDocs}}`를 생략하면 해당 블록 내부 목록도 생략됩니다. 마운트 알림 중복 제거는 렌더링된 출력을 따릅니다. 블록 0에 `xd://` 참조가 있는 템플릿은 목록을 포함한 것으로 취급하고, 없는 템플릿은 그렇지 않습니다.
 
-The generated project/footer route already renders `contextFiles` and `appendPrompt` once. A template SHOULD NOT render those fields in block 0 unless it intentionally wants duplicate copies.
+생성 프로젝트/푸터 경로는 이미 `contextFiles`와 `appendPrompt`를 한 번 렌더링합니다. 의도적으로 중복 사본을 원하지 않는 한 템플릿은 블록 0에서 이 필드를 렌더링하지 않는 것이 좋습니다.
 
-Use effective session settings and live tool data rather than copying today's rendered prose. `subagent` is true when rendering a task subagent's prompt; the bundled templates use it to replace verification duties with a hand-off to the main agent. `eagerTasks` and `eagerTasksAlways` reflect task settings captured when the session starts, while `xdevDocs`, `toolInventory`, and `toolRefs` reflect mounted devices and tool state whenever the prompt rebuilds. `xdevDocs` also reflects the `tools.xdevDocs` / `tools.xdevInlineDevices` settings used for that rebuild.
+현재 렌더링된 문구를 복사하기보다 실제 세션 설정과 실시간 도구 데이터를 사용하세요. 작업 하위 에이전트 프롬프트를 렌더링할 때 `subagent`는 true입니다. 번들 템플릿은 이를 사용하여 검증 의무를 주 에이전트에 인계하는 지침으로 대체합니다. `eagerTasks`와 `eagerTasksAlways`는 세션 시작 시 저장한 작업 설정을 반영하고, `xdevDocs`, `toolInventory`, `toolRefs`는 프롬프트 재구성 시 마운트된 장치와 도구 상태를 반영합니다. `xdevDocs`는 해당 재구성에 사용한 `tools.xdevDocs` / `tools.xdevInlineDevices` 설정도 반영합니다.
 
-The template has the same helper set used by the bundled prompt (`if`, `each`, `unless`, `list`, `when`, `has`, `ifAny`, `includes`, and the other registered helpers). No extra helper is created for a user file. Values inserted into a template are data, not a second template pass: Handlebars-looking text inside `xdevDocs`, context files, tool descriptions, or other values is not recursively rendered.
+템플릿은 번들 프롬프트와 같은 헬퍼 집합(`if`, `each`, `unless`, `list`, `when`, `has`, `ifAny`, `includes` 및 그 밖의 등록된 헬퍼)을 사용합니다. 사용자 파일을 위한 별도 헬퍼는 생성하지 않습니다. 템플릿에 삽입되는 값은 데이터이지 두 번째 템플릿 처리 대상이 아닙니다. `xdevDocs`, 컨텍스트 파일, 도구 설명 또는 다른 값 안의 Handlebars 형태 텍스트는 재귀적으로 렌더링하지 않습니다.
 
-Treat both sides of this boundary as prompt input. Protect template files like other system-level configuration, and review workspace, extension, MCP, and mounted-device descriptions before treating them as trusted policy; dynamic xdev metadata can be third-party text. The CLI reads a template file once at launch. Programmatic raw source is already in memory. Later runtime prompt rebuilds re-render that in-memory source with current live data and settings, but do not re-read a changed file; restart OMP after editing the file.
+이 경계 양쪽을 모두 프롬프트 입력으로 취급하세요. 템플릿 파일을 다른 시스템 수준 설정처럼 보호하고, 작업 공간, 확장 기능, MCP, 마운트된 장치 설명을 신뢰할 수 있는 정책으로 취급하기 전에 검토하세요. 동적 xdev 메타데이터는 제삼자 텍스트일 수 있습니다. CLI는 시작할 때 템플릿 파일을 한 번 읽습니다. 프로그래밍 방식의 원시 소스는 이미 메모리에 있습니다. 이후 런타임 프롬프트 재구성은 메모리의 소스를 현재 실시간 데이터와 설정으로 다시 렌더링하지만 변경된 파일을 다시 읽지 않습니다. 파일을 수정한 뒤에는 OMP를 다시 시작하세요.
 
-## Plain-text and template contracts
+## 일반 텍스트와 템플릿의 계약
 
-`SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, and `--append-system-prompt` remain plain text. They are values inserted into bundled Handlebars templates; their contents are not recursively compiled as Handlebars.
+`SYSTEM.md`, `APPEND_SYSTEM.md`, `--system-prompt`, `--append-system-prompt`는 일반 텍스트로 유지됩니다. 번들 Handlebars 템플릿에 삽입되는 값이며 그 내용을 Handlebars로 재귀 컴파일하지 않습니다.
 
-For example, if `SYSTEM.md` contains:
+예를 들어 `SYSTEM.md`에 다음 내용이 있으면:
 
 ```handlebars
 Working in
@@ -122,15 +120,15 @@ on
 {{#if internalUrls.length}}Internal URLs available.{{/if}}
 ```
 
-those characters reach the model literally. Internal values such as `cwd`, `skills`, `rules`, and `toolRefs` remain private implementation details for the plain route. The calendar date is not exposed as a template value — it rides a per-request reminder on the first user turn together with the session cwd.
+이 문자는 모델에 그대로 전달됩니다. `cwd`, `skills`, `rules`, `toolRefs` 같은 내부 값은 일반 텍스트 경로에서 비공개 구현 세부사항으로 유지됩니다. 날짜는 템플릿 값으로 노출하지 않으며 첫 사용자 턴에서 세션 cwd와 함께 요청별 알림으로 전달됩니다.
 
-Only the opt-in `SYSTEM_TEMPLATE.md` / `--system-prompt-template` / programmatic `CreateAgentSessionOptions.systemPromptTemplate` and `buildSystemPrompt({ systemPromptTemplate })` routes compile Handlebars. An explicit malformed or empty template fails clearly and is never downgraded to plain text. Discovered empty templates are skipped. Malformed templates discovered by `buildSystemPrompt()` warn and fall back to the bundled prompt; CLI-discovered source is forwarded as explicit SDK input and therefore fails on malformed Handlebars.
+명시적으로 선택하는 `SYSTEM_TEMPLATE.md` / `--system-prompt-template` / 프로그래밍 API `CreateAgentSessionOptions.systemPromptTemplate` 및 `buildSystemPrompt({ systemPromptTemplate })` 경로만 Handlebars를 컴파일합니다. 명시적인 템플릿이 잘못되었거나 비어 있으면 명확하게 실패하며 일반 텍스트로 대체하지 않습니다. 검색된 빈 템플릿은 건너뜁니다. `buildSystemPrompt()`가 검색한 잘못된 템플릿은 경고 후 번들 프롬프트로 대체합니다. CLI가 검색한 소스는 명시적 SDK 입력으로 전달되므로 Handlebars 형식이 잘못되면 실패합니다.
 
-## Recipes
+## 사용 예
 
-### Add rules to the default prompt
+### 기본 프롬프트에 규칙 추가
 
-Create `APPEND_SYSTEM.md` without a `SYSTEM.md` or `SYSTEM_TEMPLATE.md`:
+`SYSTEM.md`나 `SYSTEM_TEMPLATE.md` 없이 `APPEND_SYSTEM.md`를 만드세요.
 
 ```text
 # ~/.omp/agent/APPEND_SYSTEM.md
@@ -138,7 +136,7 @@ Prefer Bun APIs over Node APIs in this project.
 When you change a public function, run `bun check` before yielding.
 ```
 
-### Supply a custom base prompt
+### 사용자 지정 기본 프롬프트 제공
 
 ```text
 # <cwd>/.omp/SYSTEM.md
@@ -146,19 +144,19 @@ You are a code reviewer. Read changes, surface concrete issues, and never edit f
 Cite paths with backticks.
 ```
 
-OMP still adds the generated context, skills, rules, and project/environment footer, but not the default instruction template's tool and workflow guidance.
+OMP는 생성 컨텍스트, 스킬, 규칙, 프로젝트/환경 푸터를 계속 추가하지만 기본 지침 템플릿의 도구 및 워크플로 안내는 추가하지 않습니다.
 
-### Migrate the bundled prompt
+### 번들 프롬프트 이전
 
-1. Copy `packages/coding-agent/src/prompts/system/system-prompt.md` to `~/.omp/agent/SYSTEM_TEMPLATE.md` or `<cwd>/.omp/SYSTEM_TEMPLATE.md`.
-2. Edit the prose while keeping the required Handlebars blocks and live-data placeholders.
-3. NEVER copy a rendered `/dump` prompt: it freezes settings, tool catalogs, and mounted-device data.
-4. Diff your template against the shipped source path when updating OMP.
-5. Remove or rename any same-scope `SYSTEM.md`: a discovered literal beats a discovered template, so the template takes effect only once the literal is gone.
+1. `packages/coding-agent/src/prompts/system/system-prompt.md`를 `~/.omp/agent/SYSTEM_TEMPLATE.md` 또는 `<cwd>/.omp/SYSTEM_TEMPLATE.md`로 복사합니다.
+2. 필요한 Handlebars 블록과 실시간 데이터 자리표시자를 유지하면서 문구를 수정합니다.
+3. 렌더링된 `/dump` 프롬프트는 절대 복사하지 마세요. 설정, 도구 목록, 마운트된 장치 데이터가 고정됩니다.
+4. OMP를 업데이트할 때 템플릿과 배포된 소스 경로를 비교합니다.
+5. 같은 범위의 `SYSTEM.md`를 제거하거나 이름을 바꿉니다. 검색된 리터럴이 검색된 템플릿보다 우선하므로 리터럴이 없어져야 템플릿이 적용됩니다.
 
-### Supply a Handlebars template
+### Handlebars 템플릿 제공
 
-Create `<cwd>/.omp/SYSTEM_TEMPLATE.md` (or pass the same file to `--system-prompt-template`):
+`<cwd>/.omp/SYSTEM_TEMPLATE.md`를 만드세요(또는 같은 파일을 `--system-prompt-template`에 전달하세요).
 
 ```handlebars
 # Delegation
@@ -182,22 +180,22 @@ Write JSON args as `content` to `xd://<tool>` via `{{toolRefs.write}}`.
 {{/if}}
 ```
 
-This is a complete, runnable Handlebars Markdown template. It uses only built-in block helpers and live fields. It deliberately references `eagerTasksAlways`, `eagerTasks`, `toolInventory`, `xdevTools`, `toolRefs`, and `xdevDocs`; omitted fields would not be inserted automatically.
+이 예는 완전하게 실행 가능한 Handlebars Markdown 템플릿입니다. 내장 블록 헬퍼와 실시간 필드만 사용합니다. `eagerTasksAlways`, `eagerTasks`, `toolInventory`, `xdevTools`, `toolRefs`, `xdevDocs`를 의도적으로 참조하며 생략한 필드는 자동 삽입되지 않습니다.
 
-### Replace the personality block
+### 성격 블록 교체
 
-The default template renders a personality block chosen by the `personality` setting (`default`, `friendly`, `pragmatic`, `none`). A user-level `PERSONALITY.md` replaces the selected preset's text:
+기본 템플릿은 `personality` 설정(`default`, `friendly`, `pragmatic`, `none`)으로 선택한 성격 블록을 렌더링합니다. 사용자 수준의 `PERSONALITY.md`는 선택한 프리셋 텍스트를 교체합니다.
 
 ```text
 # ~/.omp/agent/PERSONALITY.md
 Follow ASD-STE100 Simplified Technical English for all responses.
 ```
 
-Only the agent directory is checked (`~/.omp/agent` by default; profile- and XDG-aware) — there is no project-level or other-config-base lookup. `personality: none` still omits the block entirely (subagents always run with `none`), and an empty or unreadable file falls back to the configured preset with a logged warning.
+에이전트 디렉터리만 확인합니다(기본값 `~/.omp/agent`, 프로필 및 XDG 반영). 프로젝트 수준이나 다른 설정 기준 경로는 조회하지 않습니다. `personality: none`은 여전히 블록 전체를 생략합니다(하위 에이전트는 항상 `none`으로 실행). 파일이 비어 있거나 읽을 수 없으면 경고를 기록하고 설정된 프리셋으로 대체합니다.
 
-### Customize automatic session titles
+### 자동 세션 제목 사용자 지정
 
-`SYSTEM.md` and `APPEND_SYSTEM.md` do not affect title-generation calls. Use `TITLE_SYSTEM.md`:
+`SYSTEM.md`와 `APPEND_SYSTEM.md`는 제목 생성 호출에 영향을 주지 않습니다. `TITLE_SYSTEM.md`를 사용하세요.
 
 ```text
 # ~/.omp/agent/TITLE_SYSTEM.md
@@ -205,37 +203,37 @@ Generate a session name using lowercase `<type>:<primary-objective>`.
 If the message has no concrete task, output exactly `none`.
 ```
 
-`TITLE_SYSTEM.md` uses project-first config-base discovery with no ancestor walk. Foreign user bases require `enabledProviders` opt-in (or `CLAUDE_CONFIG_DIR` for Claude). When absent, OMP titles a new session from a fork of its first reply (the session's own model, on the cached prompt) with the bundled tiny-model title prompt as the fallback. The override is used for both initial automatic titles and replan-driven title refreshes, and turns the reply fork off: titles come from the tiny title model.
+`TITLE_SYSTEM.md`는 상위 디렉터리 탐색 없이 프로젝트 우선으로 설정 기준 경로를 검색합니다. 다른 도구의 사용자 기준 경로는 `enabledProviders`(Claude는 `CLAUDE_CONFIG_DIR`도 가능)로 명시적으로 활성화해야 합니다. 파일이 없으면 OMP는 첫 응답의 분기(캐시된 프롬프트를 사용하는 세션 자체 모델)에서 새 세션 제목을 생성하고 번들 소형 모델 제목 프롬프트를 대체 수단으로 사용합니다. 재정의는 최초 자동 제목과 재계획에 따른 제목 갱신 모두에 사용되며 응답 분기를 비활성화합니다. 이 경우 소형 제목 모델이 제목을 생성합니다.
 
-Generated title output has an enforced normalization contract even with a custom prompt. OMP considers only the first trimmed line, strips surrounding quotes, `<title>...</title>` markers, and terminal punctuation, and treats `none` or `<title/>` as “no title yet.” A result longer than 80 characters or 12 words is rejected rather than truncated. Empty, deferred, or rejected output leaves the session unnamed, so a later eligible title attempt can name it.
+사용자 지정 프롬프트를 사용해도 생성된 제목 출력에는 정규화 계약이 강제됩니다. OMP는 앞뒤 공백을 제거한 첫 줄만 고려하며, 감싼 따옴표, `<title>...</title>` 표시, 끝 문장부호를 제거합니다. `none`이나 `<title/>`는 “아직 제목 없음”으로 취급합니다. 80자 또는 12단어를 넘는 결과는 자르지 않고 거부합니다. 비어 있거나 보류되거나 거부된 출력은 세션을 이름 없는 상태로 두므로 나중에 적합한 제목 생성 시도에서 이름을 지정할 수 있습니다.
 
-## Programmatic API options
+## 프로그래밍 API 옵션
 
-Programmatic API callers use separate options, not CLI flags: `CreateAgentSessionOptions.systemPromptTemplate` and `buildSystemPrompt({ systemPromptTemplate })` take raw Handlebars source; `CreateAgentSessionOptions.customSystemPrompt` is already-loaded literal text, while `buildSystemPrompt`'s `customPrompt` is plain text with path-or-literal resolution (or `resolvedCustomPrompt` is already-loaded text).
+프로그래밍 API 호출자는 CLI 플래그가 아닌 별도 옵션을 사용합니다. `CreateAgentSessionOptions.systemPromptTemplate`과 `buildSystemPrompt({ systemPromptTemplate })`는 원시 Handlebars 소스를 받습니다. `CreateAgentSessionOptions.customSystemPrompt`는 이미 읽은 리터럴 텍스트입니다. `buildSystemPrompt`의 `customPrompt`는 경로 또는 리터럴로 확인하는 일반 텍스트이며 `resolvedCustomPrompt`는 이미 읽은 텍스트입니다.
 
-A template source and literal custom prompt cannot be combined: `systemPromptTemplate` conflicts with `customSystemPrompt` in `CreateAgentSessionOptions`, and with `customPrompt` / `resolvedCustomPrompt` in `buildSystemPrompt`. These combinations fail clearly instead of silently choosing one.
+템플릿 소스와 리터럴 사용자 지정 프롬프트는 함께 사용할 수 없습니다. `systemPromptTemplate`은 `CreateAgentSessionOptions`의 `customSystemPrompt`, 그리고 `buildSystemPrompt`의 `customPrompt` / `resolvedCustomPrompt`와 충돌합니다. 이런 조합은 한쪽을 조용히 선택하지 않고 명확하게 실패합니다.
 
-## Full provider-facing replacement (programmatic API only)
+## 제공업체 대상 전체 교체(프로그래밍 API 전용)
 
-`CreateAgentSessionOptions.systemPrompt` is a different, lower-level programmatic API. A fixed string or array—including an empty string or array—replaces every OMP-generated block and bypasses discovery/rendering of an unused system-prompt template. It does not bypass option validation: defining both `systemPromptTemplate` and `customSystemPrompt` is rejected even when either value is empty or `systemPrompt` is a fixed replacement. A callback instead receives the generated block array after normal template/custom assembly and returns its replacement; normal template discovery and errors apply to that route. Either form can omit all generated context and safety blocks.
+`CreateAgentSessionOptions.systemPrompt`는 별도의 하위 수준 프로그래밍 API입니다. 빈 문자열이나 배열을 포함한 고정 문자열 또는 배열은 OMP가 생성한 모든 블록을 교체하고 사용하지 않는 시스템 프롬프트 템플릿의 검색/렌더링을 건너뜁니다. 옵션 검증까지 건너뛰지는 않습니다. 값이 비어 있거나 `systemPrompt`가 고정 교체값이어도 `systemPromptTemplate`과 `customSystemPrompt`를 함께 정의하면 거부합니다. 콜백은 대신 일반 템플릿/사용자 지정 조합 이후 생성된 블록 배열을 받아 대체값을 반환합니다. 이 경로에는 일반 템플릿 검색과 오류가 적용됩니다. 어느 형태든 생성 컨텍스트와 안전 블록을 모두 생략할 수 있습니다.
 
-`CreateAgentSessionOptions.systemPromptTemplate` is the compositional programmatic API described above: it accepts raw Handlebars source, replaces block 0, and keeps the OMP-generated footer (context, active-repository context, append text), safety blocks, and provider tool schemas. It is mutually exclusive with `customSystemPrompt`. The exported `buildSystemPrompt({ systemPromptTemplate })` option has the same raw-text contract and conflict behavior; its `customPrompt` option remains plain text with path-or-literal resolution.
+`CreateAgentSessionOptions.systemPromptTemplate`은 앞서 설명한 조합형 프로그래밍 API입니다. 원시 Handlebars 소스를 받아 블록 0을 교체하며 OMP가 생성한 푸터(컨텍스트, 활성 저장소 컨텍스트, 추가 텍스트), 안전 블록, 제공업체 도구 스키마는 유지합니다. `customSystemPrompt`와 상호 배타적입니다. 내보낸 `buildSystemPrompt({ systemPromptTemplate })` 옵션도 같은 원시 텍스트 계약과 충돌 동작을 가지며, `customPrompt` 옵션은 계속 경로 또는 리터럴로 확인하는 일반 텍스트입니다.
 
-The CLI flags and files do **not** set `systemPrompt`: they select the plain/template custom route and append route, which continue through the OMP-generated blocks described above.
+CLI 플래그와 파일은 `systemPrompt`를 설정하지 **않습니다**. 일반 텍스트/템플릿 사용자 지정 경로와 추가 경로를 선택하며 앞서 설명한 OMP 생성 블록을 계속 거칩니다.
 
-## Quick reference
+## 빠른 참조
 
-| Goal                                                                       | Use                                                                                                              |
+| 목적 | 사용 방법 |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Add instructions while keeping the complete default prompt                 | `APPEND_SYSTEM.md` or `--append-system-prompt`                                                                   |
-| Replace the default instruction block with plain text                      | `SYSTEM.md` or `--system-prompt`                                                                                 |
-| Replace the default instruction block with Handlebars                      | `SYSTEM_TEMPLATE.md` or `--system-prompt-template <path>`                                                        |
-| Supply raw Handlebars through the programmatic API                         | `CreateAgentSessionOptions.systemPromptTemplate` or `buildSystemPrompt({ systemPromptTemplate })`                |
-| Replace every provider-facing system block                                 | `CreateAgentSessionOptions.systemPrompt`                                                                         |
-| Customize automatic session titles                                         | `TITLE_SYSTEM.md`                                                                                                |
-| Replace the personality block while keeping the rest of the default prompt | `PERSONALITY.md`                                                                                                 |
-| Use `{{cwd}}` or other internal variables in a plain user file             | Not supported; plain user content is inserted verbatim                                                           |
-| Include live settings, tool inventory, or xdev docs in a template          | Reference the corresponding Handlebars fields, such as `{{eagerTasks}}`, `{{toolInventory}}`, and `{{xdevDocs}}` |
-| Inherit selected default-template sections automatically                   | Not supported; a template must reference the data it needs                                                       |
-| Per-directory override                                                     | A supported project config base; native `.omp` and `.agent` / `.agents` custom prompts also support ancestor discovery |
-| Global override                                                            | The active native agent directory, or another supported user config base                                         |
+| 완전한 기본 프롬프트를 유지하며 지침 추가 | `APPEND_SYSTEM.md` 또는 `--append-system-prompt` |
+| 기본 지침 블록을 일반 텍스트로 교체 | `SYSTEM.md` 또는 `--system-prompt` |
+| 기본 지침 블록을 Handlebars로 교체 | `SYSTEM_TEMPLATE.md` 또는 `--system-prompt-template <path>` |
+| 프로그래밍 API로 원시 Handlebars 제공 | `CreateAgentSessionOptions.systemPromptTemplate` 또는 `buildSystemPrompt({ systemPromptTemplate })` |
+| 제공업체 대상 시스템 블록 전체 교체 | `CreateAgentSessionOptions.systemPrompt` |
+| 자동 세션 제목 사용자 지정 | `TITLE_SYSTEM.md` |
+| 나머지 기본 프롬프트를 유지하며 성격 블록 교체 | `PERSONALITY.md` |
+| 일반 사용자 파일에서 `{{cwd}}` 등 내부 변수 사용 | 지원하지 않습니다. 일반 사용자 내용은 그대로 삽입됩니다. |
+| 템플릿에 실시간 설정, 도구 목록, xdev 문서 포함 | `{{eagerTasks}}`, `{{toolInventory}}`, `{{xdevDocs}}` 등 해당 Handlebars 필드를 참조합니다. |
+| 선택한 기본 템플릿 섹션을 자동 상속 | 지원하지 않습니다. 템플릿이 필요한 데이터를 참조해야 합니다. |
+| 디렉터리별 재정의 | 지원되는 프로젝트 설정 기준 경로를 사용합니다. 네이티브 `.omp` 및 `.agent` / `.agents` 사용자 지정 프롬프트는 상위 디렉터리 검색도 지원합니다. |
+| 전역 재정의 | 활성 네이티브 에이전트 디렉터리 또는 지원되는 다른 사용자 설정 기준 경로를 사용합니다. |

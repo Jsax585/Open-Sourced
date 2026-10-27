@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { decodeJwt } from "@oh-my-pi/pi-ai/registry/oauth/openai-codex";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AuthStorage } from "../session/auth-storage";
@@ -100,7 +101,7 @@ export interface PullCodexSecurityCloudResultsInput {
 
 function object(value: unknown): JsonObject {
 	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error("Codex Security cloud returned an invalid object");
+		throw new Error(t("Codex Security cloud returned an invalid object"));
 	return value as JsonObject;
 }
 
@@ -110,7 +111,7 @@ function optionalObject(value: unknown): JsonObject {
 
 function requiredString(value: unknown, field: string): string {
 	if (typeof value !== "string" || value.length === 0)
-		throw new Error(`Codex Security cloud response is missing ${field}`);
+		throw new Error(t("Codex Security cloud response is missing {0}", `${field}`));
 	return value;
 }
 
@@ -158,7 +159,7 @@ function normalizeConfiguration(value: unknown): CodexSecurityCloudConfiguration
 
 function jwtSubject(accessToken: string): string {
 	const claims = decodeJwt(accessToken);
-	if (!claims) throw new Error("The selected ChatGPT credential is not a valid JWT");
+	if (!claims) throw new Error(t("The selected ChatGPT credential is not a valid JWT"));
 	return requiredString(claims.sub ?? claims.user_id, "authenticated user id");
 }
 
@@ -187,7 +188,7 @@ export class CodexSecurityCloudClient {
 
 	constructor(options: CodexSecurityCloudClientOptions) {
 		if (options.account.provider !== "openai-codex") {
-			throw new Error("Codex Security cloud requires an openai-codex ChatGPT OAuth credential");
+			throw new Error(t("Codex Security cloud requires an openai-codex ChatGPT OAuth credential"));
 		}
 		this.#authStorage = options.authStorage;
 		this.#account = options.account;
@@ -224,7 +225,7 @@ export class CodexSecurityCloudClient {
 			if (!response.ok) throw new CodexSecurityCloudHttpError(response.status, url.pathname);
 			return object(await response.json());
 		}
-		throw new Error("Codex Security cloud authentication refresh failed");
+		throw new Error(t("Codex Security cloud authentication refresh failed"));
 	}
 
 	async listConfigurations(
@@ -260,7 +261,7 @@ export class CodexSecurityCloudClient {
 			if (found) return found;
 			cursor = page.nextCursor;
 		} while (cursor);
-		throw new Error(`Unknown Codex Security cloud configuration: ${configurationId}`);
+		throw new Error(t("Unknown Codex Security cloud configuration: {0}", `${configurationId}`));
 	}
 
 	async startScan(input: StartCodexSecurityCloudScanInput): Promise<CodexSecurityCloudConfiguration> {
@@ -269,7 +270,7 @@ export class CodexSecurityCloudClient {
 			input.lookbackDays !== "all" &&
 			(!Number.isInteger(input.lookbackDays) || input.lookbackDays < 1)
 		) {
-			throw new Error("lookbackDays must be a positive integer or 'all'");
+			throw new Error(t("lookbackDays must be a positive integer or 'all'"));
 		}
 		const raw = await this.#request("scan_configurations", {
 			method: "POST",
@@ -438,8 +439,8 @@ function locationsAndEvidence(
 		locations.push(location);
 		const entry: (typeof evidenceInputs)[number] = {
 			kind: "code",
-			label: `Cloud source evidence ${index + 1}`,
-			explanation: text(line.comment) ?? "Source location reported by Codex Security cloud.",
+			label: t("Cloud source evidence {0}", `${index + 1}`),
+			explanation: text(line.comment) ?? t("Source location reported by Codex Security cloud."),
 			location,
 		};
 		const excerpt = text(line.content);
@@ -453,12 +454,12 @@ function locationsAndEvidence(
 		}
 	}
 	if (locations.length === 0)
-		throw new Error("Codex Security cloud finding has no usable repository-relative location");
+		throw new Error(t("Codex Security cloud finding has no usable repository-relative location"));
 	const validationReport = text(commit.validation_report) ?? text(commit.fix_check_report);
 	if (validationReport) {
 		evidenceInputs.push({
 			kind: "validation",
-			label: "Cloud validation",
+			label: t("Cloud validation"),
 			explanation: validationReport,
 		});
 	}
@@ -586,11 +587,11 @@ async function assertCloudRepositoryMatchesStore(
 	const origin = repo ? await repo.remoteUrl("origin", signal).catch(() => null) : null;
 	if (!origin) {
 		throw new Error(
-			"Codex Security cloud import requires a verifiable repository identity; this project has no 'origin' remote",
+			t("Codex Security cloud import requires a verifiable repository identity; this project has no 'origin' remote"),
 		);
 	}
 	if (repositoryIdentity(origin) !== repositoryIdentity(configuration.repositoryUrl)) {
-		throw new Error("Codex Security cloud configuration does not match this project's origin remote");
+		throw new Error(t("Codex Security cloud configuration does not match this project's origin remote"));
 	}
 }
 
@@ -668,7 +669,7 @@ export async function pullCodexSecurityCloudResults(
 				surfaces: [],
 				explicitExclusions: [],
 				deferred: [
-					{ id: "cloud-coverage", reason: "Cloud coverage receipts are not exposed by the findings API." },
+					{ id: "cloud-coverage", reason: t("Cloud coverage receipts are not exposed by the findings API.") },
 				],
 			},
 			reportRef: "report.md",

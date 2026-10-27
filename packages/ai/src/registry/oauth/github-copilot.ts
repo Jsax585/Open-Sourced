@@ -11,6 +11,7 @@
  * client: private instances run their own OAuth registry and reject the
  * github.com-registered OpenCode client.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { scheduler } from "node:timers/promises";
 import { getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
@@ -118,7 +119,7 @@ async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<De
 	);
 
 	if (!data || typeof data !== "object") {
-		throw new AIError.OAuthError("Invalid device code response", { kind: "validation", provider: "github-copilot" });
+		throw new AIError.OAuthError(t("Invalid device code response"), { kind: "validation", provider: "github-copilot" });
 	}
 
 	const deviceCode = (data as Record<string, unknown>).device_code;
@@ -134,7 +135,7 @@ async function startDeviceFlow(domain: string, fetchImpl: FetchImpl): Promise<De
 		typeof interval !== "number" ||
 		typeof expiresIn !== "number"
 	) {
-		throw new AIError.OAuthError("Invalid device code response fields", {
+		throw new AIError.OAuthError(t("Invalid device code response fields"), {
 			kind: "validation",
 			provider: "github-copilot",
 		});
@@ -213,7 +214,7 @@ async function pollForGitHubAccessToken(
 			}
 
 			const descriptionSuffix = description ? `: ${description}` : "";
-			throw new AIError.OAuthError(`Device flow failed: ${error}${descriptionSuffix}`, {
+			throw new AIError.OAuthError(t("Device flow failed: {0}{1}", `${error}`, `${descriptionSuffix}`), {
 				kind: "polling",
 				provider: "github-copilot",
 			});
@@ -222,12 +223,12 @@ async function pollForGitHubAccessToken(
 
 	if (slowDownResponses > 0) {
 		throw new AIError.OAuthError(
-			"Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.",
+			t("Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again."),
 			{ kind: "timeout", provider: "github-copilot" },
 		);
 	}
 
-	throw new AIError.OAuthError("Device flow timed out", { kind: "timeout", provider: "github-copilot" });
+	throw new AIError.OAuthError(t("Device flow timed out"), { kind: "timeout", provider: "github-copilot" });
 }
 
 /** Far-future expiry (10 years). GitHub OAuth tokens are long-lived; no JWT exchange needed. */
@@ -336,7 +337,7 @@ async function enableAllGitHubCopilotModels(
 export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Promise<OAuthCredentials> {
 	const fetchImpl = options.fetch ?? fetch;
 	const input = await options.onPrompt({
-		message: "GitHub Enterprise URL/domain (blank for github.com)",
+		message: t("GitHub Enterprise URL/domain (blank for github.com)"),
 		placeholder: "company.ghe.com",
 		allowEmpty: true,
 	});
@@ -348,7 +349,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 	const trimmed = input.trim();
 	const normalizedDomain = normalizeDomain(input);
 	if (trimmed && !normalizedDomain) {
-		throw new AIError.OAuthError("Invalid GitHub Enterprise URL/domain", {
+		throw new AIError.OAuthError(t("Invalid GitHub Enterprise URL/domain"), {
 			kind: "validation",
 			provider: "github-copilot",
 		});
@@ -358,7 +359,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 		normalizedDomain && isPublicGitHubHost(normalizedDomain) ? "github.com" : (normalizedDomain ?? "github.com");
 
 	const device = await startDeviceFlow(domain, fetchImpl);
-	options.onAuth(device.verification_uri, `Enter code: ${device.user_code}`);
+	options.onAuth(device.verification_uri, t("Enter code: {0}", `${device.user_code}`));
 
 	const githubAccessToken = await pollForGitHubAccessToken(
 		domain,
@@ -384,7 +385,7 @@ export async function loginGitHubCopilot(options: GitHubCopilotLoginOptions): Pr
 	};
 
 	// Enable all models after successful login
-	options.onProgress?.("Enabling models...");
+	options.onProgress?.(t("Enabling models..."));
 	await enableAllGitHubCopilotModels(
 		githubAccessToken,
 		enterpriseDomain ?? undefined,

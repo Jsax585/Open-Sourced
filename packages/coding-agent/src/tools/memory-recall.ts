@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -18,7 +19,7 @@ export type MemoryRecallParams = typeof memoryRecallSchema.infer;
 export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 	readonly name = "recall";
 	readonly approval = "read" as const;
-	readonly label = "Recall";
+	readonly label = t("Recall");
 	get description(): string {
 		return prompt.render(recallDescription, {
 			toolRefs: sessionMemoryToolRefs(this.session),
@@ -44,13 +45,13 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 			if (backend === "mnemopi") {
 				const state = this.session.getMnemopiSessionState?.();
 				if (!state) {
-					throw new Error("Mnemopi backend is not initialised for this session.");
+					throw new Error(t("Mnemopi backend is not initialised for this session."));
 				}
 				try {
 					const results = await state.recallResultsScoped(params.query);
 					if (results.length === 0) {
 						return {
-							content: [{ type: "text", text: "No relevant memories found." }],
+							content: [{ type: "text", text: t("No relevant memories found.") }],
 							details: {},
 							useless: true,
 						};
@@ -60,7 +61,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 						content: [
 							{
 								type: "text",
-								text: `Found ${results.length} relevant ${results.length === 1 ? "memory" : "memories"} (as of ${formatCurrentTime()} UTC):\n\n${formatted}`,
+								text: t("Found {0} relevant {3} (as of {1} UTC):\n\n{2}", `${results.length}`, `${formatCurrentTime()}`, `${formatted}`, `${results.length === 1 ? "memory" : "memories"}`),
 							},
 						],
 						details: {},
@@ -73,7 +74,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 
 			const state = this.session.getHindsightSessionState?.();
 			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
+				throw new Error(t("Hindsight backend is not initialised for this session."));
 			}
 
 			try {
@@ -87,7 +88,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 				const results = response.results ?? [];
 				if (results.length === 0) {
 					return {
-						content: [{ type: "text", text: "No relevant memories found." }],
+						content: [{ type: "text", text: t("No relevant memories found.") }],
 						details: {},
 						useless: true,
 					};
@@ -97,7 +98,7 @@ export class MemoryRecallTool implements AgentTool<typeof memoryRecallSchema> {
 					content: [
 						{
 							type: "text",
-							text: `Found ${results.length} relevant ${results.length === 1 ? "memory" : "memories"} (as of ${formatCurrentTime()} UTC):\n\n${formatted}`,
+							text: t("Found {0} relevant {3} (as of {1} UTC):\n\n{2}", `${results.length}`, `${formatCurrentTime()}`, `${formatted}`, `${results.length === 1 ? "memory" : "memories"}`),
 						},
 					],
 					details: {},

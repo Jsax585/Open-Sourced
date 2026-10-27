@@ -18,6 +18,7 @@
  * Everything renders through the same components, so ctrl+o, theming, and
  * transcript behavior are native by construction.
  */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
@@ -314,7 +315,7 @@ export class CollabGuestLink {
 	/** Shows the read-only status hint when applicable; true when the action must be dropped. */
 	#rejectReadOnly(): boolean {
 		if (!this.#readOnly) return false;
-		this.#ctx.showStatus("This collab link is read-only");
+		this.#ctx.showStatus(localize("This collab link is read-only"));
 		return true;
 	}
 
@@ -325,7 +326,7 @@ export class CollabGuestLink {
 	async join(link: string): Promise<void> {
 		const parsed = parseCollabLink(link);
 		if ("error" in parsed) throw new Error(parsed.error);
-		if (this.#ctx.collabGuest || this.#left) throw new Error("Already in a collab session (/leave first)");
+		if (this.#ctx.collabGuest || this.#left) throw new Error(localize("Already in a collab session (/leave first)"));
 		this.#roomId = parsed.roomId;
 		this.#writeToken = parsed.writeToken ? Buffer.from(parsed.writeToken).toString("base64url") : undefined;
 		this.#returnSessionFile = this.#ctx.sessionManager.getSessionFile() ?? null;
@@ -334,7 +335,7 @@ export class CollabGuestLink {
 		let key: CryptoKey;
 		try {
 			key = await importRoomKey(parsed.key);
-			if (this.#left) throw new Error("Collab join cancelled");
+			if (this.#left) throw new Error(localize("Collab join cancelled"));
 		} catch (err) {
 			await this.#restoreLocalSession();
 			throw err;
@@ -397,7 +398,7 @@ export class CollabGuestLink {
 						// Fail the join with the host's message instead of hanging
 						// until the welcome timeout.
 						this.#clearWelcomeTimer();
-						if (joined) this.#ctx.showError(`Collab host: ${frame.message}`);
+						if (joined) this.#ctx.showError(localize("Collab host: {0}", `${frame.message}`));
 						else firstWelcome.reject(new Error(frame.message));
 						return;
 					}
@@ -422,10 +423,10 @@ export class CollabGuestLink {
 				return;
 			}
 			if (willReconnect) {
-				this.#ctx.showStatus(`Collab connection lost (${reason}), reconnecting…`, { dim: true });
+				this.#ctx.showStatus(localize("Collab connection lost ({0}), reconnecting…", `${reason}`), { dim: true });
 				return;
 			}
-			this.#ctx.showStatus(`Collab session ended (${reason})`);
+			this.#ctx.showStatus(localize("Collab session ended ({0})", `${reason}`));
 			this.#restoreAfterDisconnect();
 		};
 		try {
@@ -433,7 +434,7 @@ export class CollabGuestLink {
 			// Cover a blackholed WebSocket handshake too; onOpen resets the timer.
 			this.#armWelcomeTimer();
 			await firstWelcome.promise;
-			if (this.#left) throw new Error("Collab join cancelled");
+			if (this.#left) throw new Error(localize("Collab join cancelled"));
 		} catch (err) {
 			this.#joinReject = null;
 			try {
@@ -539,7 +540,7 @@ export class CollabGuestLink {
 		// keeps its model: #applyHostState mirrors the host's, which runs inference.
 		const switched = await this.#ctx.session.switchSession(replicaPath, { preserveLocalCwd: true, keepModel: true });
 		if (switched === false) {
-			throw new Error("Collab replica activation was cancelled");
+			throw new Error(localize("Collab replica activation was cancelled"));
 		}
 		this.#replicaActivated = true;
 		if (this.#left) return;
@@ -597,9 +598,9 @@ export class CollabGuestLink {
 		this.#updateStatusSegment();
 		this.#readOnly = pending.readOnly;
 		this.#welcomed = true;
-		const suffix = this.#readOnly ? " (read-only)" : "";
+		const suffix = this.#readOnly ? localize(" (read-only)") : "";
 		this.#ctx.showStatus(
-			pending.isResync ? `Reconnected to collab session${suffix}` : `Joined collab session${suffix}`,
+			pending.isResync ? localize("Reconnected to collab session{0}", `${suffix}`) : localize("Joined collab session{0}", `${suffix}`),
 		);
 	}
 
@@ -694,12 +695,12 @@ export class CollabGuestLink {
 				break;
 			}
 			case "bye": {
-				this.#ctx.showStatus(`Collab session ended (${frame.reason})`);
+				this.#ctx.showStatus(localize("Collab session ended ({0})", `${frame.reason}`));
 				this.#restoreAfterDisconnect();
 				break;
 			}
 			case "error":
-				this.#ctx.showError(`Collab host: ${frame.message}`);
+				this.#ctx.showError(localize("Collab host: {0}", `${frame.message}`));
 				break;
 			default:
 				logger.debug("collab guest ignoring unexpected frame", { type: frame.t });
@@ -945,14 +946,14 @@ export class CollabGuestLink {
 	#restoreAfterDisconnect(): void {
 		void this.#restoreLocalSession().catch(err => {
 			logger.warn("Collab local restoration failed", { error: String(err) });
-			this.#ctx.showError(`Failed to restore local session: ${err instanceof Error ? err.message : String(err)}`);
+			this.#ctx.showError(localize("Failed to restore local session: {0}", `${err instanceof Error ? err.message : String(err)}`));
 		});
 	}
 
 	#restoreLocalSession(): Promise<boolean> {
 		if (this.#restoration) return this.#restoration;
 		this.#left = true;
-		this.#joinReject?.(new Error("Collab join cancelled"));
+		this.#joinReject?.(new Error(localize("Collab join cancelled")));
 		this.#clearWelcomeTimer();
 		this.#clearSnapshotProgressTimer();
 		this.#pendingSnapshot = null;
@@ -999,12 +1000,12 @@ export class CollabGuestLink {
 			// The TUI resume wrapper returns void even when a hook or settings
 			// flush cancels it. Only the actual local file can release ownership.
 			if (this.#ctx.sessionManager.getSessionFile() !== this.#returnSessionFile) {
-				throw new Error("Local session restoration was cancelled");
+				throw new Error(localize("Local session restoration was cancelled"));
 			}
 			return;
 		}
 		if ((await this.#ctx.session.newSession()) === false) {
-			throw new Error("Local session restoration was cancelled");
+			throw new Error(localize("Local session restoration was cancelled"));
 		}
 		setSessionTerminalTitle(this.#ctx.sessionManager.getSessionName(), this.#ctx.sessionManager.getCwd());
 		this.#ctx.statusLine.invalidate();

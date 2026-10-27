@@ -29,22 +29,20 @@ describe("LSP symbols expanded tree", () => {
 					.replace(/^│/, "")
 					.replace(/\s*│$/, ""),
 			);
-		const start = rows.findIndex(row => row.includes("in src/a.ts"));
-		expect(rows.slice(start + 1, start + 15)).toEqual([
+		const start = rows.findIndex(row => row.includes("src/a.ts"));
+		expect(start).toBeGreaterThanOrEqual(0);
+		const tree = rows.slice(start + 1, start + 15);
+		expect(tree.filter((_, index) => index % 2 === 0)).toEqual([
 			"  ├─ class Alpha",
-			"  │  line 1",
 			"  │  ├─ method one",
-			"  │  │  line 2",
 			"  │  │  └─ var inner",
-			"  │  │     line 3",
 			"  │  └─ method two",
-			"  │     line 5",
 			"  ├─ class Beta",
-			"  │  line 10",
 			"  │  └─ method three",
-			"  │     line 11",
 			"  └─ function gamma",
-			"     line 20",
+		]);
+		expect(tree.filter((_, index) => index % 2 === 1).map(row => row.match(/\d+/)?.[0])).toEqual([
+			"1", "2", "3", "5", "10", "11", "20",
 		]);
 	});
 });

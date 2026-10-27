@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 const SEC = 1_000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
@@ -92,12 +93,45 @@ export function truncate(str: string, maxLen: number, ellipsis = "…"): string 
 	return `${str.slice(0, sliceLen)}${ellipsis}`;
 }
 
+const COUNT_LABELS: Readonly<Record<string, string>> = {
+	file: t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body"),
+	"more file": t("more file"),
+	"more line": t("more line"),
+	replacement: t("replacement\u0004packages/utils/src/format.ts:COUNT_LABELS.replacement"),
+	match: t("match\u0004packages/utils/src/format.ts:COUNT_LABELS.match"),
+	hit: t("Matches"),
+	"more hit": t("more hit"),
+	item: t("item"),
+	field: t("field"),
+	reference: t("reference"),
+	source: t("Sources"),
+	citation: t("citation"),
+	question: t("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label"),
+	session: t("session"),
+	msg: t("msg"),
+	error: t("error"),
+	warning: t("warning"),
+	info: t("Info"),
+	hint: t("hint"),
+	"server failure": t("server failure"),
+	line: t("line"),
+	change: t("change"),
+	yield: t("yield"),
+	finding: t("finding"),
+	todo: t("todo"),
+	agent: t("agent"),
+	recipient: t("recipient"),
+	job: t("job"),
+	process: t("process"),
+};
+
 /**
- * Format count with pluralized label (e.g., "3 files", "1 error").
+ * Format a count using the active language's display label.
  */
 export function formatCount(label: string, count: number): string {
 	const safeCount = Number.isFinite(count) ? count : 0;
-	return `${safeCount} ${pluralize(label, safeCount)}`;
+	const noun = Object.hasOwn(COUNT_LABELS, label) ? COUNT_LABELS[label] : label;
+	return t("{1} {2}", `${(noun)}`, `${(safeCount)}`, `${(pluralize(label, safeCount))}`);
 }
 
 /**
@@ -111,12 +145,12 @@ export function formatAge(ageSeconds: number | null | undefined): string {
 	const weeks = Math.floor(days / 7);
 	const months = Math.floor(days / 30);
 
-	if (months > 0) return `${months}mo ago`;
-	if (weeks > 0) return `${weeks}w ago`;
-	if (days > 0) return `${days}d ago`;
-	if (hours > 0) return `${hours}h ago`;
-	if (mins > 0) return `${mins}m ago`;
-	return "just now";
+	if (months > 0) return t("{0}mo ago", `${months}`);
+	if (weeks > 0) return t("{0}w ago", `${weeks}`);
+	if (days > 0) return t("{0}d ago", `${days}`);
+	if (hours > 0) return t("{0}h ago", `${hours}`);
+	if (mins > 0) return t("{0}m ago", `${mins}`);
+	return t("just now");
 }
 
 /**

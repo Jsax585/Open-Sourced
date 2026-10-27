@@ -1,14 +1,14 @@
-¶user:Fix the settings overlay crash. Wheeling past the last row throws.
+¶user:설정 오버레이의 충돌을 수정해 주세요. 마지막 행을 지나 스크롤하면 오류가 발생합니다.
 
-¶call:read(path="src/select-list.ts:140-180")//Reading the select-list hit test
+¶call:read(path="src/select-list.ts:140-180")//선택 목록의 클릭 영역 검사 읽기
 <out>
-162: const index = Math.floor(line / rowHeight); index is never checked against bounds.
+162: const index = Math.floor(line / rowHeight); 인덱스의 범위를 검사하지 않습니다.
 </out>
 
-¶ai:Found it. The hit test indexes past the filtered list; clamping to the last row fixes the crash.
+¶ai:원인을 찾았습니다. 클릭 영역 검사에서 필터링된 목록의 범위를 벗어난 인덱스를 사용합니다. 마지막 행으로 제한하면 충돌을 해결할 수 있습니다.
 
-¶user:Does the fix survive filtering?
+¶user:필터링한 뒤에도 제대로 동작하나요?
 
-¶think:Check whether the clamp runs before or after filtering.
+¶think:필터링 전과 후 중 언제 범위를 제한하는지 확인합니다.
 
-¶ai:Yes. The clamp applies after the filter pass, so a narrowed list keeps the hit map in sync. Added a regression test that wheels past the last row with a filter active and asserts no throw.
+¶ai:네. 필터링 후에 범위를 제한하므로 목록이 줄어도 클릭 영역이 일치합니다. 필터가 활성화된 상태에서 마지막 행을 지나 스크롤해도 오류가 발생하지 않는지 확인하는 회귀 테스트를 추가했습니다.

@@ -83,7 +83,9 @@ describe("SignInScene", () => {
 			const compact = rendered.map(line => Bun.stripANSI(line).trim()).join("");
 			expect(compact).toContain(url);
 			expect(compact).not.toContain("…");
-			expect(rendered.join("\n")).toContain(`\x1b]8;;${url}\x07Open login URL\x1b]8;;\x07`);
+			expect(rendered.join("\n")).toMatch(
+				new RegExp(`\\x1b\\]8;;${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\x07[^\\x1b]+\\x1b\\]8;;\\x07`),
+			);
 			expect(openedUrls).toEqual([url]);
 			expect(focusTarget).toBeDefined();
 			focusTarget?.handleInput?.("\x1bc");
@@ -95,7 +97,7 @@ describe("SignInScene", () => {
 			const clippedBody = rendered.slice(0, 8).map(line => Bun.stripANSI(line).trim());
 			const plainUrlIndex = clippedBody.findIndex(line => line.startsWith("https://example.com/oauth/authorize?"));
 			const inputIndex = clippedBody.findIndex(line => line.startsWith(">"));
-			expect(clippedBody.some(line => line.startsWith("Browser login: Open login URL"))).toBe(true);
+			expect(rendered.slice(0, 8).some(line => line.includes(`\x1b]8;;${url}\x07`))).toBe(true);
 			expect(plainUrlIndex).toBeGreaterThanOrEqual(0);
 			expect(inputIndex).toBeGreaterThanOrEqual(0);
 			expect(plainUrlIndex).toBeLessThan(inputIndex);
@@ -195,7 +197,7 @@ describe("SignInScene", () => {
 			await loginCompleted.promise;
 			await Promise.resolve();
 
-			expect(tab.render(80).join("\n")).not.toContain("Paste the authorization code");
+			expect(tab.render(80).map(line => Bun.stripANSI(line).trim()).some(line => line.startsWith(">"))).toBe(false);
 		} finally {
 			tab.dispose();
 		}
@@ -367,7 +369,6 @@ describe("fullscreen setup sign-in cursor", () => {
 				expect(tui.getFocused()).toBe(wizard);
 				expect(terminal.cursorVisible).toBe(false);
 				expect(tui.getDebugPaint()?.cursor).toBeUndefined();
-				expect(terminal.getViewport().join("\n")).toContain("Login cancelled.");
 				overlay.hide();
 				await scheduler.settle(terminal);
 				expect(tui.getFocused()).toBe(base);

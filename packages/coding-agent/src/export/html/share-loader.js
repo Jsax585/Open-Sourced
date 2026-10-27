@@ -1,6 +1,8 @@
     (function() {
       'use strict';
 
+      function ompT(source, ...values) { return source.replace(/\{(\d+)\}/g, (match, index) => index < values.length ? String(values[index]) : match); }
+
       // ============================================================
       // SHARE VIEWER BOOTSTRAP
       // ============================================================
@@ -32,16 +34,16 @@
         var res = await fetch('https://api.github.com/gists/' + id, {
           headers: { Accept: 'application/vnd.github+json' },
         });
-        if (res.status === 404) throw new Error('This share no longer exists (gist deleted?).');
-        if (!res.ok) throw new Error('Gist fetch failed: HTTP ' + res.status);
+        if (res.status === 404) throw new Error(ompT("This share no longer exists (gist deleted?)."));
+        if (!res.ok) throw new Error(ompT("Gist fetch failed: HTTP ") + res.status);
         var gist = await res.json();
         var files = Object.values(gist.files || {});
         var file = files.find(function(f) { return /\.ompshare\.txt$/.test(f.filename); }) || files[0];
-        if (!file) throw new Error('Gist has no files.');
+        if (!file) throw new Error(ompT("Gist has no files."));
         var text = file.content;
         if (!text || file.truncated) {
           var raw = await fetch(file.raw_url);
-          if (!raw.ok) throw new Error('Gist raw fetch failed: HTTP ' + raw.status);
+          if (!raw.ok) throw new Error(ompT("Gist raw fetch failed: HTTP ") + raw.status);
           text = await raw.text();
         }
         return decodeBase64(text.replace(/\s+/g, ''));
@@ -50,28 +52,28 @@
       async function fetchServerBlob(id) {
         var res = await fetch('/s/' + id + '/raw');
         if (res.status === 404 || res.status === 410) {
-          throw new Error('This share no longer exists (expired or deleted).');
+          throw new Error(ompT("This share no longer exists (expired or deleted)."));
         }
-        if (!res.ok) throw new Error('Share fetch failed: HTTP ' + res.status);
+        if (!res.ok) throw new Error(ompT("Share fetch failed: HTTP ") + res.status);
         return new Uint8Array(await res.arrayBuffer());
       }
 
       async function load() {
         var match = SHARE_PATH_RE.exec(location.pathname);
-        if (!match) throw new Error('Bad share URL; expected /s/<id>.');
+        if (!match) throw new Error(ompT("Bad share URL; expected /s/<id>."));
         var keyText = location.hash.replace(/^#/, '');
-        if (!keyText) throw new Error('Share link is missing its #key fragment; paste the full link.');
+        if (!keyText) throw new Error(ompT("Share link is missing its #key fragment; paste the full link."));
         var keyBytes;
         try {
           keyBytes = decodeBase64Url(keyText);
         } catch (_err) {
-          throw new Error('Share key is not valid base64url.');
+          throw new Error(ompT("Share key is not valid base64url."));
         }
-        if (keyBytes.length !== 32) throw new Error('Share key must decode to 32 bytes.');
+        if (keyBytes.length !== 32) throw new Error(ompT("Share key must decode to 32 bytes."));
 
         var id = match[1];
         var sealed = await (GIST_ID_RE.test(id) ? fetchGistBlob(id) : fetchServerBlob(id));
-        if (sealed.length <= 12) throw new Error('Sealed session blob is truncated.');
+        if (sealed.length <= 12) throw new Error(ompT("Sealed session blob is truncated."));
 
         var key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt']);
         var plain;
@@ -82,14 +84,14 @@
             sealed.subarray(12)
           );
         } catch (_err) {
-          throw new Error('Decryption failed: wrong or corrupted #key.');
+          throw new Error(ompT("Decryption failed: wrong or corrupted #key."));
         }
 
         var data = await new Response(
           new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))
         ).json();
         if (data && data.header && data.header.title) {
-          document.title = data.header.title + ' — omp session';
+          document.title = data.header.title + ompT(" — omp session");
         }
         return data;
       }

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { type Component } from "../tui";
@@ -674,7 +675,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				...head,
 				role: "omp.tool.read",
 				name: "read",
-				title: "Read",
+				title: t("Read"),
 				status,
 				tone: status === "error" ? "error" : undefined,
 				frame: "inline",
@@ -696,9 +697,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			target: filePath ? `${filePath}${split.sel ? `:${split.sel}` : ""}` : "…",
 			targetKind: "path",
 			href: fileHref(linkPathForTargets(row.targets)),
-			meta: correctedFrom ? [`corrected from ${shortenPath(correctedFrom)}`] : undefined,
+			meta: correctedFrom ? [t("corrected from {0}", `${shortenPath(correctedFrom)}`)] : undefined,
 			badges: conflicts
-				? [{ text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}`, tone: "warning" }]
+				? [{ text: t("{0} conflict{1}", `${conflicts}`, `${conflicts === 1 ? "" : "s"}`), tone: "warning" }]
 				: undefined,
 		};
 	}
@@ -714,14 +715,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			error !== undefined
 				? [span(`— ${error.split("\n", 1)[0]}`, "error")]
 				: correctedFrom
-					? `corrected from ${shortenPath(correctedFrom)}`
+					? t("corrected from {0}", `${shortenPath(correctedFrom)}`)
 					: undefined;
 		return fileRow(shortenPath(split.sel ? split.path : row.targetPath), {
 			range: split.sel ? `:${split.sel}` : undefined,
 			href: fileHref(linkPathForTargets(row.targets)),
 			icon: status === "error" ? "x-circle" : undefined,
 			tone: READ_STATUS_TONE[status],
-			chip: conflicts ? { text: `${conflicts} conflict${conflicts === 1 ? "" : "s"}` } : undefined,
+			chip: conflicts ? { text: t("{0} conflict{1}", `${conflicts}`, `${conflicts === 1 ? "" : "s"}`) } : undefined,
 			detail,
 			title: error,
 			key: row.targetPath,
@@ -734,7 +735,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return (
 			plainText(failed?.contentText ?? "")
 				.replace(/^Error:\s*/, "")
-				.trim() || "Read failed"
+				.trim() || t("Read failed")
 		);
 	}
 
@@ -777,7 +778,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const usageByRow = this.#usageRowsBySummaryRow(rows);
 		const previews = entries.filter(entry => this.#shouldRenderPreview(entry));
 		const status = this.#groupStatus(entries);
-		const title = span("Read", "toolTitle");
+		const title = span(t("Read"), "toolTitle");
 		const children: NativeChild[] = [];
 		let head: TspSpan[] = [title];
 		if (rows.length === 1) {
@@ -882,9 +883,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		if (split.sel) spans.push(span(`:${split.sel}`, "accent"));
 		const correctedFrom = this.#correctedFromForTargets(row.targets);
-		if (correctedFrom) spans.push(span(` (corrected from ${shortenPath(correctedFrom)})`, "dim"));
+		if (correctedFrom) spans.push(span(t(" (corrected from {0})", `${shortenPath(correctedFrom)}`), "dim"));
 		const conflicts = this.#conflictCountForTargets(row.targets);
-		if (conflicts) spans.push(span(` (⚠ ${conflicts} conflict${conflicts === 1 ? "" : "s"})`, "warning"));
+		if (conflicts) spans.push(span(t(" (⚠ {0} conflict{1})", `${conflicts}`, `${conflicts === 1 ? "" : "s"}`), "warning"));
 		return spans;
 	}
 
@@ -906,7 +907,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 
 		if (displayRows.length === 0) {
-			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold("Read"))}`);
+			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold(t("Read")))}`);
 			this.addChild(this.#text);
 			return;
 		}
@@ -916,7 +917,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			if (!this.#shouldRenderPreviewRow(row)) {
 				const statusSymbol = this.#formatStatus(this.#statusForTargets(row.targets));
 				const pathDisplay = this.#formatRowPath(row);
-				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold("Read"))} ${pathDisplay}`.trimEnd()];
+				const lines = [` ${statusSymbol} ${theme.fg("toolTitle", theme.bold(t("Read")))} ${pathDisplay}`.trimEnd()];
 				const usageRows = this.#usageRowsBySummaryRow(displayRows).get(0) ?? [];
 				this.#appendUsageRows(lines, usageRows, "   ");
 				this.#text.setText(lines.join("\n"));
@@ -929,7 +930,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			return;
 		}
 
-		const header = `${theme.fg("toolTitle", theme.bold("Read"))}${theme.fg("dim", ` (${displayRows.length})`)}`;
+		const header = `${theme.fg("toolTitle", theme.bold(t("Read")))}${theme.fg("dim", ` (${displayRows.length})`)}`;
 		const lines = [` ${theme.format.bullet} ${header}`];
 		const entriesWithoutPreview = entries.filter(entry => !this.#shouldRenderPreview(entry));
 		const summaryTargets = this.#displayTargetsForEntries(entriesWithoutPreview);
@@ -1181,7 +1182,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 					linkPath: readTargetLinkPath(split.path, entry.linkPath),
 				})
 			: "";
-		const title = pathDisplay ? `Read ${pathDisplay}` : "Read";
+		const title = pathDisplay ? `Read ${pathDisplay}` : t("Read");
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		const dropCache = () => {

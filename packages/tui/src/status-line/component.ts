@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
@@ -3705,13 +3706,13 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const window = ctx.contextWindow;
 		const boundaries = ctx.autoCompactEnabled ? this.#compactionBoundaries(window) : null;
 		const lines = [
-			pct === null ? "Context usage unknown" : `Context ${Math.round(pct)}% used`,
-			window > 0 ? `${formatNumber(ctx.contextTokens)} of ${formatNumber(window)} tokens` : "No context window",
+			pct === null ? localize("Context usage unknown") : localize("Context {0}% used", `${Math.round(pct)}`),
+			window > 0 ? localize("{1} of {0} tokens", `${formatNumber(window)}`, `${formatNumber(ctx.contextTokens)}`) : localize("No context window"),
 		];
-		if (boundaries) lines.push(`Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`);
+		if (boundaries) lines.push(localize("Auto-compact at {0}%", `${Math.round(boundaries.thresholdPercent)}`));
 		const speculation = ctx.compactionSpeculation;
-		if (speculation === "running") lines.push("Compaction summary in progress");
-		else if (speculation === "armed") lines.push("Compaction summary ready");
+		if (speculation === "running") lines.push(localize("Compaction summary in progress"));
+		else if (speculation === "armed") lines.push(localize("Compaction summary ready"));
 		// The line spans the whole window: omp's boundary symbols sit where speculation
 		// starts and compaction fires, and the share past the speculation point is accent.
 		const used = pct === null ? null : Math.min(1, pct / 100);
@@ -3723,7 +3724,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				const start: TspMeterMark = {
 					at: speculationAt,
 					icon: "context.speculation",
-					title: `Compaction summary starts at ${Math.round(speculationAt * 100)}%`,
+					title: localize("Compaction summary starts at {0}%", `${Math.round(speculationAt * 100)}`),
 				};
 				// Lit while a background summary runs or waits armed.
 				if (speculation !== "idle") start.tone = "accent";
@@ -3732,7 +3733,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			marks.push({
 				at: Math.min(1, boundaries.thresholdPercent / 100),
 				icon: "context.compaction",
-				title: `Auto-compact at ${Math.round(boundaries.thresholdPercent)}%`,
+				title: localize("Auto-compact at {0}%", `${Math.round(boundaries.thresholdPercent)}`),
 			});
 		}
 		const context = node(
@@ -3766,7 +3767,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				role: "omp.composer.usage",
 				text: cost,
 				wrap: "none",
-				...(cost ? { title: `Session cost ${cost}` } : {}),
+				...(cost ? { title: localize("Session cost {0}", `${cost}`) } : {}),
 				actions: { click: "status.cost" },
 			},
 			undefined,

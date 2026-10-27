@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { isRecord, prompt } from "@oh-my-pi/pi-utils";
 import type { CustomCommand, CustomCommandAPI } from "../../../../extensibility/custom-commands/types";
@@ -450,7 +451,7 @@ export async function selectReviewChoice(
 ): Promise<ReviewChoice | undefined> {
 	const choices: ReviewMenuChoice[] = [
 		...findRecentPrRefs(ctx, REVIEW_CONTEXT_PR_LIMIT).map(ref => ({
-			label: `Review ${formatReviewRefLabel(ref)} from conversation`,
+			label: t("Review {0} from conversation", `${formatReviewRefLabel(ref)}`),
 			kind: "pr" as const,
 			ref,
 		})),

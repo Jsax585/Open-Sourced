@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import { visibleWidth } from "../utils";
@@ -243,7 +244,7 @@ const TILES_SHOWN = 9;
 
 /** Pending wait frame. */
 function waitRenderCall(_args: object, _options: RenderResultOptions, uiTheme: Theme): Component {
-	return new Text(renderStatusLine({ icon: "pending", title: "Wait" }, uiTheme), 0, 0);
+	return new Text(renderStatusLine({ icon: "pending", title: t("Wait") }, uiTheme), 0, 0);
 }
 
 /** Result frame for wait snapshots and the agents roster. */
@@ -260,8 +261,8 @@ function jobsRenderResult(
 	const agents = result.details?.agents ?? [];
 
 	if (jobs.length === 0 && agents.length === 0) {
-		const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
-		const header = renderStatusLine({ icon: "warning", title: "Wait" }, uiTheme);
+		const fallback = result.content?.find(c => c.type === "text")?.text || t("No jobs to process");
+		const header = renderStatusLine({ icon: "warning", title: t("Wait") }, uiTheme);
 		return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
 	}
 
@@ -273,9 +274,9 @@ function jobsRenderResult(
 	// The title already carries the running count, so meta lists only the
 	// settled categories — "waiting on 19 of 19 · 19 running" read awkward.
 	const meta: string[] = [];
-	if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
-	if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
-	if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
+	if (counts.completed > 0) meta.push(uiTheme.fg("success", t("{0} done", `${counts.completed}`)));
+	if (counts.failed > 0) meta.push(uiTheme.fg("error", t("{0} failed", `${counts.failed}`)));
+	if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", t("{0} cancelled\u0004packages/tui/src/tools/wait.ts:jobsRenderResult", `${counts.cancelled}`)));
 	if (agents.length > 0 && jobs.length > 0) {
 		meta.push(uiTheme.fg("accent", `${agents.length} agent${agents.length === 1 ? "" : "s"}`));
 	}
@@ -288,9 +289,9 @@ function jobsRenderResult(
 			? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
 			: counts.running > 0
 				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${jobsNoun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
-				: `${jobs.length} ${jobsNoun} settled`;
+					? t("waiting on {0} {1}", `${jobs.length}`, `${jobsNoun}`)
+					: t("waiting on {1} of {0} {2}", `${jobs.length}`, `${counts.running}`, `${jobsNoun}`)
+				: t("{0} {1} settled", `${jobs.length}`, `${jobsNoun}`);
 
 	const header = renderStatusLine(
 		{
@@ -596,7 +597,7 @@ function jobsRenderResult(
 										: formatStatusIcon("warning", uiTheme);
 									const badge = agent.live
 										? formatBadge("agent", "accent", uiTheme)
-										: formatBadge("agent · no turn", "warning", uiTheme);
+										: formatBadge(t("agent · no turn"), "warning", uiTheme);
 									const id = truncateToWidth(
 										replaceTabs(agent.id).replace(/\s+/g, " "),
 										Math.max(0, rowWidth - visibleWidth(`${icon}  ${badge}`)),
@@ -763,9 +764,9 @@ function describeJobsResult(
 	const agents = result.details?.agents ?? [];
 	if (jobs.length === 0 && agents.length === 0) {
 		return {
-			head: toolHead("Wait"),
+			head: toolHead(t("Wait")),
 			tone: "warning",
-			body: [text([span(plainText(resultText(result) || "No jobs to process"), "dim")])],
+			body: [text([span(plainText(resultText(result) || t("No jobs to process")), "dim")])],
 		};
 	}
 	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
@@ -776,13 +777,13 @@ function describeJobsResult(
 			? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
 			: counts.running > 0
 				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${noun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${noun}`
-				: `${jobs.length} ${noun} settled`;
+					? t("waiting on {0} {1}", `${jobs.length}`, `${noun}`)
+					: t("waiting on {1} of {0} {2}", `${jobs.length}`, `${counts.running}`, `${noun}`)
+				: t("{0} {1} settled", `${jobs.length}`, `${noun}`);
 	const head: TspSpan[] = [span(title, "toolTitle strong")];
-	if (counts.completed > 0) head.push(span(` ${counts.completed} done`, "success"));
-	if (counts.failed > 0) head.push(span(` ${counts.failed} failed`, "error"));
-	if (counts.cancelled > 0) head.push(span(` ${counts.cancelled} cancelled`, "warning"));
+	if (counts.completed > 0) head.push(span(t(" {0} done", `${counts.completed}`), "success"));
+	if (counts.failed > 0) head.push(span(t(" {0} failed", `${counts.failed}`), "error"));
+	if (counts.cancelled > 0) head.push(span(t(" {0} cancelled", `${counts.cancelled}`), "warning"));
 	const order: Record<JobSnapshot["status"], number> = {
 		running: 0,
 		failed: 1,
@@ -810,7 +811,7 @@ function describeJobsResult(
 				{ gap: "sm", role: "omp.wait.agent" },
 				[
 					node("badge", {
-						text: agent.live ? "agent" : "agent · no turn",
+						text: agent.live ? "agent" : t("agent · no turn"),
 						tone: agent.live ? "accent" : "warning",
 					}),
 					text(spans, { truncate: "end", grow: 1 }),
@@ -860,22 +861,22 @@ export const waitToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	activitySummary(): ToolActivitySummary {
-		return { label: "Wait", detail: "Background work or peer message" };
+		return { label: t("Wait"), detail: t("Background work or peer message") };
 	},
 	renderCall: waitRenderCall,
 	describeCall(): NativeToolView {
-		return { head: toolHead("Wait"), inline: true };
+		return { head: toolHead(t("Wait")), inline: true };
 	},
 	describeResult(
 		result: ToolRenderResult<CoordinationDetails>,
 		options: RenderResultOptions,
 	): NativeToolView | undefined {
 		return waitResultMemo.get(result, [options.isPartial, widgetStamp(result.details?.jobs)], () => {
-			if (result.isError) return errorView("Wait", resultText(result));
+			if (result.isError) return errorView(t("Wait"), resultText(result));
 			const details = result.details;
 			if (details?.interrupted) {
 				return {
-					head: toolHead("Wait", "interrupted by message"),
+					head: toolHead(t("Wait"), t("interrupted by message")),
 					tone: "info",
 					inline: true,
 				};
@@ -896,7 +897,7 @@ export const waitToolRenderer = {
 	): Component {
 		if (result.details?.interrupted && !result.isError) {
 			return new Text(
-				renderStatusLine({ icon: "info", title: "Wait", meta: ["interrupted by message"] }, uiTheme),
+				renderStatusLine({ icon: "info", title: t("Wait"), meta: [t("interrupted by message")] }, uiTheme),
 				0,
 				0,
 			);

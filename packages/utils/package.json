@@ -36,6 +36,11 @@
 			"types": "./src/ar/index.ts",
 			"import": "./src/ar/index.ts"
 		},
+		"./i18n": {
+			"browser": "./src/i18n-browser.ts",
+			"types": "./src/i18n.ts",
+			"default": "./src/i18n.ts"
+		},
 		"./*": {
 			"types": "./src/*.ts",
 			"import": "./src/*.ts"

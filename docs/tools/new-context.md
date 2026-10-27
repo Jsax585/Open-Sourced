@@ -1,47 +1,47 @@
 # new_context
 
-> Request a fresh experimental context window while preserving the current notebook and recoverable branch history.
+> 현재 노트북과 복구 가능한 브랜치 이력을 보존하면서 새로운 실험적 컨텍스트 창을 요청합니다.
 
-## Source
+## 소스
 
-- Entry: `packages/coding-agent/src/tools/context-notes.ts` (`NewContextTool`)
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/new-context.md`
-- Request consumption: `packages/coding-agent/src/session/agent-session.ts`
-- Rollover lifecycle: `packages/coding-agent/src/session/session-maintenance.ts`
-- Registration: `packages/coding-agent/src/tools/index.ts`
+- 진입점: `packages/coding-agent/src/tools/context-notes.ts` (`NewContextTool`)
+- 모델용 프롬프트: `packages/coding-agent/src/prompts/tools/new-context.md`
+- 요청 처리: `packages/coding-agent/src/session/agent-session.ts`
+- 전환 수명 주기: `packages/coding-agent/src/session/session-maintenance.ts`
+- 등록: `packages/coding-agent/src/tools/index.ts`
 
-## Registration / Visibility
+## 등록 / 노출
 
-- Requires `compaction.experimentalContextManagement = true`, an undisposed session, and a session journal whose ID matches the tool session's owner ID.
-- The setting defaults to `false`. Enable **Notes-backed context windows (experimental)** under `/settings` → Context → Compaction; the running session gains the tool immediately.
-- Metadata: `approval = "write"`, `strict = true`, `loadMode = "essential"`.
-- Notes-backed rollover requires all four tools to be active: `context_notes`, `new_context`, `read`, and `grep`. Unsupported tool configurations retain the existing compaction behavior.
+- `compaction.experimentalContextManagement = true`, 폐기되지 않은 세션, 도구 세션의 소유자 ID와 ID가 일치하는 세션 저널이 필요합니다.
+- 설정의 기본값은 `false`입니다. `/settings` → Context → Compaction에서 **노트 기반 컨텍스트 창(실험적)**을 활성화하면 실행 중인 세션에 도구가 즉시 추가됩니다.
+- 메타데이터: `approval = "write"`, `strict = true`, `loadMode = "essential"`.
+- 노트 기반 전환에는 `context_notes`, `new_context`, `read`, `grep` 도구 네 개가 모두 활성화되어 있어야 합니다. 지원되지 않는 도구 구성에서는 기존 압축 동작을 유지합니다.
 
-## Inputs
+## 입력
 
-An empty object: `{}`. The tool takes no instructions, notebook text, or target session ID. Save the working notebook with [context_notes](context-notes.md) before requesting rollover.
+빈 객체 `{}`입니다. 이 도구는 지침, 노트북 텍스트, 대상 세션 ID를 받지 않습니다. 전환을 요청하기 전에 [context_notes](context-notes.md)로 작업 노트북을 저장하세요.
 
-## Outputs
+## 출력
 
-- Text: `New context window requested.`
-- Details: `{ requested: true }`.
+- 텍스트: `New context window requested.`
+- 세부 정보: `{ requested: true }`.
 
-This result acknowledges a request. The tool itself does not commit a compaction boundary or synchronously reset the conversation.
+이 결과는 요청이 접수되었음을 알립니다. 도구 자체가 압축 경계를 확정하거나 대화를 동기적으로 초기화하지는 않습니다.
 
-## Flow and Side Effects
+## 흐름과 부수 효과
 
-1. Validate the owning session and check cancellation.
-2. Return the turn-local rollover request.
-3. The owning agent consumes successful tool results, including write-device results, and processes the request through its maintenance lifecycle before the next provider request.
-4. The experimental lifecycle commits a normal compaction boundary without generating another recursive summary. It rebuilds active context with the latest notebook and retained recent messages, leaving original journal entries available through `history://current/full`.
+1. 소유 세션의 유효성을 검증하고 취소 여부를 확인합니다.
+2. 현재 턴에 한정된 전환 요청을 반환합니다.
+3. 소유 에이전트는 쓰기 장치 결과를 포함한 성공한 도구 결과를 받아들이고, 다음 제공자 요청 전에 유지 관리 수명 주기를 통해 요청을 처리합니다.
+4. 실험적 수명 주기는 재귀적 요약을 추가로 생성하지 않고 일반 압축 경계를 확정합니다. 최신 노트북과 보존된 최근 메시지로 활성 컨텍스트를 다시 구성하며, 원본 저널 항목은 `history://current/full`을 통해 계속 이용할 수 있습니다.
 
-An explicit `new_context` request bypasses the Auto-Compact toggle. Rollover still depends on the experimental capability and maintenance guards; session, branch, model, cancellation, and active-tool changes are revalidated before commit. If the capability disappears after acknowledgement, the stale request is dropped rather than falling back to summary-provider compaction.
+명시적인 `new_context` 요청은 Auto-Compact 토글을 우회합니다. 전환에는 여전히 실험적 기능과 유지 관리 보호 조건이 적용됩니다. 확정 전에 세션, 브랜치, 모델, 취소 여부, 활성 도구 변경 사항을 다시 검증합니다. 요청 접수 후 기능이 사라지면 요약 제공자 기반 압축으로 대체하지 않고 오래된 요청을 버립니다.
 
-## Limits and Errors
+## 제한과 오류
 
-- Disabled, disposed, or mismatched-owner tool sessions fail with a `ToolError`.
-- Cancellation is checked before the request is returned.
-- The maintenance lifecycle handles cancellation, extension hooks, concurrent compaction, and stale session or branch state. A successful tool request is not proof that a later rollover committed.
-- This tool does not create a new session, change working files, or delete raw journal history.
+- 비활성화되었거나 폐기되었거나 소유자가 일치하지 않는 도구 세션은 `ToolError`로 실패합니다.
+- 요청을 반환하기 전에 취소 여부를 확인합니다.
+- 유지 관리 수명 주기는 취소, 확장 훅, 동시 압축, 오래된 세션 또는 브랜치 상태를 처리합니다. 도구 요청이 성공했다고 해서 이후 전환이 확정되었다는 뜻은 아닙니다.
+- 이 도구는 새 세션을 만들거나 작업 파일을 변경하거나 원시 저널 이력을 삭제하지 않습니다.
 
-See [Compaction and Branch Summaries](../compaction.md) for automatic rollover, notebook reminders, and manual compaction behavior.
+자동 전환, 노트북 알림, 수동 압축 동작은 [압축과 브랜치 요약](../compaction.md)을 참조하세요.

@@ -1,65 +1,65 @@
-# Vibe mode
+# Vibe 모드
 
-Vibe mode turns the top-level interactive session into a **director** for persistent background worker sessions instead of letting it edit or execute commands itself. The director's active tools are reduced to `read`, optional parent-owned `todo`, and five worker-control tools. Workers do the searching, editing, running, and building; the director verifies their claims by reading touched files. The parent owns the main todo list; workers normally omit `todo`, except when their own prewalk handoff requires it.
+Vibe 모드는 최상위 대화형 세션이 직접 편집하거나 명령을 실행하는 대신, 지속적으로 유지되는 백그라운드 작업자 세션의 **지휘자** 역할을 하도록 합니다. 지휘자가 사용할 수 있는 도구는 `read`, 선택적인 상위 세션 소유 `todo`, 작업자 제어 도구 5개로 제한됩니다. 검색, 편집, 실행, 빌드는 작업자가 수행하며, 지휘자는 변경된 파일을 읽어 작업자의 주장을 확인합니다. 기본 할 일 목록은 상위 세션이 소유합니다. 작업자는 자체 prewalk 인계에 필요한 경우를 제외하면 보통 `todo`를 사용하지 않습니다.
 
-## Enabling and disabling
+## 켜기와 끄기
 
-Toggle it with the `/vibe` slash command:
+`/vibe` 슬래시 명령으로 전환합니다.
 
 ```text
-/vibe                 # enter vibe mode
-/vibe fix the flaky test in packages/tui   # enter and submit a first directive
-/vibe                 # run again to exit
+/vibe                 # Vibe 모드 진입
+/vibe fix the flaky test in packages/tui   # 진입하면서 첫 지시 제출
+/vibe                 # 다시 실행하면 종료
 ```
 
-- Entering activates a parent-session worker scope, installs the vibe tools, reduces the active toolset to `read`, optional parent-owned `todo`, and the vibe tools, and injects the director instructions.
-- An inline prompt (`/vibe <prompt>`) enters the mode and submits that prompt as the first directive.
-- Exiting aborts any running director turn, suppresses queued-message replay during teardown, restores the prior toolset, cancels in-flight worker turns, and persists terminal lifecycle records for every worker in the scope.
-- Vibe mode is mutually exclusive with both active **and paused** plan/goal modes; exit those modes first.
-- Starting, deleting, forking, moving (including `/wt`), or handing off the session is rejected while vibe mode is active. Reset-style `/loop` actions are also blocked.
-- The status line shows a `Vibe` indicator while the mode is on; its token-rate display aggregates generating workers even while the director is idle.
+- 진입하면 상위 세션의 작업자 범위를 활성화하고, Vibe 도구를 설치하며, 활성 도구를 `read`, 선택적인 상위 세션 소유 `todo`, Vibe 도구로 제한하고 지휘자 지침을 주입합니다.
+- 인라인 프롬프트(`/vibe <prompt>`)를 입력하면 모드에 진입하면서 해당 프롬프트를 첫 지시로 제출합니다.
+- 종료하면 진행 중인 지휘자 턴을 중단하고, 정리 중 대기 메시지 재생을 억제하며, 이전 도구 구성을 복원하고, 진행 중인 작업자 턴을 취소한 뒤 범위 내 모든 작업자의 최종 수명 주기 기록을 저장합니다.
+- Vibe 모드는 **활성 상태뿐 아니라 일시 정지된** 계획/목표 모드와도 함께 사용할 수 없습니다. 먼저 해당 모드를 종료하세요.
+- Vibe 모드가 활성화된 동안에는 세션 시작, 삭제, 분기, 이동(`/wt` 포함), 인계가 거부됩니다. 초기화 유형의 `/loop` 작업도 차단됩니다.
+- 모드가 켜져 있으면 상태 줄에 `Vibe` 표시가 나타납니다. 지휘자가 대기 중일 때도 생성 중인 작업자들의 토큰 속도를 합산해 표시합니다.
 
-`/vibe` is an interactive-TUI command. The mode and worker lifecycle events are persisted with the parent session. Resuming a session whose current mode is `vibe` rehydrates completed workers as idle/parked sessions with their child transcripts; a turn interrupted by process restart is not resumed automatically. Explicitly killed or mode-exit workers stay terminal.
+`/vibe`는 대화형 TUI 명령입니다. 모드와 작업자 수명 주기 이벤트는 상위 세션과 함께 저장됩니다. 현재 모드가 `vibe`인 세션을 재개하면 완료된 작업자는 하위 대화 기록을 유지한 대기/보류 세션으로 복원됩니다. 프로세스 재시작으로 중단된 턴은 자동으로 재개되지 않습니다. 명시적으로 종료했거나 모드 종료로 끝난 작업자는 종료 상태를 유지합니다.
 
-Switching to a saved session suspends the source scope: running worker turns are cancelled and queued directives are cleared, but the persisted child conversations are not tombstoned. Returning to that parent can rehydrate them; this differs from deliberately exiting `/vibe`.
+저장된 세션으로 전환하면 원래 범위가 일시 중지됩니다. 실행 중인 작업자 턴은 취소되고 대기 중인 지시는 지워지지만, 저장된 하위 대화에는 삭제 표식이 붙지 않습니다. 해당 상위 세션으로 돌아오면 복원할 수 있습니다. 이는 의도적으로 `/vibe`를 종료하는 것과 다릅니다.
 
-## The two worker tiers
+## 작업자 등급 두 가지
 
-Every worker is a real, keep-alive task-executor subagent with the normal coding tool surface and its own persisted child transcript. Choose a tier when spawning:
+각 작업자는 일반 코딩 도구와 자체적으로 저장되는 하위 대화 기록을 가진 실제 상주형 작업 실행 하위 에이전트입니다. 생성할 때 등급을 선택합니다.
 
-| Tier   | Bundled agent | Default role | Use for                                             |
+| 등급   | 내장 에이전트 | 기본 역할 | 용도 |
 | ------ | ------------- | ------------ | --------------------------------------------------- |
-| `fast` | `sonic`       | `@smol`      | Mechanical execution, drafts, high-volume work      |
-| `good` | `task`        | `@task`      | Design, judgment calls, and reviewing `fast` output |
+| `fast` | `sonic`       | `@smol`      | 기계적인 실행, 초안, 대량 작업 |
+| `good` | `task`        | `@task`      | 설계, 판단이 필요한 작업, `fast` 결과 검토 |
 
-The tier always selects the bundled `sonic` or `task` definition, not a same-named discovered custom agent. Model resolution otherwise matches task-agent routing: `task.agentModelOverrides.sonic` / `.task` wins over the bundled agent model, and role aliases resolve through `modelRoles`, with the parent active/default model as fallback.
+등급은 검색된 같은 이름의 사용자 지정 에이전트가 아니라 항상 내장 `sonic` 또는 `task` 정의를 선택합니다. 그 외 모델 결정 방식은 작업 에이전트 라우팅과 같습니다. `task.agentModelOverrides.sonic` / `.task`가 내장 에이전트 모델보다 우선하며, 역할 별칭은 `modelRoles`를 통해 결정됩니다. 최종 대체값은 상위 세션의 활성/기본 모델입니다.
 
-## Worker-control tools
+## 작업자 제어 도구
 
-| Tool         | Input and behavior                                                                                                                                                                                   |
+| 도구 | 입력과 동작 |
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibe_spawn` | `{ cli: "fast" \| "good", prompt, name? }`. Starts a blank worker with a complete, self-contained first brief. `name` is sanitized/capped at 48 characters; an id is generated when omitted.         |
-| `vibe_send`  | `{ session, message }`. Steers a streaming turn at its next step; if a turn exists but cannot be steered, queues an automatic next turn; if idle/parked, starts the next turn immediately.           |
-| `vibe_wait`  | `{ sessions?, timeout? }`. Waits for the first watched turn to settle (all in-flight workers when omitted), default 30 seconds. It acknowledges settled jobs so their result is not delivered twice. |
-| `vibe_kill`  | `{ session }`. Cancels an in-flight turn, clears queued messages, releases the worker, and retains any initialized transcript at `history://<id>`.                                                   |
-| `vibe_list`  | `{}`. Lists sessions in spawn order with tier, state, turn/queue counts, resolved model, and recent activity.                                                                                        |
+| `vibe_spawn` | `{ cli: "fast" \| "good", prompt, name? }`. 완전하고 독립적인 첫 작업 설명으로 빈 작업자를 시작합니다. `name`은 정제 후 최대 48자로 제한되며, 생략하면 ID를 생성합니다. |
+| `vibe_send` | `{ session, message }`. 스트리밍 중인 턴의 다음 단계에 지시를 전달합니다. 턴이 있지만 지시를 전달할 수 없으면 자동으로 다음 턴에 넣습니다. 대기/보류 상태라면 다음 턴을 즉시 시작합니다. |
+| `vibe_wait` | `{ sessions?, timeout? }`. 감시 대상 중 첫 번째 턴이 끝날 때까지 기다립니다. 생략하면 진행 중인 모든 작업자를 감시하며, 기본 대기 시간은 30초입니다. 완료 작업을 확인 처리하므로 결과가 두 번 전달되지 않습니다. |
+| `vibe_kill` | `{ session }`. 진행 중인 턴을 취소하고, 대기 메시지를 지우며, 작업자를 해제합니다. 초기화된 대화 기록은 `history://<id>`에 남습니다. |
+| `vibe_list` | `{}`. 생성 순서대로 세션의 등급, 상태, 턴/대기열 수, 결정된 모델, 최근 활동을 나열합니다. |
 
-Spawn and send return immediately. Each worker-turn result self-delivers into the director conversation through the async job manager; long response text is preview-capped there, with full output available at `agent://<id>`. Running `fast` and `good` workers on independent workstreams concurrently is the normal shape.
+생성과 전송은 즉시 반환됩니다. 각 작업자 턴의 결과는 비동기 작업 관리자를 통해 지휘자 대화에 자동 전달됩니다. 긴 응답은 미리보기 길이가 제한되며 전체 출력은 `agent://<id>`에서 볼 수 있습니다. 독립적인 작업 흐름에서 `fast`와 `good` 작업자를 동시에 실행하는 것이 일반적입니다.
 
-Several messages queued while one worker turn cannot be steered are joined into one automatic next-turn directive. `vibe_list` omits explicitly killed workers from its live wall and reports their ids separately; `vibe_wait` can still watch an explicitly named settled worker.
+작업자 턴에 지시를 전달할 수 없는 동안 여러 메시지가 대기열에 들어오면 다음 턴의 지시 하나로 합쳐집니다. `vibe_list`는 명시적으로 종료한 작업자를 활성 목록에서 제외하고 해당 ID를 별도로 보고합니다. `vibe_wait`는 명시적으로 지정한 완료 작업자를 계속 감시할 수 있습니다.
 
-## Scope and failure behavior
+## 범위와 실패 동작
 
-Worker ids are scoped to the owning agent and parent session; a worker from another scope is reported as unknown and cannot be controlled. Spawning requires the session async job manager. Spawn failures terminate the partial worker; failed lifecycle persistence can retain a dead record for mode-exit recovery. Turn failures self-deliver as failed job results, while a recoverable keep-alive worker returns to `idle` for another `vibe_send`. At turn settlement, a worker whose child session is no longer idle/parked in the same owner scope becomes `dead`. Sends reject stale or mismatched child-session identities rather than controlling another session.
+작업자 ID는 소유 에이전트와 상위 세션의 범위에 속합니다. 다른 범위의 작업자는 알 수 없는 작업자로 보고되며 제어할 수 없습니다. 생성하려면 세션의 비동기 작업 관리자가 필요합니다. 생성 실패 시 부분적으로 생성된 작업자를 종료합니다. 수명 주기 저장에 실패하면 모드 종료 복구를 위해 종료 기록이 남을 수 있습니다. 턴 실패는 실패한 작업 결과로 자동 전달되며, 복구 가능한 상주형 작업자는 다음 `vibe_send`를 받을 수 있도록 `idle`로 돌아갑니다. 턴이 끝날 때 하위 세션이 같은 소유 범위의 대기/보류 상태가 아니면 작업자는 `dead`가 됩니다. 전송 시 오래되었거나 일치하지 않는 하위 세션 식별자는 다른 세션을 제어하는 대신 거부됩니다.
 
-## Workflow
+## 작업 흐름
 
-1. Split the request into independent workstreams — one persistent worker per workstream so each accumulates useful conversation context.
-2. Call `vibe_spawn` with a self-contained brief: files, constraints, and observable acceptance criteria. Workers start blank and never see the director's conversation.
-3. Keep directing other workers while turns are in flight. Use `vibe_wait` only when blocked; a timed-out wait can be reissued.
-4. Use `vibe_send` naturally for corrections and next steps. A mid-turn send steers when possible; otherwise it becomes the worker's next turn automatically.
-5. When a result arrives, `read` touched files and inspect full output when the preview is insufficient. Reconcile verified work through the optional parent `todo`.
-6. Route by difficulty: draft with `fast`, escalate to `good` when mechanical execution stalls or judgment is required.
-7. Use `vibe_kill` for a finished/stuck worker. Exiting the mode kills the entire remaining scope.
+1. 요청을 독립적인 작업 흐름으로 나누세요. 흐름마다 상주 작업자 하나를 두어 유용한 대화 맥락을 축적하게 합니다.
+2. 파일, 제약, 관찰 가능한 승인 기준을 포함한 독립적인 작업 설명으로 `vibe_spawn`을 호출하세요. 작업자는 빈 상태로 시작하며 지휘자의 대화를 보지 못합니다.
+3. 턴이 진행 중일 때는 다른 작업자 지휘를 계속하세요. 더 진행할 수 없을 때만 `vibe_wait`를 사용하세요. 대기 시간이 초과되면 다시 호출할 수 있습니다.
+4. 수정 사항과 다음 단계를 `vibe_send`로 자연스럽게 전달하세요. 턴 도중 전송하면 가능한 경우 즉시 지시를 전달하고, 그렇지 않으면 자동으로 작업자의 다음 턴이 됩니다.
+5. 결과가 도착하면 변경된 파일을 `read`로 읽고, 미리보기가 부족하면 전체 출력을 살펴보세요. 검증한 작업을 선택적인 상위 `todo`에 반영하세요.
+6. 난이도에 따라 배정하세요. `fast`로 초안을 만들고, 기계적인 실행이 막히거나 판단이 필요하면 `good`으로 넘기세요.
+7. 완료되었거나 멈춘 작업자는 `vibe_kill`로 종료하세요. 모드를 종료하면 남은 범위 전체가 종료됩니다.
 
-The director remains responsible for the final outcome: worker completion means the turn settled, not that its claims are correct.
+최종 결과에 대한 책임은 지휘자에게 있습니다. 작업자 완료는 턴이 끝났다는 뜻이지, 작업자의 주장이 옳다는 뜻은 아닙니다.

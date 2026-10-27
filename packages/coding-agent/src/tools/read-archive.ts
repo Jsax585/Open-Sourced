@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TextContent } from "@oh-my-pi/pi-ai";
 import {
@@ -219,12 +220,12 @@ export async function readArchive(
 		}
 	}
 	if (!node) {
-		throw new ToolError(`Path '${readPath}' not found inside archive`);
+		throw new ToolError(t("Path '{0}' not found inside archive", `${readPath}`));
 	}
 
 	if (node.isDirectory) {
 		if (isMultiRange(sel)) {
-			throw new ToolError("Multi-range line selectors are not supported for archive directory listings.");
+			throw new ToolError(t("Multi-range line selectors are not supported for archive directory listings."));
 		}
 		return readArchiveDirectory(archive, resolvedArchivePath.absolutePath, archiveSubPath, sel, details, signal);
 	}

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ReadToolDetails } from "@oh-my-pi/pi-tui/tools/read";
@@ -38,7 +39,7 @@ export function parseBinaryView(view: string): BinaryView {
 	if (reserved) return { kind: reserved };
 	if (view.startsWith(XREFS_PREFIX)) {
 		const target = view.slice(XREFS_PREFIX.length);
-		if (!target) throw new ToolError("xrefs needs a target: <binary>:xrefs:<func|0xaddr>");
+		if (!target) throw new ToolError(t("xrefs needs a target: <binary>:xrefs:<func|0xaddr>"));
 		return { kind: "xrefs", target };
 	}
 	if (view.endsWith(ASM_SUFFIX)) return { kind: "asm", target: view.slice(0, -ASM_SUFFIX.length) };
@@ -77,7 +78,7 @@ function splitSliceView(view: string): { view: string; arch?: string } {
 	if (!view.startsWith(SLICE_PREFIX)) return { view };
 	const end = view.indexOf(":");
 	const arch = view.slice(SLICE_PREFIX.length, end < 0 ? undefined : end);
-	if (!arch) throw new ToolError(`empty slice name: use <binary>${SLICE_SEPARATOR}<arch>`);
+	if (!arch) throw new ToolError(t("empty slice name: use <binary>{0}<arch>", `${SLICE_SEPARATOR}`));
 	return { arch, view: end < 0 ? "" : view.slice(end + 1) };
 }
 

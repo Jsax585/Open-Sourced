@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 import { DEFAULT_SHARE_URL } from "@oh-my-pi/pi-wire";
 
@@ -12,9 +13,9 @@ export const cfgShareServerUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Share Server",
+		label: t("Share Server"),
 		description:
-			"Share viewer/upload base used by /share (encrypted blob upload + viewer; links are <base>/<id>#<key>)",
+			t("Share viewer/upload base used by /share (encrypted blob upload + viewer; links are <base>/<id>#<key>)"),
 	},
 });
 
@@ -26,18 +27,18 @@ export const cfgShareStore = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Share Store",
-		description: "Where /share uploads the encrypted session blob",
+		label: t("Share Store"),
+		description: t("Where /share uploads the encrypted session blob"),
 		options: [
 			{
 				value: "blob",
-				label: "Encrypted Blob",
-				description: "Upload to the share server (no GitHub account needed; avoids gist API rate limits)",
+				label: t("Encrypted Blob"),
+				description: t("Upload to the share server (no GitHub account needed; avoids gist API rate limits)"),
 			},
 			{
 				value: "gist",
 				label: "GitHub Gist",
-				description: "Push to a secret gist (needs authenticated gh), falling back to the share server",
+				description: t("Push to a secret gist (needs authenticated gh), falling back to the share server"),
 			},
 		],
 	},
@@ -50,7 +51,7 @@ export const cfgShareRedactSecrets = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Share Secret Redaction",
-		description: "Run the secret obfuscator over /share snapshots before upload (uses the secrets.* config)",
+		label: t("Share Secret Redaction"),
+		description: t("Run the secret obfuscator over /share snapshots before upload (uses the secrets.* config)"),
 	},
 });

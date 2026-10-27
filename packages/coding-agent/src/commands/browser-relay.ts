@@ -1,6 +1,7 @@
 /**
  * `omp browser-relay` — drive the user's own Chrome tabs.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import {
 	BROWSER_RELAY_ACTIONS,
@@ -10,32 +11,32 @@ import {
 } from "../cli/browser-relay-cli";
 
 export default class BrowserRelay extends Command {
-	static description = "Run the local CDP relay that lets the browser prelude drive your own Chrome tabs";
+	static description = t("Run the local CDP relay that lets the browser prelude drive your own Chrome tabs\u0004packages/coding-agent/src/commands/browser-relay.ts:BrowserRelay.description");
 
 	static args = {
 		action: Args.string({
-			description: `Action: ${BROWSER_RELAY_ACTIONS.join(" | ")} (default serve)`,
+			description: t("Action: {0} (default serve)", `${BROWSER_RELAY_ACTIONS.join(" | ")}`),
 			options: [...BROWSER_RELAY_ACTIONS],
 			required: false,
 		}),
 	};
 
 	static flags = {
-		port: Flags.integer({ char: "p", description: "Port to listen on", default: DEFAULT_RELAY_PORT }),
-		token: Flags.string({ description: "Require the extension to present this token" }),
+		port: Flags.integer({ char: "p", description: t("Port to listen on"), default: DEFAULT_RELAY_PORT }),
+		token: Flags.string({ description: t("Require the extension to present this token") }),
 		dir: Flags.string({
-			description: "Extension install directory (install; default ~/.omp/browser-relay/extension)",
+			description: t("Extension install directory (install; default ~/.omp/browser-relay/extension)"),
 		}),
 		"no-group": Flags.boolean({
-			description: "Don't gather controllable tabs into an 'omp' tab group",
+			description: t("Don't gather controllable tabs into an 'omp' tab group"),
 			default: false,
 		}),
-		verbose: Flags.boolean({ char: "v", description: "Log relay traffic summaries to stderr", default: false }),
+		verbose: Flags.boolean({ char: "v", description: t("Log relay traffic summaries to stderr"), default: false }),
 	};
 
 	static examples = [
-		"omp browser-relay install    # write the Chrome extension to disk + setup steps",
-		"omp browser-relay            # serve the relay on the default port",
+		t("omp browser-relay install    # write the Chrome extension to disk + setup steps"),
+		t("omp browser-relay            # serve the relay on the default port"),
 		"omp browser-relay -p 9333 --token s3cret",
 	];
 

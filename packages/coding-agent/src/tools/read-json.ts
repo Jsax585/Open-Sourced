@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -282,13 +283,13 @@ async function runJq(
 
 		throwIfAborted(signal);
 		if (result.timedOut && !stopped) {
-			throw new ToolError(`JSON query timed out after ${JSON_QUERY_TIMEOUT_MS / 1000} seconds`);
+			throw new ToolError(t("JSON query timed out after {0} seconds", `${JSON_QUERY_TIMEOUT_MS / 1000}`));
 		}
 		const stderr = truncateTail(sanitizeText(await readStderr(stderrPath)).trim(), {
 			maxBytes: JSON_QUERY_ERROR_MAX_BYTES,
 		}).content;
 		if (!stopped && (result.exitCode !== 0 || callbackError)) {
-			throw new ToolError(`Failed to execute JSON query: ${stderr || `jq exited with code ${result.exitCode}`}`);
+			throw new ToolError(t("Failed to execute JSON query: {0}", `${stderr || t("jq exited with code {0}", `${result.exitCode}`)}`));
 		}
 		return { output, stopped, stderr };
 	} finally {
@@ -339,7 +340,7 @@ export async function executeJsonQuery(
 	if (tail && !stopped) values.push(tail);
 	if (stopped === "capture-cap" && values.length <= page.offset) {
 		throw new ToolError(
-			`JSON query output before the requested page exceeds ${MAX_QUERY_CAPTURE_CHARS / (1024 * 1024)} MB; narrow the filter or stream large arrays with .[]`,
+			t("JSON query output before the requested page exceeds {0} MB; narrow the filter or stream large arrays with .[]", `${MAX_QUERY_CAPTURE_CHARS / (1024 * 1024)}`),
 		);
 	}
 	const text =

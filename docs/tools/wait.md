@@ -1,29 +1,30 @@
 # wait
 
-> Block until the next background result, peer message, or steering interrupt when there is no other work to do.
+> 더 할 일이 없을 때 다음 백그라운드 결과, 동료 메시지 또는 방향 전환 인터럽트가 올 때까지 대기합니다.
 
-## Source
-- Entry: `packages/coding-agent/src/tools/wait.ts`
-- Model-facing prompt: `packages/coding-agent/src/prompts/tools/wait.md`
-- Job delivery: `packages/coding-agent/src/async/job-manager.ts`
+## 소스
+- 진입점: `packages/coding-agent/src/tools/wait.ts`
+- 모델용 프롬프트: `packages/coding-agent/src/prompts/tools/wait.md`
+- 작업 결과 전달: `packages/coding-agent/src/async/job-manager.ts`
 
-## Input and availability
-`wait` has no arguments. It is an essential, read-approved, interruptible tool available when async jobs, peer messaging, or supervised services are enabled; it does not select a particular peer or job.
+## 입력과 사용 가능 조건
+`wait`에는 인수가 없습니다. 비동기 작업, 동료 메시징 또는 관리형 서비스가 활성화되어 있을 때 사용할 수 있는 필수 도구이며, 읽기 승인을 사용하고 인터럽트할 수 있습니다. 특정 동료나 작업을 선택하지는 않습니다.
 
-## Behavior
-- Returns on the first settled caller-owned job or incoming peer message. Job results delivered by this call are consumed so no duplicate async-result follows.
-- A steering/tool interrupt returns `Wait interrupted by message.` with `details.interrupted=true`; other aborts propagate. Handle the incoming notice before calling `wait` again.
-- Every wait has a 30-minute safety cap. There is no caller-selectable timeout.
-- With no owned job or service running, `wait` blocks for a reply when the caller sent a direct message (not a broadcast) during its current run to an agent that has not answered it since and is still running. The agent answers by messaging the caller back, or by settling a job of it the caller owns (its spawn job, or the job of a turn the caller's message woke), which delivers its result. Any incoming message ends it, a woken subagent's relayed turn output included. It also ends, without an error, once no agent asked can still answer: each one finished its turn without replying, or is blocked on the caller (a `wait` only the caller's result can end, entered after the question; an inline `task` spawn of it; an untimed eval handle wait on it). A reply that cannot come is what would park both sides.
-- Otherwise returns immediately with “Nothing to wait for”, naming any agent asked that finished without replying or cannot reply before the caller finishes.
-- With no owned jobs, a service finishing returns a notice directing the caller to `proc://` for status/output; with jobs, the call returns their current snapshot/result instead.
-- Results and peer messages also auto-deliver without calling `wait`. Continue useful work instead of polling.
-- Queued peer messages are checked first. Already-settled but undelivered owned jobs are returned without another wait. If a peer message wins a race with job completion, that job remains eligible for normal async delivery.
-- Job waits emit progress snapshots every 500 ms when an update callback is present. Job results/snapshots use `details: { op: "wait", jobs: ... }`; peer-message results use the messaging result shape.
-- A running subagent's row carries its latest progress, e.g. `` - `AcpSurface` [task] — <label> — 5h7m · 90 req · $18.40 · ctx 160K/1M · stage: <stage> ``: run time, requests, cost, context fill, self-estimated completion and stage, whichever its progress record reports. Bash and eval rows, and task rows without a progress record, stay `` - `<id>` [<type>] — <label> ``. `read proc://` and `read proc://<id>` show the same progress on running task rows.
+## 동작
+- 호출자 소유 작업이 처음으로 종료되거나 동료 메시지가 들어오면 반환합니다. 이 호출로 전달한 작업 결과는 소비되므로 중복된 비동기 결과가 뒤따르지 않습니다.
+- 방향 전환/도구 인터럽트가 발생하면 `details.interrupted=true`와 함께 `Wait interrupted by message.`를 반환합니다. 다른 중단은 그대로 전파됩니다. `wait`를 다시 호출하기 전에 들어온 알림을 처리하세요.
+- 모든 대기에는 30분의 안전 상한이 있습니다. 호출자가 제한 시간을 선택할 수는 없습니다.
+- 실행 중인 소유 작업이나 서비스가 없으면 다음 조건에서 답장을 기다립니다. 호출자가 현재 실행 중에 에이전트에게 직접 메시지(브로드캐스트 제외)를 보냈고, 그 에이전트가 이후 아직 답장을 보내지 않았으며 여전히 실행 중이어야 합니다. 깨어난 하위 에이전트의 전달된 턴 출력을 포함해 어떤 메시지든 들어오면 대기가 끝납니다. 질문을 받은 모든 에이전트가 더 이상 답할 수 없게 되어도 오류 없이 끝납니다. 각 에이전트가 답장 없이 턴을 마쳤거나, 호출자에게 막혀 있는 경우가 이에 해당합니다(질문 이후 진입했고 호출자의 결과로만 끝낼 수 있는 `wait`, 해당 에이전트를 인라인으로 실행하는 `task`, 해당 에이전트에 대한 시간 제한 없는 eval 핸들 대기). 올 수 없는 답장을 기다리면 양쪽 모두 대기 상태에 묶이게 됩니다.
+  에이전트는 호출자에게 답장을 보내거나 호출자가 소유한 자신의 작업(생성 작업 또는 호출자의 메시지가 깨운 턴의 작업)을 완료하여 결과를 전달하는 방식으로 응답합니다.
+- 그 외에는 즉시 “Nothing to wait for”를 반환하며, 질문을 받았지만 답장 없이 종료했거나 호출자가 끝나기 전에는 답할 수 없는 에이전트의 이름을 표시합니다.
+- 소유 작업이 없는 상태에서 서비스가 종료되면 상태/출력을 확인하도록 `proc://`로 안내하는 알림을 반환합니다. 작업이 있으면 대신 해당 작업의 현재 스냅샷/결과를 반환합니다.
+- 결과와 동료 메시지는 `wait`를 호출하지 않아도 자동 전달됩니다. 폴링하는 대신 유용한 작업을 계속하세요.
+- 대기 중인 동료 메시지를 먼저 확인합니다. 이미 종료되었지만 아직 전달되지 않은 소유 작업은 추가 대기 없이 반환합니다. 동료 메시지와 작업 완료가 경합하여 메시지가 먼저 처리되면, 해당 작업은 여전히 일반 비동기 전달 대상입니다.
+- 업데이트 콜백이 있으면 작업 대기 중 500ms마다 진행 상황 스냅샷을 내보냅니다. 작업 결과/스냅샷은 `details: { op: "wait", jobs: ... }`를 사용하고, 동료 메시지 결과는 메시징 결과 형식을 사용합니다.
+- 실행 중인 하위 에이전트 행에는 최신 진행 상황을 표시합니다. 예: `` - `AcpSurface` [task] — <label> — 5h7m · 90 req · $18.40 · ctx 160K/1M · stage: <stage> ``. 진행 기록이 보고하는 실행 시간, 요청 수, 비용, 컨텍스트 사용량, 자체 추정 완료율과 단계를 표시합니다. bash/eval 행과 진행 기록이 없는 task 행은 `` - `<id>` [<type>] — <label> `` 형식을 유지합니다. `read proc://`와 `read proc://<id>`도 실행 중인 task 행에 같은 진행 상황을 표시합니다.
 
-## Related surfaces
-- `read proc://` lists caller-visible jobs and project services; `read proc://<id>` inspects state/output without consuming delivery.
-- `write proc://<id>/kill` cancels a job or owned subagent, or stops a service; no `content` needed. Bare `proc://<id>` writes send stdin only to a service, including empty input.
-- `write agent://<id>` sends a peer message; `agent://all` broadcasts to visible live peers. Bare `read history://` discovers registered agent transcripts. The final result of a subagent is delivered to its parent automatically.
-- Start supervised services with `bash` `name` and optional `ready`; inspect and control them through `proc://`.
+## 관련 인터페이스
+- `read proc://`는 호출자가 볼 수 있는 작업과 프로젝트 서비스를 나열합니다. `read proc://<id>`는 전달 결과를 소비하지 않고 상태/출력을 확인합니다.
+- `write proc://<id>/kill`은 작업이나 소유 하위 에이전트를 취소하거나 서비스를 중지합니다. `content`는 필요 없습니다. 접미사 없는 `proc://<id>` 쓰기는 빈 입력을 포함해 서비스에만 표준 입력을 보냅니다.
+- `write agent://<id>`는 동료 메시지를 보냅니다. `agent://all`은 표시되는 실행 중 동료에게 브로드캐스트합니다. 접미사 없는 `read history://`는 등록된 에이전트 기록을 찾습니다. 하위 에이전트의 최종 결과는 부모에게 자동 전달됩니다.
+- `bash`의 `name`과 선택적 `ready`로 관리형 서비스를 시작하고, `proc://`로 조회하고 제어하세요.

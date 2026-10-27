@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type * as XtermModule from "@oh-my-pi/pi-utils/vterm";
 import type { Terminal as XtermTerminalType } from "@oh-my-pi/pi-utils/vterm";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
@@ -88,7 +89,7 @@ function normalizeInputForPty(data: string, applicationCursorKeysMode: boolean):
 /** Interactive terminal overlay driven by an external PTY controller. */
 export class BashInteractiveOverlayComponent implements Component {
 	/** Native sheet: a full-pane glass overlay titled Console. */
-	readonly nativeOverlay = { role: "omp.overlay.console", size: "full", head: "Console" } as const;
+	readonly nativeOverlay = { role: "omp.overlay.console", size: "full", head: t("Console") } as const;
 	#terminal: XtermTerminalType;
 	#state: "running" | "complete" | "timed_out" | "killed" = "running";
 	#exitCode: number | undefined;
@@ -292,11 +293,11 @@ export class BashInteractiveOverlayComponent implements Component {
 			const footer =
 				this.#state === "running"
 					? actionBar([
-							text([span("Input forwarded to PTY", "dim")]),
+							text([span(t("Input forwarded to PTY"), "dim")]),
 							null,
-							actionButton("Force kill", KILL_ACTION, { keys: "escape", tone: "error" }),
+							actionButton(t("Force kill"), KILL_ACTION, { keys: "escape", tone: "error" }),
 						])
-					: actionBar([text([span("Session finished", "dim")])]);
+					: actionBar([text([span(t("Session finished"), "dim")])]);
 			return col([head, ansi(screen.join("\n"), { cols }), footer], { gap: "sm" });
 		});
 	}
@@ -327,7 +328,7 @@ export class BashInteractiveOverlayComponent implements Component {
 				: this.#state === "complete" && this.#exitCode === 0
 					? this.#uiTheme.styledSymbol("tool.bash", "accent")
 					: formatStatusIcon("warning", this.#uiTheme);
-		const title = this.#uiTheme.fg("accent", "Console");
+		const title = this.#uiTheme.fg("accent", t("Console"));
 		const statusBadge = `${this.#uiTheme.fg("dim", this.#uiTheme.format.bracketLeft)}${this.#stateText()}${this.#uiTheme.fg("dim", this.#uiTheme.format.bracketRight)}`;
 		const prefix = `${statusIcon} ${title} `;
 		const suffix = ` ${statusBadge}`;
@@ -340,7 +341,7 @@ export class BashInteractiveOverlayComponent implements Component {
 						`${this.#uiTheme.fg("warning", formatKeyHint("escape"))} ${this.#uiTheme.fg("dim", "force-kill")} ${this.#uiTheme.fg("dim", "· input forwarded to PTY")}`,
 						innerWidth,
 					)
-				: truncateToWidth(this.#uiTheme.fg("dim", "session finished"), innerWidth);
+				: truncateToWidth(this.#uiTheme.fg("dim", t("session finished")), innerWidth);
 		const visibleLines = this.#readViewport(innerWidth, maxContentRows);
 		const content = visibleLines.length > 0 ? visibleLines : [padding(innerWidth)];
 		const borderHorizontal = this.#uiTheme.fg("border", this.#uiTheme.boxRound.horizontal.repeat(innerWidth));

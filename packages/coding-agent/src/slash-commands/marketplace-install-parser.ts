@@ -1,4 +1,5 @@
-const USAGE = "Usage: /marketplace install [--force] [--scope user|project] <name@marketplace>";
+import { t } from "@oh-my-pi/pi-utils/i18n";
+const USAGE = t("Usage: /marketplace install [--force] [--scope user|project] <name@marketplace>");
 
 export interface MarketplaceInstallArgs {
 	force: boolean;
@@ -32,16 +33,16 @@ export function parseMarketplaceInstallArgs(rest: string): MarketplaceInstallArg
 			if (s === "user" || s === "project") {
 				scope = s;
 			} else {
-				return { error: `Invalid --scope value: "${s}". Must be "user" or "project".` };
+				return { error: t("Invalid --scope value: \"{0}\". Must be \"user\" or \"project\".", `${s}`) };
 			}
 		} else if (tokens[i] === "--scope") {
 			// --scope with no value, or next token is another flag
-			return { error: '--scope requires a value: "user" or "project".' };
+			return { error: t("--scope requires a value: \"user\" or \"project\".\u0004packages/coding-agent/src/slash-commands/marketplace-install-parser.ts:parseMarketplaceInstallArgs.error") };
 		} else if (tokens[i].startsWith("-")) {
-			return { error: `Unknown flag: "${tokens[i]}". ${USAGE}` };
+			return { error: t("Unknown flag: \"{0}\". {1}", `${tokens[i]}`, `${USAGE}`) };
 		} else {
 			if (installSpec) {
-				return { error: `Unexpected argument: "${tokens[i]}". ${USAGE}` };
+				return { error: t("Unexpected argument: \"{0}\". {1}", `${tokens[i]}`, `${USAGE}`) };
 			}
 			installSpec = tokens[i];
 		}
@@ -78,14 +79,14 @@ export function parsePluginScopeArgs(rest: string, usageHint: string): PluginSco
 			if (s === "user" || s === "project") {
 				scope = s;
 			} else {
-				return { error: `Invalid --scope value: "${s}". Must be "user" or "project".` };
+				return { error: t("Invalid --scope value: \"{0}\". Must be \"user\" or \"project\".", `${s}`) };
 			}
 		} else if (tokens[i] === "--scope") {
-			return { error: '--scope requires a value: "user" or "project".' };
+			return { error: t("--scope requires a value: \"user\" or \"project\".\u0004packages/coding-agent/src/slash-commands/marketplace-install-parser.ts:parseMarketplaceInstallArgs.error") };
 		} else if (tokens[i].startsWith("-")) {
-			return { error: `Unknown flag: "${tokens[i]}". ${usageHint}` };
+			return { error: t("Unknown flag: \"{0}\". {1}", `${tokens[i]}`, `${usageHint}`) };
 		} else if (pluginId) {
-			return { error: `Unexpected argument: "${tokens[i]}". ${usageHint}` };
+			return { error: t("Unexpected argument: \"{0}\". {1}", `${tokens[i]}`, `${usageHint}`) };
 		} else {
 			pluginId = tokens[i];
 		}

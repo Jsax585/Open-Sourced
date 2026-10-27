@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import {
 	MAX_IMAGE_INPUT_BYTES,
@@ -419,9 +420,9 @@ export async function loadHeifImageInput(
 	} catch (error) {
 		if (!(error instanceof VideoError) || signal?.aborted) throw error;
 		const format = sourceMimeType.slice("image/".length).toUpperCase();
-		const cause = $which("ffmpeg") ? error.message : "Decoding it needs ffmpeg 8.1 or newer, which is not on PATH.";
+		const cause = $which("ffmpeg") ? error.message : t("Decoding it needs ffmpeg 8.1 or newer, which is not on PATH.");
 		throw new Error(
-			`Could not decode ${format} image. Convert it to PNG or JPEG (e.g. \`sips -s format jpeg -Z 4096\` on macOS) and read that file.\n${cause}`,
+			t("Could not decode {0} image. Convert it to PNG or JPEG (e.g. `sips -s format jpeg -Z 4096` on macOS) and read that file.\n{1}", `${format}`, `${cause}`),
 		);
 	}
 
@@ -429,7 +430,7 @@ export async function loadHeifImageInput(
 		image: { type: "image", data: jpeg.toBase64(), mimeType: "image/jpeg" },
 		bytes: jpeg,
 		resolvedPath,
-		textNotePrefix: "Read image file",
+		textNotePrefix: t("Read image file"),
 		sourceMimeType,
 		autoResize: options.autoResize,
 		maxBytes,

@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { NativeToolHead, NativeToolView, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { compact, md, node, row, span, text } from "../native/describe";
@@ -183,14 +184,14 @@ function renderCustomInputLines(uiTheme: Theme, customInput: string): string[] {
 
 /** Render an answer note with tab replacement and line-width clamping. */
 function renderNoteLines(uiTheme: Theme, note: string, width: number): string[] {
-	const prefix = " Note: ";
-	const continuationPrefix = "       ";
+	const prefix = localize(" Note: ");
+	const continuationPrefix = "        ";
 	const firstLineWidth = Math.max(1, width - visibleWidth(prefix));
 	const continuationWidth = Math.max(1, width - visibleWidth(continuationPrefix));
 	return replaceTabs(note)
 		.split("\n")
 		.map((line, index) => {
-			const linePrefix = index === 0 ? `${uiTheme.fg("dim", " Note:")} ` : continuationPrefix;
+			const linePrefix = index === 0 ? `${uiTheme.fg("dim", localize(" Note:"))} ` : continuationPrefix;
 			const maxWidth = index === 0 ? firstLineWidth : continuationWidth;
 			return `${linePrefix}${uiTheme.fg("toolOutput", truncateToWidth(line, maxWidth))}`;
 		});
@@ -280,7 +281,7 @@ function renderAnswerOptionLines(
 
 	// Nothing was chosen (and no custom answer) → a lone cancelled marker.
 	if (selected.size === 0 && customInput === undefined && note === undefined) {
-		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", "Cancelled")}`];
+		return [` ${uiTheme.styledSymbol("status.warning", "warning")} ${uiTheme.fg("warning", localize("Cancelled"))}`];
 	}
 
 	const out: string[] = [];
@@ -300,7 +301,7 @@ function renderAnswerOptionLines(
 
 function askHead(question: string | undefined, meta?: string): NativeToolHead {
 	const first = question ? plainText(sanitizeCarriageReturns(question)).trim().split("\n")[0] : "";
-	return { title: "Ask", target: first || undefined, targetKind: "text", meta: meta ? [meta] : undefined };
+	return { title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label"), target: first || undefined, targetKind: "text", meta: meta ? [meta] : undefined };
 }
 
 /** One question of a multi-question result: the question as markdown over its answers. */
@@ -329,7 +330,7 @@ function describeAnswers(
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
 	if (selected.size === 0 && customInput === undefined && note === undefined) {
-		return [text([span("Cancelled", "warning")], { tone: "warning" })];
+		return [text([span(localize("Cancelled"), "warning")], { tone: "warning" })];
 	}
 	const labels = options && options.length > 0 ? options : (selectedOptions ?? []);
 	const rows = labels.map((label, index) => {
@@ -351,11 +352,11 @@ function describeAnswers(
 function describeAskCall(args: AskRenderArgs): NativeToolView {
 	const questions = normalizeRenderQuestions(args.questions);
 	const first = questions?.[0]?.question ?? (typeof args.question === "string" ? args.question : undefined);
-	const more = questions && questions.length > 1 ? `${questions.length} questions` : undefined;
+	const more = questions && questions.length > 1 ? localize("{0} questions", `${questions.length}`) : undefined;
 	return {
 		tool: askHead(first, more),
 		inline: true,
-		body: [text([span("Waiting for your answer…", "muted")])],
+		body: [text([span(localize("Waiting for your answer…"), "muted")])],
 	};
 }
 
@@ -372,7 +373,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 
 	if (details.chatRedirect) {
 		return {
-			tool: askHead(details.questions?.[0] ?? argQuestion, "chat redirect"),
+			tool: askHead(details.questions?.[0] ?? argQuestion, localize("chat redirect")),
 			tone: "info",
 			body: (details.questions ?? []).map(q => md(plainText(q))),
 		};
@@ -386,7 +387,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				r.customInput !== undefined || r.note !== undefined || (r.selectedOptions && r.selectedOptions.length > 0),
 		);
 		return {
-			tool: askHead(results[0]?.question, results.length > 1 ? `${results.length} questions` : undefined),
+			tool: askHead(results[0]?.question, results.length > 1 ? localize("{0} questions", `${results.length}`) : undefined),
 			tone: answered ? undefined : "warning",
 			// Sanitizing preserves order and length, so raw indices align with `r`.
 			body: results.map((r, index) =>
@@ -426,7 +427,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
 			),
 			details.timedOut
-				? text([span("auto-selected after timeout — not a user choice", "muted")], {
+				? text([span(localize("auto-selected after timeout — not a user choice\u0004packages/tui/src/tools/ask.ts:describeAskResult.body"), "muted")], {
 						wrap: "word",
 						role: "omp.tool.notice",
 					})
@@ -452,7 +453,7 @@ export const askToolRenderer = {
 	},
 	mergeCallAndResult: true,
 	renderCall(args: AskRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
-		const label = formatTitle("Ask", uiTheme);
+		const label = formatTitle(localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label"), uiTheme);
 		const mdTheme = getMarkdownTheme();
 		const accentStyle = { color: (t: string) => uiTheme.fg("accent", t) };
 		const md = (text: string, width: number) =>
@@ -463,12 +464,12 @@ export const askToolRenderer = {
 		// throw here takes down the whole TUI render loop — normalize first.
 		const questions = normalizeRenderQuestions(args.questions);
 		if (questions && questions.length > 0) {
-			const header = `${label} ${uiTheme.fg("muted", `${questions.length} questions`)}`;
+			const header = `${label} ${uiTheme.fg("muted", localize("{0} questions", `${questions.length}`))}`;
 			return framedToolCard(uiTheme, ({ width, contentWidth }) => {
 				const sections = questions.map(q => {
 					const meta: string[] = [];
-					if (q.multi) meta.push("multi");
-					if (q.options?.length) meta.push(`options:${q.options.length}`);
+					if (q.multi) meta.push(localize("multi\u0004packages/tui/src/tools/ask.ts:askToolRenderer.renderCall.sections"));
+					if (q.options?.length) meta.push(localize("options:{0}", `${q.options.length}`));
 					const metaStr = meta.length > 0 ? uiTheme.fg("dim", ` · ${meta.join(" · ")}`) : "";
 					// md() returns a shared cached array (module-level Markdown LRU) — copy before appending.
 					const mdLines = md(q.question, width);
@@ -483,7 +484,7 @@ export const askToolRenderer = {
 
 		// Single question
 		if (typeof args.question !== "string" || !args.question) {
-			const errorLine = formatErrorMessage("No question provided", uiTheme);
+			const errorLine = formatErrorMessage(localize("No question provided"), uiTheme);
 			return framedToolCard(uiTheme, () => ({
 				header: errorLine,
 				sections: [],
@@ -494,9 +495,9 @@ export const askToolRenderer = {
 
 		const question = sanitizeCarriageReturns(args.question);
 		const meta: string[] = [];
-		if (args.multi) meta.push("multi");
+		if (args.multi) meta.push(localize("multi\u0004packages/tui/src/tools/ask.ts:askToolRenderer.renderCall.sections"));
 		const questionOptions = normalizeRenderOptions(args.options);
-		if (questionOptions?.length) meta.push(`options:${questionOptions.length}`);
+		if (questionOptions?.length) meta.push(localize("options:{0}", `${questionOptions.length}`));
 		const header = `${label}${formatMeta(meta, uiTheme)}`;
 		const multi = args.multi;
 		return framedToolCard(uiTheme, ({ width, contentWidth }) => {
@@ -528,7 +529,7 @@ export const askToolRenderer = {
 		if (!rawDetails) {
 			const txt = result.content[0];
 			const fallback = txt?.type === "text" && txt.text ? sanitizeCarriageReturns(txt.text) : "";
-			const header = renderStatusLine({ icon: "warning", title: "Ask" }, uiTheme);
+			const header = renderStatusLine({ icon: "warning", title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label") }, uiTheme);
 			const body = fallback ? `\n${uiTheme.fg("dim", fallback)}` : "";
 			return new Text(`${header}${body}`, 0, 0);
 		}
@@ -536,7 +537,7 @@ export const askToolRenderer = {
 
 		// Chat redirect: user chose "Chat about this" instead of answering.
 		if (details.chatRedirect) {
-			const header = renderStatusLine({ icon: "info", title: "Ask", meta: ["chat redirect"] }, uiTheme);
+			const header = renderStatusLine({ icon: "info", title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label"), meta: [localize("chat redirect")] }, uiTheme);
 			const questions = details.questions ?? [];
 			return framedToolCard(uiTheme, ({ width }) => ({
 				header,
@@ -558,8 +559,8 @@ export const askToolRenderer = {
 			const header = renderStatusLine(
 				{
 					icon: hasAnySelection ? "success" : "warning",
-					title: "Ask",
-					meta: [`${results.length} questions`],
+					title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label"),
+					meta: [localize("{0} questions", `${results.length}`)],
 				},
 				uiTheme,
 			);
@@ -609,8 +610,8 @@ export const askToolRenderer = {
 			(details.selectedOptions && details.selectedOptions.length > 0);
 		const header = renderStatusLine(
 			hasSelection
-				? { iconOverride: uiTheme.styledSymbol("tool.ask", "accent"), title: "Ask" }
-				: { icon: "warning", title: "Ask" },
+				? { iconOverride: uiTheme.styledSymbol("tool.ask", "accent"), title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label") }
+				: { icon: "warning", title: localize("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label") },
 			uiTheme,
 		);
 		const dOptions = details.options;
@@ -638,7 +639,7 @@ export const askToolRenderer = {
 			];
 			if (dTimedOut) {
 				// Distinguish auto-selection from a real user choice in the transcript.
-				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));
+				bodyLines.push(uiTheme.fg("dim", localize("auto-selected after timeout — not a user choice\u0004packages/tui/src/tools/ask.ts:describeAskResult.body")));
 			}
 			return {
 				header,

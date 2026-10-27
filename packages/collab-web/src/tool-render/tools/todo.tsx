@@ -1,4 +1,5 @@
 /** `todo` — phased task-list ops and the resulting board. */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badges, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -92,14 +93,14 @@ function opRow(entry: unknown, key: number): ReactNode {
 	if (task !== null) parts.push(task);
 	if (phase !== null) parts.push(phase);
 	if (Array.isArray(entry.items) && entry.items.length > 0) {
-		parts.push(`${entry.items.length} item${entry.items.length === 1 ? "" : "s"}`);
+		parts.push(localize("{0} item{1}", `${entry.items.length}`, `${entry.items.length === 1 ? "" : "s"}`));
 	}
 	if (Array.isArray(entry.list) && entry.list.length > 0) {
 		let tasks = 0;
 		for (const phaseEntry of entry.list) {
 			if (isRecord(phaseEntry) && Array.isArray(phaseEntry.items)) tasks += phaseEntry.items.length;
 		}
-		parts.push(`${entry.list.length} phase${entry.list.length === 1 ? "" : "s"} · ${tasks} tasks`);
+		parts.push(localize("{0} phase{2} · {1} tasks", `${entry.list.length}`, `${tasks}`, `${entry.list.length === 1 ? "" : "s"}`));
 	}
 	return (
 		<Row key={key} k={str(entry.op) ?? "update"}>

@@ -1,14 +1,16 @@
-# Keybindings
+<a id="keybindings"></a>
+# 키 바인딩
 
-Run `/hotkeys` inside an `omp` session for the built-in shortcut reference. Application-action rows reflect remaps loaded from disk; navigation/editing examples use fixed chords. This is not an inventory of extension-registered shortcuts.
+내장 단축키 참조를 보려면 `omp` 세션 안에서 `/hotkeys`를 실행하세요. 애플리케이션 동작 행에는 디스크에서 불러온 재매핑이 반영되며, 탐색/편집 예시는 고정된 키 조합을 사용합니다. 확장 기능에서 등록한 단축키 목록은 아닙니다.
 
-Base editor, input, and selector actions use `tui.editor.*`, `tui.input.*`, and `tui.select.*`; application actions use `app.*`. Definitions live in `packages/tui/src/keybindings.ts` and `packages/tui/src/app-keybindings.ts`.
+기본 편집기, 입력, 선택기 동작은 `tui.editor.*`, `tui.input.*`, `tui.select.*`를 사용하고, 애플리케이션 동작은 `app.*`를 사용합니다. 정의는 `packages/tui/src/keybindings.ts`와 `packages/tui/src/app-keybindings.ts`에 있습니다.
 
-## Customize keybindings
+<a id="customize-keybindings"></a>
+## 키 바인딩 사용자 지정
 
-User remaps live in `~/.omp/agent/keybindings.yml`. The file is a YAML mapping whose keys are keybinding action IDs and whose values are either one chord string or an array of chord strings. It is not read from `~/.omp/agent/config.yml`, and there is no nested `keybindings` object.
+사용자 재매핑은 `~/.omp/agent/keybindings.yml`에 저장됩니다. 이 파일은 키가 키 바인딩 동작 ID이고 값이 키 조합 문자열 하나 또는 키 조합 문자열 배열인 YAML 매핑입니다. `~/.omp/agent/config.yml`에서 읽지 않으며, 중첩된 `keybindings` 객체도 없습니다.
 
-With a named profile, bindings from the default profile's agent directory are loaded first and the active profile's `keybindings.yml` overrides them action by action. The inherited file is read-only during that profile's startup.
+이름이 지정된 프로필을 사용하면 기본 프로필의 에이전트 디렉터리에 있는 바인딩을 먼저 불러온 다음, 활성 프로필의 `keybindings.yml`이 동작별로 이를 덮어씁니다. 해당 프로필을 시작하는 동안 상속된 파일은 읽기 전용입니다.
 
 ```yaml
 app.model.cycleForward: Ctrl+P
@@ -16,151 +18,159 @@ app.model.selectTemporary: Alt+P
 app.plan.toggle: Alt+Shift+P
 ```
 
-Chord names are case-insensitive and use the same notation shown in the UI, such as `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, and `Ctrl+Backspace`.
+키 조합 이름은 대소문자를 구분하지 않으며, `Ctrl+P`, `Alt+Shift+P`, `Shift+Enter`, `Ctrl+Backspace`처럼 UI에 표시되는 것과 같은 표기법을 사용합니다.
 
-Set an action to an empty array to disable it:
+동작을 비활성화하려면 빈 배열로 설정하세요.
 
 ```yaml
 app.history.search: []
 ```
 
-## Common action IDs
+<a id="common-action-ids"></a>
+## 주요 동작 ID
 
-| Action ID                    | Default                                                               | Meaning                                                                                                                                                                              |
+| 동작 ID                    | 기본값                                                               | 의미                                                                                                                                                                              |
 | ---------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app.model.cycleForward`     | `Ctrl+P`                                                              | Cycle role models forward                                                                                                                                                            |
-| `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | Cycle role models backward                                                                                                                                                           |
-| `app.model.selectTemporary`  | `Alt+P`                                                               | Pick a model temporarily for this session                                                                                                                                            |
-| `app.model.select`           | `Alt+M`                                                               | Open the model selector and set roles                                                                                                                                                |
-| `app.plan.toggle`            | `Alt+Shift+P`                                                         | Toggle plan mode                                                                                                                                                                     |
-| `app.history.search`         | `Ctrl+R`                                                              | Search prompt history                                                                                                                                                                |
-| `app.tools.expand`           | `Ctrl+O`                                                              | Toggle tool-output expansion                                                                                                                                                         |
-| `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | Show or hide tool activity                                                                                                                                                           |
-| `app.ask.hide`               | `Alt+H`                                                               | Hide a pending `ask` question to one line (the Hide button in Tern); the same key, `Enter`, or Show brings it back                                                                   |
-| `app.approval.approve`       | `Ctrl+Enter`, `Ctrl+Q`                                                | Approve a pending tool call outright (the Approve button in Tern); `Esc` denies, and `Enter` takes the Approve/Deny choice highlighted with the arrows                                  |
-| `app.thinking.toggle`        | `Ctrl+T`                                                              | Toggle thinking-block visibility                                                                                                                                                     |
-| `app.thinking.cycle`         | `Shift+Tab`                                                           | Cycle thinking level                                                                                                                                                                 |
-| `app.editor.external`        | `Ctrl+G`                                                              | Edit the draft in `$VISUAL` / `$EDITOR`                                                                                                                                              |
-| `app.local.open`             | `Alt+G`                                                               | Pick a session `local://` file and edit it in `$VISUAL` / `$EDITOR` (same as `/local`)                                                                                              |
-| `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | Queue a follow-up message                                                                                                                                                            |
-| `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | Dequeue a queued message back into the editor                                                                                                                                        |
-| `app.retry`                  | `F5`, `Alt+R`                                                         | Retry the last failed assistant turn                                                                                                                                                 |
-| `app.display.reset`          | `Alt+L`                                                               | Reset terminal display                                                                                                                                                               |
-| `app.clipboard.copyLine`     | `Alt+Shift+L`                                                         | Copy the current line                                                                                                                                                                |
-| `app.clipboard.copyPrompt`   | `Alt+Shift+C`                                                         | Copy the whole prompt                                                                                                                                                                |
-| `app.clipboard.pasteTextRaw` | `Ctrl+Shift+V`, `Alt+Shift+V`                                         | Paste clipboard text without collapsing it                                                                                                                                           |
-| `app.clipboard.pasteImage`   | Linux: `Ctrl+V`; macOS: `Ctrl+V`, `Cmd+V`; Windows: `Ctrl+V`, `Alt+V` | Paste from the clipboard (image preferred, text fallback)                                                                                                                            |
-| `app.stt.pushToTalk`         | `Space`                                                               | Hold to record and release to transcribe. Remap this action or set it to `[]` to disable push-to-talk without disabling speech-to-text.                                              |
-| `app.stt.toggle`             | Unbound                                                               | Start or stop speech-to-text recording with each press; independent of push-to-talk.                                                                                                 |
-| `app.live.toggle`            | `Ctrl+L`                                                              | Start or stop live voice mode (same as `/live`)                                                                                                                                      |
-| `app.agents.hub`             | `Alt+A`                                                               | [Open the Agent Hub](./agent-hub.md)                                                                                                                                                 |
-| `app.tree.previousBranch`    | Unbound                                                               | Jump to the previous visible branch in `/tree` ([details](./tree.md))                                                                                                                |
-| `app.tree.nextBranch`        | Unbound                                                               | Jump to the next visible branch in `/tree` ([details](./tree.md))                                                                                                                    |
+| `app.model.cycleForward`     | `Ctrl+P`                                                              | 역할별 모델을 정방향으로 순환                                                                                                                                                            |
+| `app.model.cycleBackward`    | `Shift+Ctrl+P`                                                        | 역할별 모델을 역방향으로 순환                                                                                                                                                           |
+| `app.model.selectTemporary`  | `Alt+P`                                                               | 이 세션에서 임시로 사용할 모델 선택                                                                                                                                            |
+| `app.model.select`           | `Alt+M`                                                               | 모델 선택기를 열고 역할 설정                                                                                                                                                |
+| `app.plan.toggle`            | `Alt+Shift+P`                                                         | 계획 모드 전환                                                                                                                                                                     |
+| `app.history.search`         | `Ctrl+R`                                                              | 프롬프트 기록 검색                                                                                                                                                                |
+| `app.tools.expand`           | `Ctrl+O`                                                              | 도구 출력 펼침/접기 전환                                                                                                                                                         |
+| `app.tools.toggleVisibility` | `Ctrl+Shift+O`                                                        | 도구 활동 표시 또는 숨기기                                                                                                                                                           |
+| `app.ask.hide`               | `Alt+H`                                                               | 대기 중인 `ask` 질문을 한 줄로 숨기기(Tern의 숨기기 버튼). 같은 키, `Enter` 또는 표시를 누르면 다시 표시                                                                   |
+| `app.approval.approve`       | `Ctrl+Enter`, `Ctrl+Q`                                                | 대기 중인 도구 호출을 즉시 승인(Tern의 승인 버튼). `Esc`는 거부하며, `Enter`는 화살표로 강조 표시한 승인/거부 선택을 실행                                  |
+| `app.thinking.toggle`        | `Ctrl+T`                                                              | 추론 블록 표시 여부 전환                                                                                                                                                     |
+| `app.thinking.cycle`         | `Shift+Tab`                                                           | 추론 수준 순환                                                                                                                                                                 |
+| `app.editor.external`        | `Ctrl+G`                                                              | `$VISUAL` / `$EDITOR`에서 초안 편집                                                                                                                                              |
+| `app.local.open` | `Alt+G` | 세션 `local://` 파일을 선택하여 `$VISUAL` / `$EDITOR`에서 편집(`/local`과 동일) |
+| `app.message.followUp`       | `Ctrl+Q`, `Ctrl+Enter`                                                | 후속 메시지를 대기열에 추가                                                                                                                                                            |
+| `app.message.dequeue`        | `Alt+Up`, `Shift+Up`                                                  | 대기열의 메시지를 꺼내 편집기로 되돌리기                                                                                                                                        |
+| `app.retry`                  | `F5`, `Alt+R`                                                         | 마지막으로 실패한 어시스턴트 턴 재시도                                                                                                                                                 |
+| `app.display.reset`          | `Alt+L`                                                               | 터미널 화면 초기화                                                                                                                                                               |
+| `app.clipboard.copyLine`     | `Alt+Shift+L`                                                         | 현재 줄 복사                                                                                                                                                                |
+| `app.clipboard.copyPrompt`   | `Alt+Shift+C`                                                         | 전체 프롬프트 복사                                                                                                                                                                |
+| `app.clipboard.pasteTextRaw` | `Ctrl+Shift+V`, `Alt+Shift+V`                                         | 클립보드 텍스트를 접지 않고 붙여넣기                                                                                                                                           |
+| `app.clipboard.pasteImage`   | Linux: `Ctrl+V`; macOS: `Ctrl+V`, `Cmd+V`; Windows: `Ctrl+V`, `Alt+V` | 클립보드에서 붙여넣기(이미지 우선, 없으면 텍스트)                                                                                                                            |
+| `app.stt.pushToTalk`         | `Space`                                                               | 누르고 있는 동안 녹음하고 놓으면 텍스트로 변환. 음성 텍스트 변환을 비활성화하지 않고 눌러서 말하기만 비활성화하려면 이 동작을 재매핑하거나 `[]`로 설정하세요.                                              |
+| `app.stt.toggle`             | 미지정                                                               | 누를 때마다 음성 텍스트 변환 녹음을 시작하거나 중지. 눌러서 말하기와 독립적으로 동작.                                                                                                 |
+| `app.live.toggle`            | `Ctrl+L`                                                              | 실시간 음성 모드 시작 또는 중지(`/live`와 동일)                                                                                                                                      |
+| `app.agents.hub`             | `Alt+A`                                                               | [Agent Hub 열기](./agent-hub.md)                                                                                                                                                 |
+| `app.tree.previousBranch`    | 미지정                                                               | `/tree`에서 이전의 보이는 분기로 이동([자세히](./tree.md))                                                                                                                |
+| `app.tree.nextBranch`        | 미지정                                                               | `/tree`에서 다음의 보이는 분기로 이동([자세히](./tree.md))                                                                                                                    |
 
-To disable push-to-talk while keeping speech-to-text available through a separate toggle binding:
+별도의 전환 바인딩으로 음성 텍스트 변환을 계속 사용할 수 있게 하면서 눌러서 말하기를 비활성화하려면 다음과 같이 설정하세요.
 
 ```yaml
 app.stt.pushToTalk: []
 app.stt.toggle: Ctrl+Shift+S
 ```
 
-While speech-to-text is enabled, non-printable keys and chords assigned to `app.stt.pushToTalk` are reserved: a tap is swallowed instead of running its normal editing or application action. A plain printable key tap still types normally. Text-assistance transformations from initial taps are preserved; only unchanged literal repeat text is removed when a hold is recognized. Each configured alternative is independent; alternating between alternatives does not combine them into one hold. Hold detection requires a terminal that delivers key auto-repeat.
+음성 텍스트 변환이 활성화되어 있는 동안 `app.stt.pushToTalk`에 할당된 비인쇄 키와 키 조합은 예약됩니다. 짧게 누르면 일반적인 편집 또는 애플리케이션 동작을 실행하지 않고 입력이 무시됩니다. 일반 인쇄 가능 키는 짧게 누르면 평소처럼 입력됩니다. 처음 누를 때 적용된 텍스트 지원 변환은 유지되며, 길게 누르기가 감지되면 변환되지 않은 리터럴 반복 텍스트만 제거됩니다. 설정된 각 대체 키 조합은 독립적이며, 대체 키 조합을 번갈아 눌러도 하나의 길게 누르기로 합쳐지지 않습니다. 길게 누르기 감지에는 키 자동 반복을 전달하는 터미널이 필요합니다.
 
-### Click to dictate in Tern
+<a id="click-to-dictate-in-tern"></a>
+### Tern에서 클릭하여 받아쓰기
 
-With `stt.enabled` on, the native composer shows a microphone beside Send. Click it to start recording without holding a key. While the speech model loads, the button shows **Starting…**; click it again to cancel. Once it changes to **Recording · Stop**, click it to stop, then wait for **Transcribing…** to finish.
+`stt.enabled`가 켜져 있으면 네이티브 작성기의 보내기 옆에 마이크가 표시됩니다. 키를 누르고 있지 않아도 클릭하여 녹음을 시작할 수 있습니다. 음성 모델을 불러오는 동안 버튼에는 **시작 중…**이 표시되며, 다시 클릭하면 취소됩니다. 버튼이 **녹음 중 · 중지**로 바뀌면 클릭하여 중지한 다음 **텍스트로 변환 중…**이 끝날 때까지 기다리세요.
 
-Dictation started with this button stays in the draft, regardless of `stt.submitTrigger`. Review or edit the text, then press Enter or click Send. While dictation is recording or transcribing into the draft, Enter and Send do nothing.
+이 버튼으로 시작한 받아쓰기는 `stt.submitTrigger`와 관계없이 초안에 남습니다. 텍스트를 검토하거나 편집한 다음 Enter를 누르거나 보내기를 클릭하세요. 받아쓰기를 녹음하거나 초안에 텍스트로 변환하는 동안에는 Enter와 보내기가 작동하지 않습니다.
 
-For live English transcription, select **Nemotron 0.6B (live streaming, English)** in `omp setup speech`, or set `modelRoles.dictation` to `local/nemotron-streaming-en-0.6b`. Words appear in the draft while you speak. The first recording waits for the model to load before opening the microphone; start speaking when the button says **Recording · Stop**. Later recordings reuse the loaded model. See [local speech models](local-models.md#speech-to-text) for download and language details.
+영어 실시간 텍스트 변환을 사용하려면 `omp setup speech`에서 **Nemotron 0.6B (실시간 스트리밍, 영어)**를 선택하거나, `modelRoles.dictation`을 `local/nemotron-streaming-en-0.6b`로 설정하세요. 말하는 동안 단어가 초안에 표시됩니다. 첫 녹음에서는 모델을 불러온 뒤 마이크를 엽니다. 버튼에 **녹음 중 · 중지**가 표시되면 말하기를 시작하세요. 이후 녹음에서는 이미 불러온 모델을 재사용합니다. 다운로드와 언어에 관한 자세한 내용은 [로컬 음성 모델](local-models.md#speech-to-text)을 참조하세요.
 
-## Recover a cleared prompt
+<a id="recover-a-cleared-prompt"></a>
+## 지운 프롬프트 복구
 
-Press `Ctrl+C` to clear an unsent composer draft, then `Up` to recall it. Older drafts and submitted prompts share the existing Up/Down navigation. Recalled drafts remain editable and are never sent until you submit them.
+`Ctrl+C`를 눌러 아직 보내지 않은 작성기 초안을 지운 다음, `Up`을 눌러 다시 불러오세요. 이전 초안과 제출한 프롬프트는 기존 Up/Down 탐색을 함께 사용합니다. 다시 불러온 초안은 계속 편집할 수 있으며, 직접 제출하기 전에는 전송되지 않습니다.
 
-Cleared drafts preserve whitespace, collapsed pastes, and image attachments in the current editor's bounded history (100 entries). They are not written to persistent prompt history and do not appear in `Ctrl+R` search. Closing the process discards these canceled drafts; the separate save-on-exit behavior still applies to text currently in the composer. This is not a per-agent stash: history follows the editor, including when Agent Hub changes focus.
+지운 초안은 현재 편집기의 크기가 제한된 기록(100개 항목)에 공백, 접힌 붙여넣기, 이미지 첨부 파일을 보존합니다. 영구 프롬프트 기록에는 기록되지 않으며 `Ctrl+R` 검색에도 나타나지 않습니다. 프로세스를 종료하면 이러한 취소된 초안은 삭제됩니다. 현재 작성기에 있는 텍스트에는 별도의 종료 시 저장 동작이 계속 적용됩니다. 이는 에이전트별 임시 보관함이 아닙니다. Agent Hub에서 포커스를 변경할 때도 기록은 편집기를 따릅니다.
 
-The existing double-`Ctrl+C` exit behavior is unchanged. Empty clears do not add history entries.
+기존의 `Ctrl+C` 두 번 누르기 종료 동작은 변경되지 않습니다. 빈 내용을 지울 때는 기록 항목이 추가되지 않습니다.
 
-Recovery is on by default. Turn off **Recall Cleared Drafts** in `/settings` under Interaction > Input, or set `composer.recallClearedDrafts: false`. This takes effect on the next clear without restarting; previously retained drafts remain in history until evicted or the editor closes.
+복구는 기본적으로 켜져 있습니다. `/settings`의 상호작용 > 입력에서 **지운 초안 다시 불러오기**를 끄거나 `composer.recallClearedDrafts: false`로 설정하세요. 다시 시작할 필요 없이 다음에 지울 때부터 적용됩니다. 이전에 보관된 초안은 기록에서 밀려나거나 편집기가 닫힐 때까지 남아 있습니다.
 
-On Windows Terminal, `Ctrl+V` may be handled by the terminal paste command before `omp` sees it; use the `Alt+V` fallback when clipboard image paste appears to do nothing. When the clipboard holds no image, `app.clipboard.pasteImage` pastes the clipboard text instead, so hosts that deliver only this chord (VS Code's integrated terminal when configured to forward `Ctrl+V`, Windows clipboard history via `Win+V`) work for both payload kinds. Windows Terminal also swallows `Ctrl+Enter`, so the `app.message.followUp` chord also binds `Ctrl+Q` — the same chord GitHub Copilot CLI uses — and the same chord submits the agent dashboard's new-agent description and hook-editor prompts. If your existing `keybindings.yml` already assigns `Ctrl+Q` to another action, that user remap wins and follow-up keeps `Ctrl+Enter` unless you explicitly bind `app.message.followUp`.
+Windows Terminal에서는 `omp`가 `Ctrl+V`를 받기 전에 터미널 붙여넣기 명령이 이를 처리할 수 있습니다. 클립보드 이미지 붙여넣기가 작동하지 않는 것 같으면 대체 키인 `Alt+V`를 사용하세요. 클립보드에 이미지가 없으면 `app.clipboard.pasteImage`는 대신 클립보드 텍스트를 붙여넣습니다. 따라서 이 키 조합만 전달하는 호스트(`Ctrl+V`를 전달하도록 구성한 VS Code의 통합 터미널, `Win+V`를 통한 Windows 클립보드 기록)에서도 두 종류의 데이터를 모두 사용할 수 있습니다. Windows Terminal은 `Ctrl+Enter`도 가로채므로 `app.message.followUp`에는 GitHub Copilot CLI에서 사용하는 것과 같은 키 조합인 `Ctrl+Q`도 바인딩되어 있습니다. 같은 키 조합으로 에이전트 대시보드의 새 에이전트 설명과 훅 편집기 프롬프트도 제출할 수 있습니다. 기존 `keybindings.yml`에서 이미 `Ctrl+Q`를 다른 동작에 할당했다면 해당 사용자 재매핑이 우선하며, `app.message.followUp`을 명시적으로 바인딩하지 않는 한 후속 메시지에는 `Ctrl+Enter`가 유지됩니다.
 
-Terminals that implement OSC 5522 enhanced paste can send clipboard MIME data directly to `omp`; image pastes are attached as `[Image #N]`, while text/plain paste events keep normal paste behavior. When OSC 5522 is unavailable, bracketed paste still handles text, and a pasted single image-file path is loaded as an image when the file is readable from the `omp` host.
+OSC 5522 향상된 붙여넣기를 구현한 터미널은 클립보드 MIME 데이터를 `omp`로 직접 보낼 수 있습니다. 이미지 붙여넣기는 `[Image #N]`으로 첨부되고, text/plain 붙여넣기 이벤트는 일반적인 붙여넣기 동작을 유지합니다. OSC 5522를 사용할 수 없으면 대괄호 붙여넣기(bracketed paste)가 여전히 텍스트를 처리하며, 이미지 파일 경로 하나를 붙여넣었을 때 `omp` 호스트에서 해당 파일을 읽을 수 있으면 이미지로 불러옵니다.
 
-Older unqualified action names are migrated when `keybindings.yml` is loaded, but new docs and new configs should use the namespaced action IDs above. Existing `keybindings.json` files are still accepted and migrated to `keybindings.yml`; `keybindings.yaml` is also accepted.
+이전의 네임스페이스 없는 동작 이름은 `keybindings.yml`을 불러올 때 마이그레이션되지만, 새 문서와 새 설정에서는 위의 네임스페이스가 있는 동작 ID를 사용해야 합니다. 기존 `keybindings.json` 파일도 계속 허용되며 `keybindings.yml`로 마이그레이션됩니다. `keybindings.yaml`도 허용됩니다.
 
-## Vim editing mode
+<a id="vim-editing-mode"></a>
+## Vim 편집 모드
 
-Off by default. Turn it on with **Vim Editing Mode** in `/settings` (Interaction → Input), or set it directly:
+기본적으로 꺼져 있습니다. `/settings`(상호작용 → 입력)에서 **Vim 편집 모드**를 켜거나 직접 설정하세요.
 
 ```yaml
 tui.vimMode: true
 ```
 
-The prompt starts in Insert mode. `Escape` switches to Normal mode; the prompt border changes color to show the mode (bash/python mode colors take precedence). The software cursor underlines the current character in Insert mode and uses a block in Normal mode; at line end Insert uses a bar, and Visual mode highlights the selection. The terminal cursor shape is set via DECSCUSR to a bar in Insert and a block in Normal/Visual, and restored on exit. This is a useful subset of Vim, not a full implementation.
+프롬프트는 입력 모드에서 시작합니다. `Escape`를 누르면 일반 모드로 전환되며, 프롬프트 테두리의 색상이 바뀌어 모드를 나타냅니다(bash/python 모드 색상이 우선합니다). 소프트웨어 커서는 입력 모드에서 현재 문자에 밑줄을 표시하고 일반 모드에서는 블록을 사용합니다. 줄 끝에서는 입력 모드가 막대를 사용하며, 비주얼 모드에서는 선택 영역을 강조 표시합니다. 터미널 커서 모양은 DECSCUSR을 통해 입력 모드에서는 막대, 일반/비주얼 모드에서는 블록으로 설정되며 종료 시 복원됩니다. 이는 Vim의 유용한 일부 기능을 제공하는 것이며, 전체 구현은 아닙니다.
 
-The status line also shows the mode, pending command, and multi-line Visual selection size. **Vim Mode Indicator** (`tui.vimModeDisplay`) selects `text` (default), `icon`, or `none` (hides the whole Vim status segment).
+상태 줄에는 모드, 대기 중인 명령, 여러 줄 비주얼 선택 영역의 크기도 표시됩니다. **Vim 모드 표시기**(`tui.vimModeDisplay`)에서 `text`(기본값), `icon`, `none`(Vim 상태 영역 전체 숨기기)을 선택할 수 있습니다.
 
-| Mode        | Enter with              | Leave with                                              |
+| 모드        | 진입 방법              | 종료 방법                                              |
 | ----------- | ----------------------- | ------------------------------------------------------- |
-| Insert      | `i` `a` `I` `A` `o` `O` | `Escape`                                                |
-| Normal      | `Escape` from Insert    | any Insert-mode key                                     |
-| Visual      | `v`                     | `Escape`, or an operator (`y` `d` `c`)                  |
-| Visual line | `V`                     | `Escape`, or an operator (`y` `d` `c`)                  |
+| 입력      | `i` `a` `I` `A` `o` `O` | `Escape`                                                |
+| 일반      | 입력 모드에서 `Escape`    | 입력 모드로 진입하는 아무 키                                     |
+| 비주얼      | `v`                     | `Escape` 또는 연산자(`y` `d` `c`)                  |
+| 비주얼 라인 | `V`                     | `Escape` 또는 연산자(`y` `d` `c`)                  |
 
-### Normal mode
+<a id="normal-mode"></a>
+### 일반 모드
 
-| Keys                          | Meaning                                                        |
+| 키                          | 의미                                                        |
 | ----------------------------- | -------------------------------------------------------------- |
-| `h` `j` `k` `l`               | Move by character and line (arrow keys work too)               |
-| `0` `^` `$`                   | Line start / first non-blank / line end                        |
-| `w` `b` `e`                   | Next word, previous word, end of word                          |
-| `f` `F` `t` `T` + char        | Find / till that character on the line (`;` repeats, `,` reverses) |
-| `gg` `G`                      | First line, last line (`5gg` and `5G` jump to line 5)          |
-| `1`–`9` prefix                | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`            |
-| `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
-| `o` `O`                       | Open a line below / above and insert                           |
-| `x` `D` `C`                   | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise) |
-| `r` + char                    | Replace the character under the cursor (`3rx` replaces three)  |
-| `R`                           | Replace mode: typed characters overwrite until Escape          |
-| `%`                           | Jump to the matching `()` `[]` `{}` `"` `'` on or after the cursor. Quotes stay on the line; brackets can cross lines. With a count, `50%` goes to that percentage of the buffer. |
-| `{` `}`                       | Previous / next paragraph (blank-line boundary)                |
-| `J`                           | Join lines, dropping the indent of the following line (an empty line joins without a space) |
-| `>>` `<<`                     | Indent / outdent by two spaces (`3>>` shifts three lines; `>}` shifts a motion). Empty lines are left alone. |
-| `d` `y` `c` + motion          | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`             |
-| `dd` `yy` `cc`                | Linewise delete / yank / change                                |
-| `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
-| `p` `P`                       | Put the last yank or delete after / before the cursor          |
-| `u`                           | Undo (a whole Insert session, or a whole `.`, undoes in one step) |
-| `.`                           | Repeat the last change, including text typed in the Insert session it opened; a count replaces the original one (`3.`) |
+| `h` `j` `k` `l`               | 문자 및 줄 단위로 이동(화살표 키도 사용 가능)               |
+| `0` `^` `$`                   | 줄 시작 / 첫 번째 공백 아닌 문자 / 줄 끝                        |
+| `w` `b` `e`                   | 다음 단어, 이전 단어, 단어 끝                          |
+| `f` `F` `t` `T` + 문자        | 줄에서 해당 문자 찾기 / 해당 문자 바로 앞까지 이동(`;`는 반복, `,`는 반대 방향) |
+| `gg` `G`                      | 첫 줄, 마지막 줄(`5gg`와 `5G`는 5번째 줄로 이동)          |
+| `1`–`9` 접두사                | 이동 또는 연산자를 반복. 예: `3w`, `5j`, `2dd`            |
+| `i` `a` `I` `A`               | 커서 앞 / 뒤, 줄 시작 / 줄 끝에서 입력         |
+| `o` `O`                       | 아래 / 위에 줄을 만들고 입력                           |
+| `x` `D` `C`                   | 문자 삭제, 줄 끝까지 삭제(`2D`는 `count`개 줄에 적용), 줄 끝까지 변경(`2C`도 동일) |
+| `r` + 문자                    | 커서 아래의 문자 교체(`3rx`는 문자 3개를 교체)  |
+| `R`                           | 바꾸기 모드: Escape를 누를 때까지 입력한 문자로 덮어쓰기          |
+| `%`                           | 커서 위치 또는 그 뒤에 있는 `()` `[]` `{}` `"` `'`의 짝으로 이동. 따옴표는 같은 줄 안에서만 이동하며, 괄호는 여러 줄을 넘을 수 있습니다. 횟수를 지정한 `50%`는 버퍼의 해당 백분율 위치로 이동합니다. |
+| `{` `}`                       | 이전 / 다음 문단(빈 줄 경계)                |
+| `J`                           | 다음 줄의 들여쓰기를 제거하면서 줄 합치기(빈 줄은 공백 없이 합침) |
+| `>>` `<<`                     | 공백 두 칸만큼 들여쓰기 / 내어쓰기(`3>>`는 세 줄을 이동하고, `>}`는 이동 범위에 적용). 빈 줄은 그대로 둡니다. |
+| `d` `y` `c` + 이동          | 이동 범위에 연산 적용. 예: `dw`, `d$`, `yb`, `cw`             |
+| `dd` `yy` `cc`                | 줄 단위 삭제 / 복사 / 변경                                |
+| `d` `y` `c` + 텍스트 객체     | 텍스트 객체에 연산 적용. 예: `diw`, `ca(`, `ci"`, `dap`    |
+| `p` `P`                       | 마지막으로 복사하거나 삭제한 내용을 커서 뒤 / 앞에 붙여넣기          |
+| `u` | 전체 입력 세션 또는 전체 `.` 변경을 한 번에 실행 취소 |
+| `.` | 마지막 변경을 반복하며 그 변경이 시작한 입력 세션의 텍스트도 포함. 횟수를 지정하면 기존 횟수를 대체(`3.`) |
 
-### Text objects
+<a id="text-objects"></a>
+### 텍스트 객체
 
-A text object follows an operator (`diw`) or extends a Visual selection (`viw`). `i` takes the inside, `a` takes the surroundings; counts apply, e.g. `d2aw`.
+텍스트 객체는 연산자 뒤에 오거나(`diw`) 비주얼 선택 영역을 확장합니다(`viw`). `i`는 내부를, `a`는 주변까지 포함하며, `d2aw`처럼 횟수를 적용할 수 있습니다.
 
-| Object            | Covers                                                                     |
+| 객체            | 범위                                                                     |
 | ----------------- | -------------------------------------------------------------------------- |
-| `iw` `aw`         | Word; `aw` also takes the adjoining whitespace                             |
-| `iW` `aW`         | Whitespace-delimited WORD                                                  |
-| `i"` `i'` `` i` `` | Inside the quotes on the current line (`a"` takes the quotes too)          |
-| `i(` `i[` `i{` `i<` | Inside the innermost matching pair, nesting-aware and across lines         |
-| `a(` `a[` `a{` `a<` | The same pair including its delimiters (`b` and `B` alias `(` and `{`)     |
-| `ip` `ap`         | Paragraph — the run of non-blank (or blank) lines, linewise                |
+| `iw` `aw`         | 단어. `aw`는 인접한 공백도 포함                             |
+| `iW` `aW`         | 공백으로 구분되는 WORD                                                  |
+| `i"` `i'` `` i` `` | 현재 줄의 따옴표 내부(`a"`는 따옴표도 포함)          |
+| `i(` `i[` `i{` `i<` | 가장 안쪽의 짝이 맞는 구분자 내부. 중첩을 인식하고 여러 줄에 걸쳐 적용         |
+| `a(` `a[` `a{` `a<` | 구분자를 포함한 동일한 쌍(`b`와 `B`는 각각 `(`와 `{`의 별칭)     |
+| `ip` `ap`         | 문단 — 비어 있지 않은 줄(또는 빈 줄)의 연속 구간을 줄 단위로 선택                |
 
-### Visual mode
+<a id="visual-mode"></a>
+### 비주얼 모드
 
-`v` starts a character-wise selection and `V` a line-wise one; motions move the free end. `y` copies the selection to the system clipboard (and to the internal register, so `p` puts it back), `d` deletes it, and `c` deletes it and drops into Insert mode. `x` deletes like `d`, and `s` changes like `c`. `o` jumps to the other end of the selection. `Escape` cancels.
+`v`는 문자 단위 선택을, `V`는 줄 단위 선택을 시작합니다. 이동 명령은 선택 영역의 움직이는 끝을 이동합니다. `y`는 선택 영역을 시스템 클립보드로 복사하고(내부 레지스터에도 복사하므로 `p`로 다시 붙여넣을 수 있음), `d`는 삭제하며, `c`는 삭제 후 입력 모드로 전환합니다. `x`는 `d`처럼 삭제하고, `s`는 `c`처럼 변경합니다. `o`는 선택 영역의 반대쪽 끝으로 이동합니다. `Escape`는 취소합니다.
 
-A selection that would cut through an attachment placeholder such as `[Image #1, 800x600]` or `[Paste #2, +30 lines]` takes the whole placeholder with it, so a delete can never leave a corrupt fragment behind.
+선택 영역이 `[Image #1, 800x600]` 또는 `[Paste #2, +30 lines]` 같은 첨부 파일 자리표시자의 일부만 포함하게 되면 해당 자리표시자 전체를 포함합니다. 따라서 삭제 후 손상된 조각이 남지 않습니다.
 
+<a id="escape"></a>
 ### Escape
 
-`Escape` is shared with the app-level interrupt, so Vim mode takes it only when it has something to do:
+`Escape`는 앱 수준의 중단 동작과 공유되므로, Vim 모드는 처리할 작업이 있을 때만 이를 사용합니다.
 
-- **Insert mode** → switch to Normal mode (an open autocomplete popup gets the first Escape to dismiss it).
-- **Visual mode**, or a half-typed count or operator → cancel back to a quiet Normal mode.
-- **Replace mode** (`R`) → switch to Normal mode, stepping back onto the last overwritten character.
-- **Normal mode with nothing pending** → falls through to app behavior: dismiss autocomplete, abort active work, or run the configured double-Escape action with an empty editor. An idle main-session draft is preserved; bash/python and focused-agent views have their own Escape behavior.
+- **입력 모드** → 일반 모드로 전환합니다(자동 완성 팝업이 열려 있으면 첫 번째 Escape는 팝업을 닫습니다).
+- **비주얼 모드** 또는 입력 중인 횟수나 연산자 → 취소하고 대기 중인 명령이 없는 일반 모드로 돌아갑니다.
+- **바꾸기 모드**(`R`) → 마지막으로 덮어쓴 문자로 한 칸 물러나면서 일반 모드로 전환합니다.
+- **대기 중인 명령이 없는 일반 모드** → 앱 동작으로 넘깁니다. 자동 완성을 닫거나, 진행 중인 작업을 중단하거나, 편집기가 비어 있으면 설정된 Escape 두 번 누르기 동작을 실행합니다. 유휴 상태인 메인 세션의 초안은 보존됩니다. bash/python 및 포커스된 에이전트 뷰에는 각각 별도의 Escape 동작이 있습니다.
 
-Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Such a key also cancels a half-typed command (`d`, `r`, `f`) first, so the command never carries over into the next prompt. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+Vim 키는 앱 키 조합을 가로채지 않습니다. `Ctrl` 조합, `Enter`, `Tab`은 모든 모드에서 원래 동작을 유지하므로 일반 모드에서도 `Enter`로 제출할 수 있습니다. 이러한 키는 먼저 입력 중인 명령(`d`, `r`, `f`)도 취소하므로 해당 명령이 다음 프롬프트로 넘어가지 않습니다. 프롬프트 기록은 입력 모드에서만 `Up`/`Down`으로 탐색할 수 있습니다. 일반 모드에서 이 키들은 `k`와 `j`로 동작하므로 여러 줄 초안을 탐색해도 이전 프롬프트를 불러오지 않습니다.

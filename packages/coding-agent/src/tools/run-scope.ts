@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -353,7 +354,7 @@ export function waitForRun(
 			return undefined;
 		}
 		if (typeof msOrPredicate !== "function") {
-			throw new ToolError("wait(...) expects milliseconds (number) or a predicate function to poll");
+			throw new ToolError(t("wait(...) expects milliseconds (number) or a predicate function to poll"));
 		}
 		const timeout =
 			opts?.timeout !== undefined && Number.isFinite(opts.timeout) && opts.timeout > 0
@@ -366,7 +367,7 @@ export function waitForRun(
 			throwIfAborted(signal);
 			if (value) return value;
 			if (Date.now() + interval > deadline) {
-				throw new ToolError(`wait(predicate) timed out after ${timeout}ms — predicate never returned truthy`);
+				throw new ToolError(t("wait(predicate) timed out after {0}ms — predicate never returned truthy", `${timeout}`));
 			}
 			await untilAborted(signal, async () => await Bun.sleep(interval));
 		}

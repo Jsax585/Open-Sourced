@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Terminal } from "@oh-my-pi/pi-tui";
 import {
 	COMPOSER_DEFAULTS,
@@ -67,7 +68,7 @@ export class ComposerLease {
 
 /** Start the canonical Composer with speculative cached state. */
 export function beginStartupComposer(options: PrepaintComposerOptions = {}): void {
-	if (pendingComposer) throw new Error("A prepaint composer is already active");
+	if (pendingComposer) throw new Error(t("A prepaint composer is already active"));
 	const cwd = options.cwd ?? process.cwd();
 	const cache = options.cache === false ? undefined : sharedComposerCache();
 	const cached = cache ? cache.read(cwd) : { preferences: undefined, theme: undefined, status: undefined };

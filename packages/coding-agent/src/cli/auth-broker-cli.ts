@@ -13,6 +13,7 @@
  *     the broker already has.
  *   - `status` — health-pings the configured remote broker.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -192,7 +193,7 @@ async function runToken(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 
 async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	if (flags.via && !flags.provider) {
-		throw new Error("Usage: omp auth-broker login <provider> --via=user@host (provider required for remote login)");
+		throw new Error(t("Usage: omp auth-broker login <provider> --via=user@host (provider required for remote login)"));
 	}
 	const providers = getOAuthProviders();
 	// One interface for picker + login prompts; closed before `--via` hands
@@ -203,10 +204,10 @@ async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		providerArg = flags.provider ?? (await pickOAuthProvider(rl, providers));
 		if (!providers.some(p => p.id === providerArg)) {
 			throw new Error(
-				`Unknown OAuth provider '${providerArg}'. Known: ${providers
+				t("Unknown OAuth provider '{0}'. Known: {1}", `${providerArg}`, `${providers
 					.map(p => p.id)
 					.sort()
-					.join(", ")}`,
+					.join(", ")}`),
 			);
 		}
 		if (!flags.via) {
@@ -227,7 +228,7 @@ async function runLocalLogin(rl: readline.Interface, provider: string): Promise<
 	await storage.credentials.reload();
 	try {
 		await runTerminalOAuthLogin(rl, storage, provider);
-		process.stdout.write(`\nCredentials saved to ${getAgentDbPath()}\n`);
+		process.stdout.write(t("\nCredentials saved to {0}\n", `${getAgentDbPath()}`));
 	} finally {
 		store.close();
 	}
@@ -237,7 +238,7 @@ async function runRemoteLogin(provider: string, via: string, dryRun: boolean): P
 	const port = CALLBACK_PORTS[provider];
 	if (port === undefined) {
 		throw new Error(
-			`No known OAuth callback port for '${provider}'. Use device-code flow on the broker host directly.`,
+			t("No known OAuth callback port for '{0}'. Use device-code flow on the broker host directly.", `${provider}`),
 		);
 	}
 	const sshArgs = [
@@ -254,7 +255,7 @@ async function runRemoteLogin(provider: string, via: string, dryRun: boolean): P
 	}
 	const sshBin = $which("ssh");
 	if (!sshBin) {
-		throw new Error("ssh binary not found in PATH");
+		throw new Error(t("ssh binary not found in PATH"));
 	}
 	const proc = Bun.spawn({
 		cmd: [sshBin, ...sshArgs],
@@ -264,7 +265,7 @@ async function runRemoteLogin(provider: string, via: string, dryRun: boolean): P
 	});
 	const exitCode = await proc.exited;
 	if (exitCode !== 0) {
-		throw new Error(`ssh exited with code ${exitCode}`);
+		throw new Error(t("ssh exited with code {0}", `${exitCode}`));
 	}
 }
 
@@ -275,18 +276,18 @@ async function runLogout(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		if (!providerArg) {
 			const stored = store.listProviders();
 			if (stored.length === 0) {
-				process.stdout.write("No credentials stored.\n");
+				process.stdout.write(t("No credentials stored.\n"));
 				return;
 			}
 			const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 			try {
-				providerArg = stored[await pickIndex(rl, "Select a provider to logout:", stored)];
+				providerArg = stored[await pickIndex(rl, t("Select a provider to logout:"), stored)];
 			} finally {
 				rl.close();
 			}
 		}
 		await store.deleteAuthCredentials(providerArg, "logged out by user");
-		process.stdout.write(`Logged out of ${providerArg}\n`);
+		process.stdout.write(t("Logged out of {0}\n", `${providerArg}`));
 	} finally {
 		store.close();
 	}
@@ -298,7 +299,7 @@ async function runList(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		process.stdout.write(`${JSON.stringify(providers.map(p => ({ id: p.id, name: p.name })))}\n`);
 		return;
 	}
-	process.stdout.write("Available providers:\n\n");
+	process.stdout.write(t("Available providers:\n\n"));
 	for (const p of providers) {
 		process.stdout.write(`  ${p.id.padEnd(20)} ${p.name}\n`);
 	}
@@ -366,7 +367,7 @@ async function collectImportSources(target: string): Promise<string[]> {
 	const stat = await fs.stat(target);
 	if (stat.isFile()) return [target];
 	if (!stat.isDirectory()) {
-		throw new Error(`Import source is neither file nor directory: ${target}`);
+		throw new Error(t("Import source is neither file nor directory: {0}", `${target}`));
 	}
 	const entries = await fs.readdir(target, { withFileTypes: true });
 	const files: string[] = [];
@@ -383,6 +384,7 @@ async function loadImportPlan(
 	target: string,
 	overrideProvider: string | undefined,
 	includeDisabled: boolean,
+	machineReadable: boolean,
 ): Promise<{ entries: ImportPlanEntry[]; skipped: Array<{ file: string; reason: string }> }> {
 	const files = await collectImportSources(target);
 	const entries: ImportPlanEntry[] = [];
@@ -392,28 +394,30 @@ async function loadImportPlan(
 		try {
 			json = JSON.parse(await fs.readFile(file, "utf8")) as CliProxyCredentialJson;
 		} catch (err) {
-			skipped.push({ file, reason: `unreadable JSON: ${String(err)}` });
+			skipped.push({ file, reason: machineReadable ? `unreadable JSON: ${String(err)}` : t("unreadable JSON: {0}", `${String(err)}`) });
 			continue;
 		}
 		if (json.disabled === true && !includeDisabled) {
-			skipped.push({ file, reason: "credential marked disabled (use --include-disabled to import anyway)" });
+			skipped.push({ file, reason: machineReadable ? "credential marked disabled (use --include-disabled to import anyway)" : t("credential marked disabled (use --include-disabled to import anyway)") });
 			continue;
 		}
 		const provider = resolveCliProxyProvider(json, file, overrideProvider);
 		if (!provider) {
 			skipped.push({
 				file,
-				reason: `cannot determine omp provider from type=${json.type ?? "?"} (pass --provider to override)`,
+				reason: machineReadable
+					? `cannot determine omp provider from type=${json.type ?? "?"} (pass --provider to override)`
+					: t("cannot determine omp provider from type={0} (pass --provider to override)", `${json.type ?? "?"}`),
 			});
 			continue;
 		}
 		if (!json.access_token || !json.refresh_token) {
-			skipped.push({ file, reason: "missing access_token or refresh_token" });
+			skipped.push({ file, reason: machineReadable ? "missing access_token or refresh_token" : t("missing access_token or refresh_token") });
 			continue;
 		}
 		const expiresAt = parseCliProxyExpiry(json.expired);
 		if (expiresAt === null) {
-			skipped.push({ file, reason: `cannot parse expired=${json.expired ?? "?"}` });
+			skipped.push({ file, reason: machineReadable ? `cannot parse expired=${json.expired ?? "?"}` : t("cannot parse expired={0}", `${json.expired ?? "?"}`) });
 			continue;
 		}
 		const email = typeof json.email === "string" && json.email.length > 0 ? json.email : null;
@@ -440,19 +444,19 @@ async function loadImportPlan(
 }
 
 function describeImportEntry(entry: ImportPlanEntry): string {
-	const ident = entry.email ?? entry.accountId ?? "(no identity)";
-	const stale = entry.expiresAt < Date.now() ? " [expired]" : "";
-	const disabled = entry.disabled ? " [disabled]" : "";
-	return `${entry.provider}: ${ident}${stale}${disabled} from ${entry.sourceFile}`;
+	const ident = entry.email ?? entry.accountId ?? t("(no identity)");
+	const stale = entry.expiresAt < Date.now() ? t(" [expired]") : "";
+	const disabled = entry.disabled ? t(" [disabled]") : "";
+	return t("{0}: {1}{2}{3} from {4}", `${entry.provider}`, `${ident}`, `${stale}`, `${disabled}`, `${entry.sourceFile}`);
 }
 
 async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const target = flags.source;
 	if (!target) {
-		throw new Error("Usage: omp auth-broker import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]");
+		throw new Error(t("Usage: omp auth-broker import <file|dir> [--provider=<id>] [--include-disabled] [--dry-run]"));
 	}
 	const resolvedTarget = path.resolve(target.startsWith("~") ? target.replace(/^~/, os.homedir()) : target);
-	const { entries, skipped } = await loadImportPlan(resolvedTarget, flags.provider, flags.includeDisabled === true);
+	const { entries, skipped } = await loadImportPlan(resolvedTarget, flags.provider, flags.includeDisabled === true, flags.json === true);
 
 	if (flags.json) {
 		process.stdout.write(
@@ -476,18 +480,18 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 
 	if (!flags.json) {
 		for (const skip of skipped) {
-			process.stdout.write(`${chalk.yellow("skip")} ${skip.file}: ${skip.reason}\n`);
+			process.stdout.write(`${chalk.yellow(t("skip"))} ${skip.file}: ${skip.reason}\n`);
 		}
 	}
 
 	if (entries.length === 0) {
-		if (!flags.json) process.stdout.write(`No importable credentials in ${resolvedTarget}.\n`);
+		if (!flags.json) process.stdout.write(t("No importable credentials in {0}.\n", `${resolvedTarget}`));
 		return;
 	}
 
 	if (flags.dryRun === true) {
 		if (!flags.json) {
-			process.stdout.write(`Dry run — would import ${entries.length} credential(s):\n`);
+			process.stdout.write(t("Dry run — would import {0} credential(s):\n", `${entries.length}`));
 			for (const entry of entries) process.stdout.write(`  ${describeImportEntry(entry)}\n`);
 		}
 		return;
@@ -500,14 +504,14 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 			try {
 				await client.uploadCredential(entry.provider, entry.credential);
 				if (!flags.json) {
-					process.stdout.write(`${chalk.green("uploaded")} ${describeImportEntry(entry)} → ${brokerConfig.url}\n`);
+					process.stdout.write(`${chalk.green(t("uploaded"))} ${describeImportEntry(entry)} → ${brokerConfig.url}\n`);
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				if (flags.json) {
 					process.stdout.write(`${JSON.stringify({ error: message, file: entry.sourceFile })}\n`);
 				} else {
-					process.stdout.write(`${chalk.red("failed")} ${describeImportEntry(entry)}: ${message}\n`);
+					process.stdout.write(`${chalk.red(t("failed"))} ${describeImportEntry(entry)}: ${message}\n`);
 				}
 				process.exitCode = 1;
 			}
@@ -519,7 +523,7 @@ async function runImport(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	try {
 		for (const entry of entries) {
 			await store.upsertAuthCredential(entry.provider, entry.credential);
-			if (!flags.json) process.stdout.write(`${chalk.green("imported")} ${describeImportEntry(entry)}\n`);
+			if (!flags.json) process.stdout.write(`${chalk.green(t("imported"))} ${describeImportEntry(entry)}\n`);
 		}
 	} finally {
 		store.close();
@@ -575,18 +579,18 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 	const brokerConfig = await resolveAuthBrokerConfig();
 	if (!brokerConfig) {
 		throw new Error(
-			"OMP_AUTH_BROKER_URL must be set (or `auth.broker.url` in config.yml). `migrate` uploads local credentials to a configured broker.",
+			t("OMP_AUTH_BROKER_URL must be set (or `auth.broker.url` in config.yml). `migrate` uploads local credentials to a configured broker."),
 		);
 	}
 	if (flags.fromLocal !== true) {
 		throw new Error(
-			"`omp auth-broker migrate` requires an explicit source. Pass `--from-local` to migrate from the local SQLite store and env vars.",
+			t("`omp auth-broker migrate` requires an explicit source. Pass `--from-local` to migrate from the local SQLite store and env vars."),
 		);
 	}
 
 	const client = new AuthBrokerClient({ url: brokerConfig.url, token: brokerConfig.token });
 	const snapshotResult = await client.fetchSnapshot();
-	if (snapshotResult.status !== 200) throw new Error("Auth broker returned no snapshot");
+	if (snapshotResult.status !== 200) throw new Error(t("Auth broker returned no snapshot"));
 	const existing = snapshotResult.snapshot.credentials;
 
 	const plan: MigratePlanEntry[] = [];
@@ -607,7 +611,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity: "(api key)",
-					reason: "placeholder sentinel '<authenticated>' is not a real key",
+					reason: flags.json ? "placeholder sentinel '<authenticated>' is not a real key" : t("placeholder sentinel '<authenticated>' is not a real key"),
 				});
 				continue;
 			}
@@ -617,7 +621,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "OAuth from local SQLite skipped by default (use --include-oauth)",
+					reason: flags.json ? "OAuth from local SQLite skipped by default (use --include-oauth)" : t("OAuth from local SQLite skipped by default (use --include-oauth)"),
 				});
 				continue;
 			}
@@ -626,7 +630,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "already on broker",
+					reason: flags.json ? "already on broker" : t("already on broker"),
 				});
 				continue;
 			}
@@ -635,7 +639,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "local-sqlite",
 					provider: row.provider,
 					identity,
-					reason: "another local api_key for this provider already planned",
+					reason: flags.json ? "another local api_key for this provider already planned" : t("another local api_key for this provider already planned"),
 				});
 				continue;
 			}
@@ -658,7 +662,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "env",
 					provider,
 					identity: "(api key)",
-					reason: "already on broker (provider has an api_key)",
+					reason: flags.json ? "already on broker (provider has an api_key)" : t("already on broker (provider has an api_key)"),
 				});
 				continue;
 			}
@@ -668,7 +672,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 					source: "env",
 					provider,
 					identity: "(api key)",
-					reason: "local SQLite already supplied an api_key for this provider",
+					reason: flags.json ? "local SQLite already supplied an api_key for this provider" : t("local SQLite already supplied an api_key for this provider"),
 				});
 				continue;
 			}
@@ -687,21 +691,21 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 	} else {
 		for (const skip of skipped) {
 			process.stdout.write(
-				`${chalk.yellow("skip")} [${skip.source}] ${skip.provider} ${skip.identity}: ${skip.reason}\n`,
+				`${chalk.yellow(t("skip"))} [${skip.source === "env" ? t("env") : t("sqlite")}] ${skip.provider} ${skip.identity === "(api key)" ? t("(api key)") : skip.identity}: ${skip.reason}\n`,
 			);
 		}
 	}
 
 	if (plan.length === 0) {
-		if (!flags.json) process.stdout.write("Nothing to migrate.\n");
+		if (!flags.json) process.stdout.write(t("Nothing to migrate.\n"));
 		return;
 	}
 
 	if (flags.dryRun === true) {
 		if (!flags.json) {
-			process.stdout.write(`Dry run — would upload ${plan.length} credential(s):\n`);
+			process.stdout.write(t("Dry run — would upload {0} credential(s):\n", `${plan.length}`));
 			for (const entry of plan) {
-				process.stdout.write(`  [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+				process.stdout.write(`  [${entry.source === "env" ? t("env") : t("sqlite")}] ${entry.provider} ${entry.identity === "(api key)" ? t("(api key)") : entry.identity}\n`);
 			}
 		}
 		return;
@@ -711,14 +715,14 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 		try {
 			await client.uploadCredential(entry.provider, entry.credential);
 			if (!flags.json) {
-				process.stdout.write(`${chalk.green("uploaded")} [${entry.source}] ${entry.provider} ${entry.identity}\n`);
+				process.stdout.write(`${chalk.green(t("uploaded"))} [${entry.source === "env" ? t("env") : t("sqlite")}] ${entry.provider} ${entry.identity === "(api key)" ? t("(api key)") : entry.identity}\n`);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			if (flags.json) {
 				process.stdout.write(`${JSON.stringify({ error: message, provider: entry.provider })}\n`);
 			} else {
-				process.stdout.write(`${chalk.red("failed")} [${entry.source}] ${entry.provider}: ${message}\n`);
+				process.stdout.write(`${chalk.red(t("failed"))} [${entry.source === "env" ? t("env") : t("sqlite")}] ${entry.provider}: ${message}\n`);
 			}
 			process.exitCode = 1;
 		}
@@ -728,7 +732,7 @@ async function runMigrate(flags: AuthBrokerCommandArgs["flags"]): Promise<void> 
 async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	const cfg = await resolveAuthBrokerConfig();
 	if (!cfg) {
-		const message = "No auth-broker configured (set OMP_AUTH_BROKER_URL to enable).";
+		const message = t("No auth-broker configured (set OMP_AUTH_BROKER_URL to enable).");
 		if (flags.json) process.stdout.write(`${JSON.stringify({ ok: false, reason: "not_configured" })}\n`);
 		else process.stdout.write(`${chalk.yellow(message)}\n`);
 		return;
@@ -739,14 +743,14 @@ async function runStatus(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify({ url: cfg.url, ...health })}\n`);
 		} else {
-			process.stdout.write(`${chalk.green("OK")} ${cfg.url} (version=${health.version ?? "unknown"})\n`);
+			process.stdout.write(t("{0} {1} (version={2})\n", `${chalk.green(t("OK"))}`, `${cfg.url}`, `${health.version ?? t("unknown")}`));
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify({ ok: false, url: cfg.url, error: message })}\n`);
 		} else {
-			process.stdout.write(`${chalk.red("FAILED")} ${cfg.url}: ${message}\n`);
+			process.stdout.write(`${chalk.red(t("FAILED"))} ${cfg.url}: ${message}\n`);
 		}
 		process.exitCode = 1;
 	}
@@ -781,7 +785,7 @@ export async function runAuthBrokerCommand(cmd: AuthBrokerCommandArgs): Promise<
 		default: {
 			// Exhaustive check.
 			const _exhaustive: never = cmd.action;
-			throw new Error(`Unknown auth-broker action: ${String(_exhaustive)}`);
+			throw new Error(t("Unknown auth-broker action: {0}", `${String(_exhaustive)}`));
 		}
 	}
 }

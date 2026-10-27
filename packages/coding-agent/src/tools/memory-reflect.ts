@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
@@ -19,7 +20,7 @@ export type MemoryReflectParams = typeof memoryReflectSchema.infer;
 export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> {
 	readonly name = "reflect";
 	readonly approval = "read" as const;
-	readonly label = "Reflect";
+	readonly label = t("Reflect");
 	get description(): string {
 		return prompt.render(reflectDescription, {
 			toolRefs: sessionMemoryToolRefs(this.session),
@@ -45,7 +46,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 			if (backend === "mnemopi") {
 				const state = this.session.getMnemopiSessionState?.();
 				if (!state) {
-					throw new Error("Mnemopi backend is not initialised for this session.");
+					throw new Error(t("Mnemopi backend is not initialised for this session."));
 				}
 
 				try {
@@ -55,13 +56,13 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 					const results = await state.recallResultsScoped(query);
 					if (results.length === 0) {
 						return {
-							content: [{ type: "text", text: "No relevant information found to reflect on." }],
+							content: [{ type: "text", text: t("No relevant information found to reflect on.") }],
 							details: {},
 						};
 					}
 					const summary = state.formatContextScoped(results);
 					return {
-						content: [{ type: "text", text: `Based on recalled memories:\n\n${summary}` }],
+						content: [{ type: "text", text: t("Based on recalled memories:\n\n{0}", `${summary}`) }],
 						details: {},
 					};
 				} catch (err) {
@@ -72,7 +73,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 
 			const state = this.session.getHindsightSessionState?.();
 			if (!state) {
-				throw new Error("Hindsight backend is not initialised for this session.");
+				throw new Error(t("Hindsight backend is not initialised for this session."));
 			}
 
 			try {
@@ -83,7 +84,7 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 					tags: state.recallTags,
 					tagsMatch: state.recallTagsMatch,
 				});
-				const text = response.text?.trim() || "No relevant information found to reflect on.";
+				const text = response.text?.trim() || t("No relevant information found to reflect on.");
 				return {
 					content: [{ type: "text", text }],
 					details: {},

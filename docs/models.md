@@ -1,38 +1,42 @@
-# Model and Provider Configuration (`models.yml` / `models.yaml`)
+<a id="model-and-provider-configuration-modelsyml--modelsyaml"></a>
+# 모델 및 제공자 구성 (`models.yml` / `models.yaml`)
 
-This document describes how the coding-agent currently loads models, applies overrides, resolves credentials, and chooses models at runtime.
+이 문서는 coding-agent가 현재 모델을 불러오고, 재정의를 적용하고, 자격 증명을 확인하고, 런타임에 모델을 선택하는 방식을 설명합니다.
 
-## What controls model behavior
+<a id="what-controls-model-behavior"></a>
+## 모델 동작을 제어하는 요소
 
-Primary implementation files:
+주요 구현 파일:
 
-- `packages/coding-agent/src/config/model-registry.ts` — loads built-in + custom models, provider overrides, runtime discovery, auth integration
-- `packages/coding-agent/src/config/model-resolver.ts` — parses model patterns and selects initial/smol/slow models
-- `packages/coding-agent/src/config/model-settings.ts` — model selection settings (`modelRoles`, `enabledModels`, `enabledProviders`/`disabledProviders`, `modelProviderOrder`, `cycleOrder`)
-- `packages/coding-agent/src/session/settings.ts` — provider transport preferences (`providers.*`)
-- `packages/coding-agent/src/config/models-config.ts` and `models-config-schema-bundle.ts` — custom provider/model validation
-- `packages/coding-agent/src/session/auth-storage.ts` — re-exports `AuthStorage` from `@oh-my-pi/pi-ai`; credential precedence is implemented in `packages/ai/src/auth/cascade.ts`
-- `packages/catalog/src/compat/resolve.ts` and `compat/rules/` — compatibility and model policy resolution
-- `packages/catalog/src/models.ts` and `packages/catalog/src/types.ts` — built-in providers/models and public model types
+- `packages/coding-agent/src/config/model-registry.ts` — 내장 및 사용자 지정 모델 로드, 제공자 재정의, 런타임 탐색, 인증 통합
+- `packages/coding-agent/src/config/model-resolver.ts` — 모델 패턴 파싱 및 초기/smol/slow 모델 선택
+- `packages/coding-agent/src/config/model-settings.ts` — 모델 선택 설정(`modelRoles`, `enabledModels`, `enabledProviders`/`disabledProviders`, `modelProviderOrder`, `cycleOrder`)
+- `packages/coding-agent/src/session/settings.ts` — 제공자 전송 환경설정(`providers.*`)
+- `packages/coding-agent/src/config/models-config.ts` 및 `models-config-schema-bundle.ts` — 사용자 지정 제공자/모델 검증
+- `packages/coding-agent/src/session/auth-storage.ts` — `@oh-my-pi/pi-ai`의 `AuthStorage` 재내보내기. 자격 증명 우선순위는 `packages/ai/src/auth/cascade.ts`에서 구현
+- `packages/catalog/src/compat/resolve.ts` 및 `compat/rules/` — 호환성 및 모델 정책 확인
+- `packages/catalog/src/models.ts` 및 `packages/catalog/src/types.ts` — 내장 제공자/모델 및 공개 모델 타입
 
-## Config file location and legacy behavior
+<a id="config-file-location-and-legacy-behavior"></a>
+## 구성 파일 위치와 레거시 동작
 
-Default-profile config paths, in precedence order:
+기본 프로필의 구성 경로(우선순위 순):
 
 - `~/.omp/agent/models.yml`
 - `~/.omp/agent/models.yaml`
 
-These are relative to the active agent directory returned by `getAgentDir()`. Named profiles use
-`~/.omp/profiles/<name>/agent/`; `PI_CONFIG_DIR` changes the config-root directory name, and
-`PI_CODING_AGENT_DIR` can override the default-profile agent directory. A programmatic
-`ModelRegistry` path overrides the directory-derived location.
+이 경로는 `getAgentDir()`이 반환하는 활성 에이전트 디렉터리를 기준으로 합니다. 이름 있는 프로필은
+`~/.omp/profiles/<name>/agent/`를 사용합니다. `PI_CONFIG_DIR`은 구성 루트 디렉터리 이름을 바꾸고,
+`PI_CODING_AGENT_DIR`은 기본 프로필의 에이전트 디렉터리를 재정의할 수 있습니다.
+프로그래밍 방식으로 지정한 `ModelRegistry` 경로는 디렉터리에서 유도한 위치보다 우선합니다.
 
-Legacy behavior still present:
+현재도 유지되는 레거시 동작:
 
-- If both YAML files are missing and `models.json` exists at the same location, it is migrated to `models.yml`.
-- Explicit `.json` / `.jsonc` config paths are still supported when passed programmatically to `ModelRegistry`.
+- 두 YAML 파일이 모두 없고 같은 위치에 `models.json`이 있으면 `models.yml`로 마이그레이션합니다.
+- `ModelRegistry`에 프로그래밍 방식으로 전달한 명시적 `.json` / `.jsonc` 구성 경로도 계속 지원합니다.
 
-## `models.yml` / `models.yaml` shape
+<a id="modelsyml--modelsyaml-shape"></a>
+## `models.yml` / `models.yaml` 구조
 
 ```yaml
 providers:
@@ -40,11 +44,12 @@ providers:
     # provider-level config
 ```
 
-`provider-id` is the canonical provider key used across selection and auth lookup.
+`provider-id`는 모델 선택과 인증 조회 전반에 사용하는 정규 제공자 키입니다.
 
-`providers` is the only root key the registry consumes. Unknown root keys are not rejected by the current schema, but do not configure model behavior.
+`providers`는 레지스트리가 사용하는 유일한 루트 키입니다. 현재 스키마는 알 수 없는 루트 키를 거부하지 않지만, 그런 키는 모델 동작을 구성하지 않습니다.
 
-## Provider-level fields
+<a id="provider-level-fields"></a>
+## 제공자 수준 필드
 
 ```yaml
 providers:
@@ -94,43 +99,42 @@ providers:
             controller: mlx
 ```
 
-`maxContextWindow` is available on both `models` entries and `modelOverrides`.
-Set `contextWindow` to the normal prompt window and `maxContextWindow` to the
-larger prompt window accepted by the provider. `/extended-context on` selects
-the larger window; `off` restores the normal one. An override specifying only
-`contextWindow` remains fixed in both modes, as before. This changes OMP's
-local context budget, not the provider's server-side limit; verify the endpoint
-accepts requests of the configured size.
-Configured maxima do not replace provider-advertised capacity. Models governed
-by a catalog override ceiling (such as Codex Astra) still clamp to that ceiling.
-Per-model overrides, including retired variant aliases, are resolved before
-selecting the extended window.
+`maxContextWindow`는 `models` 항목과 `modelOverrides` 모두에서 사용할 수 있습니다.
+`contextWindow`는 일반 프롬프트 창으로, `maxContextWindow`는 제공자가 허용하는 더 큰 프롬프트 창으로
+설정하세요. `/extended-context on`은 더 큰 창을 선택하며 `off`는 일반 창으로 복원합니다.
+`contextWindow`만 지정한 재정의는 이전처럼 두 모드에서 모두 고정됩니다. 이는 제공자의 서버 측 제한이 아니라
+OMP의 로컬 컨텍스트 예산을 바꾸므로, 엔드포인트가 구성한 크기의 요청을 허용하는지 확인하세요.
+구성한 최댓값은 제공자가 알린 용량을 대체하지 않습니다. Codex Astra처럼 카탈로그 재정의 상한이 있는
+모델은 여전히 그 상한으로 제한됩니다. 폐기된 변형 별칭을 포함한 모델별 재정의는 확장 창 선택 전에 확인합니다.
 
-Custom `models` entries can set their own `baseUrl`; otherwise they inherit the provider URL.
-For built-in models, a provider `baseUrl` override is scoped to the effective APIs of custom models
-that inherit it, or to the provider's `api` for an override-only configuration. Without either
-scope it applies provider-wide. `transport: pi-native` always applies the gateway URL provider-wide.
-An unscoped OpenRouter `baseUrl` names the `/api/v1` chat root, so OpenRouter Decisions (judge)
-models use its `/api/alpha` sibling on the same host, e.g. a `.../api/v1` relay serves judges at
-`.../api/alpha/decisions`.
+사용자 지정 `models` 항목은 자체 `baseUrl`을 설정할 수 있으며, 그렇지 않으면 제공자 URL을 상속합니다.
+내장 모델의 경우 제공자 `baseUrl` 재정의는 이를 상속하는 사용자 지정 모델의 유효 API 범위에 적용되고,
+재정의 전용 구성에서는 제공자의 `api` 범위에 적용됩니다. 두 범위가 모두 없으면 제공자 전체에 적용됩니다.
+`transport: pi-native`는 항상 게이트웨이 URL을 제공자 전체에 적용합니다.
+범위가 없는 OpenRouter `baseUrl`은 `/api/v1` 채팅 루트를 뜻하므로 OpenRouter Decisions(judge) 모델은
+동일 호스트의 `/api/alpha` 경로를 사용합니다. 예를 들어 `.../api/v1` 릴레이는
+`.../api/alpha/decisions`에서 판단 모델을 제공합니다.
 
-`preferWebsockets` (on a model or `modelOverrides` entry) controls whether Codex requests prefer
-the WebSocket transport. `omitMaxOutputTokens` omits the model-derived output cap.
+모델 또는 `modelOverrides` 항목의 `preferWebsockets`는 Codex 요청의 WebSocket 전송 선호 여부를
+제어합니다. `omitMaxOutputTokens`는 모델에서 유도한 출력 상한을 생략합니다.
 
-### Bedrock request options
+<a id="bedrock-request-options"></a>
+### Bedrock 요청 옵션
 
-Provider-level `guardrailIdentifier`, `guardrailVersion`, and `guardrailTrace` attach a guardrail to
-Converse requests. The version defaults to `"DRAFT"` when an identifier is set; trace accepts
-`enabled`, `disabled`, or `enabled_full`. `requestMetadata` supplies invocation-log tags. Invalid
-entries and entries beyond Bedrock's 16-entry limit are dropped before dispatch; per-request tags
-override matching model tags. These fields do not configure the Anthropic Messages route.
+제공자 수준 `guardrailIdentifier`, `guardrailVersion`, `guardrailTrace`는 Converse 요청에 가드레일을
+연결합니다. 식별자를 설정하면 버전 기본값은 `"DRAFT"`이며 trace는 `enabled`, `disabled`,
+`enabled_full`을 허용합니다. `requestMetadata`는 호출 로그 태그를 제공합니다. 잘못된 항목과 Bedrock의
+16개 제한을 넘는 항목은 전송 전에 버립니다. 요청별 태그는 같은 모델 태그를 재정의합니다.
+이 필드는 Anthropic Messages 경로를 구성하지 않습니다.
 
-### Compaction options
+<a id="compaction-options"></a>
+### 압축 옵션
 
-- `compactionModel` (per model, including `modelOverrides`) — preferred compaction model, tried before the active model, chat-role candidates, and a largest-context fallback. It does not switch the active conversation model.
-- `remoteCompaction` (provider level or per model) — opts eligible models into provider-native compaction. Supported keys: `enabled`, `api`, `endpoint`, `model`, `v2StreamingEnabled`, `v2Endpoint`, `streamingEndpoint`. Provider-level settings are the baseline; per-model keys override them.
+- `compactionModel`(`modelOverrides`를 포함한 모델별 설정) — 선호 압축 모델입니다. 활성 모델, 채팅 역할 후보, 최대 컨텍스트 폴백보다 먼저 시도하며 활성 대화 모델을 전환하지 않습니다.
+- `remoteCompaction`(제공자 수준 또는 모델별 설정) — 해당 모델에서 제공자 기본 압축을 사용하도록 합니다. 지원 키는 `enabled`, `api`, `endpoint`, `model`, `v2StreamingEnabled`, `v2Endpoint`, `streamingEndpoint`입니다. 제공자 설정을 기준으로 모델별 키가 재정의합니다.
 
-### Allowed provider/model `api` values
+<a id="allowed-providermodel-api-values"></a>
+### 허용되는 제공자/모델 `api` 값
 
 - `openai-completions`
 - `openai-responses`
@@ -146,34 +150,35 @@ override matching model tags. These fields do not configure the Anthropic Messag
 - `openai-decisions`
 - `workers-ai-systemone`
 
-`typesafe`, `openrouter-decisions`, `openai-decisions`, and `workers-ai-systemone` are judgment APIs, not chat transports: a model declared with one answers judgment requests and is selected by the `judge` model role. `typesafe` posts TypeSafe's System One body to `{baseUrl}/v1/systemone` (any System One server: TypeSafe, OpenJEV, Kev, self-hosted Clef); `openrouter-decisions` posts the same body to `{baseUrl}/decisions`; `openai-decisions` translates questions and answers to OpenAI's Decisions API at `{baseUrl}/decisions` (the bundled `openai/gpt-6-luna-decisions` row sends the wire model `gpt-6-luna`); `workers-ai-systemone` posts the System One body to Cloudflare Workers AI at `{baseUrl}/{model id}`, where `<account>` in the base URL is filled from the stored credential's account id or `CLOUDFLARE_ACCOUNT_ID`. Its `headers` carry gateway routing or custom authentication headers for that traffic.
-Judgment requests can share image attachments with vision-chat requests. Native OpenAI Decisions, TypeSafe Jev, OpenRouter Jev, and Workers AI judges, plus prompted vision-chat models, support images; text-only candidates are skipped for image requests. `Judge.supportsImages` identifies compatible candidates, and a judge chain with no image-capable model fails explicitly rather than dropping images. Prompted judgments normalize images for the selected candidate, including upscaling undersized rasters and converting WebP for models with STB-backed decoders; native judges continue to receive the original image bytes. When constructing a `NativeJudge` directly for System One, set `supportsImages: true`; `createNativeJudge` derives this flag from the catalog.
+`typesafe`, `openrouter-decisions`, `openai-decisions`, `workers-ai-systemone`은 채팅 전송이 아닌 판단 API입니다. 해당 API로 선언한 모델은 판단 요청에 응답하며 `judge` 모델 역할로 선택합니다. `typesafe`는 TypeSafe의 System One 본문을 `{baseUrl}/v1/systemone`에 전송합니다(TypeSafe, OpenJEV, Kev, 자체 호스팅 Clef 등 모든 System One 서버). `openrouter-decisions`는 같은 본문을 `{baseUrl}/decisions`로 전송합니다. `openai-decisions`는 질문과 답을 OpenAI Decisions API의 `{baseUrl}/decisions` 형식으로 변환합니다(번들 `openai/gpt-6-luna-decisions` 항목은 전송 모델로 `gpt-6-luna` 사용). `workers-ai-systemone`은 System One 본문을 Cloudflare Workers AI의 `{baseUrl}/{model id}`로 전송하며, 기본 URL의 `<account>`는 저장된 자격 증명의 계정 ID 또는 `CLOUDFLARE_ACCOUNT_ID`로 채웁니다. 이 트래픽의 게이트웨이 라우팅 또는 사용자 지정 인증 헤더는 `headers`에 담습니다.
+판단 요청은 비전 채팅 요청과 이미지 첨부를 공유할 수 있습니다. 기본 OpenAI Decisions, TypeSafe Jev, OpenRouter Jev, Workers AI 판단 모델과 프롬프트 기반 비전 채팅 모델은 이미지를 지원하며, 텍스트 전용 후보는 이미지 요청에서 건너뜁니다. `Judge.supportsImages`로 호환 후보를 확인하며 이미지 지원 모델이 없는 판단 체인은 이미지를 버리지 않고 명시적으로 실패합니다. 프롬프트 기반 판단은 작은 래스터 확대와 STB 기반 디코더용 WebP 변환을 포함해 선택한 후보에 맞게 이미지를 정규화하며, 기본 판단 모델은 원래 이미지 바이트를 계속 받습니다. System One용 `NativeJudge`를 직접 생성할 때는 `supportsImages: true`를 설정하세요. `createNativeJudge`는 이 플래그를 카탈로그에서 유도합니다.
 
-Catalog-backed native judges apply the selected model's image bounds. Direct `NativeJudge` constructors can supply `imageInput` bounds explicitly; opting into images does not inherit Jev's size limits for unrelated System One models.
+카탈로그 기반 기본 판단 모델은 선택한 모델의 이미지 범위를 적용합니다. 직접 호출하는 `NativeJudge` 생성자에는 `imageInput` 범위를 명시할 수 있습니다. 이미지 사용을 활성화한다고 관련 없는 System One 모델에 Jev 크기 제한이 상속되지는 않습니다.
 
-OpenAI Decisions forwards embedded `ImageContent.detail`, and different explicit fidelity settings retain separate native image-judgment cache entries. TypeSafe Jev has no image-detail equivalent: detail is ignored on the wire and in cache identity, so requests that differ only by detail can reuse an answer. Omitted detail and explicit `auto` share the default setting.
+OpenAI Decisions는 포함된 `ImageContent.detail`을 전달하며, 명시적 품질 설정이 다르면 기본 이미지 판단 캐시 항목도 구분합니다. TypeSafe Jev에는 대응하는 이미지 세부 수준이 없어 전송과 캐시 식별에서 detail을 무시하므로, detail만 다른 요청은 답을 재사용할 수 있습니다. 생략한 detail과 명시적 `auto`는 기본 설정을 공유합니다.
 
-Image inputs are validated before any candidate runs; malformed images fail as caller errors rather than exhausting the chain. Providers may enforce additional limits. Workers AI Clef accepts at most 4 PNG, JPEG, or WebP images of up to 4 MiB and 16 MP each, 8 MiB in total. Valid padded and unpadded base64, and MIME case variants, share one cache identity.
+이미지 입력은 후보 실행 전에 검증합니다. 잘못된 이미지는 체인을 소진하지 않고 호출자 오류로 실패합니다. 제공자가 추가 제한을 적용할 수 있습니다. Workers AI Clef는 각 최대 4 MiB 및 16 MP, 합계 8 MiB인 PNG, JPEG, WebP 이미지를 최대 4개 허용합니다. 유효한 패딩 유무의 base64와 MIME 대소문자 변형은 같은 캐시 식별을 공유합니다.
 
-After image filtering, the same native-only tail policy used for text judgments applies: a failed native judge may fall through to another compatible native, never to a prompted chat model. Filtering removes natives without image support and natives whose image-count cap the request exceeds, so when no compatible native remains, eligible prompted candidates and a vision-capable session-model fallback can still answer. Size bounds never filter a native: each image is fitted into them first (see below).
+이미지 필터링 후에는 텍스트 판단과 같은 기본 모델 전용 후속 정책이 적용됩니다. 기본 판단 모델 실패 후에는 다른 호환 기본 모델로만 넘어가며 프롬프트 기반 채팅 모델로 넘어가지 않습니다. 필터링은 이미지 미지원 기본 모델과 요청이 이미지 개수 상한을 넘는 기본 모델을 제거하므로, 호환 기본 모델이 남지 않으면 적격 프롬프트 후보와 비전 지원 세션 모델 폴백이 응답할 수 있습니다. 크기 범위 때문에 기본 모델을 제거하지는 않습니다. 먼저 이미지를 범위에 맞춥니다(아래 참조).
 
-#### Jev images (experimental)
+<a id="jev-images-experimental"></a>
+#### Jev 이미지(실험적)
 
-Native image judgments for Jev are experimental. Direct TypeSafe Jev supports `jev-latest`, `jev-preview`, `jev-1.13.0`, and `jev-1.14.0` (the default `judge` role uses `typesafe/jev-1.14.0`; `jev-latest` is TypeSafe's stable alias, currently `jev-1.13.0`). OpenRouter supports `typesafe/jev-1.13`, `typesafe/jev-1.14`, and `~typesafe/jev-latest`.
+Jev의 기본 이미지 판단은 실험적입니다. 직접 TypeSafe Jev는 `jev-latest`, `jev-preview`, `jev-1.13.0`, `jev-1.14.0`을 지원합니다(기본 `judge` 역할은 `typesafe/jev-1.14.0` 사용, TypeSafe 안정 별칭 `jev-latest`는 현재 `jev-1.13.0`). OpenRouter는 `typesafe/jev-1.13`, `typesafe/jev-1.14`, `~typesafe/jev-latest`를 지원합니다.
 
-Images join `state` without replacing it: an object root keeps its fields and gains them under a collision-safe `__omp_judgment_images` key (with a numeric suffix if the key is taken), an array root gains them at the end, and a string root becomes `[original, ...images]`. Direct TypeSafe requests add each image as a referenced `assets` entry and put its reference in `state`, setting `TypeSafe-Danger-Zone-Images: true` only when images are attached; caller-supplied assets (auth gateway) must each be referenced in `state`, `instructions`, or `criteria`, and each split request carries only the assets it references. OpenRouter encodes each image as an `image_url` data URL part and uses neither the TypeSafe header nor a top-level `images` field.
+이미지는 `state`를 대체하지 않고 추가됩니다. 루트가 객체이면 기존 필드를 유지하고 충돌 방지 키 `__omp_judgment_images` 아래에 추가합니다(이미 사용 중이면 숫자 접미사 사용). 배열이면 끝에 추가하고 문자열이면 `[original, ...images]`가 됩니다. 직접 TypeSafe 요청은 각 이미지를 참조된 `assets` 항목으로 추가하고 그 참조를 `state`에 넣으며, 이미지를 첨부할 때만 `TypeSafe-Danger-Zone-Images: true`를 설정합니다. 호출자가 제공한 자산(인증 게이트웨이)은 각각 `state`, `instructions`, `criteria`에서 참조되어야 하며 분할 요청에는 자신이 참조하는 자산만 담습니다. OpenRouter는 이미지를 `image_url` 데이터 URL 부분으로 인코딩하며 TypeSafe 헤더나 최상위 `images` 필드를 사용하지 않습니다.
 
-Text-only requests retain their original request shape and bytes. Image support is limited to the listed TypeSafe Jev and OpenRouter Jev models; it does not imply support for other System One-compatible servers or OpenRouter Decisions models.
+텍스트 전용 요청은 원래 요청 구조와 바이트를 유지합니다. 이미지 지원은 나열한 TypeSafe Jev 및 OpenRouter Jev 모델로 한정되며, 다른 System One 호환 서버나 OpenRouter Decisions 모델의 지원을 의미하지 않습니다.
 
-Both paths accept PNG and JPEG of 280–1568 pixels per side and 78,400–2,458,624 pixels in total, and reject anything else rather than resizing it. The judge chain therefore fits every image into a native judge's bounds before sending: an image already inside them keeps its original bytes; any other is scaled down past a maximum, or up toward a minimum as far as the maximums allow, without distortion, then padded with its top-left pixel when an extreme aspect ratio still leaves a side short (a 401×41 toolbar crop becomes 1568×160 centered on 1568×280), and re-encoded as PNG, or JPEG when the PNG exceeds the byte cap. TypeSafe Jev has no image-detail equivalent, so `ImageContent.detail` is ignored on direct TypeSafe requests.
+두 경로 모두 각 변 280–1568픽셀, 총 78,400–2,458,624픽셀의 PNG와 JPEG를 허용하며, 그 밖의 입력은 크기를 조절하지 않고 거부합니다. 따라서 판단 체인은 전송 전에 모든 이미지를 기본 판단 모델의 범위에 맞춥니다. 이미 범위 안이면 원래 바이트를 유지합니다. 그렇지 않으면 왜곡 없이 최댓값 이하로 줄이거나 최댓값이 허용하는 한 최솟값에 가깝게 키웁니다. 극단적인 종횡비로 한 변이 여전히 짧으면 왼쪽 위 픽셀로 여백을 채웁니다(401×41 도구 모음 자르기는 1568×280 가운데 배치된 1568×160이 됨). PNG로 다시 인코딩하며 PNG가 바이트 상한을 넘으면 JPEG를 사용합니다. TypeSafe Jev에는 이미지 세부 수준이 없으므로 직접 TypeSafe 요청에서 `ImageContent.detail`을 무시합니다.
 
-[Box questions](https://docs.typesafe.ai/primitives/box) (`{ type: "box", instructions, image }`) need Jev 1.14 and go only to TypeSafe and OpenRouter Decisions judges; the chain skips every other candidate for a request that has one, with no prompted or session-model fallback. `image` indexes the request's `images` and never reaches the wire, so `instructions` must still name the image to search among several. Jev answers with edges as fractions of the image it was sent; when fitting padded that image, the chain maps the edges back onto the image you passed and clamps any edge that lands in the padding.
+[박스 질문](https://docs.typesafe.ai/primitives/box)(`{ type: "box", instructions, image }`)은 Jev 1.14가 필요하며 TypeSafe와 OpenRouter Decisions 판단 모델로만 전달됩니다. 이런 질문이 있는 요청은 그 밖의 모든 후보를 건너뛰고 프롬프트 또는 세션 모델 폴백도 사용하지 않습니다. `image`는 요청의 `images` 인덱스이며 전송되지 않으므로, 여러 이미지 중 검색할 이미지는 `instructions`에서도 지정해야 합니다. Jev는 받은 이미지에 대한 비율로 경계 좌표를 반환합니다. 이미지 맞춤 과정에서 여백을 추가했다면 체인은 좌표를 원래 입력 이미지로 역변환하고 여백 안의 좌표를 경계로 제한합니다.
 
-See TypeSafe's [image documentation](https://docs.typesafe.ai/images) and OpenRouter's [multimodal Decisions guide](https://openrouter.ai/docs/guides/community/multimodal-decisions) for their image constraints.
+이미지 제약은 TypeSafe의 [이미지 문서](https://docs.typesafe.ai/images)와 OpenRouter의 [멀티모달 Decisions 가이드](https://openrouter.ai/docs/guides/community/multimodal-decisions)를 참조하세요.
 
-OpenRouter's guide lists a 256 px minimum side, but a [report of a live Jev 1.14 request](https://github.com/can1357/oh-my-pi/pull/15887#issuecomment-6218295982) says a 270×300 PNG received HTTP 400; the 280 px minimum side is intentional and remains in effect.
+OpenRouter 가이드는 최소 변 길이를 256px로 설명하지만 [실제 Jev 1.14 요청 보고](https://github.com/can1357/oh-my-pi/pull/15887#issuecomment-6218295982)에서 270×300 PNG가 HTTP 400을 받았으므로, 의도적으로 최소 280px 제한을 유지합니다.
 
-For example, configure TypeSafe Jev as the judge and attach an image in JavaScript or Python:
+예를 들어 TypeSafe Jev를 판단 모델로 구성하고 JavaScript 또는 Python에서 이미지를 첨부할 수 있습니다.
 
 ```yaml
 modelRoles:
@@ -188,7 +193,7 @@ await judge(state, question, { images: ["./chart.png"] });
 await judge(state, question, images=["./chart.png"])
 ```
 
-A model or `modelOverrides` entry may also use a runner API, which serves one model `kind`; `RUNNER_API_KINDS` in `packages/catalog/src/types.ts` lists them (for example `openai-images` serves `image`, `openai-embeddings` serves `embedding`, `openai-speech` serves `tts`). `web-search` is built in and cannot be named here, so neither can `kind: search`. `kind` defaults to the api's kind (`chat` for chat transports), and an explicit `kind` must be one its api serves. Chat transports serve `chat` and `tiny` (small models for the `tiny`, `memory`, and `judge` roles); those that `generate_image` runs (`openai-responses`, `openai-codex-responses`, `google-generative-ai`, `google-gemini-cli`) also serve `image`: on `openai-responses`, the image is generated through the Responses `image_generation` tool, carried by a GPT-5+ chat model on the same provider, instead of `/images/generations`. This moves discovered gateway models to the image role:
+모델 또는 `modelOverrides` 항목은 하나의 모델 `kind`를 제공하는 실행기 API도 사용할 수 있습니다. 목록은 `packages/catalog/src/types.ts`의 `RUNNER_API_KINDS`에 있습니다(예: `openai-images`는 `image`, `openai-embeddings`는 `embedding`, `openai-speech`는 `tts` 제공). 내장 `web-search`는 여기에 지정할 수 없으므로 `kind: search`도 불가능합니다. `kind` 기본값은 API 종류(채팅 전송은 `chat`)이며 명시적 `kind`는 해당 API가 제공하는 종류여야 합니다. 채팅 전송은 `chat`과 `tiny`(`tiny`, `memory`, `judge` 역할용 소형 모델)를 제공합니다. `generate_image`가 실행하는 전송(`openai-responses`, `openai-codex-responses`, `google-generative-ai`, `google-gemini-cli`)은 `image`도 제공합니다. `openai-responses`에서는 `/images/generations` 대신 같은 제공자의 GPT-5+ 채팅 모델이 Responses의 `image_generation` 도구로 이미지를 생성합니다. 다음 구성은 탐색한 게이트웨이 모델을 이미지 역할로 옮깁니다.
 
 ```yaml
 providers:
@@ -203,33 +208,37 @@ providers:
         kind: image # stays on openai-responses, generated via the hosted image tool
 ```
 
-A configured `kind`, explicit or implied by a runner API, outranks the bundled catalog's classification of the same id and survives `modelOverrides` and refreshes.
+명시적이거나 실행기 API에서 유도된 구성 `kind`는 같은 ID의 번들 카탈로그 분류보다 우선하며 `modelOverrides`와 갱신 후에도 유지됩니다.
 
-Loading models.yml checks a `modelOverrides` `kind` only against an api the file names: the override's own `api`, or that of a `models` entry with the same id. A built-in or discovered model gets its api later, so its override `kind` is checked against that api when the override applies; a kind the api does not serve is ignored and logged. An `api` override without `kind` takes a runner API's kind, keeps a kind the new api still serves, and otherwise makes the model `chat`. A `models` entry that redefines a built-in id on a different api follows the same rule, so redefining an image row on `openai-completions` makes it `chat`.
+models.yml 로드 시 `modelOverrides`의 `kind`는 파일에서 지정한 API(재정의 자체 `api` 또는 같은 ID의 `models` 항목 API)에 대해서만 검증합니다. 내장/탐색 모델은 API를 나중에 받으므로 재정의를 적용할 때 검증합니다. API가 제공하지 않는 종류는 무시하고 기록합니다. `kind` 없는 `api` 재정의는 실행기 API의 종류를 사용하거나, 새 API도 지원하는 기존 종류를 유지하며, 그렇지 않으면 `chat`으로 만듭니다. 다른 API로 내장 ID를 재정의하는 `models` 항목도 같은 규칙을 따르므로 이미지 항목을 `openai-completions`로 재정의하면 `chat`이 됩니다.
 
-### Allowed auth/discovery values
+<a id="allowed-authdiscovery-values"></a>
+### 허용되는 인증/탐색 값
 
-- `auth`: `apiKey` (default), `none`, or `oauth`. `none` and `oauth` waive the custom-provider `apiKey` requirement, but `oauth` does not create credentials or register a login flow. It forces OAuth-style request shaping; a usable credential must come from stored auth, environment, or a configured key. Custom `anthropic-messages` models also use OAuth-style shaping when `auth` is omitted; set `auth: apiKey` for plain API-key shaping.
-- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, `litellm`, or `apple-foundation-models`. Apple's transport is registered implicitly on supported Macs; `apple-foundation-models` is not an allowed `api` value in this YAML schema.
-- `discovery.injectV1`: optional boolean, default `true`, for `openai-models-list`. Set `false` to fetch the model list from `{baseUrl}/models` without injecting `/v1` — for gateways that root their OpenAI-compatible surface at a versioned path (e.g. `https://api.opper.ai/v3/compat`) where the forced `/v1/models` returns a different, smaller model list. Query strings in `baseUrl` are ignored, matching the default mode.
-- `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
-- `imageInputDecoder`: `stb` only. Set this on a custom model or `modelOverrides` entry when the serving backend uses an STB-compatible image decoder that cannot accept WebP; OMP converts attached and historical WebP images before provider dispatch.
-- `imageCountBudget`: positive integer. Set this on a custom model or `modelOverrides` entry to state how many images one request to its host may carry. It replaces the catalog budget, which is 5 for a provider no catalog rule names. A gateway in front of a vendor with a higher limit needs it: once a session holds more images than the budget, OMP drops the oldest ones, which changes the cached prompt prefix.
-- `tokenizer`: opt into a specific embedded local tokenizer when a proxy's model id is ambiguous or noncanonical. Allowed values: `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, `glm5`, and `o200k` (OpenAI GPT-5 and later). Omit it to use catalog identity policy; unknown models retain the fast local estimate.
+- `auth`: `apiKey`(기본값), `none`, `oauth`. `none`과 `oauth`는 사용자 지정 제공자의 `apiKey` 필수 조건을 없애지만, `oauth`가 자격 증명을 생성하거나 로그인 흐름을 등록하지는 않습니다. OAuth 스타일 요청을 강제하며, 사용 가능한 자격 증명은 저장된 인증, 환경, 구성 키에서 와야 합니다. 사용자 지정 `anthropic-messages` 모델은 `auth` 생략 시에도 OAuth 스타일 요청을 사용합니다. 일반 API 키 요청에는 `auth: apiKey`를 설정하세요.
+- `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, `litellm`, `apple-foundation-models`. Apple 전송은 지원 Mac에서 암시적으로 등록되며 이 YAML 스키마의 `api` 값에는 `apple-foundation-models`를 사용할 수 없습니다.
+- `discovery.injectV1`: `openai-models-list`의 선택적 불리언이며 기본값은 `true`입니다. 버전 경로(예: `https://api.opper.ai/v3/compat`)를 OpenAI 호환 루트로 쓰는 게이트웨이에서 강제 `/v1/models`가 다른 작은 목록을 반환한다면, `false`로 설정해 `/v1` 삽입 없이 `{baseUrl}/models`를 조회하세요. 기본 모드와 마찬가지로 `baseUrl` 쿼리 문자열은 무시합니다.
+- `transport`: `pi-native`만 허용합니다. 설정하면 제공자의 모든 모델이 `POST /v1/pi/stream`으로 `omp auth-gateway` 호환 `baseUrl`에 전송됩니다. `apiKey`는 게이트웨이 bearer입니다.
+- `imageInputDecoder`: `stb`만 허용합니다. 백엔드가 WebP를 받지 못하는 STB 호환 이미지 디코더를 사용하면 사용자 지정 모델 또는 `modelOverrides`에 설정하세요. OMP가 제공자 전송 전에 첨부 및 대화 이력의 WebP 이미지를 변환합니다.
+- `imageCountBudget`: 양의 정수입니다. 호스트 요청 하나에 실을 수 있는 이미지 수를 사용자 지정 모델 또는 `modelOverrides`에 지정합니다. 카탈로그 예산을 대체하며, 카탈로그 규칙에 없는 제공자의 기본 예산은 5입니다. 더 높은 제한의 공급사 앞에 있는 게이트웨이에 필요합니다. 세션 이미지가 예산을 넘으면 OMP가 가장 오래된 것부터 버려 캐시된 프롬프트 접두사가 바뀝니다.
+- `tokenizer`: 프록시 모델 ID가 모호하거나 비정규 형식이면 특정 내장 로컬 토크나이저를 선택합니다. 허용 값은 `claude-v3`, `claude-v47`, `claude-v5`, `claude-v5-sonnet`, `qwen3`, `deepseek-v3`, `kimi-k2`, `glm5`, `o200k`(OpenAI GPT-5 이상)입니다. 생략하면 카탈로그 식별 정책을 사용하고 알 수 없는 모델에는 빠른 로컬 추정이 유지됩니다.
 
-## Validation rules (current)
+<a id="validation-rules-current"></a>
+## 검증 규칙(현재)
 
-### Full custom provider (`models` is non-empty)
+<a id="full-custom-provider-models-is-non-empty"></a>
+### 완전한 사용자 지정 제공자(`models`가 비어 있지 않음)
 
-Required:
+필수 항목:
 
 - `baseUrl`
-- `apiKey` unless `auth: none` or `auth: oauth`
-- `api` at provider level or each model
+- `auth: none` 또는 `auth: oauth`가 아니면 `apiKey`
+- 제공자 수준 또는 각 모델의 `api`
 
-### Override-only provider (`models` missing or empty)
+<a id="override-only-provider-models-missing-or-empty"></a>
+### 재정의 전용 제공자(`models`가 없거나 비어 있음)
 
-Must define at least one of:
+다음 중 하나 이상을 정의해야 합니다.
 
 - `baseUrl`
 - `apiKey`
@@ -239,51 +248,55 @@ Must define at least one of:
 - `disableStrictTools: true`
 - `guardrailIdentifier`
 - `requestMetadata`
-- non-empty `modelOverrides`
+- 비어 있지 않은 `modelOverrides`
 - `discovery`
 - `remoteCompaction`
 
-### Discovery
+<a id="discovery"></a>
+### 탐색
 
-- `discovery.timeoutMs` overrides that provider's runtime HTTP probe timeout in milliseconds. It must be a positive finite number.
-- Without an override, Ollama and llama.cpp loopback probes use short endpoint-specific budgets (150–250 ms); remote/LAN probes use 10 s. Generic model-list and proxy probes default to 10 s.
-- `discovery` requires provider-level `api`, except `discovery.type: proxy` (per-model wire auto-detected).
+- `discovery.timeoutMs`는 해당 제공자의 런타임 HTTP 확인 제한 시간을 밀리초로 재정의합니다. 양의 유한수여야 합니다.
+- 재정의가 없으면 Ollama와 llama.cpp 루프백 확인은 짧은 엔드포인트별 예산(150–250ms)을, 원격/LAN 확인은 10초를 사용합니다. 일반 모델 목록 및 프록시 확인의 기본값은 10초입니다.
+- `discovery`에는 제공자 수준 `api`가 필요하지만 `discovery.type: proxy`는 예외입니다(모델별 전송 자동 감지).
 
-### Remote compaction
+<a id="remote-compaction"></a>
+### 원격 압축
 
-`remoteCompaction` is independently sufficient for an override-only provider.
-It supports `enabled`, `api`, `endpoint`, `model`, `v2StreamingEnabled`,
-`v2Endpoint`, and `streamingEndpoint`.
+`remoteCompaction`만으로도 재정의 전용 제공자의 조건을 충족합니다.
+지원 키는 `enabled`, `api`, `endpoint`, `model`, `v2StreamingEnabled`,
+`v2Endpoint`, `streamingEndpoint`입니다.
 
-`openai-responses` models on Amazon Bedrock's OpenAI routes (`/openai/…` on
-`bedrock-runtime.<region>.amazonaws.com` or `bedrock-mantle.<region>.api.aws`,
-Mantle's `/v1` base, the runtime FIPS host, and PrivateLink hosts of both endpoints)
-use native OpenAI compaction without an opt-in, for any provider id. Set
-`enabled: false` to turn it off, or `v2StreamingEnabled: false` to keep only
-the V1 `/responses/compact` request. See [compaction](./compaction.md).
+Amazon Bedrock OpenAI 경로(`bedrock-runtime.<region>.amazonaws.com` 또는
+`bedrock-mantle.<region>.api.aws`의 `/openai/…`, Mantle `/v1` 루트, runtime FIPS 호스트,
+두 엔드포인트의 PrivateLink 호스트)의 `openai-responses` 모델은 제공자 ID와 관계없이 별도 활성화 없이
+기본 OpenAI 압축을 사용합니다. `enabled: false`로 끄거나 `v2StreamingEnabled: false`로
+V1 `/responses/compact` 요청만 유지하세요. [압축](./compaction.md)을 참조하세요.
 
-Bedrock Converse Claude models compact natively through a Bedrock Runtime side request on AWS endpoints;
-a custom non-AWS `baseUrl` needs `remoteCompaction.enabled: true`, and `enabled: false` opts out. See
-[compaction](./compaction.md#summary-generation). The separate Anthropic Messages `/anthropic` route has
-its own [setup](./models.md#claude-on-bedrocks-anthropic-messages-api-anthropic).
+Bedrock Converse Claude 모델은 AWS 엔드포인트의 Bedrock Runtime 보조 요청으로 기본 압축을 수행합니다.
+AWS가 아닌 사용자 지정 `baseUrl`에는 `remoteCompaction.enabled: true`가 필요하며 `enabled: false`로
+끕니다. [압축](./compaction.md#summary-generation)을 참조하세요. 별도 Anthropic Messages
+`/anthropic` 경로에는 자체 [설정](./models.md#claude-on-bedrocks-anthropic-messages-api-anthropic)이 있습니다.
 
-### Model value checks
+<a id="model-value-checks"></a>
+### 모델 값 검증
 
-- `id` is required and non-empty; optional `name`, model `baseUrl`, `contextPromotionTarget`, and `compactionModel` must also be non-empty
-- custom `models` entries require positive `contextWindow` and `maxTokens` when provided; the current auxiliary positivity check does not cover `modelOverrides`
-- on both custom models and overrides, `maxContextWindow` must be a positive safe integer no smaller than `contextWindow` when both are set
+- `id`는 필수이며 비어 있으면 안 됩니다. 선택적 `name`, 모델 `baseUrl`, `contextPromotionTarget`, `compactionModel`도 비어 있으면 안 됩니다.
+- 사용자 지정 `models` 항목의 `contextWindow`와 `maxTokens`를 지정하면 양수여야 합니다. 현재 보조 양수 검증은 `modelOverrides`를 포함하지 않습니다.
+- 사용자 지정 모델과 재정의 모두 `maxContextWindow`는 양의 안전한 정수여야 하며, 두 값이 모두 있으면 `contextWindow` 이상이어야 합니다.
 
-### Unknown compatibility keys
+<a id="unknown-compatibility-keys"></a>
+### 알 수 없는 호환성 키
 
-Unknown keys in provider, model, and `modelOverrides` `compat` blocks produce non-fatal warnings: a notification at interactive startup, and a stderr line in print and RPC modes and when listing models (including JSON output; stdout is unchanged). Each warning names the config file and the dotted key path; model array entries use zero-based indices, as schema errors do. The configuration still loads and unknown keys are preserved for forward compatibility. A registry reports each unknown key path only once, even after forced refreshes or re-reading an unchanged file.
+제공자, 모델, `modelOverrides`의 `compat` 블록에 알 수 없는 키가 있으면 치명적이지 않은 경고가 발생합니다. 대화형 시작에는 알림을, 출력 및 RPC 모드와 모델 목록에는 stderr 행을 표시합니다(JSON 출력 포함, stdout은 그대로 유지). 각 경고는 구성 파일과 점으로 구분된 키 경로를 표시하며, 모델 배열 항목은 스키마 오류처럼 0부터 시작하는 인덱스를 사용합니다. 구성은 계속 로드되고 알 수 없는 키는 향후 호환성을 위해 보존됩니다. 강제 갱신이나 변경 없는 파일 재읽기 후에도 레지스트리는 각 알 수 없는 키 경로를 한 번만 보고합니다.
 
-Known record-level keys, at the top level of `compat` and inside its `whenThinking` override, come from both the models.yml compatibility schemas and the runtime compatibility vocabulary (wire axes). The schemas validate only a curated subset, so a runtime-recognized key such as `streamFirstEventTimeoutMs` does not warn merely because the file schema omits it. A nested `whenThinking.whenThinking` still warns: a thinking override cannot contain another thinking override. Thinking and catalog axes belong outside `compat` and are not included. Other nested checking follows only schema-declared fixed-field objects, including routing blocks and `reasoningEffortMap`; open maps such as `extraBody` accept arbitrary keys and nested payloads. Runtime extension provider registrations are not checked against the file schema: they can register custom APIs with their own compatibility fields.
+`compat` 최상위 및 `whenThinking` 재정의 내부의 알려진 레코드 키는 models.yml 호환성 스키마와 런타임 호환성 어휘(전송 축) 양쪽에서 가져옵니다. 스키마는 선별된 일부만 검증하므로 `streamFirstEventTimeoutMs`처럼 런타임이 아는 키는 파일 스키마에 없다는 이유만으로 경고하지 않습니다. 사고 재정의 안에 다른 사고 재정의를 넣을 수 없으므로 중첩 `whenThinking.whenThinking`은 여전히 경고합니다. 사고 및 카탈로그 축은 `compat` 밖에 속하며 포함하지 않습니다. 그 밖의 중첩 검증은 라우팅 블록과 `reasoningEffortMap` 등 스키마가 선언한 고정 필드 객체만 따릅니다. `extraBody` 같은 개방형 맵은 임의 키와 중첩 페이로드를 허용합니다. 런타임 확장 제공자 등록은 파일 스키마로 검증하지 않으며 자체 호환성 필드가 있는 사용자 지정 API를 등록할 수 있습니다.
 
-The runtime vocabulary is not filtered by the provider's `api`: a wire key that only another API family reads (for example an Anthropic-only key in an `openai-completions` provider) does not warn, even though it has no effect there.
+런타임 어휘는 제공자의 `api`로 필터링하지 않습니다. 다른 API 계열만 읽는 전송 키(예: `openai-completions` 제공자의 Anthropic 전용 키)는 효과가 없어도 경고하지 않습니다.
 
-### Command-resolved secrets
+<a id="command-resolved-secrets"></a>
+### 명령으로 확인하는 비밀 정보
 
-Provider `apiKey` values and provider/model `headers` values may start with `!` to read a secret from command stdout. Commands run asynchronously with a 10 s timeout; stdout is trimmed, and empty/failing commands are omitted. Loading or inspecting the catalog does not execute them: credentials resolve when a request or online credential probe needs them.
+제공자 `apiKey` 값과 제공자/모델 `headers` 값 앞에 `!`를 붙이면 명령 stdout에서 비밀 정보를 읽습니다. 명령은 10초 제한으로 비동기 실행되며 stdout의 앞뒤 공백을 제거하고, 비어 있거나 실패한 명령은 생략합니다. 카탈로그를 로드하거나 살펴볼 때는 실행하지 않습니다. 요청 또는 온라인 자격 증명 확인에 필요할 때 확인합니다.
 
 ```yaml
 providers:
@@ -293,69 +306,70 @@ providers:
       X-Team-Key: "!bw get password omp-team-key"
 ```
 
-Successful command outputs are cached for the process lifetime, and concurrent requests share an in-flight execution. Failures back off for 30 seconds. Refresh callers that request `refreshCommandCredentials` (including the model hub's explicit refresh) and 401 credential recovery invalidate the relevant cached API keys and headers; an ordinary catalog refresh does not. Runtime API-key overrides, including `--api-key`, take precedence over configured credentials.
+성공한 명령 출력은 프로세스 수명 동안 캐시되며 동시 요청은 진행 중인 실행을 공유합니다. 실패 시 30초간 대기합니다. `refreshCommandCredentials`를 요청하는 갱신 호출자(모델 허브의 명시적 갱신 포함)와 401 자격 증명 복구는 관련 캐시 API 키와 헤더를 무효화하지만 일반 카탈로그 갱신은 그렇지 않습니다. `--api-key`를 포함한 런타임 API 키 재정의는 구성된 자격 증명보다 우선합니다.
 
-## Merge and override order
+<a id="merge-and-override-order"></a>
+## 병합 및 재정의 순서
 
-ModelRegistry composition order:
+ModelRegistry 조합 순서:
 
-1. Load `models.yml` / `models.yaml` to establish provider overrides, custom models, model overrides, and discovery configuration.
-2. Load built-in models from `@oh-my-pi/pi-catalog` (`getBundledProviders` / `getBundledModels`), applying provider overrides and context policies.
-3. Merge cached and runtime-discovered rows. Authoritative provider catalogs can replace their bundled chat roster.
-4. Merge configured custom `models`, then extension-registered models:
-   - a matching `provider + id` replaces transport metadata and patches defined model fields
-   - otherwise append a model, filling omitted metadata from a bundled reference or local defaults
-5. Collapse effort-tier variants, apply `modelOverrides`, and select configured extended windows.
-6. Apply provider Bedrock fields, runtime provider overrides, discovery wire policies, and extension OAuth catalog projections.
+1. `models.yml` / `models.yaml`을 로드해 제공자 재정의, 사용자 지정 모델, 모델 재정의, 탐색 구성을 설정합니다.
+2. `@oh-my-pi/pi-catalog`에서 내장 모델(`getBundledProviders` / `getBundledModels`)을 로드하고 제공자 재정의와 컨텍스트 정책을 적용합니다.
+3. 캐시 및 런타임 탐색 항목을 병합합니다. 권위 있는 제공자 카탈로그는 번들 채팅 목록을 대체할 수 있습니다.
+4. 구성한 사용자 지정 `models`, 이어서 확장 등록 모델을 병합합니다.
+   - `provider + id`가 일치하면 전송 메타데이터를 대체하고 정의된 모델 필드를 패치합니다.
+   - 아니면 모델을 추가하며 누락 메타데이터는 번들 참조 또는 로컬 기본값으로 채웁니다.
+5. 노력 단계 변형을 통합하고 `modelOverrides`를 적용한 뒤 구성된 확장 창을 선택합니다.
+6. 제공자 Bedrock 필드, 런타임 제공자 재정의, 탐색 전송 정책, 확장 OAuth 카탈로그 투영을 적용합니다.
 
-Background discovery repeats the merge with custom definitions and model overrides applied after
-the discovered rows, so explicit user configuration remains effective.
+백그라운드 탐색도 탐색 항목 뒤에 사용자 정의와 모델 재정의를 적용해 병합을 반복하므로
+명시적 사용자 구성이 계속 유효합니다.
 
-### Provider-model cache and static fingerprint
+<a id="provider-model-cache-and-static-fingerprint"></a>
+### 제공자 모델 캐시와 정적 지문
 
-Cached per-provider model lists are persisted in `models.db` (schema version 13) as materialized
-models. A materialization-policy stamp includes the application version, builder version, and
-compiled-rule hash; incompatible rows are invalidated. Request-header values are never persisted
-and must be restored from trusted local metadata or configuration.
+제공자별 캐시 모델 목록은 구체화된 모델로 `models.db`(스키마 버전 13)에 저장됩니다.
+구체화 정책 스탬프에는 애플리케이션 버전, 빌더 버전, 컴파일된 규칙 해시가 포함되며 호환되지 않는 항목은
+무효화됩니다. 요청 헤더 값은 저장하지 않으며 신뢰할 수 있는 로컬 메타데이터나 구성에서 복원해야 합니다.
 
-`static_fingerprint` hashes the current static slice and merge policy. It is recomputed from the
-array's current contents, not stored on the array. When a fresh authoritative cache matches and no
-headers remain unresolved, `resolveProviderModels` can skip the full merge. Additive shared-catalog
-caches still reapply static rows, and returned models pass through variant collapsing.
-The model-manager default cache TTL is two hours (individual providers can override it);
-non-authoritative snapshots use a five-minute retry interval.
+`static_fingerprint`는 현재 정적 슬라이스와 병합 정책을 해시합니다. 배열에 저장하지 않고 배열의
+현재 내용으로 다시 계산합니다. 최신의 권위 있는 캐시가 일치하고 미확인 헤더가 없으면
+`resolveProviderModels`는 전체 병합을 건너뛸 수 있습니다. 추가형 공유 카탈로그 캐시는 정적 항목을
+다시 적용하며 반환 모델은 변형 통합을 거칩니다. 모델 관리자의 기본 캐시 TTL은 2시간입니다
+(개별 제공자가 재정의 가능). 권위 없는 스냅샷은 5분 재시도 간격을 사용합니다.
 
-### Shared catalog refresh
+<a id="shared-catalog-refresh"></a>
+### 공유 카탈로그 갱신
 
-The bundled catalog remains the startup and offline baseline. Startup loads configuration and cached rows, materializing provider slices lazily; a local-only credential-scoped hydration pass precedes selector validation. Background refresh fetches the shared models.dev catalog through `https://catalog.stencil.so/models.json.zstd` for supported providers. New model IDs are merged additively into each provider's bundled slice, normalized through that provider's catalog descriptor, and persisted in the model-cache database. This allows newly published models to appear without waiting for a new OMP binary.
+번들 카탈로그는 시작 및 오프라인 기준으로 유지됩니다. 시작 시 구성과 캐시 항목을 로드하고 제공자 슬라이스를 지연 구체화합니다. 선택기 검증 전에는 로컬 전용 자격 증명 범위의 데이터 보충 단계를 수행합니다. 백그라운드 갱신은 지원 제공자에 대해 `https://catalog.stencil.so/models.json.zstd`에서 공유 models.dev 카탈로그를 가져옵니다. 새 모델 ID는 각 제공자의 번들 슬라이스에 추가 병합하고 제공자 카탈로그 설명자로 정규화한 뒤 모델 캐시 데이터베이스에 저장합니다. 덕분에 새 OMP 바이너리 없이도 새 모델이 나타날 수 있습니다.
 
-Remote rows can supply current limits, pricing, modalities, and capability flags for newly added IDs, but they cannot introduce code, arbitrary headers, or an unregistered provider. Providers whose descriptors declare endpoint discovery authoritative use that result for their available chat roster. The shared catalog is not authoritative: it does not remove bundled models when a remote row disappears.
+원격 항목은 새 ID의 최신 제한, 가격, 모달리티, 기능 플래그를 제공할 수 있지만 코드, 임의 헤더, 미등록 제공자를 도입할 수는 없습니다. 설명자에서 엔드포인트 탐색을 권위 있는 소스로 선언한 제공자는 그 결과를 사용 가능 채팅 목록에 사용합니다. 공유 카탈로그는 권위 있는 소스가 아니므로 원격 항목이 사라져도 번들 모델을 제거하지 않습니다.
 
-Fresh cached snapshots avoid a network request. If refresh fails, OMP keeps the last usable cached snapshot and marks it stale; without a cache, it falls back to the bundled catalog. Provider discovery state records `source` (`bundled`, `models.dev`, `provider`, or `cache`) and `fetchedAt` so callers can distinguish current remote data from an offline fallback.
+최신 캐시 스냅샷이 있으면 네트워크 요청을 피합니다. 갱신 실패 시 OMP는 마지막 사용 가능 캐시 스냅샷을 유지하고 오래된 상태로 표시하며, 캐시가 없으면 번들 카탈로그로 돌아갑니다. 제공자 탐색 상태에는 `source`(`bundled`, `models.dev`, `provider`, `cache`)와 `fetchedAt`을 기록하여 호출자가 최신 원격 데이터와 오프라인 폴백을 구분할 수 있습니다.
 
-## Provider and model identity
+<a id="provider-and-model-identity"></a>
+## 제공자 및 모델 식별
 
-The registry retains concrete `provider` + `id` identities. Use an exact
-`provider/modelId` selector when the same model id exists under multiple providers. Session state
-and transcripts record the concrete provider/model that executed the turn.
+레지스트리는 구체적인 `provider` + `id` 식별을 유지합니다. 같은 모델 ID가 여러 제공자에 있으면 정확한
+`provider/modelId` 선택기를 사용하세요. 세션 상태와 기록에는 해당 턴을 실행한 구체적 제공자/모델을 저장합니다.
 
-Provider defaults vs per-model overrides:
+제공자 기본값과 모델별 재정의:
 
-- Provider `headers`, `compat`, and `remoteCompaction` are baselines.
-- Model `headers` override provider header keys.
-- `modelOverrides` can override model metadata (`name`, `api`, `kind`, `reasoning`, `thinking`, `input`,
+- 제공자의 `headers`, `compat`, `remoteCompaction`이 기준입니다.
+- 모델 `headers`는 제공자 헤더 키를 재정의합니다.
+- `modelOverrides`는 모델 메타데이터(`name`, `api`, `kind`, `reasoning`, `thinking`, `input`,
   `imageInputDecoder`, `imageCountBudget`, `tokenizer`, `supportsTools`, `cost`, `promptCache`, `premiumMultiplier`, `contextWindow`,
   `maxContextWindow`, `maxTokens`, `omitMaxOutputTokens`, `preferWebsockets`, `headers`, `compat`,
-  `contextPromotionTarget`, `compactionModel`, and `remoteCompaction`).
-- `compat` is deep-merged for nested routing blocks (`openRouterRouting`, `vercelGatewayRouting`,
-  `extraBody`, and `whenThinking`).
+  `contextPromotionTarget`, `compactionModel`, `remoteCompaction`)를 재정의할 수 있습니다.
+- `compat`는 중첩 라우팅 블록(`openRouterRouting`, `vercelGatewayRouting`, `extraBody`, `whenThinking`)을 깊게 병합합니다.
 
-## Prompt cache lifetimes
+<a id="prompt-cache-lifetimes"></a>
+## 프롬프트 캐시 수명
 
-`promptCache` states how long the provider keeps a prompt cache entry alive for each retention tier
-OMP can request (`short` is normally the default; Anthropic OAuth subscriber requests default to
-`long` where supported, unless an explicit retention setting or `PI_CACHE_RETENTION` overrides it). Values are seconds and are
-estimates: providers publish ranges, so pick the conservative end.
+`promptCache`는 OMP가 요청할 수 있는 보존 단계별 제공자의 프롬프트 캐시 항목 유지 시간을 지정합니다
+(일반 기본값은 `short`. Anthropic OAuth 구독자 요청은 지원되는 경우 `long`이 기본값이며,
+명시적 보존 설정 또는 `PI_CACHE_RETENTION`이 우선합니다). 단위는 초이며 추정치입니다.
+제공자는 범위를 공개하므로 보수적인 끝값을 선택하세요.
 
 ```yaml
 providers:
@@ -365,154 +379,150 @@ providers:
         promptCache: { short: 300, long: 3600 }
 ```
 
-An explicit `promptCache` replaces the model's catalog lifetimes rather than
-merging with them: `promptCache: {}` disables warming for that model, and a
-`short`-only value does not inherit a catalog `long` lifetime. For a matching
-model, `modelOverrides.promptCache` has highest priority. A runtime-registered
-model definition replaces the matching YAML `models` definition for lifetime
-selection, even when the runtime `promptCache` is omitted: the actual effective
-model's catalog defaults apply instead of the YAML lifetime. Without a runtime
-replacement, the matching YAML lifetime applies, or catalog defaults if absent.
+명시적 `promptCache`는 카탈로그 수명과 병합하지 않고 대체합니다. `promptCache: {}`는 해당 모델의
+사전 예열을 끄며, `short`만 있으면 카탈로그의 `long` 수명을 상속하지 않습니다. 일치 모델에서는
+`modelOverrides.promptCache`가 최우선입니다. 런타임 등록 모델 정의는 수명 선택 시 일치 YAML
+`models` 정의를 대체하며 런타임 `promptCache`를 생략해도 마찬가지입니다. YAML 수명 대신 실제 유효 모델의
+카탈로그 기본값이 적용됩니다. 런타임 대체가 없으면 일치 YAML 수명을, 그것도 없으면 카탈로그 기본값을 사용합니다.
 
-The ordinary `bun run gen:models` command recomputes bundled prompt-cache
-lifetimes from current catalog policy; there is no separate cache-regeneration
-command.
+일반 `bun run gen:models` 명령은 현재 카탈로그 정책에서 번들 프롬프트 캐시 수명을 다시 계산합니다.
+별도 캐시 재생성 명령은 없습니다.
 
-Direct Anthropic keeps its existing 5 min / 1 h lifetimes (`short: 300`, `long: 3600`),
-defaulting to 5 min for API keys and 1 h for OAuth subscriber sessions; API keys can
-explicitly select `long`. Factory Droid's Claude models have the same 5 min / 1 h lifetimes and
-default to 5 min; `long` writes 1 h entries on the Anthropic, Vertex, Bedrock and Azure upstreams
-and stays 5 min elsewhere. Claude on native Amazon Bedrock Converse has a 5 min TTL; 1 h is
-available only where both catalog metadata and the request wire support it. Claude on
-Bedrock Runtime or Mantle's Anthropic Messages route has a 5 min lifetime under existing
-request support; an explicit `long` request falls back to `short` when unsupported. Other Amazon Bedrock models,
-including Nova and GPT, are not enabled for warming. A model without a lifetime for the
-retention tier actually used is never warmed; custom models and `modelOverrides` can opt in
-with `promptCache` once the backing cache behavior is known. See `providers.cacheWarming` in
-[Settings](./settings.md).
+직접 Anthropic은 기존 5분/1시간 수명(`short: 300`, `long: 3600`)을 유지합니다. API 키는 기본 5분,
+OAuth 구독 세션은 1시간이며 API 키도 `long`을 명시적으로 선택할 수 있습니다. Factory Droid의 Claude 모델도 5분/1시간 수명을 가지며 기본값은 5분입니다. `long`은 Anthropic, Vertex, Bedrock, Azure 업스트림에서는 1시간 항목을 기록하고 나머지에서는 5분을 유지합니다. 기본 Amazon Bedrock
+Converse의 Claude는 TTL이 5분이며 카탈로그 메타데이터와 요청 전송 모두 지원할 때만 1시간을 사용할 수
+있습니다. Bedrock Runtime 또는 Mantle Anthropic Messages 경로의 Claude는 현재 요청 지원에서 5분 수명을
+사용하며 지원되지 않는 명시적 `long` 요청은 `short`로 돌아갑니다. Nova와 GPT 등 다른 Amazon Bedrock
+모델은 예열하지 않습니다. 실제 사용 보존 단계에 수명이 없는 모델은 예열하지 않습니다. 기반 캐시 동작을
+안다면 사용자 지정 모델과 `modelOverrides`에 `promptCache`로 예열을 활성화할 수 있습니다.
+[설정](./settings.md)의 `providers.cacheWarming`을 참조하세요.
 
-## Usage costs and time-based pricing
+<a id="usage-costs-and-time-based-pricing"></a>
+## 사용 비용과 시간 기반 가격
 
-OMP estimates token costs from the selected provider/model's catalog pricing, preferring server-reported monetary costs when available. Completed messages retain their recorded costs: crossing a pricing boundary, switching models, or reopening a session does not reprice accumulated usage.
+OMP는 선택한 제공자/모델의 카탈로그 가격으로 토큰 비용을 추정하며, 서버가 금액을 보고하면 우선 사용합니다. 완료 메시지는 기록된 비용을 유지합니다. 가격 경계 통과, 모델 전환, 세션 재열기는 누적 사용량을 다시 계산하지 않습니다.
 
-For the first-party `deepseek` provider, the catalog follows [DeepSeek's official pricing](https://api-docs.deepseek.com/quick_start/pricing):
+자체 제공자 `deepseek`의 카탈로그는 [DeepSeek 공식 가격](https://api-docs.deepseek.com/quick_start/pricing)을 따릅니다.
 
-- Peak hours are **Monday–Friday, 01:00–04:00 and 06:00–10:00 UTC** (start inclusive, end exclusive). All other times, including weekends, cost **50% of peak rates**.
-- Flash pricing covers `deepseek-flash` and the retired-but-still-accepted `deepseek-v4-flash` and `deepseek-v4-flash-vision-exp` ids, all billed at the Flash card. Peak rates per million tokens are $0.30 uncached input, $0.006 cached input, and $1.20 output.
-- `deepseek-v4-pro` initially uses peak rates of $1.32 uncached input, $0.044 cached input, and $3.96 output per million tokens. From **2026-09-14 04:00 UTC**, its estimates use the Flash rate card, with the same peak/off-peak schedule.
+- 피크 시간은 **월요일–금요일 01:00–04:00 및 06:00–10:00 UTC**입니다(시작 포함, 끝 제외). 주말을 포함한 나머지 시간은 **피크 요금의 50%**입니다.
+- Flash 가격은 `deepseek-flash`와 폐기되었지만 여전히 허용되는 `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp` ID에 적용되며 모두 Flash 요금표로 청구됩니다. 백만 토큰당 피크 요금은 비캐시 입력 $0.30, 캐시 입력 $0.006, 출력 $1.20입니다.
+- `deepseek-v4-pro`의 초기 백만 토큰당 피크 요금은 비캐시 입력 $1.32, 캐시 입력 $0.044, 출력 $3.96입니다. **2026-09-14 04:00 UTC**부터는 같은 피크/비피크 일정으로 Flash 요금표를 사용해 추정합니다.
 
-Some catalog prices change on a date without a peak/off-peak tariff. Gemini 4 Argon on `google`, `google-vertex`, `google-antigravity`, and `cursor` is estimated at $2 input / $0.10 cached input / $10 output per million tokens through 2026-11-30, and at Google's $4 / $0.20 / $20 list price from **2026-12-01 08:00 UTC** (midnight US Pacific). The request's timestamp picks the price, so a model loaded before the change prices later requests at the new rate without a catalog update, and the model browser and `omp models --json` show the price in force.
+일부 카탈로그 가격은 피크/비피크 요금 없이 특정 날짜에 바뀝니다. `google`, `google-vertex`, `google-antigravity`, `cursor`의 Gemini 4 Argon은 2026-11-30까지 백만 토큰당 입력 $2 / 캐시 입력 $0.10 / 출력 $10으로, **2026-12-01 08:00 UTC**(미국 태평양 자정)부터 Google 정가 $4 / $0.20 / $20으로 추정합니다. 요청 타임스탬프로 가격을 선택하므로 변경 전에 로드한 모델도 카탈로그 업데이트 없이 이후 요청에 새 요금을 적용하며 모델 브라우저와 `omp models --json`에는 현재 가격이 표시됩니다.
 
-Local estimates use the assistant message's **request-start timestamp** to choose both the rate card and tariff for the whole request. This is OMP's estimation convention: DeepSeek's pricing page does not specify how its server bills a request spanning a boundary. When importing historical usage without recorded cost, the stats importer leaves scheduled pricing unpriced if no request timestamp can be recovered, rather than choosing a wall-clock tariff.
+로컬 추정은 어시스턴트 메시지의 **요청 시작 타임스탬프**로 전체 요청의 요금표와 요율을 선택합니다. 이는 OMP의 추정 규칙이며 DeepSeek 가격 페이지는 경계를 걸치는 요청의 서버 과금 방식을 명시하지 않습니다. 기록된 비용 없는 과거 사용량을 가져올 때 요청 타임스탬프를 복구할 수 없으면 통계 가져오기는 현재 시각 요율을 고르지 않고 일정 기반 가격을 미산정 상태로 둡니다.
 
-The status line's `cost` segment appends **↑** for peak or **↓** for off-peak pricing on the **currently active provider/model**, using the current wall clock. It refreshes at tariff boundaries even while idle; the arrow is not a label for the accumulated session total. Models without a peak/off-peak tariff, including dated price changes and explicit flat-price overrides, show no arrow.
+상태 표시줄의 `cost` 부분은 현재 시각 기준으로 **현재 활성 제공자/모델**의 피크 가격에 **↑**, 비피크에 **↓**를 붙입니다. 유휴 상태에서도 요금 경계에서 갱신되며 화살표는 누적 세션 합계에 대한 표시가 아닙니다. 날짜별 가격 변경과 명시적 고정 가격 재정의를 포함해 피크/비피크 요금이 없는 모델에는 화살표가 없습니다.
 
-An explicit model `cost` in `models.yml`, including `modelOverrides`, is a flat-price override and disables inherited time-based pricing for that model. Omitting `cost` preserves catalog pricing. `models.yml` does **not** configure a `timeBased` schedule; that metadata belongs to the catalog's [KDL pricing rules](../packages/catalog/src/compat/rules/README.md#time-based-pricing).
+`modelOverrides`를 포함한 `models.yml`의 명시적 모델 `cost`는 고정 가격 재정의이며 해당 모델의 상속된 시간 기반 가격을 끕니다. `cost`를 생략하면 카탈로그 가격을 유지합니다. `models.yml`은 `timeBased` 일정을 구성하지 **않습니다**. 그 메타데이터는 카탈로그 [KDL 가격 규칙](../packages/catalog/src/compat/rules/README.md#time-based-pricing)에 속합니다.
 
-A new custom model in `models.yml` that omits `cost` inherits its bundled reference row's card,
-schedule included. References are matched by model id and prefer larger context/output limits,
-then complete cache pricing and first-party OpenAI rows. A same-provider, same-id custom entry
-instead preserves the existing model's pricing when `cost` is omitted. Generic proxy and
-OpenAI-model-list discovery keeps pricing local-unknown (zero) rather than borrowing upstream
-prices; rich provider discovery such as LiteLLM can supply its own prices.
+`models.yml`의 새 사용자 지정 모델이 `cost`를 생략하면 번들 참조 항목의 일정 포함 요금표를 상속합니다.
+참조는 모델 ID로 일치시키고 큰 컨텍스트/출력 제한, 완전한 캐시 가격, 자체 OpenAI 항목 순으로 선호합니다.
+같은 제공자/같은 ID의 사용자 지정 항목은 `cost` 생략 시 기존 모델 가격을 유지합니다. 일반 프록시와
+OpenAI 모델 목록 탐색은 업스트림 가격을 빌리지 않고 로컬 가격 미상(0)을 유지합니다.
+LiteLLM 같은 풍부한 제공자 탐색은 자체 가격을 제공할 수 있습니다.
 
-## Runtime discovery integration
+<a id="runtime-discovery-integration"></a>
+## 런타임 탐색 통합
 
-### Implicit Ollama discovery
+<a id="implicit-ollama-discovery"></a>
+### 암시적 Ollama 탐색
 
-If `ollama` is not explicitly configured, registry adds an implicit discoverable provider:
+`ollama`를 명시적으로 구성하지 않으면 레지스트리가 암시적 탐색 제공자를 추가합니다.
 
-- provider: `ollama`
-- api: `openai-responses`
-- base URL: `OLLAMA_BASE_URL`, or `OLLAMA_HOST`, or `http://127.0.0.1:11434`
-- context window: `OLLAMA_CONTEXT_LENGTH` if set, otherwise Ollama `/api/show` metadata, otherwise `128000`
-- auth mode: keyless (`auth: none` behavior)
+- 제공자: `ollama`
+- API: `openai-responses`
+- 기본 URL: `OLLAMA_BASE_URL`, 다음 `OLLAMA_HOST`, 다음 `http://127.0.0.1:11434`
+- 컨텍스트 창: 설정된 `OLLAMA_CONTEXT_LENGTH`, 아니면 Ollama `/api/show` 메타데이터, 아니면 `128000`
+- 인증 모드: 키 불필요(`auth: none` 동작)
 
-Runtime discovery calls Ollama endpoints and normalizes discovered OpenAI-compatible models to `openai-responses`.
+런타임 탐색은 Ollama 엔드포인트를 호출하고 발견한 OpenAI 호환 모델을 `openai-responses`로 정규화합니다.
 
-`OLLAMA_CONTEXT_LENGTH` does not configure Ollama's runtime `num_ctx`; set that in Ollama/model configuration separately.
+`OLLAMA_CONTEXT_LENGTH`는 Ollama 런타임 `num_ctx`를 구성하지 않습니다. Ollama/모델 구성에서 따로 설정하세요.
 
-### Implicit llama.cpp discovery
+<a id="implicit-llamacpp-discovery"></a>
+### 암시적 llama.cpp 탐색
 
-If `llama.cpp` is not explicitly configured, registry adds an implicit discoverable provider:
+`llama.cpp`를 명시적으로 구성하지 않으면 레지스트리가 암시적 탐색 제공자를 추가합니다.
 
-- provider: `llama.cpp`
-- api: `openai-responses`
-- base URL: `LLAMA_CPP_BASE_URL` or `http://127.0.0.1:8080`
-- auth mode: keyless (`auth: none` behavior)
+- 제공자: `llama.cpp`
+- API: `openai-responses`
+- 기본 URL: `LLAMA_CPP_BASE_URL` 또는 `http://127.0.0.1:8080`
+- 인증 모드: 키 불필요(`auth: none` 동작)
 
-Runtime discovery calls llama.cpp model endpoints and synthesizes model entries with local defaults.
+런타임 탐색은 llama.cpp 모델 엔드포인트를 호출하고 로컬 기본값으로 모델 항목을 구성합니다.
 
-The provider `api` is the default for discovered models; catalog rules can override it per model class. Qwen-class models on any `discovery.type: llama.cpp` provider (implicit or explicit) are discovered as `openai-completions`, because the Responses API cannot carry the chat template's thinking controls (`enable_thinking` / `chat_template_kwargs`). The override lives in `packages/catalog/src/compat/rules/providers/llama.cpp.kdl` (`discovery-api`).
+제공자의 `api`는 탐색 모델의 기본값이며 카탈로그 규칙은 모델 클래스별로 재정의할 수 있습니다. 암시적/명시적 모든 `discovery.type: llama.cpp` 제공자의 Qwen 클래스 모델은 `openai-completions`로 탐색됩니다. Responses API는 채팅 템플릿의 사고 제어(`enable_thinking` / `chat_template_kwargs`)를 전달할 수 없기 때문입니다. 재정의는 `packages/catalog/src/compat/rules/providers/llama.cpp.kdl`의 `discovery-api`에 있습니다.
 
-After a first response loads a lazy llama.cpp model, OMP re-probes its runtime context and input
-metadata. Explicit custom-model and `modelOverrides` limits take precedence over that probe.
-The implicit provider is keyless only when no credential source is configured.
+첫 응답으로 지연 llama.cpp 모델을 로드하면 OMP는 런타임 컨텍스트와 입력 메타데이터를 다시 확인합니다.
+명시적 사용자 지정 모델 및 `modelOverrides` 제한이 확인 결과보다 우선합니다.
+암시적 제공자는 구성된 자격 증명 소스가 없을 때만 키가 필요 없습니다.
 
-### Implicit LM Studio discovery
+<a id="implicit-lm-studio-discovery"></a>
+### 암시적 LM Studio 탐색
 
-If `lm-studio` is not explicitly configured, registry adds an implicit discoverable provider:
+`lm-studio`를 명시적으로 구성하지 않으면 레지스트리가 암시적 탐색 제공자를 추가합니다.
 
-- provider: `lm-studio`
-- api: `openai-completions`
-- base URL: `LM_STUDIO_BASE_URL` or `http://127.0.0.1:1234/v1`
-- auth mode: keyless (`auth: none` behavior)
+- 제공자: `lm-studio`
+- API: `openai-completions`
+- 기본 URL: `LM_STUDIO_BASE_URL` 또는 `http://127.0.0.1:1234/v1`
+- 인증 모드: 키 불필요(`auth: none` 동작)
 
-Runtime discovery fetches the OpenAI-compatible model list and native LM Studio metadata when
-available. Native `loaded_context_length` takes precedence over the training window; after a first
-response JIT-loads a model, OMP refreshes that runtime metadata. Explicit custom-model and
-`modelOverrides` limits remain authoritative. Discovered LM Studio models use `imageInputDecoder: stb`.
+런타임 탐색은 OpenAI 호환 모델 목록과, 가능하면 LM Studio 기본 메타데이터를 가져옵니다.
+기본 `loaded_context_length`가 학습 창보다 우선하며 첫 응답으로 모델을 JIT 로드하면 OMP가 런타임
+메타데이터를 갱신합니다. 명시적 사용자 지정 모델 및 `modelOverrides` 제한은 계속 우선합니다.
+탐색한 LM Studio 모델은 `imageInputDecoder: stb`를 사용합니다.
 
-This path also works for local OpenAI-compatible servers that are not LM Studio. For example, if oMLX is bound to Ollama's usual port, set `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1` to discover it through the existing `/v1/models` flow. Running oMLX and Ollama side by side requires assigning a different port to one of them. Do not configure oMLX as `ollama`: Ollama discovery uses native `/api/tags` and `/api/show` endpoints, not OpenAI `/v1/models`.
+이 경로는 LM Studio가 아닌 로컬 OpenAI 호환 서버에서도 작동합니다. 예를 들어 oMLX가 Ollama의 일반 포트에 바인딩되었다면 `LM_STUDIO_BASE_URL=http://127.0.0.1:11434/v1`로 기존 `/v1/models` 흐름에서 탐색하세요. oMLX와 Ollama를 함께 실행하려면 하나의 포트를 바꿔야 합니다. oMLX를 `ollama`로 구성하지 마세요. Ollama 탐색은 OpenAI `/v1/models`가 아니라 기본 `/api/tags`와 `/api/show` 엔드포인트를 사용합니다.
 
-### Implicit Apple Foundation Models discovery
+<a id="implicit-apple-foundation-models-discovery"></a>
+### 암시적 Apple Foundation Models 탐색
 
-On Apple Silicon macOS, an unconfigured, non-disabled `apple` provider is probed through the
-in-process Foundation Models bridge. When the bridge reports it usable, `apple/on-device` is
-available without credentials, with context size, reasoning, image input, and tool support derived
-from bridge metadata. It is not selected automatically: its on-device context window may be
-smaller than the default coding-agent prompt and project instructions. Select it deliberately with
-`--model apple/on-device` or `/model`; otherwise use `/login` or configure another local model.
-Ineligible devices, disabled Apple Intelligence, and builds without the bridge yield no models.
-Its internal API is `apple-foundation-models`; no HTTP endpoint is used.
+Apple Silicon macOS에서는 미구성 및 비활성화되지 않은 `apple` 제공자를 프로세스 내 Foundation Models
+브리지로 확인합니다. 브리지가 사용 가능으로 보고하면 자격 증명 없이 `apple/on-device`를 사용할 수 있으며
+컨텍스트 크기, 추론, 이미지 입력, 도구 지원은 브리지 메타데이터에서 유도합니다. 온디바이스 컨텍스트 창이
+기본 coding-agent 프롬프트와 프로젝트 지침보다 작을 수 있으므로 자동으로 선택하지 않습니다.
+`--model apple/on-device` 또는 `/model`로 명시적으로 선택하거나 `/login` 또는 다른 로컬 모델을 구성하세요.
+지원하지 않는 기기, 비활성화된 Apple Intelligence, 브리지 없는 빌드는 모델을 제공하지 않습니다.
+내부 API는 `apple-foundation-models`이며 HTTP 엔드포인트는 사용하지 않습니다.
 
-### LiteLLM provider discovery
+<a id="litellm-provider-discovery"></a>
+### LiteLLM 제공자 탐색
 
-When `litellm` is active (for example through `LITELLM_API_KEY` or stored auth), runtime discovery uses the LiteLLM proxy:
+`litellm`이 활성 상태이면(예: `LITELLM_API_KEY` 또는 저장된 인증) 런타임 탐색은 LiteLLM 프록시를 사용합니다.
 
-- provider: `litellm`
-- api: `openai-decisions` (kind `judge`) for model groups with `mode: decisions`; `openai-responses` for OpenAI-backed models; `openai-completions` for other models
-- base URL: explicit provider `baseUrl` / `models.yml` config, otherwise `LITELLM_BASE_URL`, otherwise `http://localhost:4000/v1`
-- auth mode: `LITELLM_API_KEY` or stored LiteLLM auth when the proxy requires a key
+- 제공자: `litellm`
+- API: `mode: decisions`인 모델 그룹은 `openai-decisions`(`judge` 종류), OpenAI 기반 모델은 `openai-responses`, 그 밖의 모델은 `openai-completions`
+- 기본 URL: 명시적 제공자 `baseUrl` / `models.yml` 구성, 아니면 `LITELLM_BASE_URL`, 아니면 `http://localhost:4000/v1`
+- 인증 모드: 프록시가 키를 요구하면 `LITELLM_API_KEY` 또는 저장된 LiteLLM 인증
 
-Runtime discovery probes LiteLLM management metadata in order: `GET /model_group/info`, `GET /v2/model/info`, `GET /model/info`, and `GET /v1/model/info`. The configured key must be authorized to read at least one of these routes; on deployments that restrict management endpoints, grant the route through LiteLLM's `allowed_routes` access controls or use a master/admin key for discovery.
+런타임 탐색은 `GET /model_group/info`, `GET /v2/model/info`, `GET /model/info`, `GET /v1/model/info` 순으로 LiteLLM 관리 메타데이터를 확인합니다. 구성 키에는 하나 이상의 경로 읽기 권한이 있어야 합니다. 관리 엔드포인트를 제한한 배포에서는 LiteLLM `allowed_routes` 접근 제어로 경로를 허용하거나 탐색에 마스터/관리자 키를 사용하세요.
 
-If every metadata route is unavailable, discovery falls back to the OpenAI-compatible `GET /models` list. A forbidden or failed metadata request is logged once with its endpoint and status; `404` is treated as an absent route. Both paths exclude models explicitly marked with known task-specific LiteLLM modes: `audio_speech`, `audio_transcription`, `batch`, `embedding`, `guardrail`, `image_edit`, `image_generation`, `moderation`, `ocr`, `rerank`, `search`, `vector_store`, and `video_generation`. Missing, null, and unrecognized modes remain selectable so router aliases continue to work. Rich metadata maps per-model context, capability, and upstream-provider fields. OpenAI-backed models use LiteLLM's Responses route so reasoning summaries remain available; mixed-provider groups stay on Chat Completions. Bare fallback ids use the known OpenAI model families for routing and bundled reference metadata when available. Fallback pricing remains unknown (represented by zero); configured generic discovery uses a 128,000-token context default when neither the endpoint nor a bundled reference supplies a limit. Rich management metadata can supply provider-specific prices. Later probes fill or override reported metadata for models in the first usable roster rather than unioning every endpoint's roster.
+모든 메타데이터 경로를 사용할 수 없으면 OpenAI 호환 `GET /models` 목록으로 돌아갑니다. 거부 또는 실패한 메타데이터 요청은 엔드포인트와 상태와 함께 한 번 기록하며 `404`는 경로 없음으로 취급합니다. 두 경로 모두 알려진 작업별 LiteLLM 모드 `audio_speech`, `audio_transcription`, `batch`, `embedding`, `guardrail`, `image_edit`, `image_generation`, `moderation`, `ocr`, `rerank`, `search`, `vector_store`, `video_generation`으로 명시된 모델을 제외합니다. 모드가 없거나 null 또는 미인식이면 라우터 별칭이 작동하도록 선택 가능 상태를 유지합니다. 풍부한 메타데이터는 모델별 컨텍스트, 기능, 업스트림 제공자 필드를 매핑합니다. OpenAI 기반 모델은 추론 요약을 유지하기 위해 LiteLLM Responses 경로를 사용하며 혼합 제공자 그룹은 Chat Completions를 유지합니다. 기본 폴백 ID는 알려진 OpenAI 모델 계열로 라우팅하며 가능하면 번들 참조 메타데이터를 사용합니다. 폴백 가격은 미상(0)이고, 구성된 일반 탐색에서 엔드포인트와 번들 참조 모두 제한을 제공하지 않으면 컨텍스트 기본값은 128,000토큰입니다. 풍부한 관리 메타데이터는 제공자별 가격을 제공할 수 있습니다. 이후 확인은 모든 엔드포인트 목록을 합치는 대신 처음 사용 가능한 목록의 모델 메타데이터를 보충하거나 재정의합니다.
 
-### Generic OpenAI-compatible discovery
+<a id="generic-openai-compatible-discovery"></a>
+### 일반 OpenAI 호환 탐색
 
-`openai-models-list` reads `{baseUrl}/v1/models` by default (without adding a second `/v1`).
-`discovery.injectV1: false` treats the configured URL as the complete API root. Reported
-`max_model_len` wins over `context_length`. If both are absent, nested
-`limits.max_input_tokens` and `limits.max_output_tokens` supply their sum as context only when both
-are positive safe integers and the sum is safe. A valid `limits.max_output_tokens` independently sets the
-chat output cap, clamped to the resolved context; an incomplete or invalid context pair does not
-discard a valid output limit. Without it, a valid top-level `max_output_tokens`, then
-`max_completion_tokens`, then `top_provider.max_completion_tokens`, then the generic `max_tokens`
-sets the cap, ahead of any bundled-reference limit. Each spelling is validated on its own, so an
-unusable value on one never suppresses a usable sibling. Otherwise, context and output follow the
-existing native/reference/default fallback.
-Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
-use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
-Anthropic-routed models use an 8,192-token fallback output cap.
+`openai-models-list`는 기본적으로 `{baseUrl}/v1/models`를 읽으며 `/v1`을 중복 추가하지 않습니다.
+`discovery.injectV1: false`이면 구성 URL을 완전한 API 루트로 취급합니다. 보고된 `max_model_len`이
+`context_length`보다 우선합니다. 둘 다 없으면 중첩 `limits.max_input_tokens`와 `limits.max_output_tokens`가
+모두 양의 안전한 정수이고 합계도 안전할 때만 합계를 컨텍스트로 사용합니다. 유효한 `limits.max_output_tokens`는
+별도로 채팅 출력 상한을 설정하며 확인된 컨텍스트로 제한합니다. 컨텍스트 쌍이 불완전하거나 잘못되어도
+유효한 출력 제한은 버리지 않습니다. 이것이 없으면 유효한 최상위 `max_output_tokens`,
+`max_completion_tokens`, `top_provider.max_completion_tokens`, 일반 `max_tokens` 순으로
+번들 참조 제한보다 우선하여 상한을 설정합니다. 각 표기를 별도 검증하므로 하나가 유효하지 않아도 다른
+유효한 값은 무시하지 않습니다. 그 밖에는 기존 기본/참조/기본값 폴백을 따릅니다.
+정보 없는 엔드포인트는 번들 참조의 제한, 추론, 입력 모달리티를 상속할 수 있습니다.
+알 수 없는 모델의 일반 채팅 기본값은 컨텍스트 128,000, 출력 32,768입니다. 출력 상한은 확인된 컨텍스트로
+제한되며 Anthropic 경로 모델의 폴백 출력 상한은 8,192토큰입니다.
 
-A row advertising only image output becomes an image-generation runner; embedding-only output
-becomes an embedding runner. Mixed outputs remain chat models. These runners are visible with
-`omp models --kind all`, not the default chat listing.
+이미지 출력만 알리는 항목은 이미지 생성 실행기가, 임베딩 출력만 알리는 항목은 임베딩 실행기가 됩니다.
+혼합 출력은 채팅 모델로 유지됩니다. 이 실행기는 기본 채팅 목록이 아니라 `omp models --kind all`에서 보입니다.
 
-### Explicit provider discovery
+<a id="explicit-provider-discovery"></a>
+### 명시적 제공자 탐색
 
-You can configure discovery yourself:
+탐색을 직접 구성할 수도 있습니다.
 
 ```yaml
 providers:
@@ -531,7 +541,7 @@ providers:
       type: llama.cpp
 ```
 
-Custom LiteLLM gateways can use the same rich discovery path:
+사용자 지정 LiteLLM 게이트웨이도 같은 풍부한 탐색 경로를 사용할 수 있습니다.
 
 ```yaml
 providers:
@@ -543,23 +553,23 @@ providers:
       type: litellm
 ```
 
-LiteLLM metadata endpoints use the configured base URL with a trailing `/v1` stripped for discovery only, preserving any preceding proxy path. Runtime model calls keep the configured OpenAI-compatible `/v1` base URL.
+LiteLLM 메타데이터 엔드포인트는 탐색에만 구성 기본 URL 끝의 `/v1`을 제거하며 앞선 프록시 경로는 유지합니다. 런타임 모델 호출은 구성한 OpenAI 호환 `/v1` 기본 URL을 유지합니다.
 
-### Proxy discovery (`discovery.type: proxy`)
+<a id="proxy-discovery-discoverytype-proxy"></a>
+### 프록시 탐색 (`discovery.type: proxy`)
 
-For Anthropic+OpenAI-compatible proxies (new-api / one-api / similar)
-that expose both `/v1/messages` and `/v1/chat/completions` behind the same
-host. Discovery hits `GET /v1/models` (10s timeout, OpenAI-style payload) and
-derives each model's `api` from the entry's `supported_endpoint_types`:
+같은 호스트에서 `/v1/messages`와 `/v1/chat/completions`를 모두 제공하는
+Anthropic+OpenAI 호환 프록시(new-api / one-api 등)를 위한 기능입니다.
+탐색은 `GET /v1/models`(10초 제한, OpenAI 형식 페이로드)를 호출하고
+항목의 `supported_endpoint_types`에서 각 모델의 `api`를 유도합니다.
 
-- contains `"anthropic"` -> `api: anthropic-messages` (routes via `/v1/messages`)
-- contains `"openai"` -> `api: openai-completions` (routes via `/v1/chat/completions`)
-- otherwise -> falls back to provider-level `api`, or `openai-completions` when it is omitted
+- `"anthropic"` 포함 → `api: anthropic-messages`(`/v1/messages` 경로)
+- `"openai"` 포함 → `api: openai-completions`(`/v1/chat/completions` 경로)
+- 그 밖에는 제공자 수준 `api`, 생략되었다면 `openai-completions`로 폴백
 
-Provider-level `api` is **optional** with `discovery.type: proxy` because the
-per-model wire is auto-detected. The Anthropic SDK strips a trailing `/v1`
-from `baseUrl` before appending `/v1/messages`, so a single discovery `baseUrl`
-(ending in `/v1`) round-trips correctly to both wires.
+모델별 전송을 자동 감지하므로 `discovery.type: proxy`에서는 제공자 수준 `api`가 **선택 사항**입니다.
+Anthropic SDK는 `/v1/messages`를 덧붙이기 전에 `baseUrl` 끝의 `/v1`을 제거하므로
+하나의 탐색 `baseUrl`(`/v1`로 끝남)이 두 전송 모두에서 올바르게 작동합니다.
 
 ```yaml
 providers:
@@ -572,148 +582,151 @@ providers:
       type: proxy
 ```
 
-### Extension provider registration
+<a id="extension-provider-registration"></a>
+### 확장 제공자 등록
 
-Extensions can register providers at runtime (`pi.registerProvider(...)`), including:
+확장은 런타임에 `pi.registerProvider(...)`로 제공자를 등록할 수 있으며 다음을 포함합니다.
 
-- model replacement/append for a provider
-- custom stream handler registration for new API IDs
-- custom OAuth provider registration
-- `fetchDynamicModels` for a credential-aware live roster (cached with a default 24-hour TTL)
-- custom usage reporting and OAuth `modifyModels` projections reapplied after catalog rebuilds
+- 제공자의 모델 대체/추가
+- 새 API ID용 사용자 지정 스트림 핸들러 등록
+- 사용자 지정 OAuth 제공자 등록
+- 자격 증명을 반영한 실시간 목록용 `fetchDynamicModels`(기본 TTL 24시간으로 캐시)
+- 사용자 지정 사용량 보고 및 카탈로그 재구축 후 다시 적용되는 OAuth `modifyModels` 투영
 
-## Auth and API key resolution order
+<a id="auth-and-api-key-resolution-order"></a>
+## 인증 및 API 키 확인 순서
 
-When requesting a key for a provider, effective order is:
+제공자 키 요청의 유효 순서는 다음과 같습니다.
 
-1. Runtime override (CLI `--api-key`)
-2. Config override (`models.yml` `providers.<name>.apiKey`)
-3. Stored OAuth credential (with refresh)
-4. Login-sourced stored API key
-5. Extension-registered config fallback (`keys.setConfig(..., { fallback: true })`)
-6. Environment variable mapping (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
-7. Other stored API key, such as a broker-migrated copy
+1. 런타임 재정의(CLI `--api-key`)
+2. 구성 재정의(`models.yml`의 `providers.<name>.apiKey`)
+3. 저장된 OAuth 자격 증명(갱신 포함)
+4. 로그인으로 저장한 API 키
+5. 확장 등록 구성 폴백(`keys.setConfig(..., { fallback: true })`)
+6. 환경 변수 매핑(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY` 등)
+7. 브로커에서 마이그레이션한 복사본 등 그 밖의 저장 API 키
 
-The fallback tier is for registered providers with their own login flow. Keys explicitly supplied
-in `models.yml` belong to tier 2, not this fallback tier.
+폴백 단계는 자체 로그인 흐름이 있는 등록 제공자용입니다.
+`models.yml`에 명시한 키는 이 폴백이 아니라 2단계에 속합니다.
 
-`models.yml` `apiKey` behavior:
+`models.yml`의 `apiKey` 동작:
 
-- Value is first treated as an environment variable name.
-- If the env var is unset or empty, the literal string is used as the token.
+- 먼저 값을 환경 변수 이름으로 취급합니다.
+- 환경 변수가 없거나 비어 있으면 리터럴 문자열을 토큰으로 사용합니다.
 
-If `authHeader: true` and provider `apiKey` is set, models get:
+`authHeader: true`이고 제공자 `apiKey`가 설정되어 있으면 모델에 다음을 적용합니다.
 
-- `Authorization: Bearer <resolved-key>` header injected.
+- `Authorization: Bearer <resolved-key>` 헤더 삽입.
 
-Resolution does not fail for a missing variable: with `apiKey: MY_PROVIDER_API_KEY`
-and `authHeader: true`, an unset or empty `MY_PROVIDER_API_KEY` produces
-`Authorization: Bearer MY_PROVIDER_API_KEY`. Launchers using env-backed keys must
-check that the variable is set and non-empty before starting OMP.
+변수가 없어도 확인에 실패하지 않습니다. `apiKey: MY_PROVIDER_API_KEY`와 `authHeader: true`에서
+`MY_PROVIDER_API_KEY`가 없거나 비어 있으면 `Authorization: Bearer MY_PROVIDER_API_KEY`가 됩니다.
+환경 기반 키를 사용하는 실행기는 OMP 시작 전에 변수가 설정되어 있고 비어 있지 않은지 확인해야 합니다.
 
-[Command-resolved secrets](#command-resolved-secrets) do not use this literal
-fallback: a failing command or empty trimmed stdout resolves to no value, so it
-does not add a derived bearer header.
+[명령으로 확인하는 비밀 정보](#command-resolved-secrets)는 리터럴 폴백을 사용하지 않습니다.
+명령이 실패하거나 공백 제거한 stdout이 비어 있으면 값 없음으로 확인되므로 유도된 bearer 헤더를 추가하지 않습니다.
 
-Keyless providers:
+키 없는 제공자:
 
-- Providers marked `auth: none`, implicit local providers, and optional-key logins stored in keyless mode can be available without credentials.
-- `ModelRegistry.getApiKey*` returns `kNoAuth` when a provider is keyless and no real credential source is configured; configured credentials still take precedence.
+- `auth: none` 제공자, 암시적 로컬 제공자, 키 없는 모드로 저장된 선택적 키 로그인은 자격 증명 없이 사용 가능할 수 있습니다.
+- 제공자가 키 불필요이고 실제 자격 증명 소스도 구성되지 않았다면 `ModelRegistry.getApiKey*`는 `kNoAuth`를 반환합니다. 구성된 자격 증명이 있으면 여전히 우선합니다.
 
-### Broker mode
+<a id="broker-mode"></a>
+### 브로커 모드
 
-When `OMP_AUTH_BROKER_URL` (or `auth.broker.url`) is set, the local SQLite credential store is replaced by `RemoteAuthCredentialStore`. Layers 3, 4, and 7 above (stored OAuth and API-key credentials) are served from a broker-supplied snapshot whose `refresh` tokens are redacted; expiry triggers `POST /v1/credential/:id/refresh` on the broker rather than a local refresh.
+`OMP_AUTH_BROKER_URL` 또는 `auth.broker.url`을 설정하면 로컬 SQLite 자격 증명 저장소를 `RemoteAuthCredentialStore`로 대체합니다. 위 3, 4, 7계층(저장 OAuth 및 API 키)은 `refresh` 토큰을 가린 브로커 스냅샷에서 제공됩니다. 만료되면 로컬 갱신 대신 브로커에 `POST /v1/credential/:id/refresh`를 호출합니다.
 
-`AuthStorage.keys.setConfig` lets a `models.yml` `apiKey` win over a broker-resolved OAuth token without overriding a runtime `--api-key`. See [`auth-broker-gateway.md`](./auth-broker-gateway.md) for the full broker / gateway design and env surface (`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`, `auth.broker.url`, `auth.broker.token`).
+`AuthStorage.keys.setConfig`는 런타임 `--api-key`를 재정의하지 않으면서 `models.yml`의 `apiKey`가 브로커 OAuth 토큰보다 우선하도록 합니다. 전체 브로커/게이트웨이 설계와 환경 설정(`OMP_AUTH_BROKER_URL`, `OMP_AUTH_BROKER_TOKEN`, `auth.broker.url`, `auth.broker.token`)은 [`auth-broker-gateway.md`](./auth-broker-gateway.md)를 참조하세요.
 
-## Model availability vs all models
+<a id="model-availability-vs-all-models"></a>
+## 사용 가능 모델과 전체 모델
 
-- `getAll()` returns chat models by default; `getAll("all")` includes every catalog kind.
-- `getAvailable()` is also chat-only by default; a kind or `"all"` includes the corresponding runners.
-- Availability excludes `disabledProviders` and requires a keyless provider or configured credential source. It does not execute secret commands or refresh OAuth tokens.
+- `getAll()`은 기본적으로 채팅 모델을 반환하며 `getAll("all")`은 모든 카탈로그 종류를 포함합니다.
+- `getAvailable()`도 기본은 채팅 전용이며 종류 또는 `"all"`을 지정하면 해당 실행기를 포함합니다.
+- 사용 가능 여부는 `disabledProviders`를 제외하고 키 없는 제공자 또는 구성된 자격 증명 소스를 요구합니다. 비밀 명령 실행이나 OAuth 토큰 갱신은 하지 않습니다.
 
-A model can exist in the registry without being available, and a configured credential can still
-fail when resolved for a request. `enabledProviders` controls foreign configuration-source discovery,
-not an allowlist of model transports.
+모델이 사용 불가능한 상태로 레지스트리에 존재할 수 있으며 구성된 자격 증명도 요청 시 확인에 실패할 수 있습니다.
+`enabledProviders`는 모델 전송 허용 목록이 아니라 외부 구성 소스 탐색을 제어합니다.
 
-## Runtime model resolution
+<a id="runtime-model-resolution"></a>
+## 런타임 모델 확인
 
-### CLI and pattern parsing
+<a id="cli-and-pattern-parsing"></a>
+### CLI 및 패턴 파싱
 
-`model-resolver.ts` supports:
+`model-resolver.ts`는 다음을 지원합니다.
 
-- exact `provider/modelId`
-- exact model id (provider inferred)
-- fuzzy/substring matching
-- glob scope patterns in `--models` (e.g. `openai/*`, `*sonnet*`)
-- optional `:thinkingLevel` suffix (`off|minimal|low|medium|high|xhigh|max|auto|inherit`)
-- `@upstream` routing suffix on OpenRouter and Vercel Gateway selectors (for example, `openrouter/anthropic/claude-sonnet-5@anthropic:high`); an exact literal model id still wins
+- 정확한 `provider/modelId`
+- 정확한 모델 ID(제공자 추론)
+- 퍼지/부분 문자열 일치
+- `--models`의 glob 범위 패턴(예: `openai/*`, `*sonnet*`)
+- 선택적 `:thinkingLevel` 접미사(`off|minimal|low|medium|high|xhigh|max|auto|inherit`)
+- OpenRouter 및 Vercel Gateway 선택기의 `@upstream` 라우팅 접미사(예: `openrouter/anthropic/claude-sonnet-5@anthropic:high`). 정확히 일치하는 리터럴 모델 ID가 여전히 우선합니다.
 
-`--provider` is legacy; `--model` is preferred. An exact `provider/modelId` is unambiguous; bare ids
-and fuzzy patterns are resolved against the available concrete models.
+`--provider`는 레거시이며 `--model`을 권장합니다. 정확한 `provider/modelId`는 모호하지 않습니다.
+단독 ID와 퍼지 패턴은 사용 가능한 구체적 모델을 대상으로 확인합니다.
 
-Resolution precedence for exact selectors:
+정확한 선택기의 확인 우선순위:
 
-1. exact `provider/modelId` reference
-2. exact bare id (case-insensitive); when several providers carry the same id, a preference ranking picks the winner (see below)
-3. retired effort-tier variant alias (collapsed catalog entries, e.g. `X`/`X-thinking` twins)
-4. provider-scoped fuzzy match, then substring matching with an alias-vs-dated pick
+1. 정확한 `provider/modelId` 참조
+2. 정확한 단독 ID(대소문자 무시). 여러 제공자에 같은 ID가 있으면 선호 순위로 선택합니다(아래 참조).
+3. 폐기된 노력 단계 변형 별칭(통합된 카탈로그 항목, 예: `X`/`X-thinking` 쌍)
+4. 제공자 범위 퍼지 일치, 이어서 별칭/날짜 버전 선택을 포함한 부분 문자열 일치
 
-Glob scope patterns (used by `enabledModels` and CLI `--models`) run separately over concrete models after exact matching.
+`enabledModels`와 CLI `--models`의 glob 범위 패턴은 정확한 일치 후 구체적 모델에 별도로 실행합니다.
 
-When a bare id matches models from multiple providers, preference order is:
+단독 ID가 여러 제공자의 모델과 일치하면 다음 순서로 선호합니다.
 
-1. recently used model variants
-2. provider priority (`modelProviderOrder` setting, then built-in catalog provider priority)
-3. recently used providers
-4. registry order
+1. 최근 사용 모델 변형
+2. 제공자 우선순위(`modelProviderOrder` 설정, 이어서 내장 카탈로그 제공자 우선순위)
+3. 최근 사용 제공자
+4. 레지스트리 순서
 
-### Initial model selection priority
+<a id="initial-model-selection-priority"></a>
+### 초기 모델 선택 우선순위
 
-`findInitialModel(...)` uses this order:
+`findInitialModel(...)`은 다음 순서를 사용합니다.
 
-1. explicit CLI provider+model
-2. first scoped model (if not resuming)
-3. saved default provider/model
-4. known provider defaults (e.g. OpenAI/Anthropic/etc.) among available models; a provider whose discovery marks the account's default model (`isProviderDefault`, e.g. Devin) uses it in place of its bundled `default-model`
-5. first available model
+1. 명시적 CLI 제공자+모델
+2. 범위 내 첫 모델(재개가 아닐 때)
+3. 저장된 기본 제공자/모델
+4. 사용 가능 모델 중 알려진 제공자 기본값(OpenAI/Anthropic 등). 탐색에서 계정 기본 모델을 표시한 제공자(`isProviderDefault`, 예: Devin)는 번들 `default-model` 대신 그 모델을 사용합니다.
+5. 첫 사용 가능 모델
 
-The automatic fallback first restricts the pool to providers with concrete credentials (including
-keyless locals) when any exist. Ambient AWS/Vertex credential sentinels remain usable, but do not
-displace providers with explicit credentials. Session restoration is handled separately and checks
-that the saved model still exists and resolves a usable credential.
+자동 폴백은 구체적 자격 증명(키 없는 로컬 포함)이 있는 제공자가 하나라도 있으면 우선 그 풀로 제한합니다.
+주변 AWS/Vertex 자격 증명 센티널도 사용 가능하지만 명시적 자격 증명의 제공자를 밀어내지 않습니다.
+세션 복원은 별도로 처리하며 저장 모델의 존재와 사용 가능한 자격 증명 확인 여부를 검사합니다.
 
-### Role aliases and settings
+<a id="role-aliases-and-settings"></a>
+### 역할 별칭과 설정
 
-Model roles assign model selectors to workloads. Configure them under `modelRoles` in `config.yml`, not in `models.yml`; `models.yml` defines providers and model metadata.
+모델 역할은 작업에 모델 선택기를 할당합니다. `models.yml`이 아니라 `config.yml`의 `modelRoles`에 구성하세요. `models.yml`은 제공자와 모델 메타데이터를 정의합니다.
 
-Built-in roles are grouped in the model picker:
+내장 역할은 모델 선택기에서 다음과 같이 묶입니다.
 
-- **Chat roles:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, and `advisor`. The `tiny` and `memory` roles accept both ordinary chat models and `tiny` catalog models.
-- **Model-kind roles:** `image`, `web`, `speech`, `dictation`, and `judge`. These select image generation, search/grounded chat, text-to-speech, speech-to-text, and judgment runners respectively. The `judge` role also accepts tiny and chat models.
+- **채팅 역할:** `default`, `smol`, `slow`, `vision`, `plan`, `commit`, `tiny`, `memory`, `task`, `advisor`. `tiny`와 `memory` 역할은 일반 채팅 및 `tiny` 카탈로그 모델을 모두 허용합니다.
+- **모델 종류 역할:** `image`, `web`, `speech`, `dictation`, `judge`. 각각 이미지 생성, 검색/근거 기반 채팅, 음성 합성, 음성 인식, 판단 실행기를 선택합니다. `judge`는 tiny와 채팅 모델도 허용합니다.
 
-`vision` and `image` are different workloads: `vision` selects a chat model for image analysis, such as `read screenshot.png?q=...`; `image` selects a model with catalog kind `image` for `generate_image`. Assigning a model to `vision` does not give it image-input support: image questions additionally check that the model can send image input to its provider.
+`vision`과 `image`는 다른 작업입니다. `vision`은 `read screenshot.png?q=...` 같은 이미지 분석용 채팅 모델을, `image`는 `generate_image`용 카탈로그 종류 `image` 모델을 선택합니다. `vision`에 모델을 할당한다고 이미지 입력을 지원하게 되지는 않습니다. 이미지 질문은 모델이 제공자에 이미지 입력을 보낼 수 있는지도 확인합니다.
 
-The `tiny` role selects lightweight models for background work such as session titles; when unset, it resolves through `@smol`. The `memory` role resolves through `@tiny` when unset. See [model settings](./settings.md#models) for configuration and fallback-chain examples.
+`tiny` 역할은 세션 제목 같은 백그라운드 작업용 경량 모델을 선택하며 미설정 시 `@smol`로 확인합니다. `memory`는 미설정 시 `@tiny`로 확인합니다. 구성과 폴백 체인 예제는 [모델 설정](./settings.md#models)을 참조하세요.
 
-Assigning a non-default role in `/models` normally saves its selector without switching the active conversation model. A workload uses the role when invoked; assigning `plan` does not itself enter plan mode, and calling `todo` does not itself select the plan model. While plan mode is active, changing the `plan` role reapplies its model. Assigning `default` normally also switches the active model, unless a higher-priority settings layer overrides the edited assignment. The session-only model picker changes the active model without rewriting role assignments.
+`/models`에서 기본 이외 역할을 할당하면 보통 활성 대화 모델을 바꾸지 않고 선택기만 저장합니다. 작업이 호출될 때 그 역할을 사용합니다. `plan` 할당 자체로 계획 모드에 들어가지 않으며 `todo` 호출 자체로 계획 모델을 선택하지 않습니다. 계획 모드 중 `plan` 역할을 바꾸면 해당 모델을 다시 적용합니다. `default` 할당은 상위 설정 계층이 편집한 할당을 재정의하지 않는 한 보통 활성 모델도 전환합니다. 세션 전용 모델 선택기는 역할 할당을 다시 쓰지 않고 활성 모델을 바꿉니다.
 
-Role aliases like `@smol` expand through `settings.modelRoles`; `*` selects `@default`. Quote `@` aliases in YAML values (`plan: "@slow"`). Chat-role values can append a thinking selector such as `:minimal`, `:low`, `:medium`, or `:high`; model-kind roles do not use chat thinking suffixes.
+`@smol` 같은 역할 별칭은 `settings.modelRoles`를 통해 확장하며 `*`는 `@default`를 선택합니다. YAML의 `@` 별칭은 따옴표로 감싸세요(`plan: "@slow"`). 채팅 역할 값에는 `:minimal`, `:low`, `:medium`, `:high` 같은 사고 선택기를 붙일 수 있습니다. 모델 종류 역할에는 채팅 사고 접미사를 사용하지 않습니다.
 
-Role values can contain comma-separated selectors; selection uses the first available match,
-not a per-request retry chain. Request-failure fallbacks are configured separately under
-`retry.fallbackChains` (role, exact model, or provider-wildcard keys; see [Settings](./settings.md)).
-Custom role names
-can be introduced through `modelRoles`, `modelTags`, or `cycleOrder`; they use chat models.
-Unset `smol` and `slow` inherit an explicitly configured `default` before their built-in priority
-lists. The advisor uses an explicitly configured `slow`, otherwise its own strong-model priority
-chain rather than inheriting the active conversation model.
+역할 값에는 쉼표로 구분한 선택기를 넣을 수 있습니다. 요청별 재시도 체인이 아니라 첫 사용 가능 일치를
+선택합니다. 요청 실패 폴백은 `retry.fallbackChains`에 별도로 구성합니다(역할, 정확한 모델,
+제공자 와일드카드 키. [설정](./settings.md) 참조). `modelRoles`, `modelTags`, `cycleOrder`로
+사용자 지정 역할 이름을 도입할 수 있으며 채팅 모델을 사용합니다. 미설정 `smol`과 `slow`는 내장 우선순위
+목록보다 명시적 `default`를 먼저 상속합니다. advisor는 명시적 `slow`를 사용하고, 없으면 활성 대화 모델
+상속 대신 자체 강력 모델 우선순위 체인을 사용합니다.
 
-If a role points at another role, the target model still inherits normally and any explicit suffix on the referring role wins for that role-specific use.
+역할이 다른 역할을 가리켜도 대상 모델은 정상 상속되며, 참조하는 역할의 명시적 접미사가 그 역할의 사용에 우선합니다.
 
-### Model presets
+<a id="model-presets"></a>
+### 모델 프리셋
 
-A model preset is a named snapshot of every role assignment plus `defaultThinkingLevel`, so you can swap a whole setup at once:
+모델 프리셋은 모든 역할 할당과 `defaultThinkingLevel`의 이름 있는 스냅샷으로, 전체 구성을 한 번에 전환할 수 있습니다.
 
 ```text
 /modelpreset save cheap      # save the current roles and thinking level
@@ -722,7 +735,7 @@ A model preset is a named snapshot of every role assignment plus `defaultThinkin
 /modelpreset list | delete <name>
 ```
 
-In `/models`, press `s` in the Roles view to save the current setup under a name. Presets live under `modelPresets` in `config.yml`:
+`/models`의 Roles 보기에서 `s`를 눌러 현재 구성을 이름과 함께 저장하세요. 프리셋은 `config.yml`의 `modelPresets` 아래에 있습니다.
 
 ```yaml
 modelPresets:
@@ -733,27 +746,27 @@ modelPresets:
     defaultThinkingLevel: high
 ```
 
-Switching writes roles the way the model picker does: into the scope chosen by `modelRoleStorage`, clearing roles the preset leaves out and replacing `--model`/`--smol` session overrides. The preset's `defaultThinkingLevel` is written to the global config. It then switches the active model to the resulting `default` (an automatic provider-default selection when the preset has none) and sets the session's thinking level from the `:level` suffix on that selector, or else the preset's `defaultThinkingLevel`; a `:inherit` suffix leaves the level the model switch set. When a preset's `default` model is unavailable, nothing is changed. Roles that another layer still decides — a `--config` file, a project config in `global` storage, or the global config in `project` storage — are listed in the switch message with the layer that wins, instead of being reported as switched. The same goes for a `defaultThinkingLevel` set by a project config or `--config` file: the session still switches to the preset's level, but the message names that layer, whose level returns on the next start.
+전환은 모델 선택기와 같은 방식으로 역할을 기록합니다. `modelRoleStorage`가 고른 범위에 쓰고, 프리셋에 없는 역할을 지우며 `--model`/`--smol` 세션 재정의를 대체합니다. 프리셋의 `defaultThinkingLevel`은 전역 구성에 씁니다. 이후 결과 `default`(프리셋에 없으면 자동 제공자 기본 선택)로 활성 모델을 전환하고, 선택기의 `:level` 접미사 또는 프리셋의 `defaultThinkingLevel`로 세션 사고 수준을 설정합니다. `:inherit`는 모델 전환이 설정한 수준을 유지합니다. 프리셋 `default` 모델을 사용할 수 없으면 아무것도 바꾸지 않습니다. `--config` 파일, `global` 저장 모드의 프로젝트 구성, `project` 저장 모드의 전역 구성 등 다른 계층이 계속 결정하는 역할은 전환되었다고 표시하지 않고 전환 메시지에 우선 계층과 함께 나열합니다. 프로젝트 구성 또는 `--config` 파일이 설정한 `defaultThinkingLevel`도 마찬가지입니다. 세션은 프리셋 수준으로 전환되지만 다음 시작 시 해당 계층의 수준이 복원된다는 사실을 메시지에 표시합니다.
 
-When several config layers define a preset of the same name, the highest layer (command line, then `--config` file, then project config, then global config) wins whole: entries are never merged across layers, so a project `deep` that only sets `default` applies without the global `deep`'s other roles. A `null` entry in a `--config` file (or a command-line override) hides the preset from lists and switches; a `null` entry in a project config is ignored, so the global preset of that name still applies. Saving always writes the named entry to the global config and reports when a higher layer still takes precedence for that name.
+여러 구성 계층에 같은 이름의 프리셋이 있으면 최상위 계층(명령줄, `--config` 파일, 프로젝트 구성, 전역 구성 순)이 통째로 우선합니다. 계층 간 항목을 병합하지 않으므로 `default`만 설정한 프로젝트 `deep`에는 전역 `deep`의 다른 역할이 적용되지 않습니다. `--config` 파일 또는 명령줄 재정의의 `null` 항목은 프리셋을 목록과 전환에서 숨깁니다. 프로젝트 구성의 `null`은 무시되므로 같은 이름의 전역 프리셋이 계속 적용됩니다. 저장은 항상 이름 있는 항목을 전역 구성에 쓰며, 더 높은 계층이 그 이름에 계속 우선하면 알립니다.
 
-Saving captures the effective assignments — including any `--model` session override — and the configured `defaultThinkingLevel`, not the session's live thinking level.
+저장은 `--model` 세션 재정의를 포함한 유효 할당과 구성된 `defaultThinkingLevel`을 캡처하며, 세션의 현재 사고 수준을 저장하지는 않습니다.
 
-Related settings:
+관련 설정:
 
-- `modelRoles` (record)
-- `enabledModels` (scoped pattern list)
-- `modelProviderOrder` (provider precedence when equivalent concrete choices share an id)
-- `providers.kimiApiFormat` (`auto|openai|anthropic`; `auto` follows server-declared model metadata)
-- `providers.openaiWebsockets` (`auto|off|on` websocket preference for OpenAI Codex transport)
-- `providers.openaiLiveSteering` (deliver mid-response user messages into GPT-6 responses over the Codex WebSocket)
+- `modelRoles`(레코드)
+- `enabledModels`(범위 패턴 목록)
+- `modelProviderOrder`(동등한 구체적 선택지가 ID를 공유할 때의 제공자 우선순위)
+- `providers.kimiApiFormat`(`auto|openai|anthropic`. `auto`는 서버가 선언한 모델 메타데이터를 따름)
+- `providers.openaiWebsockets`(OpenAI Codex 전송의 `auto|off|on` WebSocket 선호)
+- `providers.openaiLiveSteering`(Codex WebSocket으로 응답 중 사용자 메시지를 GPT-6 응답에 전달)
 
-`modelRoles` stores model selectors such as `provider/modelId`; `enabledModels` and CLI `--models`
-accept exact selectors, globs, and fuzzy matches. The resulting scope restricts chat models only
-(Ctrl+P cycling, the startup model, chat roles in `/model`); judge, search, image, and speech
-models stay available for their roles, so entries naming them are accepted but have no effect.
+`modelRoles`는 `provider/modelId` 같은 모델 선택기를 저장합니다. `enabledModels`와 CLI `--models`는
+정확한 선택기, glob, 퍼지 일치를 허용합니다. 결과 범위는 채팅 모델만 제한합니다(Ctrl+P 순환,
+시작 모델, `/model`의 채팅 역할). 판단, 검색, 이미지, 음성 모델은 각 역할에서 계속 사용 가능하므로
+이를 지정한 항목도 허용되지만 효과는 없습니다.
 
-`enabledModels`, `enabledProviders`, and `disabledProviders` entries may also be scoped to a path prefix:
+`enabledModels`, `enabledProviders`, `disabledProviders` 항목은 경로 접두사 범위로 지정할 수도 있습니다.
 
 ```yaml
 enabledModels:
@@ -768,75 +781,81 @@ disabledProviders:
       - anthropic
 ```
 
-String entries apply everywhere. Scoped entries apply when the current working directory is the configured path or one of its subdirectories. Use `path`, `paths`, `pathPrefix`, or `pathPrefixes`; use `models` for `enabledModels`, `providers` for either provider setting, or `values` for any of them.
+문자열 항목은 모든 곳에 적용됩니다. 범위 항목은 현재 작업 디렉터리가 구성한 경로이거나 그 하위일 때 적용됩니다. `path`, `paths`, `pathPrefix`, `pathPrefixes`를 사용하세요. 값에는 `enabledModels`용 `models`, 제공자 설정용 `providers`, 공통으로 `values`를 사용할 수 있습니다.
 
-## `/model` and `omp models`
+<a id="model-and-omp-models"></a>
+## `/model`과 `omp models`
 
-Both surfaces keep provider-prefixed concrete models visible and selectable.
+두 인터페이스 모두 제공자 접두사가 붙은 구체적 모델을 표시하고 선택할 수 있게 유지합니다.
 
-- `/model` / `/models` opens the model hub with role assignments and provider catalogs; the session-only picker changes the active model without saving a role assignment.
-- `omp models` (default `ls` action) prints provider-grouped tables of available **chat** models; `--kind <kind>` selects another catalog kind and `--kind all` includes every kind.
-- `omp models find <substring>` filters by provider, id, or name; `omp models refresh` forces an online catalog re-fetch ignoring the model cache TTL; a provider name doubles as an `ls` filter (e.g. `omp models openai-codex`).
-- Other flags: `--json`, `-e <path>` / `--extension <path>` (repeatable), `--no-extensions` (skip ambient discovery; explicit `-e` still loads), and `--config <overlay>` (repeatable).
+- `/model` / `/models`는 역할 할당과 제공자 카탈로그가 있는 모델 허브를 엽니다. 세션 전용 선택기는 역할 할당을 저장하지 않고 활성 모델을 바꿉니다.
+- `omp models`(기본 `ls` 동작)는 사용 가능 **채팅** 모델을 제공자별 표로 출력합니다. `--kind <kind>`는 다른 카탈로그 종류를, `--kind all`은 모든 종류를 선택합니다.
+- `omp models find <substring>`은 제공자, ID, 이름으로 필터링합니다. `omp models refresh`는 모델 캐시 TTL을 무시하고 온라인 카탈로그를 다시 가져옵니다. 제공자 이름은 `ls` 필터로도 작동합니다(예: `omp models openai-codex`).
+- 그 밖의 플래그: `--json`, 반복 가능한 `-e <path>` / `--extension <path>`, `--no-extensions`(주변 탐색 생략, 명시적 `-e`는 로드), 반복 가능한 `--config <overlay>`.
 
-JSON includes `provider`, `kind`, `id`, `selector`, `name`, limits, reasoning/thinking metadata,
-declared `input`, and `cost`; it does not expose the model's transport `api`.
+JSON에는 `provider`, `kind`, `id`, `selector`, `name`, 제한, 추론/사고 메타데이터, 선언된 `input`,
+`cost`가 포함되며 모델 전송 `api`는 노출하지 않습니다.
 
-Selecting a provider row stores its explicit `provider/modelId`.
+제공자 행을 선택하면 명시적 `provider/modelId`를 저장합니다.
 
-The table's `images` column reports what the transport will actually send, so a model whose images are
-stripped (`compat.stripImageInput`, see [Image handling](#compatibility-and-routing-fields)) shows `no`
-even when its spec declares `input: [text, image]`; `--json` keeps the declared `input`.
+표의 `images` 열은 실제 전송 내용을 표시합니다. 이미지를 제거하는 모델(`compat.stripImageInput`,
+[이미지 처리](#compatibility-and-routing-fields) 참조)은 사양이 `input: [text, image]`여도 `no`를
+표시합니다. `--json`은 선언된 `input`을 유지합니다.
 
-## Context promotion
+<a id="context-promotion"></a>
+## 컨텍스트 승격
 
-Context promotion switches to an explicitly configured larger-context model before compaction.
-It is attempted on context overflow errors and at pre-prompt or post-turn compaction thresholds.
+컨텍스트 승격은 압축 전에 명시적으로 구성한 더 큰 컨텍스트 모델로 전환합니다.
+컨텍스트 초과 오류와 프롬프트 전 또는 턴 후 압축 임계점에서 시도합니다.
 
-Context promotion and [retry model fallback](./non-compaction-retry-policy.md) are independent.
-Turning off **Auto-Promote Context** (`contextPromotion.enabled`) does not disable
-`retry.fallbackChains`: provider errors still switch the active model while `retry.modelFallback`
-is on, even when the fallback model happens to have a larger context window. To stop those
-switches, set `retry.modelFallback: false`; same-model retries (`retry.enabled`) and automatic
-compaction (`compaction.enabled`) are unaffected.
+컨텍스트 승격과 [재시도 모델 폴백](./non-compaction-retry-policy.md)은 독립적입니다.
+**Auto-Promote Context**(`contextPromotion.enabled`)를 꺼도 `retry.fallbackChains`는 꺼지지 않습니다.
+`retry.modelFallback`이 켜져 있으면 폴백 모델의 컨텍스트가 더 크더라도 제공자 오류로 활성 모델을 전환합니다.
+이 전환을 막으려면 `retry.modelFallback: false`를 설정하세요. 같은 모델 재시도(`retry.enabled`)와
+자동 압축(`compaction.enabled`)에는 영향이 없습니다.
 
-### Trigger and order
+<a id="trigger-and-order"></a>
+### 트리거와 순서
 
-When a turn fails with a context overflow error (e.g. `context_length_exceeded`), `AgentSession` attempts promotion **before** falling back to compaction:
+컨텍스트 초과 오류(예: `context_length_exceeded`)로 턴이 실패하면 `AgentSession`은 압축 폴백 **전에** 승격을 시도합니다.
 
-1. If `contextPromotion.enabled` is true, resolve a promotion target (see below).
-2. If a target is found, switch to it and retry the request — no compaction needed.
-3. If no target is available, fall through to auto-compaction on the current model.
+1. `contextPromotion.enabled`가 참이면 승격 대상을 확인합니다(아래 참조).
+2. 대상을 찾으면 전환하고 요청을 재시도합니다. 압축은 필요 없습니다.
+3. 사용 가능한 대상이 없으면 현재 모델에서 자동 압축으로 넘어갑니다.
 
-### Target selection
+<a id="target-selection"></a>
+### 대상 선택
 
-Selection is explicit and model-driven:
+선택은 명시적이며 모델 기반입니다.
 
-1. `currentModel.contextPromotionTarget` (if configured)
+1. `currentModel.contextPromotionTarget`(구성된 경우)
 
-Only the configured target is considered; context promotion does not automatically choose a larger same-provider/API sibling. The target must be available, differ from the current model, have a strictly larger known context window, and resolve a usable credential (`ModelRegistry.getApiKey(...)`).
+구성한 대상만 고려하며 같은 제공자/API의 더 큰 형제 모델을 자동 선택하지 않습니다. 대상은 사용 가능하고 현재 모델과 달라야 하며, 알려진 컨텍스트 창이 엄격히 더 크고 사용 가능한 자격 증명을 확인할 수 있어야 합니다(`ModelRegistry.getApiKey(...)`).
 
-### OpenAI Codex websocket handoff
+<a id="openai-codex-websocket-handoff"></a>
+### OpenAI Codex WebSocket 인계
 
-If switching from/to `openai-codex-responses`, session provider state key `openai-codex-responses` is closed before model switch. This drops websocket transport state so the next turn starts clean on the promoted model.
+`openai-codex-responses`로 또는 그 모델에서 전환할 때 모델 전환 전에 세션 제공자 상태 키 `openai-codex-responses`를 닫습니다. WebSocket 전송 상태를 버려 다음 턴이 승격된 모델에서 깨끗하게 시작하도록 합니다.
 
-### Persistence behavior
+<a id="persistence-behavior"></a>
+### 저장 동작
 
-Promotion uses temporary switching (`setModelTemporary`):
+승격은 임시 전환(`setModelTemporary`)을 사용합니다.
 
-- recorded as a `model_change` with the ephemeral role `"fallback"` (not a durable user model selection)
-- does not rewrite saved role mapping
+- 임시 역할 `"fallback"`의 `model_change`로 기록합니다(영구 사용자 모델 선택 아님).
+- 저장된 역할 매핑은 다시 쓰지 않습니다.
 
-### Configuring promotion targets
+<a id="configuring-promotion-targets"></a>
+### 승격 대상 구성
 
-Configure the target directly in model metadata via `contextPromotionTarget`.
+모델 메타데이터의 `contextPromotionTarget`으로 대상을 직접 구성하세요.
 
-`contextPromotionTarget` accepts either:
+`contextPromotionTarget`은 다음 중 하나를 허용합니다.
 
-- `provider/model-id` (explicit)
-- `model-id` (resolved within current provider)
+- `provider/model-id`(명시적)
+- `model-id`(현재 제공자 안에서 확인)
 
-Example (`models.yml`) for an explicit OpenAI promotion target:
+명시적 OpenAI 승격 대상의 `models.yml` 예제:
 
 ```yaml
 providers:
@@ -846,147 +865,128 @@ providers:
         contextPromotionTarget: openai-codex/gpt-5.4
 ```
 
-Do not rely on a model-name-derived chain: configure the target explicitly or use a target supplied
-by the provider's discovered metadata.
+모델 이름에서 유도한 체인에 의존하지 마세요. 대상을 명시적으로 구성하거나
+제공자의 탐색 메타데이터에서 제공한 대상을 사용하세요.
 
-## Compatibility and routing fields
+<a id="compatibility-and-routing-fields"></a>
+## 호환성 및 라우팅 필드
 
-The `compat` block supplies sparse overrides to `packages/catalog/src/compat/resolve.ts`, after
-endpoint detection and the KDL provider/model rules in `packages/catalog/src/compat/rules/`.
-The YAML schema is constructed in `packages/coding-agent/src/config/models-config-schema-bundle.ts`.
-The resolved shape depends on the model's API: `OpenAICompat` is the sparse OpenAI input type, while
-chat-completions and Responses transports consume their corresponding resolved records from
-`packages/catalog/src/types.ts`.
+`compat` 블록은 엔드포인트 감지와 `packages/catalog/src/compat/rules/`의 KDL 제공자/모델 규칙 적용 후
+`packages/catalog/src/compat/resolve.ts`에 희소 재정의를 제공합니다.
+YAML 스키마는 `packages/coding-agent/src/config/models-config-schema-bundle.ts`에서 구성합니다.
+확인된 구조는 모델 API에 따라 달라집니다. `OpenAICompat`는 희소 OpenAI 입력 타입이며,
+chat-completions와 Responses 전송은 `packages/catalog/src/types.ts`의 대응하는 확인 레코드를 사용합니다.
 
-Endpoint-specific exceptions that interact with these fields are cataloged in [Provider endpoint constraints](./provider-endpoint-constraints.md).
+이 필드와 상호작용하는 엔드포인트별 예외는 [제공자 엔드포인트 제약](./provider-endpoint-constraints.md)에 정리되어 있습니다.
 
-`models.yml` supports the following keys (all optional; unset uses catalog rules and endpoint defaults).
-Fields only affect APIs whose resolved compatibility record declares them:
+`models.yml`은 아래 키를 지원합니다(모두 선택 사항. 미설정 시 카탈로그 규칙과 엔드포인트 기본값 사용).
+필드는 확인된 호환성 레코드에 해당 필드가 선언된 API에만 영향을 줍니다.
 
-Request shaping:
+요청 구성:
 
-- `supportsStore` — emit `store: false` on requests. Default: auto (off for non-standard endpoints).
-- `supportsDeveloperRole` — use the `developer` system role for reasoning models instead of `system`. Default: auto.
-- `supportsMultipleSystemMessages` — preserve separate leading system/developer messages instead of coalescing them. Default: auto (known OpenAI-compatible hosted APIs preserve; strict-template/local hosts coalesce).
-- `supportsUsageInStreaming` — send `stream_options: { include_usage: true }` to receive token usage on streaming responses. Default: auto (normally on, off for Cerebras hosts).
-- `maxTokensField` — `"max_completion_tokens"` or `"max_tokens"`. Default: auto.
-- `supportsToolChoice` — allow the `tool_choice` parameter. Default: auto. Set `false` for endpoints that 400 on `tool_choice` (e.g. DeepSeek when reasoning is on).
-- `supportsForcedToolChoice` — accept a forced `tool_choice` that requires a specific tool. Default: auto. When `false`, a forced selector is downgraded to `auto` so the tool stays available for endpoints that reject forced tool calls (e.g. some thinking-required OpenAI-compatible models).
-- `disableReasoningOnForcedToolChoice` — drop `reasoning_effort` / OpenRouter `reasoning` whenever `tool_choice` forces a call. Default: auto (Kimi/Anthropic-fronted endpoints).
-- `disableReasoningOnToolChoice` — drop reasoning fields whenever any `tool_choice` is sent. Default: auto (DeepSeek reasoning models).
-- `disableReasoningWithTools` — suppress reasoning when tools are present even without forced tool choice. Default: `false` unless catalog policy overrides it.
-- `alwaysSendMaxTokens` — always send a max-token field when the caller did not provide one. Default: auto (Kimi-family models derive TPM limits from `max_tokens`).
-- `strictResponsesPairing` — Responses-API tool-call/result history must be strictly paired. Default: auto (Azure OpenAI, GitHub Copilot).
-- `statefulResponses` — enable or disable stored `previous_response_id` chaining for `openai-responses`. Enabling it sends `store: true` and delta input on later turns; disabling it replays full context with `store: false`. Precedence: call option > `PI_OPENAI_STATEFUL` > `compat.statefulResponses` > `compat.officialEndpoint` (on for official OpenAI, off elsewhere). This key does not enable `officialEndpoint` or official-only fields such as `text.verbosity`; it does not change Codex or Azure Responses behavior.
-- `streamIdleTimeoutMs` — stream-watchdog idle-timeout floor in ms for slow reasoning hosts. Default: auto (GLM coding-plan hosts, direct DeepSeek reasoning).
-- `streamMarkupHealingPattern` — recover leaked stream control markup with the `kimi`, `dsml`, `qwen`, or `thinking` grammar. Default: endpoint/model policy.
-- `cacheControlFormat` — `"anthropic"` to include Anthropic-style prompt-cache markers in chat-completions payloads. Default: auto (OpenRouter `anthropic/*` models).
-- `supportsLongPromptCacheRetention` — host honors `prompt_cache_retention: "24h"` on the Responses API. Default: auto (api.openai.com).
-- `supportsImageDetailOriginal` — allow the Responses API's nonstandard `detail: "original"` image
-  mode where the endpoint supports it. Default: `true` for OpenAI, Azure OpenAI, and Codex;
-  `false` for other hosts, including custom/local endpoints, xAI, and Copilot. Custom hosts receive
-  `auto` for snapcompact frames and computer screenshots unless they opt in with
-  `compat.supportsImageDetailOriginal: true`. An explicit `false` also overrides the known-host default.
-- `supportsConfigurationUpdate` — let the Responses API change `reasoning.effort` mid-session through a `configuration_update` input item while the request-level effort stays pinned for prompt caching (GPT-6 Astra). Default: auto (`true` for `gpt-6-astra` on every host, `false` otherwise). Set `false` for custom `openai-responses` / `openai-codex-responses` endpoints that reject the item type with HTTP 400; effort changes are then sent as the top-level `reasoning.effort` and no update items are emitted.
-- `supportsSteering` — let the Codex WebSocket transport send `response.steer`, so a message typed while the model responds joins that response instead of waiting for the next request. Default: auto (`true` for the GPT-6 family). Set `false` for proxies that reject the event.
-- `extraBody` — extra top-level fields merged into every request body (gateway hints, controller selectors, etc.).
+- `supportsStore` — 요청에 `store: false`를 출력합니다. 기본값: 자동(비표준 엔드포인트는 끔).
+- `supportsDeveloperRole` — 추론 모델에 `system` 대신 `developer` 시스템 역할을 사용합니다. 기본값: 자동.
+- `supportsMultipleSystemMessages` — 선행 system/developer 메시지를 합치지 않고 별도로 유지합니다. 기본값: 자동(알려진 OpenAI 호환 호스팅 API는 유지, 엄격 템플릿/로컬 호스트는 합침).
+- `supportsUsageInStreaming` — 스트리밍 응답의 토큰 사용량을 받도록 `stream_options: { include_usage: true }`를 보냅니다. 기본값: 자동(보통 켬, Cerebras 호스트는 끔).
+- `maxTokensField` — `"max_completion_tokens"` 또는 `"max_tokens"`. 기본값: 자동.
+- `supportsToolChoice` — `tool_choice` 매개변수를 허용합니다. 기본값: 자동. `tool_choice`에 400을 반환하는 엔드포인트(예: 추론을 켠 DeepSeek)에는 `false`를 설정하세요.
+- `supportsForcedToolChoice` — 특정 도구를 요구하는 강제 `tool_choice`를 허용합니다. 기본값: 자동. `false`이면 강제 선택기를 `auto`로 낮춰 강제 도구 호출을 거부하는 엔드포인트(일부 사고 필수 OpenAI 호환 모델 등)에서도 도구를 사용할 수 있게 합니다.
+- `disableReasoningOnForcedToolChoice` — `tool_choice`가 호출을 강제하면 `reasoning_effort` / OpenRouter `reasoning`을 제거합니다. 기본값: 자동(Kimi/Anthropic 프런트 엔드포인트).
+- `disableReasoningOnToolChoice` — 어떤 `tool_choice`든 전송할 때 추론 필드를 제거합니다. 기본값: 자동(DeepSeek 추론 모델).
+- `disableReasoningWithTools` — 강제 선택이 없어도 도구가 있으면 추론을 억제합니다. 카탈로그 정책 재정의가 없으면 기본 `false`.
+- `alwaysSendMaxTokens` — 호출자가 지정하지 않아도 항상 최대 토큰 필드를 보냅니다. 기본값: 자동(Kimi 계열은 `max_tokens`에서 TPM 제한 유도).
+- `strictResponsesPairing` — Responses API 도구 호출/결과 이력이 엄격한 쌍을 이루어야 합니다. 기본값: 자동(Azure OpenAI, GitHub Copilot).
+- `statefulResponses` — `openai-responses`의 저장된 `previous_response_id` 연결을 켜거나 끕니다. 켜면 후속 턴에 `store: true`와 변경분 입력을 보내고, 끄면 `store: false`로 전체 컨텍스트를 재전송합니다. 우선순위: 호출 옵션 > `PI_OPENAI_STATEFUL` > `compat.statefulResponses` > `compat.officialEndpoint`(공식 OpenAI는 켬, 나머지는 끔). 이 키는 `officialEndpoint`나 `text.verbosity` 같은 공식 전용 필드를 켜지 않으며 Codex/Azure Responses 동작을 바꾸지 않습니다.
+- `streamIdleTimeoutMs` — 느린 추론 호스트용 스트림 감시 유휴 제한 시간 하한(ms). 기본값: 자동(GLM coding-plan 호스트, 직접 DeepSeek 추론).
+- `streamMarkupHealingPattern` — `kimi`, `dsml`, `qwen`, `thinking` 문법으로 유출된 스트림 제어 마크업을 복구합니다. 기본값: 엔드포인트/모델 정책.
+- `cacheControlFormat` — `"anthropic"`이면 chat-completions 페이로드에 Anthropic 스타일 프롬프트 캐시 마커를 포함합니다. 기본값: 자동(OpenRouter `anthropic/*` 모델).
+- `supportsLongPromptCacheRetention` — 호스트가 Responses API의 `prompt_cache_retention: "24h"`를 지원합니다. 기본값: 자동(api.openai.com).
+- `supportsImageDetailOriginal` — 엔드포인트가 지원하면 Responses API의 비표준 `detail: "original"` 이미지 모드를 허용합니다. 기본값은 OpenAI, Azure OpenAI, Codex에서 `true`, 사용자 지정/로컬, xAI, Copilot 등 다른 호스트에서 `false`입니다. 사용자 지정 호스트는 `compat.supportsImageDetailOriginal: true`로 활성화하지 않으면 snapcompact 프레임과 컴퓨터 스크린샷에 `auto`를 받습니다. 명시적 `false`는 알려진 호스트 기본값도 재정의합니다.
+- `supportsConfigurationUpdate` — 요청 수준 노력은 프롬프트 캐싱용으로 고정한 채 `configuration_update` 입력 항목으로 세션 중 `reasoning.effort`를 바꿀 수 있게 합니다(GPT-6 Astra). 기본값: 자동(모든 호스트의 `gpt-6-astra`는 `true`, 나머지는 `false`). 이 항목 유형에 HTTP 400을 반환하는 사용자 지정 `openai-responses` / `openai-codex-responses`에는 `false`를 설정하세요. 그러면 노력 변경을 최상위 `reasoning.effort`로 보내고 갱신 항목은 출력하지 않습니다.
+- `supportsSteering` — Codex WebSocket 전송이 `response.steer`를 보내 모델 응답 중 입력한 메시지를 다음 요청까지 기다리지 않고 해당 응답에 포함하도록 합니다. 기본값: 자동(GPT-6 계열은 `true`). 이벤트를 거부하는 프록시에는 `false`를 설정하세요.
+- `extraBody` — 모든 요청 본문에 병합할 추가 최상위 필드(게이트웨이 힌트, 컨트롤러 선택기 등).
 
-Image handling:
+이미지 처리:
 
-- `stripImageInput` — drop image parts before an `openai-completions` request is encoded (including the OpenRouter chat fallback, `PI_OPENROUTER_RESPONSES=0`). The catalog's
-  class rules set it for model lines that endpoints commonly serve as text-only (e.g. the DeepSeek class),
-  independently of the provider's own `input` declaration, so a model can declare `input: [text, image]`
-  and still send no image. Per-model `compat` is deep-merged over those rules and wins: set
-  `stripImageInput: false` for an id whose endpoint really accepts `image_url` — a vision-augmenting
-  proxy, for example. Default: auto (catalog class and provider rules). The Responses and Anthropic/Google
-  encoders ship the modalities the model declares, as does the `pi-native` transport (it forwards the
-  original context to the gateway, so the guard never runs client-side and the `images` column reports
-  the declared `input`).
+- `stripImageInput` — `openai-completions` 요청 인코딩 전에 이미지 부분을 제거합니다(OpenRouter 채팅 폴백 `PI_OPENROUTER_RESPONSES=0` 포함). 카탈로그 클래스 규칙은 제공자의 자체 `input` 선언과 별개로 엔드포인트가 흔히 텍스트 전용으로 제공하는 모델 계열(DeepSeek 클래스 등)에 이를 설정하므로 `input: [text, image]`여도 이미지를 보내지 않을 수 있습니다. 모델별 `compat`는 이 규칙 위에 깊게 병합되어 우선합니다. 비전 보강 프록시 등 엔드포인트가 실제 `image_url`을 받는 ID에는 `stripImageInput: false`를 설정하세요. 기본값: 자동(카탈로그 클래스/제공자 규칙). Responses와 Anthropic/Google 인코더는 모델이 선언한 모달리티를 전송하며 `pi-native`도 같습니다(원래 컨텍스트를 게이트웨이에 전달하므로 클라이언트 가드가 실행되지 않고 `images` 열은 선언된 `input`을 표시).
 
-Reasoning / thinking:
+추론/사고:
 
-Custom models and overrides may define `thinking` with required `mode` and `efforts`, plus
-`defaultLevel`, `effortMap`, `supportsDisplay`, and `requiresEffort`. Modes are `effort`, `budget`,
-`google-level`, `anthropic-adaptive`, and `anthropic-budget-effort`. Efforts are ordered
-`minimal|low|medium|high|xhigh|max`. Legacy `levels` or `minLevel`/`maxLevel` shapes are normalized to
-`efforts`; explicit `efforts` wins over either.
-`requiresEffort` defaults to auto-detection; set it to `false` only when the
-configured backend has been verified to accept an explicit reasoning-off
-request. This keeps the `:off` selector from being clamped to the lowest effort.
+사용자 지정 모델과 재정의에는 필수 `mode`, `efforts` 및 `defaultLevel`, `effortMap`, `supportsDisplay`,
+`requiresEffort`를 가진 `thinking`을 정의할 수 있습니다. 모드는 `effort`, `budget`, `google-level`,
+`anthropic-adaptive`, `anthropic-budget-effort`입니다. 노력 순서는 `minimal|low|medium|high|xhigh|max`입니다.
+레거시 `levels` 또는 `minLevel`/`maxLevel` 구조는 `efforts`로 정규화하며 명시적 `efforts`가 우선합니다.
+`requiresEffort`의 기본값은 자동 감지입니다. 구성 백엔드가 명시적 추론 끄기 요청을 허용한다고
+확인한 경우에만 `false`로 설정하세요. 그러면 `:off` 선택기가 최저 노력으로 제한되는 것을 막습니다.
 
-For a custom model with the default `thinkingFormat: openai`, `--thinking off`
-has no explicit off payload on `openai-completions`: when `reasoning_effort` is
-sent, it requests the first effort listed in `efforts`, even with
-`requiresEffort: false` (for example, `efforts: [low, medium, high]` sends
-`reasoning_effort: low`), so list efforts lowest-first. Turning reasoning off
-requires a request shape the server treats as off; for example,
-`thinkingFormat: qwen-chat-template` sends
-`chat_template_kwargs: { enable_thinking: false }`.
+기본 `thinkingFormat: openai` 사용자 지정 모델의 `--thinking off`는 `openai-completions`에서
+명시적 끄기 페이로드가 없습니다. `requiresEffort: false`여도 `reasoning_effort`를 보내면
+`efforts`의 첫 노력을 요청합니다(예: `efforts: [low, medium, high]`는 `reasoning_effort: low` 전송).
+따라서 낮은 노력부터 나열하세요. 추론을 끄려면 서버가 끄기로 취급하는 요청 구조가 필요합니다.
+예를 들어 `thinkingFormat: qwen-chat-template`는
+`chat_template_kwargs: { enable_thinking: false }`를 보냅니다.
 
-- `supportsReasoningEffort` — accept `reasoning_effort`. Default: endpoint/model policy; supported dialects can vary within a provider.
-- `supportsReasoningParams` — whether request shaping may send reasoning params at all. Default: auto (off for GitHub Copilot chat-completions).
-- `supportsReasoningSummary` — allow Responses reasoning summaries. Default: endpoint/model policy; set `false` for endpoints that reject `reasoning.summary`.
-- `reasoningEffortMap` — partial map from internal effort levels (`minimal|low|medium|high|xhigh|max`) to provider-specific strings (e.g. Fireworks GLM maps `minimal -> "none"`).
-- `thinkingFormat` — request shape for thinking: `"openai"` (`reasoning_effort`), `"openrouter"` (`reasoning: { effort }`), `"zai"` (`thinking: { type: "enabled" }`), `"qwen"` (top-level `enable_thinking`), or `"qwen-chat-template"` (`chat_template_kwargs.enable_thinking`). Default: endpoint/model policy, normally `"openai"`.
-- `qwenTemplateReasoningEffort` — route the selected effort onto the Qwen 3.8+ chat template's `reasoning_effort` kwarg (`chat_template_kwargs.reasoning_effort`, plus the top-level field on the `qwen` dialect). Default: catalog policy (enabled for Qwen 3.8+ on LM Studio, llama.cpp discovery, and vLLM). Set `false` for strict servers that reject unknown `chat_template_kwargs`; effort selections are then not sent for the Qwen dialects and the template runs at its own default.
-- `reasoningContentField` — assistant field carrying chain-of-thought: `"reasoning_content"`, `"reasoning"`, or `"reasoning_text"`. Default: auto.
-- `requiresReasoningContentForToolCalls` — assistant tool-call turns must round-trip the reasoning field. Default: endpoint/model policy (including DeepSeek, Kimi, and reasoning-enabled OpenRouter).
-- `allowsSyntheticReasoningContentForToolCalls` — allow a placeholder reasoning field when a prior assistant tool-call turn lacks provider reasoning content. Default: endpoint/model policy; set `false` for providers that validate the exact reasoning value.
-- `requiresAssistantContentForToolCalls` — assistant tool-call turns must include non-empty text content. Default: endpoint/model policy (including Kimi and direct DeepSeek reasoning).
-- `whenThinking` — partial compat overrides applied only when a request actually engages thinking mode (deep-merged over the baseline compat).
+- `supportsReasoningEffort` — `reasoning_effort`를 허용합니다. 기본값: 엔드포인트/모델 정책. 같은 제공자 안에서도 지원 형식이 다를 수 있습니다.
+- `supportsReasoningParams` — 요청 구성 시 추론 매개변수를 전송할 수 있는지 지정합니다. 기본값: 자동(GitHub Copilot chat-completions는 끔).
+- `supportsReasoningSummary` — Responses 추론 요약을 허용합니다. 기본값: 엔드포인트/모델 정책. `reasoning.summary`를 거부하면 `false`로 설정하세요.
+- `reasoningEffortMap` — 내부 노력 수준(`minimal|low|medium|high|xhigh|max`)에서 제공자 문자열로의 부분 매핑(예: Fireworks GLM의 `minimal -> "none"`).
+- `thinkingFormat` — 사고 요청 구조: `"openai"`(`reasoning_effort`), `"openrouter"`(`reasoning: { effort }`), `"zai"`(`thinking: { type: "enabled" }`), `"qwen"`(최상위 `enable_thinking`), `"qwen-chat-template"`(`chat_template_kwargs.enable_thinking`). 기본값: 엔드포인트/모델 정책, 보통 `"openai"`.
+- `qwenTemplateReasoningEffort` — 선택한 노력을 Qwen 3.8+ 채팅 템플릿의 `reasoning_effort` 키워드 인수로 전달합니다(`chat_template_kwargs.reasoning_effort`, `qwen` 형식에는 최상위 필드도 사용). 기본값: 카탈로그 정책(LM Studio, llama.cpp 탐색, vLLM의 Qwen 3.8+에서 켬). 알 수 없는 `chat_template_kwargs`를 거부하는 엄격 서버에는 `false`로 설정하세요. 그러면 Qwen 형식에 노력을 보내지 않고 템플릿 자체 기본값으로 실행합니다.
+- `reasoningContentField` — 사고 과정을 담는 assistant 필드: `"reasoning_content"`, `"reasoning"`, `"reasoning_text"`. 기본값: 자동.
+- `requiresReasoningContentForToolCalls` — assistant 도구 호출 턴은 추론 필드를 왕복 전달해야 합니다. 기본값: 엔드포인트/모델 정책(DeepSeek, Kimi, 추론 활성 OpenRouter 포함).
+- `allowsSyntheticReasoningContentForToolCalls` — 이전 assistant 도구 호출 턴에 제공자 추론 내용이 없을 때 대체 추론 필드를 허용합니다. 기본값: 엔드포인트/모델 정책. 정확한 추론 값을 검증하는 제공자에는 `false`를 설정하세요.
+- `requiresAssistantContentForToolCalls` — assistant 도구 호출 턴에 비어 있지 않은 텍스트가 필요합니다. 기본값: 엔드포인트/모델 정책(Kimi, 직접 DeepSeek 추론 포함).
+- `whenThinking` — 실제 사고 모드 요청에만 적용할 부분 호환성 재정의(기준 compat 위에 깊게 병합).
 
-Tool / message normalization:
+도구/메시지 정규화:
 
-- `requiresToolResultName` — tool-result messages need a `name` field (Mistral). Default: auto.
-- `requiresAssistantAfterToolResult` — a user message after a tool result needs an assistant turn in between. Default: auto.
-- `requiresThinkingAsText` — convert thinking blocks to text wrapped in `<thinking>` delimiters (Mistral). Default: auto.
-- `requiresMistralToolIds` — normalize tool-call ids to exactly 9 alphanumeric chars. Default: auto.
-- `supportsStrictMode` — accept the per-tool `strict` field on tool schemas. Default: conservative auto-detect per provider/baseUrl.
-- `toolStrictMode` — `"all_strict"` forces strict on every tool, `"none"` forces it off; unset uses endpoint/model policy (normally mixed, all-strict on Cerebras hosts).
+- `requiresToolResultName` — 도구 결과 메시지에 `name` 필드가 필요합니다(Mistral). 기본값: 자동.
+- `requiresAssistantAfterToolResult` — 도구 결과 뒤 사용자 메시지 사이에 assistant 턴이 필요합니다. 기본값: 자동.
+- `requiresThinkingAsText` — 사고 블록을 `<thinking>` 구분자로 감싼 텍스트로 변환합니다(Mistral). 기본값: 자동.
+- `requiresMistralToolIds` — 도구 호출 ID를 정확히 영숫자 9자로 정규화합니다. 기본값: 자동.
+- `supportsStrictMode` — 도구 스키마의 도구별 `strict` 필드를 허용합니다. 기본값: 제공자/baseUrl별 보수적 자동 감지.
+- `toolStrictMode` — `"all_strict"`는 모든 도구를 strict로 강제하고 `"none"`은 끕니다. 미설정 시 엔드포인트/모델 정책(보통 혼합, Cerebras 호스트는 모두 strict).
 
-Gateway routing (only applied when `baseUrl` matches the gateway):
+게이트웨이 라우팅(`baseUrl`이 게이트웨이와 일치할 때만 적용):
 
-- `openRouterRouting.only` / `openRouterRouting.order` — provider routing on `openrouter.ai` (see <https://openrouter.ai/docs/provider-routing>).
-- `vercelGatewayRouting.only` / `vercelGatewayRouting.order` — provider routing on `ai-gateway.vercel.sh` (see <https://vercel.com/docs/ai-gateway/models-and-providers/provider-options>).
+- `openRouterRouting.only` / `openRouterRouting.order` — `openrouter.ai`의 제공자 라우팅(<https://openrouter.ai/docs/provider-routing> 참조).
+- `vercelGatewayRouting.only` / `vercelGatewayRouting.order` — `ai-gateway.vercel.sh`의 제공자 라우팅(<https://vercel.com/docs/ai-gateway/models-and-providers/provider-options> 참조).
 
-Provider-level `compat` is the baseline; per-model `compat` is deep-merged on top, with
-`openRouterRouting`, `vercelGatewayRouting`, `extraBody`, and `whenThinking` merged as nested objects.
+제공자 수준 `compat`가 기준이며 모델별 `compat`를 그 위에 깊게 병합합니다.
+`openRouterRouting`, `vercelGatewayRouting`, `extraBody`, `whenThinking`은 중첩 객체로 병합합니다.
 
-### Anthropic compatibility (`anthropic-messages`)
+<a id="anthropic-compatibility-anthropic-messages"></a>
+### Anthropic 호환성 (`anthropic-messages`)
 
-For `anthropic-messages` models the runtime uses a separate `AnthropicCompat` shape
-(`packages/catalog/src/types.ts`). The `models.yml` schema exposes the strict-tools opt-out as a
-top-level provider field; inside `compat` it honors every shared key that also names an
-`AnthropicCompat` field: `supportsContextManagement`, `supportsEagerToolInputStreaming`,
-`supportsForcedToolChoice`, `allowAnthropicHeaderOverrides`, `requiresToolResultId`,
-`replayUnsignedThinking`, `bedrockMessagesApi`, `stripImageInput`, and `streamIdleTimeoutMs`. Other Anthropic-side knobs
-are supplied by built-in catalog metadata and are not configurable here — `applyCompatOverrides`
-drops override keys the resolved shape does not declare.
+`anthropic-messages` 모델에는 별도 `AnthropicCompat` 구조(`packages/catalog/src/types.ts`)를 사용합니다.
+`models.yml` 스키마는 strict 도구 비활성화를 최상위 제공자 필드로 노출합니다.
+`compat` 안에서는 `AnthropicCompat` 필드 이름과 일치하는 공유 키를 모두 반영합니다:
+`supportsContextManagement`, `supportsEagerToolInputStreaming`, `supportsForcedToolChoice`,
+`allowAnthropicHeaderOverrides`, `requiresToolResultId`, `replayUnsignedThinking`, `bedrockMessagesApi`,
+`stripImageInput`, `streamIdleTimeoutMs`. 다른 Anthropic 조절 항목은 내장 카탈로그 메타데이터가 제공하며
+여기서 구성할 수 없습니다. `applyCompatOverrides`는 확인된 구조에 선언되지 않은 재정의 키를 버립니다.
 
-### Bedrock compatibility (`bedrock-converse-stream`)
+<a id="bedrock-compatibility-bedrock-converse-stream"></a>
+### Bedrock 호환성 (`bedrock-converse-stream`)
 
-The same `compat` slot accepts `promptCacheMode` (`none`, `automatic`, or `explicit`),
-`supportsLongPromptCacheRetention`, `promptCacheMinimumTokens`,
-`promptCacheMaximumCheckpoints`, `supportsForcedToolChoice` (forced `any`/`tool` choices
-fall back to `auto` when `false`; built in for Claude Opus/Sonnet 5.5), and
-`supportsThinkingBindingControls` for Bedrock models. Prefix-bound Claude models (Fable 5.1+,
-Opus/Sonnet/Haiku 5.5) send `thinking.block_binding`, the `thinking-binding-controls-2026-08-01`
-beta and the `/input_transformations` response path by default; set
-`supportsThinkingBindingControls: false` for a gateway or region that rejects them. Local
-prefix-binding safeguards stay on, and a prefix-mismatch rejection is retried once with
-bound thinking stripped.
+같은 `compat` 슬롯에서 Bedrock 모델용 `promptCacheMode`(`none`, `automatic`, `explicit`),
+`supportsLongPromptCacheRetention`, `promptCacheMinimumTokens`, `promptCacheMaximumCheckpoints`,
+`supportsForcedToolChoice`(`false`이면 강제 `any`/`tool`을 `auto`로 폴백. Claude Opus/Sonnet 5.5에 내장),
+`supportsThinkingBindingControls`를 허용합니다. 접두사 결합 Claude 모델(Fable 5.1+, Opus/Sonnet/Haiku 5.5)은
+기본적으로 `thinking.block_binding`, `thinking-binding-controls-2026-08-01` 베타,
+`/input_transformations` 응답 경로를 보냅니다. 거부하는 게이트웨이/지역에는
+`supportsThinkingBindingControls: false`를 설정하세요. 로컬 접두사 결합 보호는 유지되며,
+접두사 불일치 거부 시 결합된 사고를 제거하고 한 번 재시도합니다.
 
-By default `bedrock-converse-stream` requests go to `bedrock-runtime.{region}.amazonaws.com`.
-An explicit per-request region or a model ARN's region wins. Otherwise an ambient region from
-`AWS_REGION`/`AWS_DEFAULT_REGION`/the AWS profile is used when compatible with the inference
-profile's geo prefix; a compatible guardrail ARN region or the geo's default region is the
-fallback. Models without a recognized geo prefix use the ambient region, then the guardrail ARN
-region, then `us-east-1`. Set `baseUrl` on `providers.amazon-bedrock` (or on a custom provider using
-`api: bedrock-converse-stream`) to send requests somewhere else instead — a VPC/PrivateLink
-endpoint, a FIPS host, or a gateway. Any path or query string on the `baseUrl` is kept — the path
-as a prefix, the query appended to the final URL (and included in SigV4's canonical request when
-signing) — so `{baseUrl}/model/{id}/converse-stream[?query]` is the final URL. That covers gateways
-that authenticate via a query parameter instead of a header:
+기본 `bedrock-converse-stream` 요청은 `bedrock-runtime.{region}.amazonaws.com`으로 갑니다.
+요청별 명시적 지역 또는 모델 ARN 지역이 우선합니다. 없으면 `AWS_REGION`/`AWS_DEFAULT_REGION`/AWS 프로필의
+주변 지역이 추론 프로필의 지역 접두사와 호환될 때 사용하며, 호환 가드레일 ARN 지역 또는 해당 지역 기본값으로
+폴백합니다. 알려진 지역 접두사가 없는 모델은 주변 지역, 가드레일 ARN 지역, `us-east-1` 순으로 사용합니다.
+VPC/PrivateLink 엔드포인트, FIPS 호스트, 게이트웨이 등 다른 곳으로 보내려면 `providers.amazon-bedrock` 또는
+`api: bedrock-converse-stream` 사용자 지정 제공자에 `baseUrl`을 설정하세요. `baseUrl`의 경로는 접두사로,
+쿼리는 최종 URL 끝에 유지하며 서명 시 SigV4 정규 요청에도 포함합니다.
+최종 URL은 `{baseUrl}/model/{id}/converse-stream[?query]`입니다.
+따라서 헤더 대신 쿼리 매개변수로 인증하는 게이트웨이도 지원합니다.
 
 ```yaml
 providers:
@@ -994,44 +994,43 @@ providers:
     baseUrl: https://vpce-0123456789abcdef0.bedrock-runtime.us-east-1.vpce.amazonaws.com
 ```
 
-One host shape is not taken literally: a `baseUrl` of exactly
-`bedrock-runtime.{region}.amazonaws.com` is AWS's own endpoint, and its region segment is replaced
-with the resolved region — signing has to match the region it sends to, and every bundled Bedrock
-model already carries such a `baseUrl`. Use a distinct host (VPC endpoint, `-fips`, gateway) to
-pin an origin exactly.
+한 가지 호스트 형식은 그대로 사용하지 않습니다. `baseUrl`이 정확히 `bedrock-runtime.{region}.amazonaws.com`이면
+AWS 자체 엔드포인트이므로 지역 부분을 확인된 지역으로 바꿉니다. 서명 지역은 전송 지역과 일치해야 하며 모든
+번들 Bedrock 모델에 이미 이런 `baseUrl`이 있습니다. 원본을 정확히 고정하려면 VPC 엔드포인트,
+`-fips`, 게이트웨이 같은 별도 호스트를 사용하세요.
 
-Region resolution itself is unaffected by `baseUrl`, because SigV4 still signs with a real AWS
-region — set `AWS_REGION` or use a region-scoped model id/ARN if the endpoint expects a specific
-one. A gateway that accepts a bearer token instead of SigV4 needs no AWS signing credentials: set the
-provider's `apiKey` (or `AWS_BEARER_TOKEN_BEDROCK`) and signing is skipped. Region resolution still
-controls AWS's default host.
+SigV4는 여전히 실제 AWS 지역으로 서명하므로 `baseUrl`은 지역 확인 자체에 영향을 주지 않습니다.
+엔드포인트가 특정 지역을 요구하면 `AWS_REGION` 또는 지역 범위 모델 ID/ARN을 사용하세요.
+SigV4 대신 bearer 토큰을 받는 게이트웨이는 AWS 서명 자격 증명이 필요 없습니다.
+제공자 `apiKey` 또는 `AWS_BEARER_TOKEN_BEDROCK`을 설정하면 서명을 건너뜁니다.
+지역 확인은 여전히 AWS 기본 호스트를 제어합니다.
 
-### Claude on Bedrock's Anthropic Messages API (`/anthropic`)
+<a id="claude-on-bedrocks-anthropic-messages-api-anthropic"></a>
+### Bedrock Anthropic Messages API의 Claude (`/anthropic`)
 
-Amazon Bedrock also serves Claude through the Anthropic Messages API, under `/anthropic` on both of
-its endpoints. AWS recommends `bedrock-runtime` for new applications
-([Inference using Anthropic Messages API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html)).
-Claude Opus 4.7 and later are served here; Opus 4.6 and earlier stay on Converse
-([Claude in Amazon Bedrock](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock)).
+Amazon Bedrock은 두 엔드포인트의 `/anthropic`에서 Anthropic Messages API로 Claude도 제공합니다.
+AWS는 새 애플리케이션에 `bedrock-runtime`을 권장합니다
+([Anthropic Messages API로 추론](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html)).
+Claude Opus 4.7 이상은 여기서 제공하며 Opus 4.6 이하는 Converse에 남습니다
+([Amazon Bedrock의 Claude](https://platform.claude.com/docs/en/build-with-claude/claude-in-amazon-bedrock)).
 
-| Route | Base URL | Provider | Model id |
+| 경로 | 기본 URL | 제공자 | 모델 ID |
 | --- | --- | --- | --- |
-| bedrock-runtime | `https://bedrock-runtime.<region>.amazonaws.com/anthropic` | `amazon-bedrock` | inference profile, e.g. `us.anthropic.claude-opus-5-5` |
+| bedrock-runtime | `https://bedrock-runtime.<region>.amazonaws.com/anthropic` | `amazon-bedrock` | 추론 프로필, 예: `us.anthropic.claude-opus-5-5` |
 | bedrock-mantle | `https://bedrock-mantle.<region>.api.aws/anthropic` | `bedrock-mantle` | `anthropic.claude-opus-5-5` |
 
-The FIPS host (`bedrock-runtime-fips.<region>.amazonaws.com`) and AWS PrivateLink endpoint-specific
-hosts (`<vpce-id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com`, likewise for
-`bedrock-runtime-fips` and `bedrock-mantle`) are recognized as the same routes. A VPC endpoint with
-private DNS enabled needs no change: it answers on the public hostnames
-([Bedrock VPC endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html)).
+FIPS 호스트(`bedrock-runtime-fips.<region>.amazonaws.com`)와 AWS PrivateLink 엔드포인트별 호스트
+(`<vpce-id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com`, `bedrock-runtime-fips`와
+`bedrock-mantle`도 동일)는 같은 경로로 인식합니다. 비공개 DNS가 켜진 VPC 엔드포인트는
+공개 호스트 이름에 응답하므로 바꿀 필요가 없습니다
+([Bedrock VPC 엔드포인트](https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html)).
 
-Define the model under the provider shown in the table, with `api: anthropic-messages`. Those two
-provider ids carry the catalog rule that enables Claude's on-demand compaction
-([Compaction](./compaction.md)). Set `auth: apiKey` so OMP sends plain API-key requests; without
-it, custom `anthropic-messages` models get Claude Code request shaping. The examples authenticate
-with an [Amazon Bedrock API key](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html);
-OMP does not sign runtime-route requests with SigV4. Write the region into the runtime URL. Mantle
-URLs may keep `{region}`, which OMP fills in from your AWS region settings.
+표의 제공자 아래에 `api: anthropic-messages`로 모델을 정의하세요. 두 제공자 ID에는 Claude의 요청 시 압축을
+활성화하는 카탈로그 규칙이 있습니다([압축](./compaction.md)). 일반 API 키 요청을 보내도록 `auth: apiKey`를
+설정하세요. 없으면 사용자 지정 `anthropic-messages` 모델은 Claude Code 요청 구성을 사용합니다.
+예제는 [Amazon Bedrock API 키](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html)로
+인증합니다. OMP는 runtime 경로 요청을 SigV4로 서명하지 않습니다. runtime URL에는 지역을 적으세요.
+Mantle URL은 `{region}`을 유지할 수 있으며 OMP가 AWS 지역 설정에서 채웁니다.
 
 ```yaml
 providers:
@@ -1057,18 +1056,17 @@ providers:
         input: [text, image]
 ```
 
-Requests on these routes are shaped by `compat.bedrockMessagesApi`, which OMP detects from a Bedrock
-`/anthropic` `baseUrl` under any provider id. Both routes reject the tool `strict` field, so OMP drops
-it. OMP also fits `metadata.user_id` to
-Bedrock's [request-metadata pattern](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html),
-which the runtime route enforces: a value that fits is kept, otherwise its session id is sent,
-otherwise it is left out. Both run after any `onPayload` hook. Both routes verify thinking
-signatures, so by default OMP does not replay unsigned thinking to them.
+이 경로의 요청은 `compat.bedrockMessagesApi`로 구성하며, OMP는 모든 제공자 ID에서 Bedrock
+`/anthropic` `baseUrl`을 통해 감지합니다. 두 경로 모두 도구 `strict` 필드를 거부하므로 제거합니다.
+또한 runtime 경로가 강제하는 Bedrock [요청 메타데이터 패턴](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)에
+`metadata.user_id`를 맞춥니다. 값이 맞으면 유지하고, 아니면 세션 ID를 보내며 그것도 없으면 생략합니다.
+두 처리는 `onPayload` 훅 후에 실행합니다. 두 경로 모두 사고 서명을 검증하므로 기본적으로
+서명 없는 사고를 재전송하지 않습니다.
 
-The URL check cannot see a Bedrock route behind a proxy or an `ANTHROPIC_BASE_URL` reroute of the
-first-party `anthropic` provider; those keep plain Anthropic requests unless you opt in. Set the flag
-in `compat` (provider-wide or under `modelOverrides`) to opt in, or to `false` to opt a Bedrock URL
-out:
+URL 검사는 프록시 뒤 Bedrock 경로나 자체 `anthropic` 제공자의 `ANTHROPIC_BASE_URL` 재라우팅을 볼 수
+없습니다. 명시적으로 활성화하지 않으면 일반 Anthropic 요청을 유지합니다.
+제공자 전체 또는 `modelOverrides` 아래 `compat`에 플래그를 설정해 켜거나, Bedrock URL에서도
+끄려면 `false`를 설정하세요.
 
 ```yaml
 providers:
@@ -1077,15 +1075,16 @@ providers:
       bedrockMessagesApi: true # ANTHROPIC_BASE_URL points at bedrock-runtime /anthropic
 ```
 
-On-demand compaction still needs a model line the catalog grants it to (`amazon-bedrock`,
-`bedrock-mantle`, `anthropic`, or `google-vertex` provider ids); an arbitrary proxy provider id does
-not acquire that capability just from `bedrockMessagesApi`.
+요청 시 압축에는 여전히 카탈로그가 해당 기능을 부여한 모델 계열(`amazon-bedrock`, `bedrock-mantle`,
+`anthropic`, `google-vertex` 제공자 ID)이 필요합니다. 임의 프록시 제공자 ID가
+`bedrockMessagesApi`만으로 그 기능을 얻지는 않습니다.
 
-### Strict tool schemas (`disableStrictTools`)
+<a id="strict-tool-schemas-disablestricttools"></a>
+### 엄격한 도구 스키마 (`disableStrictTools`)
 
-Anthropic's API supports a `strict` field on tool definitions that forces the model to always follow the provided schema exactly. OMP enables it by default for a small allowlist of high-frequency built-in `anthropic-messages` tools (`python`, `edit`, and `find`) whose schemas fit Anthropic's strict grammar limits; other tools still send normalized schemas but omit `strict`. `bash` is left out: strict decoding fixes property order, so once a call has written `async`, the `timeout` declared before it can no longer be emitted.
+Anthropic API는 모델이 제공 스키마를 항상 정확히 따르도록 하는 도구 정의 `strict` 필드를 지원합니다. OMP는 스키마가 Anthropic 엄격 문법 제한에 맞는 자주 쓰는 내장 `anthropic-messages` 도구의 작은 허용 목록(`python`, `edit`, `find`)에서 기본 활성화합니다. 다른 도구도 정규화 스키마를 보내지만 `strict`는 생략합니다. `bash`는 제외합니다. 엄격 디코딩은 속성 순서를 고정하므로 호출이 `async`를 쓴 후에는 그 앞에 선언된 `timeout`을 출력할 수 없기 때문입니다.
 
-Third-party providers that front the Anthropic API (AWS Bedrock, Azure, self-hosted proxies) do not always implement this field and will reject requests that include it. Set `disableStrictTools: true` at the provider level to opt out of strict mode for the allowlisted tools:
+Anthropic API 앞의 타사 제공자(AWS Bedrock, Azure, 자체 호스팅 프록시)는 이 필드를 항상 구현하지는 않아 포함 요청을 거부할 수 있습니다. 허용 목록 도구의 엄격 모드를 끄려면 제공자 수준에 `disableStrictTools: true`를 설정하세요.
 
 ```yaml
 providers:
@@ -1107,19 +1106,19 @@ providers:
           cacheWrite: 3.75
 ```
 
-`disableStrictTools` is a provider-level flag that applies to all models in the provider. It disables the Anthropic `strict` marker only for tools that OMP would otherwise mark strict; it does not change runtime tool argument validation. OMP can automatically retry without strict tools after Anthropic reports a strict-grammar-too-large error before the first streamed token, but proxies that reject the `strict` field for other reasons should set this flag explicitly.
+`disableStrictTools`는 제공자의 모든 모델에 적용되는 제공자 수준 플래그입니다. OMP가 원래 strict로 표시할 도구의 Anthropic `strict` 마커만 끄며 런타임 도구 인수 검증은 바꾸지 않습니다. 첫 스트리밍 토큰 전에 Anthropic이 엄격 문법 과대 오류를 보고하면 OMP는 strict 도구 없이 자동 재시도할 수 있지만, 다른 이유로 `strict`를 거부하는 프록시는 플래그를 명시해야 합니다.
 
-Tool schemas going on the wire are normalized by the unified flow in
-`packages/ai/src/utils/schema/normalize.ts` (Google/CCA/MCP dispatchers
-plus the OpenAI strict-mode sanitize+enforce pipeline). See
-[`ai-schema-normalize.md`](./ai-schema-normalize.md) for the strict-mode
-edge cases (local `$ref` inlining, single-item `allOf` collapse,
-`anyOf`-wrapper description hoist, enum/const primitive-type inference)
-and the per-provider dispatcher mapping.
+전송 도구 스키마는 `packages/ai/src/utils/schema/normalize.ts`의 통합 흐름으로 정규화합니다
+(Google/CCA/MCP 디스패처 및 OpenAI 엄격 모드 정리+강제 파이프라인).
+로컬 `$ref` 인라인화, 단일 항목 `allOf` 통합, `anyOf` 래퍼 설명 끌어올리기,
+enum/const 기본 타입 추론 같은 엄격 모드 경계 사례와 제공자별 디스패처 매핑은
+[`ai-schema-normalize.md`](./ai-schema-normalize.md)를 참조하세요.
 
-## Practical examples
+<a id="practical-examples"></a>
+## 실제 예제
 
-### Local OpenAI-compatible endpoint (no auth)
+<a id="local-openai-compatible-endpoint-no-auth"></a>
+### 로컬 OpenAI 호환 엔드포인트(인증 없음)
 
 ```yaml
 providers:
@@ -1132,7 +1131,7 @@ providers:
         name: Qwen 2.5 Coder 32B (local)
 ```
 
-For oMLX or another local OpenAI-compatible server with a discoverable `/v1/models` endpoint, prefer discovery instead of listing models by hand. Set `api` to the endpoint family your server actually exposes: `openai-completions` uses `/v1/chat/completions`; servers that expose `/v1/responses` need `openai-responses` instead.
+탐색 가능한 `/v1/models` 엔드포인트가 있는 oMLX 또는 다른 로컬 OpenAI 호환 서버에서는 모델 수동 나열보다 탐색을 권장합니다. 서버가 실제 제공하는 엔드포인트 계열로 `api`를 설정하세요. `openai-completions`는 `/v1/chat/completions`를 사용하며 `/v1/responses` 서버에는 `openai-responses`가 필요합니다.
 
 ```yaml
 providers:
@@ -1144,7 +1143,7 @@ providers:
       type: openai-models-list
 ```
 
-The built-in vLLM provider can be pointed at a non-default endpoint without declaring a custom discovery type. OMP uses vLLM's `/v1/models` metadata and preserves vLLM's `max_model_len` field as the discovered context window.
+내장 vLLM 제공자는 사용자 지정 탐색 유형 선언 없이 기본값이 아닌 엔드포인트로 지정할 수 있습니다. OMP는 vLLM의 `/v1/models` 메타데이터를 사용하며 `max_model_len` 필드를 탐색된 컨텍스트 창으로 유지합니다.
 
 ```yaml
 providers:
@@ -1153,7 +1152,7 @@ providers:
     auth: none
 ```
 
-For multiple vLLM endpoints, use arbitrary provider IDs with the generic OpenAI-compatible discovery path. Set `auth: none` for local no-auth servers or `apiKey` for authenticated ones. Generic discovery reads `max_model_len` first and then `context_length` as a generic OpenAI-compatible fallback.
+여러 vLLM 엔드포인트에는 일반 OpenAI 호환 탐색 경로와 임의 제공자 ID를 사용하세요. 인증 없는 로컬 서버에는 `auth: none`, 인증 서버에는 `apiKey`를 설정합니다. 일반 탐색은 먼저 `max_model_len`을 읽고 일반 OpenAI 호환 폴백으로 `context_length`를 읽습니다.
 
 ```yaml
 providers:
@@ -1171,7 +1170,8 @@ providers:
       type: openai-models-list
 ```
 
-### Hosted proxy with env-based key
+<a id="hosted-proxy-with-env-based-key"></a>
+### 환경 기반 키를 사용하는 호스팅 프록시
 
 ```yaml
 providers:
@@ -1189,7 +1189,8 @@ providers:
         input: [text, image]
 ```
 
-### Override built-in provider route + model metadata
+<a id="override-built-in-provider-route--model-metadata"></a>
+### 내장 제공자 경로 및 모델 메타데이터 재정의
 
 ```yaml
 providers:
@@ -1205,15 +1206,17 @@ providers:
             only: [anthropic]
 ```
 
-## Legacy consumer caveat
+<a id="legacy-consumer-caveat"></a>
+## 레거시 사용 시 주의
 
-Most model configuration now flows through `models.yml` / `models.yaml` via `ModelRegistry`.
-Explicit `.json` / `.jsonc` paths remain supported when passed programmatically; the active agent
-directory's `models.yml` takes precedence over `models.yaml`.
+대부분의 모델 구성은 이제 `ModelRegistry`를 통해 `models.yml` / `models.yaml`에서 처리합니다.
+프로그래밍 방식으로 전달한 명시적 `.json` / `.jsonc` 경로도 계속 지원합니다.
+활성 에이전트 디렉터리의 `models.yml`은 `models.yaml`보다 우선합니다.
 
-## Failure mode
+<a id="failure-mode"></a>
+## 실패 동작
 
-If `models.yml` / `models.yaml` fails schema or validation checks:
+`models.yml` / `models.yaml`이 스키마 또는 검증에 실패하면 다음과 같습니다.
 
-- registry keeps operating with built-in models
-- error is exposed via `ModelRegistry.getError()` and surfaced in UI/notifications
+- 레지스트리는 내장 모델로 계속 동작합니다.
+- 오류는 `ModelRegistry.getError()`로 노출되며 UI/알림에도 표시됩니다.

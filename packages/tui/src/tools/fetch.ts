@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { isReadableUrlPath, readSelectorRangeStart } from "./read";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
@@ -131,7 +132,7 @@ export function renderReadUrlCall(
 	const description = formatReadUrlDescription(url);
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
-	const text = renderStatusLine({ icon: "pending", title: "Read", description, meta }, uiTheme);
+	const text = renderStatusLine({ icon: "pending", title: localize("Read"), description, meta }, uiTheme);
 	return new Text(text, 0, 0);
 }
 
@@ -139,7 +140,7 @@ export function renderReadUrlCall(
 function readUrlHead(input: string, meta: readonly string[] = []): NativeToolHead {
 	const link = input ? readUrlLinkSpan(input) : undefined;
 	return {
-		title: "Read",
+		title: localize("Read"),
 		target: link?.t || undefined,
 		targetKind: "text",
 		href: link?.href,
@@ -161,11 +162,11 @@ export function describeReadUrlResult(result: {
 	const details = result.details;
 	if (result.isError || !details) {
 		const urlText = details?.finalUrl ?? details?.url ?? "";
-		const message = plainText(resultText(result) || "No response data").replace(/^Error:\s*/, "");
+		const message = plainText(resultText(result) || localize("No response data")).replace(/^Error:\s*/, "");
 		return {
 			tool: readUrlHead(urlText),
 			tone: "error",
-			body: [errorText(message.trim() || "Read failed")],
+			body: [errorText(message.trim() || localize("Read failed"))],
 		};
 	}
 
@@ -203,8 +204,8 @@ export function describeReadUrlResult(result: {
 						[
 							span(
 								truncation?.artifactId
-									? `Output truncated · ${formatFullOutputReference(truncation.artifactId)}`
-									: "Output truncated",
+									? localize("Output truncated · {0}", `${formatFullOutputReference(truncation.artifactId)}`)
+									: localize("Output truncated"),
 								"warning",
 							),
 						],
@@ -225,10 +226,10 @@ export function renderReadUrlResult(
 
 	if (result.isError || !details) {
 		const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
-		const errorText = (rawErrorText || "No response data").replace(/^Error:\s*/, "");
+		const errorText = (rawErrorText || localize("No response data")).replace(/^Error:\s*/, "");
 		const urlText = details?.finalUrl ?? details?.url ?? "";
 		const description = urlText ? formatReadUrlDescription(urlText) : undefined;
-		const header = renderStatusLine({ icon: "error", title: "Read", description }, uiTheme);
+		const header = renderStatusLine({ icon: "error", title: localize("Read"), description }, uiTheme);
 		const errorLines = sanitizeDisplayLines(errorText).map(line => uiTheme.fg("error", line));
 		return framedToolCard(uiTheme, () => ({
 			header,
@@ -246,7 +247,7 @@ export function renderReadUrlResult(
 	const header = renderStatusLine(
 		{
 			icon: truncated ? "warning" : "success",
-			title: "Read",
+			title: localize("Read"),
 			description,
 		},
 		uiTheme,
@@ -273,7 +274,7 @@ export function renderReadUrlResult(
 	metadataLines.push(`${uiTheme.fg("muted", "Lines:")} ${lineLabel}`);
 	metadataLines.push(`${uiTheme.fg("muted", "Chars:")} ${charCount}`);
 	if (truncated) {
-		metadataLines.push(uiTheme.fg("warning", `${uiTheme.status.warning} Output truncated`));
+		metadataLines.push(uiTheme.fg("warning", localize("{0} Output truncated", `${uiTheme.status.warning}`)));
 		if (truncation?.artifactId) metadataLines.push(formatStyledArtifactReference(truncation.artifactId, uiTheme));
 	}
 	if (hasNotes) {
@@ -313,8 +314,8 @@ export function renderReadUrlResult(
 				header,
 				phase: truncated ? "warning" : "success",
 				sections: [
-					{ label: uiTheme.fg("toolTitle", "Metadata"), content: metadataLines },
-					{ label: uiTheme.fg("toolTitle", "Content Preview"), content: contentPreviewLines },
+					{ label: uiTheme.fg("toolTitle", localize("Metadata")), content: metadataLines },
+					{ label: uiTheme.fg("toolTitle", localize("Content Preview")), content: contentPreviewLines },
 				],
 				applyBg: false,
 			};

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Korean translations for settings, startup help, and input hints, with terminal display-width handling.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

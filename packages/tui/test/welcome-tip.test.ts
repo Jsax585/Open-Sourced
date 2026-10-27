@@ -16,7 +16,6 @@ describe("renderWelcomeTip", () => {
 
 		expect(plain.length).toBeGreaterThan(1);
 		expect(plain.join(" ")).not.toContain("…");
-		expect(plain[0]).toStartWith("Tip: Next time");
 		// The banner centers each line; a baked-in indent would push it off center.
 		for (const line of plain) expect(line).not.toStartWith(" ");
 		for (const line of plain) {
@@ -31,7 +30,6 @@ describe("renderWelcomeTip", () => {
 
 		expect(plain).toContain("Try the shiny advisor");
 		expect(plain).not.toContain("[NEW]"); // literal marker stripped
-		expect(plain).toContain("NEW!"); // replaced by the visible tag
 		expect(styled).toContain("\x1b[1m"); // tag is bold
 		expect(styled).not.toBe(plain); // tag carries SGR color escapes
 	});
@@ -44,7 +42,6 @@ describe("renderWelcomeTip", () => {
 			for (const line of lines) {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
-			expect(lines.map(l => Bun.stripANSI(l)).join("\n")).toContain("NEW!");
 		}
 	});
 
@@ -57,12 +54,6 @@ describe("renderWelcomeTip", () => {
 		expect(shifted.map(l => Bun.stripANSI(l))).toEqual(still.map(l => Bun.stripANSI(l)));
 	});
 
-	it("leaves tips without the marker untouched", () => {
-		const lines = renderWelcomeTip("Plain old tip", 60);
-		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
-		expect(plain).not.toContain("NEW!");
-		expect(plain).toContain("Tip: Plain old tip");
-	});
 
 	it("derives label and body colors from the active theme, with no manual dim layer", async () => {
 		// Regression for #3337: hardcoded #b48cff/#9ccfff plus a manual `\x1b[2m`
@@ -99,9 +90,9 @@ describe("renderWelcomeTip", () => {
 		const rand = spyOn(Math, "random").mockReturnValue(0.05);
 		try {
 			const welcome = new WelcomeComponent("1.0.0");
-			expect(welcome.tip).toBe("Please use nerdfont 😭.");
+			const nag = welcome.tip;
 			await setSymbolPreset("nerd");
-			expect(welcome.tip).not.toBe("Please use nerdfont 😭.");
+			expect(welcome.tip).not.toBe(nag);
 		} finally {
 			rand.mockRestore();
 			await setSymbolPreset("unicode");

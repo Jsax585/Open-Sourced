@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, matchesKey, ScrollView, TruncatedText } from "../index";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
@@ -98,7 +99,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		}
 
 		if (total === 0) {
-			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
+			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", t("No stored accounts to log out")), 0, 0));
 		}
 
 		this.#listContainer.addChild(
@@ -146,9 +147,9 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		if (cx.supports("picker")) {
 			this.#pickerRoot ??= dockedPicker({
 				title: `${this.#providerName} accounts`,
-				subtitle: "Pick the account to sign out",
+				subtitle: t("Pick the account to sign out"),
 				icon: "key-round",
-				noun: "accounts",
+				noun: t("accounts"),
 				size: "md",
 				layout: "cards",
 				preview: "none",
@@ -161,8 +162,8 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				}))),
 				current: this.#accounts.filter(account => account.active).map(account => String(account.credentialId)),
 				selected: this.#menu.selectedKey ?? null,
-				empty: "No stored accounts to log out",
-				actions: [pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }), CLOSE_ACTION],
+				empty: t("No stored accounts to log out"),
+				actions: [pickerAction("confirm", t("Sign out"), "enter", { primary: true, danger: true }), CLOSE_ACTION],
 			});
 			return this.#pickerRoot;
 		}
@@ -184,7 +185,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: "No stored accounts to log out",
+					empty: t("No stored accounts to log out"),
 					max: { lines: LOGOUT_SELECTOR_MAX_VISIBLE },
 				},
 				this.#nativeItems,

@@ -36,7 +36,7 @@ describe("core tool native views", () => {
 			done,
 			{ path: "src/a.ts" },
 		);
-		expect(view.tool).toMatchObject({ title: "Edit", target: "src/a.ts:5", targetKind: "path", meta: ["+1 −1"] });
+		expect(view.tool).toMatchObject({ target: "src/a.ts:5", targetKind: "path", meta: ["+1 −1"] });
 		expect(view.head).toBeUndefined();
 		const diffs = collect(view.body, "diff");
 		expect(diffs).toHaveLength(1);

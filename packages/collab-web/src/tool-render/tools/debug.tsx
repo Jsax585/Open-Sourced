@@ -1,5 +1,7 @@
 /** `debug` — DAP debugger sessions: launch/attach, breakpoints, stepping, evaluate. */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
+import { formatStatus } from "../../lib/format";
 import { Badge, CodeBlock, Kv, KvGrid, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, display, isRecord, normalizeWs, num, str, truncate } from "../util";
@@ -41,7 +43,7 @@ function snapshotOf(result: ToolRenderProps["result"]): SessionSnapshot | null {
 
 function actionOf(props: ToolRenderProps): string {
 	const action = str(props.args.action) ?? str(detailsRecord(props.result)?.action);
-	return action ? action.replace(/_/g, " ") : "request";
+	return action ? action.replace(/_/g, " ") : t("request");
 }
 
 /** Mirrors the TUI's summarizeDebugCall target priority. */
@@ -79,35 +81,35 @@ function Summary(props: ToolRenderProps): ReactNode {
 
 /** Scalar args worth a KvGrid row, in display order (program/file/expression are special-cased). */
 const SCALAR_ARGS: ReadonlyArray<readonly [key: string, label: string]> = [
-	["adapter", "adapter"],
-	["cwd", "cwd"],
-	["function", "function"],
-	["name", "name"],
-	["condition", "condition"],
-	["hit_condition", "hit condition"],
-	["context", "context"],
-	["frame_id", "frame id"],
-	["scope_id", "scope id"],
-	["variable_ref", "variable ref"],
+	["adapter", t("adapter")],
+	["cwd", t("cwd")],
+	["function", t("function")],
+	["name", t("name")],
+	["condition", t("condition")],
+	["hit_condition", t("hit condition")],
+	["context", t("context")],
+	["frame_id", t("frame id")],
+	["scope_id", t("scope id")],
+	["variable_ref", t("variable ref")],
 	["pid", "pid"],
-	["host", "host"],
-	["port", "port"],
-	["levels", "levels"],
-	["memory_reference", "memory ref"],
-	["instruction_reference", "instruction ref"],
-	["instruction_count", "instruction count"],
-	["instruction_offset", "instruction offset"],
-	["offset", "offset"],
-	["count", "count"],
-	["data", "data"],
-	["data_id", "data id"],
-	["access_type", "access"],
-	["command", "command"],
-	["resolve_symbols", "resolve symbols"],
-	["allow_partial", "allow partial"],
-	["start_module", "start module"],
-	["module_count", "module count"],
-	["timeout", "timeout"],
+	["host", t("host")],
+	["port", t("port")],
+	["levels", t("levels")],
+	["memory_reference", t("memory ref")],
+	["instruction_reference", t("instruction ref")],
+	["instruction_count", t("instruction count")],
+	["instruction_offset", t("instruction offset")],
+	["offset", t("offset")],
+	["count", t("count")],
+	["data", t("data")],
+	["data_id", t("data id")],
+	["access_type", t("access")],
+	["command", t("command")],
+	["resolve_symbols", t("resolve symbols")],
+	["allow_partial", t("allow partial")],
+	["start_module", t("start module")],
+	["module_count", t("module count")],
+	["timeout", t("timeout")],
 ];
 
 function Body(props: ToolRenderProps): ReactNode {
@@ -121,27 +123,27 @@ function Body(props: ToolRenderProps): ReactNode {
 	const argRows: ReactNode[] = [];
 	if (program !== null) {
 		argRows.push(
-			<Kv key="program" k="program">
+			<Kv key="program" k={t("program")}>
 				<PathText path={program} />
 			</Kv>,
 		);
 	}
 	if (programArgs.length > 0) {
 		argRows.push(
-			<Kv key="args" k="args">
+			<Kv key="args" k={t("args")}>
 				{truncate(programArgs.join(" "), 160)}
 			</Kv>,
 		);
 	}
 	if (file !== null) {
 		argRows.push(
-			<Kv key="file" k="file">
+			<Kv key="file" k={t("file\u0004packages/collab-web/src/tool-render/tools/debug.tsx:Body")}>
 				<PathText path={file} from={line ?? undefined} />
 			</Kv>,
 		);
 	} else if (line !== null) {
 		argRows.push(
-			<Kv key="line" k="line">
+			<Kv key="line" k={t("line")}>
 				{line}
 			</Kv>,
 		);
@@ -169,35 +171,35 @@ function Body(props: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{argRows.length > 0 && <KvGrid>{argRows}</KvGrid>}
-			{expression !== null && <CodeBlock code={expression} title="expression" maxLines={8} />}
-			{customArgsJson && <CodeBlock code={customArgsJson} lang="json" title="arguments" maxLines={10} />}
+			{expression !== null && <CodeBlock code={expression} title={t("expression")} maxLines={8} />}
+			{customArgsJson && <CodeBlock code={customArgsJson} lang="json" title={t("arguments")} maxLines={10} />}
 			{snapshot && (
 				<KvGrid>
-					{snapshot.id !== null && <Kv k="session">{snapshot.id}</Kv>}
-					{snapshot.adapter !== null && <Kv k="adapter">{snapshot.adapter}</Kv>}
+					{snapshot.id !== null && <Kv k={t("session")}>{snapshot.id}</Kv>}
+					{snapshot.adapter !== null && <Kv k={t("adapter")}>{snapshot.adapter}</Kv>}
 					{snapshot.status !== null && (
-						<Kv k="status">
-							<Badge tone={snapshot.status === "exited" ? "warn" : "ok"}>{snapshot.status}</Badge>
+						<Kv k={t("status")}>
+							<Badge tone={snapshot.status === "exited" ? "warn" : "ok"}>{formatStatus(snapshot.status)}</Badge>
 						</Kv>
 					)}
 					{snapshot.program !== null && (
-						<Kv k="program">
+						<Kv k={t("program")}>
 							<PathText path={snapshot.program} />
 						</Kv>
 					)}
-					{snapshot.stopReason !== null && <Kv k="stop reason">{snapshot.stopReason}</Kv>}
-					{snapshot.frameName !== null && <Kv k="frame">{snapshot.frameName}</Kv>}
+					{snapshot.stopReason !== null && <Kv k={t("stop reason")}>{snapshot.stopReason}</Kv>}
+					{snapshot.frameName !== null && <Kv k={t("frame")}>{snapshot.frameName}</Kv>}
 					{snapshot.sourcePath !== null && snapshot.line !== null && (
-						<Kv k="location">
+						<Kv k={t("location")}>
 							<PathText
 								path={snapshot.sourcePath}
 								sel={snapshot.column !== null ? `${snapshot.line}:${snapshot.column}` : String(snapshot.line)}
 							/>
 						</Kv>
 					)}
-					{snapshot.exitCode !== null && <Kv k="exit code">{snapshot.exitCode}</Kv>}
+					{snapshot.exitCode !== null && <Kv k={t("exit code")}>{snapshot.exitCode}</Kv>}
 					{snapshot.needsConfigurationDone && (
-						<Kv k="configuration">pending configurationDone — set breakpoints, then continue</Kv>
+						<Kv k={t("configuration")}>{t("pending configurationDone — set breakpoints, then continue")}</Kv>
 					)}
 				</KvGrid>
 			)}

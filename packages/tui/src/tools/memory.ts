@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { NativeToolView, ToolRenderer } from "./renderer";
 /**
  * Inline TUI renderers for the long-term memory tools (`retain`, `recall`,
@@ -79,7 +80,7 @@ function retainComponent(contents: string[], header: string, getExpanded: () => 
 		}
 		const remaining = contents.length - shown.length;
 		if (remaining > 0) {
-			lines.push(`  ${theme.fg("dim", `… ${remaining} more`)} ${formatExpandHint(theme, expanded, true)}`);
+			lines.push(`  ${theme.fg("dim", t("… {0} more\u0004packages/tui/src/tools/memory.ts:retainComponent", `${remaining}`))} ${formatExpandHint(theme, expanded, true)}`);
 		}
 		return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
 	});
@@ -88,7 +89,7 @@ function retainComponent(contents: string[], header: string, getExpanded: () => 
 /** Retained memories as a list, clamped to the collapsed item budget. */
 function describeRetain(contents: string[], summary?: string): NativeToolView {
 	return {
-		head: toolHead("Retain", summary),
+		head: toolHead(t("Retain\u0004packages/tui/src/tools/memory.ts:describeRetain.head"), summary),
 		inline: true,
 		body:
 			contents.length > 0
@@ -109,7 +110,7 @@ export const retainToolRenderer = {
 	mergeCallAndResult: true,
 	renderCall(args: RetainRenderArgs, options: RenderResultOptions, theme: Theme): Component {
 		const contents = retainContents(args);
-		const header = renderStatusLine({ icon: "pending", title: "Retain" }, theme);
+		const header = renderStatusLine({ icon: "pending", title: t("Retain\u0004packages/tui/src/tools/memory.ts:describeRetain.head") }, theme);
 		return retainComponent(contents, header, () => options.expanded, theme);
 	},
 	renderResult(
@@ -119,7 +120,7 @@ export const retainToolRenderer = {
 		args?: RetainRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Retain failed", theme), 0, 0);
+			return new Text(formatErrorMessage(resultText(result).trim() || t("Retain failed"), theme), 0, 0);
 		}
 		const contents = retainContents(args);
 		// `summary` is the tool's own "N memories stored/queued." line; drop the
@@ -128,7 +129,7 @@ export const retainToolRenderer = {
 		const header = renderStatusLine(
 			{
 				iconOverride: theme.styledSymbol("tool.memory", "accent"),
-				title: "Retain",
+				title: t("Retain\u0004packages/tui/src/tools/memory.ts:describeRetain.head"),
 				meta: summary ? [summary] : undefined,
 			},
 			theme,
@@ -146,7 +147,7 @@ export const retainToolRenderer = {
 	): NativeToolView | undefined {
 		return retainResultMemo.get(result, [], () => {
 			if (result.isError)
-				return { ...errorView("Retain", resultText(result).trim() || "Retain failed"), inline: true };
+				return { ...errorView(t("Retain\u0004packages/tui/src/tools/memory.ts:describeRetain.head"), resultText(result).trim() || t("Retain failed")), inline: true };
 			return describeRetain(retainContents(args), resultText(result).trim().replace(/\.$/, ""));
 		});
 	},
@@ -157,7 +158,7 @@ export const recallToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: QueryRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		return new Text(queryHeader("Recall", args.query, "pending", theme), 0, 0);
+		return new Text(queryHeader(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), args.query, "pending", theme), 0, 0);
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -166,16 +167,16 @@ export const recallToolRenderer = {
 		args?: QueryRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Recall failed", theme), 0, 0);
+			return new Text(formatErrorMessage(resultText(result).trim() || t("Recall failed"), theme), 0, 0);
 		}
 		const text = resultText(result).trim();
 		const match = text.match(/^Found (\d+) relevant/);
 		const found = match ? Number(match[1]) : 0;
-		const meta = [found > 0 ? `${found} found` : "no matches"];
+		const meta = [found > 0 ? t("{0} found", `${found}`) : t("no matches")];
 		const header =
 			found > 0
-				? queryHeader("Recall", args?.query, "success", theme, meta, theme.styledSymbol("tool.memory", "accent"))
-				: queryHeader("Recall", args?.query, "warning", theme, meta);
+				? queryHeader(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), args?.query, "success", theme, meta, theme.styledSymbol("tool.memory", "accent"))
+				: queryHeader(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), args?.query, "warning", theme, meta);
 		if (found === 0) {
 			return new Text(header, 0, 0);
 		}
@@ -199,7 +200,7 @@ export const recallToolRenderer = {
 		);
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {
-		return { head: toolHead("Recall", args.query?.trim()), inline: true };
+		return { head: toolHead(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), args.query?.trim()), inline: true };
 	},
 	describeResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -209,9 +210,9 @@ export const recallToolRenderer = {
 		return recallResultMemo.get(result, [], () => {
 			const query = args?.query?.trim();
 			const output = resultText(result).trim();
-			if (result.isError) return { ...errorView("Recall", output || "Recall failed", query), inline: true };
+			if (result.isError) return { ...errorView(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), output || t("Recall failed"), query), inline: true };
 			const found = Number(output.match(/^Found (\d+) relevant/)?.[1] ?? 0);
-			if (found === 0) return { head: toolHead("Recall", query, "no matches"), tone: "warning", inline: true };
+			if (found === 0) return { head: toolHead(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), query, t("no matches")), tone: "warning", inline: true };
 			// Collapsed keeps to the header; expanding reveals the recalled memories.
 			const memories = output
 				.replace(/^[^\n]*\n+/, "")
@@ -219,7 +220,7 @@ export const recallToolRenderer = {
 				.slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED)
 				.join("\n");
 			return {
-				head: toolHead("Recall", query, `${found} found`),
+				head: toolHead(t("Recall\u0004packages/tui/src/tools/memory.ts:recallToolRenderer.renderCall"), query, t("{0} found", `${found}`)),
 				inline: true,
 				body: memories.trim() ? [text([span(plainText(memories), "muted")], { wrap: "word" })] : [],
 				preview: { lines: 0 },
@@ -233,7 +234,7 @@ export const reflectToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
 	renderCall(args: QueryRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		return new Text(queryHeader("Reflect", args.query, "pending", theme), 0, 0);
+		return new Text(queryHeader(t("Reflect\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderCall"), args.query, "pending", theme), 0, 0);
 	},
 	renderResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -242,10 +243,10 @@ export const reflectToolRenderer = {
 		args?: QueryRenderArgs,
 	): Component {
 		if (result.isError) {
-			return new Text(formatErrorMessage(resultText(result).trim() || "Reflect failed", theme), 0, 0);
+			return new Text(formatErrorMessage(resultText(result).trim() || t("Reflect failed\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderResult"), theme), 0, 0);
 		}
 		const header = queryHeader(
-			"Reflect",
+			t("Reflect\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderCall"),
 			args?.query,
 			"success",
 			theme,
@@ -266,7 +267,7 @@ export const reflectToolRenderer = {
 				const remaining = answerLines.length - shown.length;
 				if (remaining > 0) {
 					lines.push(
-						`  ${theme.fg("dim", `… ${remaining} more lines`)} ${formatExpandHint(theme, expanded, true)}`,
+						`  ${theme.fg("dim", t("… {0} more lines", `${remaining}`))} ${formatExpandHint(theme, expanded, true)}`,
 					);
 				}
 				return lines.map(line => truncateToWidth(line, width, Ellipsis.Omit));
@@ -274,7 +275,7 @@ export const reflectToolRenderer = {
 		);
 	},
 	describeCall(args: QueryRenderArgs): NativeToolView {
-		return { head: toolHead("Reflect", args.query?.trim()), inline: true };
+		return { head: toolHead(t("Reflect\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderCall"), args.query?.trim()), inline: true };
 	},
 	describeResult(
 		result: { content: Array<{ type: string; text?: string }>; isError?: boolean },
@@ -284,10 +285,10 @@ export const reflectToolRenderer = {
 		return reflectResultMemo.get(result, [], () => {
 			const query = args?.query?.trim();
 			const answer = resultText(result).trim();
-			if (result.isError) return { ...errorView("Reflect", answer || "Reflect failed", query), inline: true };
+			if (result.isError) return { ...errorView(t("Reflect\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderCall"), answer || t("Reflect failed\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderResult"), query), inline: true };
 			const shown = answer.split("\n").slice(0, PREVIEW_LIMITS.OUTPUT_EXPANDED).join("\n").trim();
 			return {
-				head: toolHead("Reflect", query),
+				head: toolHead(t("Reflect\u0004packages/tui/src/tools/memory.ts:reflectToolRenderer.renderCall"), query),
 				inline: true,
 				body: shown ? [md(shown, { role: "omp.memory.reflect" })] : [],
 				preview: { lines: PREVIEW_LIMITS.OUTPUT_COLLAPSED },

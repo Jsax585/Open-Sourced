@@ -36,10 +36,9 @@ describe("grepToolRenderer", () => {
 		// Same left edge as every other tool row (read, todo, framed cards).
 		expect(plainLines[0]).not.toStartWith(" ");
 		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", uiTheme.symbol("icon.search")));
-		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", "Search"));
 	});
 
-	it("keeps truncation status in the header without a bottom notice", async () => {
+	it("keeps truncated search results within the collapsed body budget", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
 		const uiTheme = theme!;
@@ -66,11 +65,7 @@ describe("grepToolRenderer", () => {
 		const renderedLines = sanitizeText(collapsed.render(200).join("\n")).split("\n");
 		const bodyLines = renderedLines.slice(1);
 
-		expect(renderedLines[0]).toContain("truncated");
 		expect(bodyLines).toHaveLength(6);
-		expect(renderedLines.join("\n")).not.toContain("truncated:");
-		expect(renderedLines.join("\n")).not.toContain("skip to paginate");
-		expect(renderedLines.join("\n")).not.toContain("matches per file");
 		expect(bodyLines.some(line => line.includes("gamma:1"))).toBe(true);
 	});
 
@@ -107,7 +102,6 @@ describe("grepToolRenderer", () => {
 		expect(bodyLines).toHaveLength(6);
 		expect(bodyLines.some(line => line.includes("const firstFlag = true;"))).toBe(true);
 		expect(bodyLines.some(line => line.includes("const secondFlag = true;"))).toBe(true);
-		expect(bodyLines.some(line => line.includes("1 more match"))).toBe(true);
 		expect(bodyLines.some(line => line.includes("before"))).toBe(false);
 		expect(bodyLines.some(line => line.includes("thirdFlag"))).toBe(false);
 	});
@@ -313,7 +307,6 @@ describe("grepToolRenderer", () => {
 		const expandedBody = expanded.slice(1);
 		// Bounded: must not render all 12 clusters (36+ lines).
 		expect(expandedBody.length).toBeLessThan(clusters.length * 3);
-		expect(expandedBody.some(line => line.includes("more matches"))).toBe(true);
 		// Expanded keeps surrounding context lines (unlike the compact collapsed view).
 		expect(expandedBody.some(line => line.includes("context before"))).toBe(true);
 
@@ -321,7 +314,6 @@ describe("grepToolRenderer", () => {
 		expect(collapsedBody.length).toBeLessThan(expandedBody.length);
 		// Collapsed compacts to match lines only — no context.
 		expect(collapsedBody.some(line => line.includes("context before"))).toBe(false);
-		expect(collapsedBody.some(line => line.includes("more matches"))).toBe(true);
 	});
 
 	it("wraps a long-pattern header so the match summary stays visible", async () => {

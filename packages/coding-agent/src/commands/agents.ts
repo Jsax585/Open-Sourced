@@ -2,6 +2,7 @@
  * Manage bundled task agents.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, Command, Flags, renderCommandHelp } from "@oh-my-pi/pi-utils/cli";
 import { type AgentsAction, type AgentsCommandArgs, runAgentsCommand } from "../cli/agents-cli";
 import { agentsHelp as commandHelp } from "../cli/command-help";
@@ -13,25 +14,25 @@ export default class Agents extends Command {
 	static description = commandHelp.description;
 	static args = {
 		action: Args.string({
-			description: "Agents action",
+			description: t("Agents action"),
 			required: false,
 			options: ACTIONS,
 		}),
 	};
 
 	static flags = {
-		force: Flags.boolean({ char: "f", description: "Overwrite existing agent files" }),
-		json: Flags.boolean({ description: "Output JSON" }),
-		dir: Flags.string({ description: "Output directory (overrides --user/--project)" }),
-		user: Flags.boolean({ description: "Write to ~/.omp/agent/agents (default)" }),
-		project: Flags.boolean({ description: "Write to ./.omp/agents" }),
+		force: Flags.boolean({ char: "f", description: t("Overwrite existing agent files") }),
+		json: Flags.boolean({ description: t("Output JSON") }),
+		dir: Flags.string({ description: t("Output directory (overrides --user/--project)") }),
+		user: Flags.boolean({ description: t("Write to ~/.omp/agent/agents (default)") }),
+		project: Flags.boolean({ description: t("Write to ./.omp/agents") }),
 	};
 
 	static examples = [
-		"# Export bundled agents into user config (default)\n  omp agents unpack",
-		"# Export bundled agents into project config\n  omp agents unpack --project",
-		"# Overwrite existing local agent files\n  omp agents unpack --project --force",
-		"# Export into a custom directory\n  omp agents unpack --dir ./tmp/agents --json",
+		t("# Export bundled agents into user config (default)\n  omp agents unpack"),
+		t("# Export bundled agents into project config\n  omp agents unpack --project"),
+		t("# Overwrite existing local agent files\n  omp agents unpack --project --force"),
+		t("# Export into a custom directory\n  omp agents unpack --dir ./tmp/agents --json"),
 	];
 
 	async run(): Promise<void> {

@@ -4,6 +4,7 @@
  * Classifies a source string, resolves it, and loads the catalog.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -100,14 +101,14 @@ export function classifySource(source: string): MarketplaceSourceType {
 		return "local";
 	}
 
-	throw new Error(`Unrecognized source format. Did you mean './${source}' (local) or 'owner/repo' (GitHub)?`);
+	throw new Error(t("Unrecognized source format. Did you mean './{0}' (local) or 'owner/repo' (GitHub)?", `${source}`));
 }
 
 // ── parseMarketplaceCatalog ───────────────────────────────────────────
 
 function assertField(condition: boolean, field: string, filePath: string): asserts condition {
 	if (!condition) {
-		throw new Error(`Missing or invalid field "${field}" in catalog: ${filePath}`);
+		throw new Error(t("Missing or invalid field \"{0}\" in catalog: {1}", `${field}`, `${filePath}`));
 	}
 }
 
@@ -125,11 +126,11 @@ export function parseMarketplaceCatalog(content: string, filePath: string): Mark
 	try {
 		raw = JSON.parse(content);
 	} catch (err) {
-		throw new Error(`Failed to parse marketplace catalog at ${filePath}: ${(err as Error).message}`);
+		throw new Error(t("Failed to parse marketplace catalog at {0}: {1}", `${filePath}`, `${(err as Error).message}`));
 	}
 
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-		throw new Error(`Marketplace catalog at ${filePath} must be a JSON object`);
+		throw new Error(t("Marketplace catalog at {0} must be a JSON object", `${filePath}`));
 	}
 
 	const obj = raw as Record<string, unknown>;
@@ -319,7 +320,7 @@ async function cloneAndReadCatalog(url: string, source: string, cacheDir: string
 		return { catalog, clonePath: tmpDir };
 	} catch (err) {
 		await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-		throw new Error(`Cloned repository ${url}: ${(err as Error).message} (source: ${source})`, { cause: err });
+		throw new Error(t("Cloned repository {0}: {1} (source: {2})", `${url}`, `${(err as Error).message}`, `${source}`), { cause: err });
 	}
 }
 

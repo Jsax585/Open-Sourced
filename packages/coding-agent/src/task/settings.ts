@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
 import {
 	type AgentCompactionThresholdOverride,
@@ -31,8 +32,8 @@ export const cfgTaskIsolationEnabled = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Allow Isolated Subagents",
-		description: "Allow per-task isolation with `isolated: true`; tasks without it run in the shared checkout",
+		label: t("Allow Isolated Subagents"),
+		description: t("Allow per-task isolation with `isolated: true`; tasks without it run in the shared checkout"),
 	},
 });
 
@@ -45,29 +46,29 @@ export const cfgIsolationBackend = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Isolation Backend",
-		description: "Backend used for subagent isolation and worktree cloning",
+		label: t("Isolation Backend"),
+		description: t("Backend used for subagent isolation and worktree cloning"),
 		options: [
-			{ value: "auto", label: "Auto", description: "Let the PAL pick the best available backend" },
-			{ value: "apfs", label: "APFS", description: "macOS clonefile reflink (APFS)" },
-			{ value: "btrfs", label: "btrfs", description: "btrfs subvolume snapshot" },
-			{ value: "zfs", label: "ZFS", description: "ZFS snapshot + clone" },
-			{ value: "reflink", label: "Reflink", description: "Linux FICLONE per-file reflink" },
+			{ value: "auto", label: t("Auto"), description: t("Let the PAL pick the best available backend") },
+			{ value: "apfs", label: "APFS", description: t("macOS clonefile reflink (APFS)") },
+			{ value: "btrfs", label: "btrfs", description: t("btrfs subvolume snapshot") },
+			{ value: "zfs", label: "ZFS", description: t("ZFS snapshot + clone") },
+			{ value: "reflink", label: t("Reflink"), description: t("Linux FICLONE per-file reflink") },
 			{
 				value: "overlayfs",
 				label: "Overlayfs",
-				description: "Linux kernel overlay (or fuse-overlayfs fallback)",
+				description: t("Linux kernel overlay (or fuse-overlayfs fallback)"),
 			},
-			{ value: "projfs", label: "ProjFS", description: "Windows Projected File System" },
+			{ value: "projfs", label: "ProjFS", description: t("Windows Projected File System") },
 			{
 				value: "block-clone",
-				label: "Block clone",
+				label: t("Block clone"),
 				description: "Windows FSCTL_DUPLICATE_EXTENTS_TO_FILE (NTFS/ReFS)",
 			},
 			{
 				value: "rcopy",
-				label: "Recursive copy",
-				description: "git worktree if available, otherwise recursive copy",
+				label: t("Recursive copy"),
+				description: t("git worktree if available, otherwise recursive copy"),
 			},
 		],
 	},
@@ -81,9 +82,9 @@ export const cfgWorktreeClone = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Clone Checkout into Worktrees",
+		label: t("Clone Checkout into Worktrees"),
 		description:
-			"New worktrees from `github pr_checkout` and `git worktree add` in bash start as a copy-on-write clone of the current checkout so ignored build artifacts (node_modules, target) carry over; falls back to a plain checkout when the filesystem cannot clone",
+			t("New worktrees from `github pr_checkout` and `git worktree add` in bash start as a copy-on-write clone of the current checkout so ignored build artifacts (node_modules, target) carry over; falls back to a plain checkout when the filesystem cannot clone"),
 	},
 });
 
@@ -95,9 +96,9 @@ export const cfgWorktreeCleanSource = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Clean Source Checkout on /wt",
+		label: t("Clean Source Checkout on /wt"),
 		description:
-			"When creating a worktree with `/wt`, reset tracked changes and remove untracked files from the original checkout after carrying them over",
+			t("When creating a worktree with `/wt`, reset tracked changes and remove untracked files from the original checkout after carrying them over"),
 	},
 });
 
@@ -110,12 +111,12 @@ export const cfgWorktreeOnStart = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Worktree on Start",
-		description: "Whether fresh interactive sessions start in a new linked worktree",
+		label: t("Worktree on Start"),
+		description: t("Whether fresh interactive sessions start in a new linked worktree"),
 		options: [
-			{ value: "off", label: "Off", description: "Start in the current checkout" },
-			{ value: "ask", label: "Ask", description: "Ask at session start" },
-			{ value: "create", label: "Create", description: "Always start in a new worktree on a `wt/*` branch" },
+			{ value: "off", label: t("Off"), description: t("Start in the current checkout") },
+			{ value: "ask", label: t("Ask"), description: t("Ask at session start") },
+			{ value: "create", label: t("Create"), description: t("Always start in a new worktree on a `wt/*` branch") },
 		],
 	},
 });
@@ -129,16 +130,16 @@ export const cfgWorktreeOnExit = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Worktree on Exit",
-		description: "What to do on exit with worktrees created since omp started (on start or with `/wt`)",
+		label: t("Worktree on Exit"),
+		description: t("What to do on exit with worktrees created since omp started (on start or with `/wt`)"),
 		options: [
-			{ value: "keep", label: "Keep", description: "Leave worktrees in place" },
-			{ value: "ask", label: "Ask", description: "Ask on exit" },
+			{ value: "keep", label: t("Keep"), description: t("Leave worktrees in place") },
+			{ value: "ask", label: t("Ask"), description: t("Ask on exit") },
 			{
 				value: "remove",
-				label: "Remove",
+				label: t("Remove"),
 				description:
-					"Remove clean worktrees; ask when they have uncommitted changes or new commits. Gitignored files (e.g. `.env`) are deleted too",
+					t("Remove clean worktrees; ask when they have uncommitted changes or new commits. Gitignored files (e.g. `.env`) are deleted too"),
 			},
 		],
 	},
@@ -152,9 +153,9 @@ export const cfgTaskIsolationApply = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Apply Isolated Changes",
+		label: t("Apply Isolated Changes"),
 		description:
-			"Automatically apply successful isolated task changes to the parent checkout; disable to retain patch or branch artifacts",
+			t("Automatically apply successful isolated task changes to the parent checkout; disable to retain patch or branch artifacts"),
 	},
 });
 
@@ -167,11 +168,11 @@ export const cfgTaskIsolationMerge = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Isolation Merge Strategy",
-		description: "How isolated task changes are integrated (patch apply or branch merge)",
+		label: t("Isolation Merge Strategy"),
+		description: t("How isolated task changes are integrated (patch apply or branch merge)"),
 		options: [
-			{ value: "patch", label: "Patch", description: "Combine diffs and git apply" },
-			{ value: "branch", label: "Branch", description: "Commit per task, merge with --no-ff" },
+			{ value: "patch", label: t("Patch"), description: t("Combine diffs and git apply") },
+			{ value: "branch", label: t("Branch"), description: t("Commit per task, merge with --no-ff") },
 		],
 	},
 });
@@ -185,11 +186,11 @@ export const cfgTaskIsolationCommits = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Isolation Commit Style",
-		description: "Commit message style for nested repo changes (generic or AI-generated)",
+		label: t("Isolation Commit Style"),
+		description: t("Commit message style for nested repo changes (generic or AI-generated)"),
 		options: [
-			{ value: "generic", label: "Generic", description: "Static commit message" },
-			{ value: "ai", label: "AI", description: "AI-generated commit message from diff" },
+			{ value: "generic", label: t("Generic"), description: t("Static commit message") },
+			{ value: "ai", label: "AI", description: t("AI-generated commit message from diff") },
 		],
 	},
 });
@@ -201,9 +202,9 @@ export const cfgWorktreeBase = register({
 	ui: {
 		tab: "tasks",
 		group: "Isolation",
-		label: "Worktree Base Directory",
+		label: t("Worktree Base Directory"),
 		description:
-			"Base directory for agent-managed worktrees — task-isolation copies, `github` PR checkouts, and `omp worktree` cleanup all live here. Unset uses ~/.omp/wt. Must be an absolute or ~-relative path; relative paths are ignored. The OMP_WORKTREE_DIR env var overrides this.",
+			t("Base directory for agent-managed worktrees — task-isolation copies, `github` PR checkouts, and `omp worktree` cleanup all live here. Unset uses ~/.omp/wt. Must be an absolute or ~-relative path; relative paths are ignored. The OMP_WORKTREE_DIR env var overrides this."),
 	},
 });
 effect(cfgWorktreeBase, value => {
@@ -224,16 +225,16 @@ export const cfgTaskEager = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Prefer Task Delegation",
-		description: "How strongly to push delegating work to subagents",
+		label: t("Prefer Task Delegation"),
+		description: t("How strongly to push delegating work to subagents"),
 		options: [
 			{
 				value: "default",
-				label: "Default",
-				description: "Uses the selected model's policy; some models require an explicit delegation request",
+				label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"),
+				description: t("Uses the selected model's policy; some models require an explicit delegation request"),
 			},
-			{ value: "preferred", label: "Preferred", description: "Adds delegation guidance to the system prompt" },
-			{ value: "always", label: "Always", description: "Prompt guidance plus a first-turn delegation reminder" },
+			{ value: "preferred", label: t("Preferred"), description: t("Adds delegation guidance to the system prompt") },
+			{ value: "always", label: t("Always"), description: t("Prompt guidance plus a first-turn delegation reminder") },
 		],
 	},
 });
@@ -246,9 +247,9 @@ export const cfgTaskBatch = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Batch Task Calls",
+		label: t("Batch Task Calls"),
 		description:
-			"Switch the task tool to its batch shape: one call carries { context, tasks[] } — one subagent per item, with an optional per-item agent (defaulting to the session spawn-policy agent), per-item isolation, and a required shared context prepended to every assignment. With async.enabled=true, each spawn runs as an independent background agent with the normal idle/parked lifecycle; otherwise the call blocks for merged results. Disable to restore the flat single-spawn schema.",
+			t("Switch the task tool to its batch shape: one call carries { context, tasks[] } — one subagent per item, with an optional per-item agent (defaulting to the session spawn-policy agent), per-item isolation, and a required shared context prepended to every assignment. With async.enabled=true, each spawn runs as an independent background agent with the normal idle/parked lifecycle; otherwise the call blocks for merged results. Disable to restore the flat single-spawn schema."),
 	},
 });
 
@@ -259,9 +260,9 @@ export const cfgTaskStructured = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Structured Task Results",
+		label: t("Structured Task Results"),
 		description:
-			"Expose outputSchema/schemaMode on the task tool and return subagent results through the yield tool, validated against caller or agent output schemas. Off: task subagents have no yield tool and return their final message as plain text, except agents whose definition sets structured: true. Eval agent()/workpool spawns always keep structured results.",
+			t("Expose outputSchema/schemaMode on the task tool and return subagent results through the yield tool, validated against caller or agent output schemas. Off: task subagents have no yield tool and return their final message as plain text, except agents whose definition sets structured: true. Eval agent()/workpool spawns always keep structured results."),
 	},
 });
 
@@ -272,9 +273,9 @@ export const cfgTaskSpeculativeLaunch = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Speculative Task Launch",
+		label: t("Speculative Task Launch"),
 		description:
-			"Start each batch subagent as soon as its tasks[] item finishes streaming instead of waiting for the whole task call. Launched agents are aborted if the finished call fails validation, is blocked, or its arguments change. Requires auto-allowed task approval and no extension tool lifecycle handlers.",
+			t("Start each batch subagent as soon as its tasks[] item finishes streaming instead of waiting for the whole task call. Launched agents are aborted if the finished call fails validation, is blocked, or its arguments change. Requires auto-allowed task approval and no extension tool lifecycle handlers."),
 	},
 });
 
@@ -285,9 +286,9 @@ export const cfgTaskEnableEffort = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Per-Task Effort",
+		label: t("Per-Task Effort"),
 		description:
-			"Expose the optional effort parameter on task spawns, allowing callers to override each subagent's thinking level",
+			t("Expose the optional effort parameter on task spawns, allowing callers to override each subagent's thinking level"),
 	},
 });
 
@@ -299,17 +300,17 @@ export const cfgTaskMaxConcurrency = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Max Concurrent Tasks",
-		description: "Maximum number of subagents running concurrently",
+		label: t("Max Concurrent Tasks"),
+		description: t("Maximum number of subagents running concurrently"),
 		options: [
-			{ value: "0", label: "Unlimited" },
-			{ value: "1", label: "1 task" },
-			{ value: "2", label: "2 tasks" },
-			{ value: "4", label: "4 tasks" },
-			{ value: "8", label: "8 tasks" },
-			{ value: "16", label: "16 tasks" },
-			{ value: "32", label: "32 tasks" },
-			{ value: "64", label: "64 tasks" },
+			{ value: "0", label: t("Unlimited") },
+			{ value: "1", label: t("1 task") },
+			{ value: "2", label: t("2 tasks") },
+			{ value: "4", label: t("4 tasks") },
+			{ value: "8", label: t("8 tasks") },
+			{ value: "16", label: t("16 tasks") },
+			{ value: "32", label: t("32 tasks") },
+			{ value: "64", label: t("64 tasks") },
 		],
 	},
 });
@@ -321,9 +322,9 @@ export const cfgTaskEnableLsp = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "LSP in Subagents",
+		label: t("LSP in Subagents"),
 		description:
-			"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
+			t("Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens."),
 	},
 });
 
@@ -335,14 +336,14 @@ export const cfgTaskMaxRecursionDepth = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Max Task Recursion",
-		description: "How many levels deep subagents can spawn their own subagents",
+		label: t("Max Task Recursion"),
+		description: t("How many levels deep subagents can spawn their own subagents"),
 		options: [
-			{ value: "-1", label: "Unlimited" },
-			{ value: "0", label: "None" },
-			{ value: "1", label: "Single" },
-			{ value: "2", label: "Double" },
-			{ value: "3", label: "Triple" },
+			{ value: "-1", label: t("Unlimited") },
+			{ value: "0", label: t("None") },
+			{ value: "1", label: t("Single") },
+			{ value: "2", label: t("Double") },
+			{ value: "3", label: t("Triple") },
 		],
 	},
 });
@@ -354,15 +355,15 @@ export const cfgTaskMaxRuntimeMs = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Max Subagent Runtime",
+		label: t("Max Subagent Runtime"),
 		description:
-			"Hard wall-clock limit per subagent (ms). 0 disables it. Defense-in-depth against provider-side stream hangs that escape the inference-layer watchdog; triggers a normal subagent abort with a 'timed out' reason.",
+			t("Hard wall-clock limit per subagent (ms). 0 disables it. Defense-in-depth against provider-side stream hangs that escape the inference-layer watchdog; triggers a normal subagent abort with a 'timed out' reason."),
 		options: [
-			{ value: "0", label: "Unlimited", description: "Default" },
-			{ value: "300000", label: "5 minutes" },
-			{ value: "900000", label: "15 minutes" },
-			{ value: "1800000", label: "30 minutes" },
-			{ value: "3600000", label: "1 hour" },
+			{ value: "0", label: t("Unlimited"), description: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description") },
+			{ value: "300000", label: t("5 minutes") },
+			{ value: "900000", label: t("15 minutes") },
+			{ value: "1800000", label: t("30 minutes") },
+			{ value: "3600000", label: t("1 hour") },
 		],
 	},
 });
@@ -374,9 +375,9 @@ export const cfgTaskCompletionProbe = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Subagent Completion Probe",
+		label: t("Subagent Completion Probe"),
 		description:
-			"Ask a working subagent, through a cached side request like /btw, to estimate how complete its task is: after 2, 5, 10 and 30 more minutes, then hourly. The estimate shows next to the subagent in wait and task views. Only subagents spawned by the main agent of an interactive session are asked; print, RPC, ACP and SDK runs never probe.",
+			t("Ask a working subagent, through a cached side request like /btw, to estimate how complete its task is: after 2, 5, 10 and 30 more minutes, then hourly. The estimate shows next to the subagent in wait and task views. Only subagents spawned by the main agent of an interactive session are asked; print, RPC, ACP and SDK runs never probe."),
 	},
 });
 
@@ -387,9 +388,9 @@ export const cfgTaskAgentIdleTtlMs = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Agent Idle TTL",
+		label: t("Agent Idle TTL"),
 		description:
-			"How long an idle subagent stays live in memory before being parked to disk (ms). Parked agents are revived automatically when messaged or resumed. 0 keeps idle agents live until exit.",
+			t("How long an idle subagent stays live in memory before being parked to disk (ms). Parked agents are revived automatically when messaged or resumed. 0 keeps idle agents live until exit."),
 	},
 });
 
@@ -400,14 +401,14 @@ export const cfgTaskSoftRequestBudget = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Soft Subagent Request Budget",
+		label: t("Soft Subagent Request Budget"),
 		description:
-			"Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must hand back its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them. A task.agentSoftRequestBudget entry replaces this budget for the agent it names.",
+			t("Soft per-subagent request budget (assistant requests per run). Crossing it injects a wrap-up steering notice (see task.softRequestBudgetNotice); at 1.5x the budget the run is force-stopped and the agent must hand back its partial findings. 0 disables the guard. Bundled scout/sonic agents cap out at a lower built-in budget, so a value below that cap still applies to them. A task.agentSoftRequestBudget entry replaces this budget for the agent it names."),
 		options: [
-			{ value: "0", label: "Disabled" },
-			{ value: "90", label: "90 requests" },
-			{ value: "150", label: "150 requests" },
-			{ value: "200", label: "200 requests", description: "Default" },
+			{ value: "0", label: t("Disabled\u0004packages/coding-agent/src/modes/settings.ts:cfgDisplayShimmer.ui.options.label") },
+			{ value: "90", label: t("90 requests") },
+			{ value: "150", label: t("150 requests") },
+			{ value: "200", label: t("200 requests"), description: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description") },
 		],
 	},
 });
@@ -420,15 +421,15 @@ export const cfgTaskSoftRequestBudget = register({
 function validateAgentSoftRequestBudget(value: unknown): void {
 	if (value === undefined || value === null) return;
 	if (!isRecord(value)) {
-		const received = Array.isArray(value) ? "an array" : `a ${typeof value}`;
+		const received = Array.isArray(value) ? t("an array") : t("a {0}", `${typeof value}`);
 		throw new Error(
-			`Invalid task.agentSoftRequestBudget: expected a map of agent name to request budget, got ${received}.`,
+			t("Invalid task.agentSoftRequestBudget: expected a map of agent name to request budget, got {0}.", `${received}`),
 		);
 	}
 	for (const [agentName, budget] of Object.entries(value)) {
 		if (budget === null || (typeof budget === "number" && Number.isSafeInteger(budget) && budget >= 0)) continue;
 		throw new Error(
-			`Invalid task.agentSoftRequestBudget.${agentName}: expected a non-negative integer request count (0 disables the guard), got ${Bun.inspect(budget)}.`,
+			t("Invalid task.agentSoftRequestBudget.{0}: expected a non-negative integer request count (0 disables the guard), got {1}.", `${agentName}`, `${Bun.inspect(budget)}`),
 		);
 	}
 }
@@ -447,9 +448,9 @@ export const cfgTaskSoftRequestBudgetNotice = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Soft Request Budget Notice",
+		label: t("Soft Request Budget Notice"),
 		description:
-			"Inject one steering notice when a subagent crosses its soft request budget, asking it to wrap up before the 1.5x forced-yield stop.",
+			t("Inject one steering notice when a subagent crosses its soft request budget, asking it to wrap up before the 1.5x forced-yield stop."),
 	},
 });
 
@@ -461,9 +462,9 @@ export const cfgTaskMaxEffort = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Maximum Per-Spawn Effort",
+		label: t("Maximum Per-Spawn Effort"),
 		description:
-			"Maximum reasoning effort allowed for the task tool's per-spawn effort hint. Lower values prevent callers from escalating subagents above this ceiling; the default preserves the model's full range.",
+			t("Maximum reasoning effort allowed for the task tool's per-spawn effort hint. Lower values prevent callers from escalating subagents above this ceiling; the default preserves the model's full range."),
 		options: THINKING_EFFORTS.map(getThinkingLevelMetadata),
 	},
 });
@@ -527,9 +528,9 @@ export const cfgTaskPrewalk = register({
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
-		label: "Generic Task Prewalk",
+		label: t("Generic Task Prewalk"),
 		description:
-			"Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, configured from the /agents hub) and user agent `prewalk` frontmatter apply regardless of this toggle.",
+			t("Arm prewalk for the bundled generic `task` subagent: it starts on its resolved model, plans and begins the implementation, then hands off to the 'smol' role at its first edit/write. Per-agent overrides (task.agentPrewalk, configured from the /agents hub) and user agent `prewalk` frontmatter apply regardless of this toggle."),
 	},
 });
 
@@ -540,8 +541,8 @@ export const cfgTaskShowResolvedModelBadge = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: "Show Resolved Model Badge",
-		description: "Display the actual model ID used by each subagent in the task widget status line",
+		label: t("Show Resolved Model Badge"),
+		description: t("Display the actual model ID used by each subagent in the task widget status line"),
 	},
 });
 effect(cfgTaskShowResolvedModelBadge, setFeedModelBadgeEnabled);

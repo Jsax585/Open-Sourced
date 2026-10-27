@@ -5,6 +5,7 @@
  * {@link buildJobTree}) beside the selected one's status, command, facts
  * (cwd, live pids, exit code, artifact) and live output.
  */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Component } from "../tui";
@@ -78,10 +79,10 @@ export interface JobsSheetSource {
 
 /** A job's status as the sheet names it. */
 const STATUS_LABEL: Record<JobsPanelJob["status"], string> = {
-	running: "Running",
-	completed: "Done",
-	failed: "Failed",
-	cancelled: "Cancelled",
+	running: localize("Running"),
+	completed: localize("Done"),
+	failed: localize("Failed"),
+	cancelled: localize("Cancelled"),
 };
 
 /** A job's status color: the list row's icon and the detail's status pill. */
@@ -123,7 +124,7 @@ export class JobsSheet implements Component {
 		role: "omp.overlay.jobs",
 		size: "lg",
 		anchor: "center",
-		head: "Background jobs",
+		head: localize("Background jobs"),
 	} as const;
 	readonly #source: JobsSheetSource;
 	#selectedId: string | undefined;
@@ -158,7 +159,7 @@ export class JobsSheet implements Component {
 		].join("|");
 		const output = detail?.output;
 		if (this.#native?.key === key && this.#native.output === output) return this.#native.node;
-		const close = actionButton("Close", "close", { keys: "escape" });
+		const close = actionButton(localize("Close"), "close", { keys: "escape" });
 		const described = selected
 			? col([
 					node(
@@ -376,8 +377,8 @@ function describeEmpty(): NativeNode {
 		{ role: "omp.jobs.empty", align: "center" },
 		[
 			node("icon", { name: "jobs" }),
-			text("No background jobs", { role: "omp.jobs.empty.title" }),
-			text("Commands and subagent tasks started in the background show up here while they run.", {
+			text(localize("No background jobs"), { role: "omp.jobs.empty.title" }),
+			text(localize("Commands and subagent tasks started in the background show up here while they run."), {
 				role: "omp.jobs.empty.note",
 				wrap: "word",
 			}),
@@ -406,8 +407,8 @@ function describeDetail(
 		job.agentId ? { k: "Agent", v: [span(job.agentId, "mono")] } : undefined,
 		detail?.cwd ? { k: "Directory", v: [span(detail.cwd, "path")] } : undefined,
 		pids.length > 0 && { k: pids.length > 1 ? "PIDs" : "PID", v: [span(pids.join(", "), "num")] },
-		exit !== undefined && { k: "Exit code", v: [span(String(exit), exit === 0 ? "success" : "error")] },
-		detail?.artifactId ? { k: "Full output", v: [span(`artifact://${detail.artifactId}`, "mono")] } : undefined,
+		exit !== undefined && { k: localize("Exit code"), v: [span(String(exit), exit === 0 ? "success" : "error")] },
+		detail?.artifactId ? { k: localize("Full output"), v: [span(`artifact://${detail.artifactId}`, "mono")] } : undefined,
 	]);
 	const children = compact<NativeChild>([
 		row(
@@ -426,7 +427,7 @@ function describeDetail(
 				}),
 				text([span(`${job.type} · ${job.id}`, "mono")], { role: "omp.jobs.id", wrap: "none", truncate: "end" }),
 				node("spacer", { grow: 1 }),
-				cancellable && !settled && actionButton("Cancel job", "cancel", { keys: "x", tone: "error" }),
+				cancellable && !settled && actionButton(localize("Cancel job"), "cancel", { keys: "x", tone: "error" }),
 			]),
 			{ role: "omp.jobs.status", gap: "sm", align: "center" },
 		),
@@ -439,10 +440,10 @@ function describeDetail(
 			"col",
 			{ role: "omp.jobs.out", gap: "sm" },
 			[
-				text("Output", { role: "omp.jobs.label" }),
+				text(localize("Output"), { role: "omp.jobs.label" }),
 				detail?.output
 					? ansi(detail.output, { follow: !settled, role: "omp.jobs.output", max: { h: "16lines" } })
-					: text(settled ? "No output" : "No output yet", { role: "omp.jobs.nooutput" }),
+					: text(settled ? localize("No output") : localize("No output yet"), { role: "omp.jobs.nooutput" }),
 			],
 			"out",
 		),

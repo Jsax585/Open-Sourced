@@ -13,6 +13,7 @@
  * pending state with it, so the published end state is unchanged.
  */
 
+import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import type {
 	AgentSnapshot,
 	AssistantMessage,
@@ -190,7 +191,7 @@ export class GuestClient {
 		if (!this.#welcomed && this.#welcomeTimer === null) {
 			this.#welcomeTimer = setTimeout(() => {
 				this.#welcomeTimer = null;
-				if (!this.#welcomed) this.#end("timed out waiting for the host's welcome");
+				if (!this.#welcomed) this.#end(localize("timed out waiting for the host's welcome"));
 			}, WELCOME_TIMEOUT_MS);
 		}
 	}
@@ -308,7 +309,7 @@ export class GuestClient {
 		this.#clearSnapshotProgressTimer();
 		this.#snapshotProgressTimer = setTimeout(() => {
 			this.#snapshotProgressTimer = null;
-			this.#end("timed out waiting for the host's session snapshot");
+			this.#end(localize("timed out waiting for the host's session snapshot"));
 		}, SNAPSHOT_PROGRESS_TIMEOUT_MS);
 	}
 
@@ -326,10 +327,10 @@ export class GuestClient {
 		} catch (err) {
 			console.warn("collab: failed to apply frame", frame.t, err);
 			if (frame.t === "welcome" && !this.#welcomed) {
-				this.#end(`failed to apply session snapshot: ${err instanceof Error ? err.message : String(err)}`);
+				this.#end(localize("failed to apply session snapshot: {0}", `${err instanceof Error ? err.message : String(err)}`));
 				return;
 			}
-			this.#pushNotice("error", `failed to apply ${frame.t} frame`);
+			this.#pushNotice("error", localize("failed to apply {0} frame", `${frame.t}`));
 			this.#commit();
 		}
 	}
@@ -574,23 +575,23 @@ export class GuestClient {
 				this.#pushNotice(event.level, event.message);
 				break;
 			case "auto_retry_start":
-				this.#pushNotice("info", `retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`);
+				this.#pushNotice("info", localize("retry {0}/{1}: {2}", `${event.attempt}`, `${event.maxAttempts}`, `${event.errorMessage}`));
 				break;
 			case "auto_retry_end":
-				if (!event.success) this.#pushNotice("error", event.finalError ?? "retry failed");
+				if (!event.success) this.#pushNotice("error", event.finalError ?? localize("retry failed"));
 				break;
 			case "auto_compaction_start":
-				this.#pushNotice("info", `compacting context (${event.reason})`);
+				this.#pushNotice("info", localize("compacting context ({0})", `${event.reason}`));
 				break;
 			case "auto_compaction_end":
 				if (!event.skipped) {
 					this.#pushNotice(
 						"info",
 						event.aborted
-							? "compaction aborted"
+							? localize("compaction aborted")
 							: event.errorMessage
-								? `compaction failed: ${event.errorMessage}`
-								: "context compacted",
+								? localize("compaction failed: {0}", `${event.errorMessage}`)
+								: localize("context compacted"),
 					);
 				}
 				break;

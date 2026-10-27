@@ -2,6 +2,7 @@
  * Custom model/provider config file handle and validation.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { FluentType } from "@oh-my-pi/omptype";
 import type { Api, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { AXES } from "@oh-my-pi/pi-catalog/compat/axes";
@@ -66,13 +67,13 @@ export function validateProviderConfiguration(
 				!config.discovery
 			) {
 				throw new Error(
-					`Provider ${providerName}: must specify "baseUrl", "headers", "apiKey", "auth: none", "compat", "disableStrictTools", "guardrailIdentifier", "requestMetadata", "remoteCompaction", "modelOverrides", "discovery", or "models"`,
+					t("Provider {0}: must specify \"baseUrl\", \"headers\", \"apiKey\", \"auth: none\", \"compat\", \"disableStrictTools\", \"guardrailIdentifier\", \"requestMetadata\", \"remoteCompaction\", \"modelOverrides\", \"discovery\", or \"models\"", `${providerName}`),
 				);
 			}
 		}
 	} else {
 		if (!config.baseUrl) {
-			throw new Error(`Provider ${providerName}: "baseUrl" is required when defining custom models.`);
+			throw new Error(t("Provider {0}: \"baseUrl\" is required when defining custom models.", `${providerName}`));
 		}
 		const requiresAuth =
 			mode === "runtime-register"
@@ -81,14 +82,14 @@ export function validateProviderConfiguration(
 		if (requiresAuth) {
 			throw new Error(
 				mode === "runtime-register"
-					? `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`
-					: `Provider ${providerName}: "apiKey" is required when defining custom models unless auth is "none" or "oauth".`,
+					? t("Provider {0}: \"apiKey\" or \"oauth\" is required when defining models.", `${providerName}`)
+					: t("Provider {0}: \"apiKey\" is required when defining custom models unless auth is \"none\" or \"oauth\".", `${providerName}`),
 			);
 		}
 	}
 
 	if (mode === "models-config" && config.discovery && !config.api && config.discovery.type !== "proxy") {
-		throw new Error(`Provider ${providerName}: "api" is required when discovery is enabled at provider level.`);
+		throw new Error(t("Provider {0}: \"api\" is required when discovery is enabled at provider level.", `${providerName}`));
 	}
 
 	// Runners dispatch on `api`, so an explicit `kind` must be one its api serves. An
@@ -97,28 +98,28 @@ export function validateProviderConfiguration(
 		const served = servedKinds(api);
 		if (served === undefined || served.includes(kind)) return;
 		throw new Error(
-			`Provider ${providerName}, ${subject}: kind "${kind}" does not match api "${api}", which serves kind ${KIND_LIST.format(served.map(k => `"${k}"`))}.`,
+			t("Provider {0}, {1}: kind \"{2}\" does not match api \"{3}\", which serves kind {4}.", `${providerName}`, `${subject}`, `${kind}`, `${api}`, `${KIND_LIST.format(served.map(k => `"${k}"`))}`),
 		);
 	};
 	for (const modelDef of models) {
 		if (!hasProviderApi && !modelDef.api) {
 			throw new Error(
 				mode === "runtime-register"
-					? `Provider ${providerName}, model ${modelDef.id}: no "api" specified.`
-					: `Provider ${providerName}, model ${modelDef.id}: no "api" specified. Set at provider or model level.`,
+					? t("Provider {0}, model {1}: no \"api\" specified.", `${providerName}`, `${modelDef.id}`)
+					: t("Provider {0}, model {1}: no \"api\" specified. Set at provider or model level.", `${providerName}`, `${modelDef.id}`),
 			);
 		}
 		if (!modelDef.id) {
-			throw new Error(`Provider ${providerName}: model missing "id"`);
+			throw new Error(t("Provider {0}: model missing \"id\"", `${providerName}`));
 		}
 		const api = modelDef.api ?? config.api;
-		if (modelDef.kind !== undefined && api !== undefined) checkKind(`model ${modelDef.id}`, modelDef.kind, api);
+		if (modelDef.kind !== undefined && api !== undefined) checkKind(t("model {0}", `${modelDef.id}`), modelDef.kind, api);
 		if (mode === "models-config") {
 			if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0) {
-				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
+				throw new Error(t("Provider {0}, model {1}: invalid contextWindow", `${providerName}`, `${modelDef.id}`));
 			}
 			if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0) {
-				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
+				throw new Error(t("Provider {0}, model {1}: invalid maxTokens", `${providerName}`, `${modelDef.id}`));
 			}
 		}
 	}

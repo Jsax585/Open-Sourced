@@ -7,6 +7,7 @@
  * suffix extracts a single frame instead: a bare number is a frame index,
  * anything timestamp-shaped is a seek position.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { rasterizeSvg } from "@oh-my-pi/pi-natives";
 import { isVideoPath } from "@oh-my-pi/pi-tui/prompt/video";
@@ -409,7 +410,7 @@ export async function decodeStillImageJpeg(
 	const release = await ffmpegRelease();
 	if (release && (release.major < 8 || (release.major === 8 && release.minor < 1))) {
 		throw new VideoError(
-			`ffmpeg ${release.major}.${release.minor} cannot decode tiled HEIF images such as camera photos; ffmpeg 8.1 or newer can.`,
+			t("ffmpeg {0}.{1} cannot decode tiled HEIF images such as camera photos; ffmpeg 8.1 or newer can.", `${release.major}`, `${release.minor}`),
 		);
 	}
 	const tmp = await TempDir.create("@omp-still-image-");
@@ -421,12 +422,12 @@ export async function decodeStillImageJpeg(
 			const bytes = await Bun.file(out)
 				.bytes()
 				.catch(() => null);
-			if (!bytes || bytes.length === 0) throw new VideoError("ffmpeg wrote no image.");
+			if (!bytes || bytes.length === 0) throw new VideoError(t("ffmpeg wrote no image."));
 			if (bytes.length <= maxBytes) return bytes;
 			decodedBytes = bytes.length;
 		}
 		throw new VideoError(
-			`It decodes to ${formatByteSize(decodedBytes)} of JPEG, over the ${formatByteSize(maxBytes)} image limit.`,
+			t("It decodes to {0} of JPEG, over the {1} image limit.", `${formatByteSize(decodedBytes)}`, `${formatByteSize(maxBytes)}`),
 		);
 	} finally {
 		await tmp.remove().catch(() => {});

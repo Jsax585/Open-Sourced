@@ -1,7 +1,9 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
 import { APP_NAME, isEnoent } from "@oh-my-pi/pi-utils";
+import { browserLanguagePackScript, localizeBrowserHtml, localizeBrowserScript } from "@oh-my-pi/pi-utils/browser-i18n";
 import { getResolvedThemeColors, getThemeExportColors } from "@oh-my-pi/pi-tui/theme";
 import type { SessionEntry, SessionHeader } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
@@ -30,8 +32,8 @@ export function resolveBundledHtmlAssetPath(assetPath: string, moduleDir: string
 export function getTemplate(): string {
 	if (cachedTemplate) return cachedTemplate;
 	const templateCss = fs.readFileSync(resolveBundledHtmlAssetPath(templateCssPath), "utf8");
-	const templateHtml = fs.readFileSync(resolveBundledHtmlAssetPath(templateHtmlPath as unknown as string), "utf8");
-	const templateJs = fs.readFileSync(resolveBundledHtmlAssetPath(templateJsPath), "utf8");
+	const templateHtml = localizeBrowserHtml(fs.readFileSync(resolveBundledHtmlAssetPath(templateHtmlPath as unknown as string), "utf8"));
+	const templateJs = localizeBrowserScript(fs.readFileSync(resolveBundledHtmlAssetPath(templateJsPath), "utf8"));
 	const toolViewsJs = fs.readFileSync(resolveBundledHtmlAssetPath(toolViewsJsPath), "utf8");
 	const markedJs = fs.readFileSync(resolveBundledHtmlAssetPath(markedJsPath), "utf8");
 	const highlightJs = fs.readFileSync(resolveBundledHtmlAssetPath(highlightJsPath), "utf8");
@@ -43,6 +45,7 @@ export function getTemplate(): string {
 	// Function replacements so `$'`, `$&`, `$$`, etc. inside the embedded
 	// CSS/JS are not interpreted as substitution patterns.
 	cachedTemplate = templateHtml
+		.replace("<template-i18n/>", browserLanguagePackScript)
 		.replace("<template-css/>", () => `<style>${minifiedCss}</style>`)
 		.replace("<template-marked/>", () => `<script>${markedJs}</script>`)
 		.replace("<template-highlight/>", () => `<script>${highlightJs}</script>`)
@@ -229,7 +232,7 @@ export async function exportSessionToHtml(
 	const opts: ExportOptions = typeof options === "string" ? { outputPath: options } : options || {};
 
 	const sessionFile = sm.getSessionFile();
-	if (!sessionFile) throw new Error("Cannot export in-memory session to HTML");
+	if (!sessionFile) throw new Error(localize("Cannot export in-memory session to HTML"));
 
 	const sessionData = buildSessionData(sm, state);
 	if (opts.includeSubSessions !== false) {
@@ -256,7 +259,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 			throwIfMissing: true,
 		});
 	} catch (err) {
-		if (isEnoent(err)) throw new Error(`File not found: ${inputPath}`);
+		if (isEnoent(err)) throw new Error(localize("File not found: {0}", `${inputPath}`));
 		throw err;
 	}
 

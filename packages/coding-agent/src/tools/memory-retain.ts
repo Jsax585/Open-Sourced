@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { MemoryRetainDetails } from "@oh-my-pi/pi-tui/tools/memory";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -41,7 +42,7 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 	/** A global item reaches every project's recall, so it needs the same approval as a file write. */
 	readonly approval = (args: unknown) =>
 		(args as Partial<MemoryRetainParams>).items?.some(item => item.scope === "global") ? "write" : "read";
-	readonly label = "Retain";
+	readonly label = t("Retain");
 	get description(): string {
 		return prompt.render(retainDescription, { globalScope: isGlobalMemoryScopeAvailable(this.session.settings) });
 	}
@@ -66,7 +67,7 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 		if (backend === "mnemopi") {
 			const state = this.session.getMnemopiSessionState?.();
 			if (!state) {
-				throw new Error("Mnemopi backend is not initialised for this session.");
+				throw new Error(t("Mnemopi backend is not initialised for this session."));
 			}
 			return withLoopPhase("mnemopi.retain", () => {
 				// Resolve the global bank first, so an unsupported scoping mode rejects the batch before any item is stored.
@@ -104,11 +105,11 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 						const reason = error instanceof Error ? error.message : String(error);
 						const kept =
 							storedIds.length === 0
-								? "Nothing was stored."
-								: `Stored before the failure and kept: ${storedIds.map((storedId, storedIndex) => `item ${storedIndex + 1} (id ${storedId})`).join(", ")}.`;
-						const untried = index + 1 < params.items.length ? " Later items were not attempted." : "";
+								? t("Nothing was stored.")
+								: t("Stored before the failure and kept: {0}.", `${storedIds.map((storedId, storedIndex) => t("item {0} (id {1})", `${storedIndex + 1}`, `${storedId}`)).join(", ")}`);
+						const untried = index + 1 < params.items.length ? t(" Later items were not attempted.") : "";
 						throw new Error(
-							`Mnemopi did not store item ${index + 1} of ${params.items.length}: ${reason}. ${kept}${untried}`,
+							t("Mnemopi did not store item {1} of {0}: {2}. {3}{4}", `${params.items.length}`, `${index + 1}`, `${reason}`, `${kept}`, `${untried}`),
 							{ cause: error },
 						);
 					}
@@ -116,9 +117,9 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 				}
 
 				const count = params.items.length;
-				const noun = count === 1 ? "memory" : "memories";
+				const noun = t("memory");
 				return {
-					content: [{ type: "text", text: `${count} ${noun} stored.` }],
+					content: [{ type: "text", text: t("{1} {0} stored.", `${noun}`, `${count}`) }],
 					details: { count },
 				};
 			});
@@ -126,10 +127,10 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 
 		const state = this.session.getHindsightSessionState?.();
 		if (!state) {
-			throw new Error("Hindsight backend is not initialised for this session.");
+			throw new Error(t("Hindsight backend is not initialised for this session."));
 		}
 		if (params.items.some(item => item.scope === "global")) {
-			throw new Error("Global memory scope is only available with the Mnemopi backend.");
+			throw new Error(t("Global memory scope is only available with the Mnemopi backend."));
 		}
 
 		// Push every item onto the session-owned queue and return immediately.
@@ -141,9 +142,9 @@ export class MemoryRetainTool implements AgentTool<MemoryRetainSchema, MemoryRet
 		}
 
 		const count = params.items.length;
-		const noun = count === 1 ? "memory" : "memories";
+		const noun = t("memory");
 		return {
-			content: [{ type: "text", text: `${count} ${noun} queued.` }],
+			content: [{ type: "text", text: t("{1} {0} queued.", `${noun}`, `${count}`) }],
 			details: { count },
 		};
 	}

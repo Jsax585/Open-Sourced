@@ -4,6 +4,7 @@
  * This file handles CLI argument parsing and translates them into
  * createAgentSession() options. The SDK does the heavy lifting.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
@@ -277,15 +278,15 @@ function applyProtocolDefaults(host: ProtocolHost, targetSettings: Settings = se
 /** `--no-ui` only applies to RPC modes; reject it elsewhere (exit 1). */
 function rejectNoUiWithoutRpc(args: Pick<Args, "noUi" | "mode">): void {
 	if (!args.noUi || args.mode === "rpc" || args.mode === "rpc-ui") return;
-	process.stderr.write(`${chalk.red("Error: --no-ui requires --mode rpc or --mode rpc-ui")}\n`);
+	process.stderr.write(`${chalk.red(t("Error: --no-ui requires --mode rpc or --mode rpc-ui"))}\n`);
 	process.exit(1);
 }
 
 /** Fail an interactive launch whose stdin is not a terminal: the TUI cannot run there. */
 function exitWithoutTerminal(): never {
 	process.stderr.write(
-		`${chalk.red("Error: interactive mode requires a terminal, but stdin is not a TTY.")}\n` +
-			`Pass a prompt (\`${APP_NAME} -p "…"\`), pipe one on stdin, or use \`--mode rpc\`.\n`,
+		`${chalk.red(t("Error: interactive mode requires a terminal, but stdin is not a TTY."))}\n` +
+			t("Pass a prompt (`{0} -p \"…\"`), pipe one on stdin, or use `--mode rpc`.\n", `${APP_NAME}`),
 	);
 	process.exit(2);
 }
@@ -299,7 +300,7 @@ export async function readPipedInput(): Promise<string | undefined> {
 		? undefined
 		: setTimeout(() => {
 				process.stderr.write(
-					`${chalk.dim(`Reading prompt from piped stdin (waiting for EOF; ${formatKeyHint("ctrl+c")} to abort)…`)}\n`,
+					`${chalk.dim(t("Reading prompt from piped stdin (waiting for EOF; {0} to abort)…", `${formatKeyHint("ctrl+c")}`))}\n`,
 				);
 			}, 1000);
 	notice?.unref?.();
@@ -335,8 +336,8 @@ function armStartupWatchdog(): void {
 		const elapsed = Math.round((Date.now() - startupWatchdogStartedAt) / 1000);
 		const phase = logger.openSpanPath().join(" > ") || "module load / pre-phase work";
 		process.stderr.write(
-			`${chalk.yellow(`Still starting after ${elapsed}s`)}${chalk.dim(` — phase: ${phase}`)}\n` +
-				`${chalk.dim(`  logs: ${getLogPath()} · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers`)}\n`,
+			`${chalk.yellow(t("Still starting after {0}s", `${elapsed}`))}${chalk.dim(t(" — phase: {0}", `${phase}`))}\n` +
+				`${chalk.dim(t("  logs: {0} · re-run with PI_DEBUG_STARTUP=1 for streaming phase markers", `${getLogPath()}`))}\n`,
 		);
 	}, STARTUP_WATCHDOG_INTERVAL_MS);
 	startupWatchdogTimer.unref?.();
@@ -392,7 +393,7 @@ export function buildModelScopeNotification(
 			return `${scopedModel.model.id}${thinkingStr}`;
 		})
 		.join(", ");
-	return { kind: "info", message: `Model scope: ${modelList} (${formatKeyHint("ctrl+p")} to cycle)` };
+	return { kind: "info", message: t("Model scope: {0} ({1} to cycle)", `${modelList}`, `${formatKeyHint("ctrl+p")}`) };
 }
 export async function submitInteractiveInput(
 	mode: Pick<
@@ -478,7 +479,7 @@ export async function submitInteractiveInput(
 			try {
 				forwarded = await session.prompt(input.text, { images: input.images, streamingBehavior });
 			} catch (error: unknown) {
-				mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+				mode.showError(error instanceof Error ? error.message : t("Unknown error occurred"));
 			}
 			// Dispatch consumed the body locally (void custom command) or rejected
 			// instead of starting a turn: when it is the armed loop body, park the
@@ -488,7 +489,7 @@ export async function submitInteractiveInput(
 			if (!forwarded && mode.loopPrompt === input.text) mode.pauseLoop?.();
 		}
 	} catch (error: unknown) {
-		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+		const errorMessage = error instanceof Error ? error.message : t("Unknown error occurred");
 		mode.showError(errorMessage);
 	} finally {
 		mode.finishPendingSubmission(input);
@@ -525,10 +526,10 @@ async function loadTrustedSessionExtensions(
 		try {
 			stat = fsSync.statSync(trustedPath);
 		} catch {
-			throw new Error(`Trusted extension must be an existing module file: ${trustedPath}`);
+			throw new Error(t("Trusted extension must be an existing module file: {0}", `${trustedPath}`));
 		}
 		if (!stat.isFile()) {
-			throw new Error(`Trusted extension must be a module file, not a directory: ${trustedPath}`);
+			throw new Error(t("Trusted extension must be a module file, not a directory: {0}", `${trustedPath}`));
 		}
 	}
 	return loadExtensions(paths, cwd, eventBus);
@@ -563,7 +564,7 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 				: undefined;
 		if (trustedExtensions && trustedExtensions.errors.length > 0) {
 			throw new Error(
-				`Trusted extension failed to load: ${trustedExtensions.errors.map(item => item.error).join("; ")}`,
+				t("Trusted extension failed to load: {0}", `${trustedExtensions.errors.map(item => item.error).join("; ")}`),
 			);
 		}
 		// Like every top-level session, it holds process-wide effects (`worktree.base`, request
@@ -778,7 +779,7 @@ async function runInteractiveMode(
 		try {
 			await mode.startGoalAtStartup(startupGoal);
 		} catch (error: unknown) {
-			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+			mode.showError(error instanceof Error ? error.message : t("Unknown error occurred"));
 		}
 	}
 
@@ -786,18 +787,18 @@ async function runInteractiveMode(
 		try {
 			using _keepalive = new EventLoopKeepalive();
 			const { turn, subagents } = await startupRestore();
-			const agents = subagents.length === 1 ? "1 subagent" : `${subagents.length} subagents`;
+			const agents = t("{0} subagents", `${subagents.length}`);
 			mode.showStatus(
 				turn && subagents.length > 0
-					? `Restored: going on with the interrupted turn and ${agents}.`
+					? t("Restored: going on with the interrupted turn and {0}.", `${agents}`)
 					: turn
-						? "Restored: going on with the interrupted turn."
+						? t("Restored: going on with the interrupted turn.")
 						: subagents.length > 0
-							? `Restored: ${agents} going on with their interrupted turns.`
-							: "Restored: nothing was left unfinished.",
+							? t("Restored: {0} going on with their interrupted turns.", `${agents}`)
+							: t("Restored: nothing was left unfinished."),
 			);
 		} catch (error: unknown) {
-			mode.showError(error instanceof Error ? error.message : "Unknown error occurred");
+			mode.showError(error instanceof Error ? error.message : t("Unknown error occurred"));
 		}
 	}
 
@@ -810,7 +811,7 @@ async function runInteractiveMode(
 			// dying with AgentBusyError.
 			await session.prompt(initialMessage, { images: initialImages, streamingBehavior: "steer" });
 		} catch (error: unknown) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+			const errorMessage = error instanceof Error ? error.message : t("Unknown error occurred");
 			mode.showError(errorMessage);
 		}
 	}
@@ -820,7 +821,7 @@ async function runInteractiveMode(
 			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(message, { streamingBehavior: "steer" });
 		} catch (error: unknown) {
-			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+			const errorMessage = error instanceof Error ? error.message : t("Unknown error occurred");
 			mode.showError(errorMessage);
 		}
 	}
@@ -869,7 +870,7 @@ export class SessionResolutionError extends Error {
 }
 
 function exitForSessionResolutionError(error: SessionResolutionError): never {
-	process.stderr.write(`${chalk.red(`Error: ${error.message}`)}\n`);
+	process.stderr.write(`${chalk.red(t("Error: {0}", `${error.message}`))}\n`);
 	if (error.hint) {
 		process.stderr.write(`${chalk.dim(error.hint)}\n`);
 	}
@@ -880,15 +881,15 @@ function resolveForeignSessionSource(
 	parsed: Pick<Args, "continue" | "fork" | "fromClaude" | "fromCodex" | "noSession" | "resume">,
 ): ForeignSessionSource | undefined {
 	if (parsed.fromClaude && parsed.fromCodex) {
-		throw new SessionResolutionError("--from-claude and --from-codex cannot be used together");
+		throw new SessionResolutionError(t("--from-claude and --from-codex cannot be used together"));
 	}
 	const source = parsed.fromClaude ? "claude" : parsed.fromCodex ? "codex" : undefined;
 	if (!source) return undefined;
 	if (parsed.noSession) {
-		throw new SessionResolutionError(`--from-${source} requires session persistence`);
+		throw new SessionResolutionError(t("--from-{0} requires session persistence", `${source}`));
 	}
 	if (parsed.continue || parsed.resume || parsed.fork) {
-		throw new SessionResolutionError(`--from-${source} cannot be combined with --continue, --resume, or --fork`);
+		throw new SessionResolutionError(t("--from-{0} cannot be combined with --continue, --resume, or --fork", `${source}`));
 	}
 	return source;
 }
@@ -919,7 +920,7 @@ async function moveMissingCwdSessionIfNeeded(
 		const movePromptResult = await askToMoveSession(session);
 		if (movePromptResult === "unavailable") {
 			throw new SessionResolutionError(
-				`Session "${sessionArg}" belongs to a directory that no longer exists (${sourceCwd}); run interactively to move it into the current project.`,
+				t("Session \"{0}\" belongs to a directory that no longer exists ({1}); run interactively to move it into the current project.", `${sessionArg}`, `${sourceCwd}`),
 			);
 		}
 		if (movePromptResult === "declined") {
@@ -942,7 +943,7 @@ async function openRelocatedSession(
 		// Its directory is gone, so it cannot be resumed in place either.
 		throw new SessionResolutionError(
 			err.message,
-			"Close the session in the other omp process, then resume it again.",
+			t("Close the session in the other omp process, then resume it again."),
 		);
 	}
 }
@@ -1001,7 +1002,7 @@ async function switchToResumedProject(
 			await activeSettings.reloadForCwd(launchCwd);
 		} catch (rollbackError) {
 			throw new SessionResolutionError(
-				`Could not switch to resumed project ${resumedCwd} (${error instanceof Error ? error.message : String(error)}); failed to restore launch directory ${launchCwd}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+				t("Could not switch to resumed project {0} ({1}); failed to restore launch directory {2}: {3}", `${resumedCwd}`, `${error instanceof Error ? error.message : String(error)}`, `${launchCwd}`, `${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`),
 			);
 		}
 		return { cwd: launchCwd, chdirFailed: resumedCwd };
@@ -1013,7 +1014,7 @@ function notifyResumeCwdFallback(parsedArgs: Args, resumedProject: ResumedProjec
 	if (!resumedProject.chdirFailed) return;
 	writeStartupNotice(
 		parsedArgs,
-		`${chalk.yellow(`Could not switch to resumed project ${resumedProject.chdirFailed}; staying in ${cwd}.`)}\n`,
+		`${chalk.yellow(t("Could not switch to resumed project {0}; staying in {1}.", `${resumedProject.chdirFailed}`, `${cwd}`))}\n`,
 	);
 }
 
@@ -1213,15 +1214,15 @@ export function normalizeContinueSessionArgs(parsed: Args, rawArgs?: readonly st
 	parsed.messages.splice(messageIndex, 1);
 }
 const SESSION_NOT_FOUND_HINT =
-	"Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.";
+	t("Run `omp --resume` without an argument to pick from recent sessions, or `omp` to start a new one.");
 
 function validateSessionPersistenceArgs(parsed: Pick<Args, "continue" | "noSession" | "resume">): void {
 	if (!parsed.noSession) return;
 	if (parsed.resume !== undefined) {
-		throw new SessionResolutionError("--resume requires session persistence");
+		throw new SessionResolutionError(t("--resume requires session persistence"));
 	}
 	if (parsed.continue) {
-		throw new SessionResolutionError("--continue requires session persistence");
+		throw new SessionResolutionError(t("--continue requires session persistence"));
 	}
 }
 /**
@@ -1239,7 +1240,7 @@ export async function createSessionManager(
 ): Promise<SessionManager | undefined> {
 	if (parsed.fork) {
 		if (parsed.noSession) {
-			throw new SessionResolutionError("--fork requires session persistence");
+			throw new SessionResolutionError(t("--fork requires session persistence"));
 		}
 		const forkSource = parsed.fork;
 		if (forkSource.includes("/") || forkSource.includes("\\") || forkSource.endsWith(".jsonl")) {
@@ -1256,7 +1257,7 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(forkSource, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
+			throw new SessionResolutionError(t("Session \"{0}\" not found.\u0004packages/coding-agent/src/main.ts:createSessionManager", `${forkSource}`), SESSION_NOT_FOUND_HINT);
 		}
 		try {
 			return await SessionManager.forkFrom(match.session.path, cwd, parsed.sessionDir, undefined, {
@@ -1264,7 +1265,7 @@ export async function createSessionManager(
 			});
 		} catch (err) {
 			if (err instanceof ForkSourceNotFoundError) {
-				throw new SessionResolutionError(`Session "${forkSource}" not found.`, SESSION_NOT_FOUND_HINT);
+				throw new SessionResolutionError(t("Session \"{0}\" not found.\u0004packages/coding-agent/src/main.ts:createSessionManager", `${forkSource}`), SESSION_NOT_FOUND_HINT);
 			}
 			throw err;
 		}
@@ -1287,7 +1288,7 @@ export async function createSessionManager(
 				manager = await SessionManager.open(sessionArg, parsed.sessionDir, undefined, { throwIfMissing: true });
 			} catch (err) {
 				if (isEnoent(err) || isEnotdir(err)) {
-					throw new SessionResolutionError(`Session "${sessionArg}" not found.`, SESSION_NOT_FOUND_HINT);
+					throw new SessionResolutionError(t("Session \"{0}\" not found.\u0004packages/coding-agent/src/main.ts:createSessionManager", `${sessionArg}`), SESSION_NOT_FOUND_HINT);
 				}
 				throw err;
 			}
@@ -1296,7 +1297,7 @@ export async function createSessionManager(
 		}
 		const match = await resolveResumableSession(sessionArg, cwd, parsed.sessionDir);
 		if (!match) {
-			throw new SessionResolutionError(`Session "${sessionArg}" not found.`, SESSION_NOT_FOUND_HINT);
+			throw new SessionResolutionError(t("Session \"{0}\" not found.\u0004packages/coding-agent/src/main.ts:createSessionManager", `${sessionArg}`), SESSION_NOT_FOUND_HINT);
 		}
 		if (match.scope === "local") {
 			const moveResult = await moveMissingCwdSessionIfNeeded(
@@ -1411,7 +1412,7 @@ export async function buildSessionOptions(
 
 	// Explicit prompt inputs win over discovered SYSTEM_TEMPLATE.md/SYSTEM.md.
 	if (parsed.systemPrompt !== undefined && parsed.systemPromptTemplate !== undefined) {
-		throw new Error("--system-prompt and --system-prompt-template cannot be combined");
+		throw new Error(t("--system-prompt and --system-prompt-template cannot be combined\u0004packages/coding-agent/src/main.ts:buildSessionOptions"));
 	}
 	const cwd = options.cwd;
 	const discoveredOverride =
@@ -1490,13 +1491,13 @@ export async function buildSessionOptions(
 			preferences: modelMatchPreferences,
 		});
 		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+			process.stderr.write(`${chalk.yellow(t("Warning: {0}", `${resolved.warning}`))}\n`);
 		}
 		if (resolved.disabledProvider !== undefined) {
 			// Deferring a disabled pin to post-extension resolution would let it
 			// through, so refuse here (issue #13079).
 			process.stderr.write(
-				`${chalk.red(resolved.error ?? `Provider "${resolved.disabledProvider}" is disabled.`)}\n`,
+				`${chalk.red(resolved.error ?? t("Provider \"{0}\" is disabled.", `${resolved.disabledProvider}`))}\n`,
 			);
 			process.exit(1);
 		}
@@ -1588,7 +1589,7 @@ export async function buildSessionOptions(
 	}
 
 	if (parsed.noPrewalk && (parsed.prewalk || parsed.prewalkInto !== undefined)) {
-		throw new Error("--no-prewalk cannot be combined with --prewalk or --prewalk-into");
+		throw new Error(t("--no-prewalk cannot be combined with --prewalk or --prewalk-into"));
 	}
 	options.suppressAutoPrewalk = parsed.noPrewalk;
 	const explicitPrewalk = parsed.prewalk === true || parsed.prewalkInto !== undefined;
@@ -1636,30 +1637,30 @@ export async function buildSessionOptions(
 		} else {
 			options.prewalk = selection.prewalk;
 			for (const warning of selection.warnings) {
-				process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+				process.stderr.write(`${chalk.yellow(t("Warning: {0}", `${warning}`))}\n`);
 			}
 		}
 	}
 
 	if (parsed.planYoloInto !== undefined && !parsed.planYolo) {
-		throw new Error("--plan-yolo-into requires --plan-yolo");
+		throw new Error(t("--plan-yolo-into requires --plan-yolo"));
 	}
 	if (parsed.planYolo) {
 		const rolePattern = expandRoleAlias(parsed.planYoloInto ?? "@smol", activeSettings);
 		const resolved = resolveCliModel({ cliModel: rolePattern, modelRegistry, preferences: modelMatchPreferences });
 		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
+			process.stderr.write(`${chalk.yellow(t("Warning: {0}", `${resolved.warning}`))}\n`);
 		}
 		if (resolved.error || !resolved.model) {
-			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "@smol"}" not found`);
+			throw new Error(resolved.error ?? t("Model \"{0}\" not found", `${parsed.planYoloInto ?? "@smol"}`));
 		}
 		if (disabledProviders.has(resolved.model.provider)) {
 			throw new Error(
-				`Provider "${resolved.model.provider}" is disabled. Remove it from disabledProviders to hand off to "${rolePattern}".`,
+				t("Provider \"{0}\" is disabled. Remove it from disabledProviders to hand off to \"{1}\".", `${resolved.model.provider}`, `${rolePattern}`),
 			);
 		}
 		if (!modelRegistry.hasConfiguredAuth(resolved.model)) {
-			throw new Error(`No API key for ${resolved.model.provider}/${resolved.model.id}`);
+			throw new Error(t("No API key for {0}/{1}", `${resolved.model.provider}`, `${resolved.model.id}`));
 		}
 		options.planYolo = { target: resolved.model, thinkingLevel: resolved.thinkingLevel };
 	}
@@ -1738,10 +1739,10 @@ export async function buildSessionOptions(
 				resolvedPath = fsSync.realpathSync.native(trustedPath);
 				stat = fsSync.statSync(resolvedPath);
 			} catch {
-				throw new Error(`Trusted extension must be an existing module file: ${trustedPath}`);
+				throw new Error(t("Trusted extension must be an existing module file: {0}", `${trustedPath}`));
 			}
 			if (!stat.isFile()) {
-				throw new Error(`Trusted extension must be a module file, not a directory: ${trustedPath}`);
+				throw new Error(t("Trusted extension must be a module file, not a directory: {0}", `${trustedPath}`));
 			}
 			return resolvedPath;
 		});
@@ -1800,7 +1801,7 @@ export async function runRootCommand(
 			await logger.time("applyStartupCwd", applyStartupCwd, parsedArgs);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);
-			process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+			process.stderr.write(`${chalk.red(t("Error: {0}", `${message}`))}\n`);
 			process.exit(1);
 		}
 
@@ -1823,16 +1824,16 @@ export async function runRootCommand(
 				const { exportFromFile } = await import("./export/html");
 				result = await exportFromFile(parsedArgs.export, outputPath);
 			} catch (error: unknown) {
-				const message = error instanceof Error ? error.message : "Failed to export session";
-				process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+				const message = error instanceof Error ? error.message : t("Failed to export session");
+				process.stderr.write(`${chalk.red(t("Error: {0}", `${message}`))}\n`);
 				process.exit(1);
 			}
-			writeStartupNotice(parsedArgs, `Exported to: ${result}\n`);
+			writeStartupNotice(parsedArgs, t("Exported to: {0}\n", `${result}`));
 			process.exit(0);
 		}
 
 		if ((parsedArgs.mode === "rpc" || parsedArgs.mode === "rpc-ui") && parsedArgs.fileArgs.length > 0) {
-			process.stderr.write(`${chalk.red("Error: @file arguments are not supported in RPC mode")}\n`);
+			process.stderr.write(`${chalk.red(t("Error: @file arguments are not supported in RPC mode"))}\n`);
 			process.exit(1);
 		}
 		// A pending invalid `--mode` leaves `mode` unset; report it (exit 2) at the
@@ -1929,7 +1930,7 @@ export async function runRootCommand(
 		} catch (error) {
 			const message = await describeAuthBrokerStartupError(error);
 			if (message === null) throw error;
-			process.stderr.write(`${chalk.red(`Error: ${message}`)}\n`);
+			process.stderr.write(`${chalk.red(t("Error: {0}", `${message}`))}\n`);
 			process.exit(1);
 		}
 
@@ -2085,10 +2086,10 @@ export async function runRootCommand(
 					foreignSessions = await logger.time(`list${sourceName}Sessions`, () => store.list());
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					throw new SessionResolutionError(`Failed to list ${sourceName} sessions: ${message}`);
+					throw new SessionResolutionError(t("Failed to list {0} sessions: {1}", `${sourceName}`, `${message}`));
 				}
 				if (foreignSessions.length === 0) {
-					writeStartupNotice(parsedArgs, `${chalk.dim(`No ${sourceName} sessions found`)}\n`);
+					writeStartupNotice(parsedArgs, `${chalk.dim(t("No {0} sessions found", `${sourceName}`))}\n`);
 					stopStartupWatchdog();
 					process.exit(0);
 				}
@@ -2098,7 +2099,7 @@ export async function runRootCommand(
 				try {
 					const selectSessionImpl = deps.selectSession ?? (await loadSessionPicker());
 					selected = await logger.time(`select${sourceName}Session`, selectSessionImpl, choices, {
-						title: `Import ${sourceName} Session`,
+						title: t("Import {0} Session", `${sourceName}`),
 						scopeLabel: false,
 						showCwd: true,
 						allowDelete: false,
@@ -2109,7 +2110,7 @@ export async function runRootCommand(
 					resumeStartupWatchdog();
 				}
 				if (!selected) {
-					writeStartupNotice(parsedArgs, `${chalk.dim(`No ${sourceName} session selected`)}\n`);
+					writeStartupNotice(parsedArgs, `${chalk.dim(t("No {0} session selected", `${sourceName}`))}\n`);
 					stopStartupWatchdog();
 					process.exit(0);
 				}
@@ -2129,7 +2130,7 @@ export async function runRootCommand(
 					);
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					throw new SessionResolutionError(`Failed to import ${sourceName} session: ${message}`);
+					throw new SessionResolutionError(t("Failed to import {0} session: {1}", `${sourceName}`, `${message}`));
 				}
 			} else {
 				sessionManager = await logger.time(
@@ -2174,7 +2175,7 @@ export async function runRootCommand(
 		// User declined the missing-directory move prompt — exit cleanly instead of
 		// letting the cancellation fall through to a new session.
 		if (typeof parsedArgs.resume === "string" && !sessionManager) {
-			writeStartupNotice(parsedArgs, `${chalk.dim("Resume cancelled: session was not moved.")}\n`);
+			writeStartupNotice(parsedArgs, `${chalk.dim(t("Resume cancelled: session was not moved."))}\n`);
 			stopStartupWatchdog();
 			process.exit(0);
 		}
@@ -2202,7 +2203,7 @@ export async function runRootCommand(
 					SessionManager.listAllForPicker,
 				);
 				if (preloadedAllSessions.length === 0) {
-					writeStartupNotice(parsedArgs, `${chalk.dim("No sessions found")}\n`);
+					writeStartupNotice(parsedArgs, `${chalk.dim(t("No sessions found"))}\n`);
 					stopStartupWatchdog();
 					process.exit(0);
 				}
@@ -2214,7 +2215,7 @@ export async function runRootCommand(
 			});
 			resumeStartupWatchdog();
 			if (!selected) {
-				writeStartupNotice(parsedArgs, `${chalk.dim("No session selected")}\n`);
+				writeStartupNotice(parsedArgs, `${chalk.dim(t("No session selected"))}\n`);
 				// Quit instead of returning: startup already armed long-lived handles
 				// (theme watcher + SIGWINCH/macOS appearance listeners via initTheme,
 				// settings save timer, model registry) that keep the event loop alive,
@@ -2300,7 +2301,7 @@ export async function runRootCommand(
 		sessionOptions.settings = settingsInstance;
 		sessionOptions.onPrewalkWarning = warning => {
 			if (isInteractive) notifs.push({ kind: "warn", message: warning });
-			else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+			else process.stderr.write(`${chalk.yellow(t("Warning: {0}", `${warning}`))}\n`);
 		};
 
 		// OTEL: unless `telemetry.otlpExportEnabled` is off, register global OTLP
@@ -2327,7 +2328,7 @@ export async function runRootCommand(
 		if (parsedArgs.apiKey) {
 			if (!sessionOptions.model && !sessionOptions.modelPattern) {
 				process.stderr.write(
-					`${chalk.red("--api-key requires a model to be specified via --model, --provider/--model, or --models")}\n`,
+					`${chalk.red(t("--api-key requires a model to be specified via --model, --provider/--model, or --models"))}\n`,
 				);
 				process.exit(1);
 			}
@@ -2425,7 +2426,7 @@ export async function runRootCommand(
 			}
 			if ((parsedArgs.trustedExtensions?.length ?? 0) > 0 && extensionsResult.errors.length > 0) {
 				throw new Error(
-					`Trusted extension failed to load: ${extensionsResult.errors.map(item => item.error).join("; ")}`,
+					t("Trusted extension failed to load: {0}", `${extensionsResult.errors.map(item => item.error).join("; ")}`),
 				);
 			}
 			for (const message of formatExtensionLoadNotifications(extensionsResult.errors)) {
@@ -2626,7 +2627,7 @@ export async function runRootCommand(
 			const modelRegistryError = modelRegistry.getError();
 			for (const warning of modelRegistry.drainConfigWarnings()) {
 				if (isInteractive) notifs.push({ kind: "warn", message: warning });
-				else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
+				else process.stderr.write(`${chalk.yellow(t("Warning: {0}", `${warning}`))}\n`);
 			}
 			if (modelRegistryError) {
 				notifs.push({ kind: "error", message: modelRegistryError.message });
@@ -2639,7 +2640,7 @@ export async function runRootCommand(
 				if (modelFallbackMessage) {
 					process.stderr.write(`${chalk.red(modelFallbackMessage)}\n`);
 				} else {
-					process.stderr.write(`${chalk.red("No models available.")}\n`);
+					process.stderr.write(`${chalk.red(t("No models available."))}\n`);
 				}
 				const availableModels = modelRegistry.getAvailable();
 				if (parsedArgs.model && availableModels.length > 0) {
@@ -2651,17 +2652,17 @@ export async function runRootCommand(
 						selector => selector,
 					).slice(0, 5);
 					if (suggestions.length > 0) {
-						process.stderr.write(`${chalk.yellow("\nDid you mean:")}\n`);
+						process.stderr.write(`${chalk.yellow(t("\nDid you mean:"))}\n`);
 						for (const selector of suggestions) process.stderr.write(`  ${selector}\n`);
 					}
 					process.stderr.write(
-						`\nRun \`${APP_NAME} models find <pattern>\` to search, or \`${APP_NAME} models\` to list all.\n`,
+						t("\nRun `{0} models find <pattern>` to search, or `{1} models` to list all.\n", `${APP_NAME}`, `${APP_NAME}`),
 					);
 					process.exit(1);
 				}
-				process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
-				process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-				process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+				process.stderr.write(`${chalk.yellow(t("\nSet an API key environment variable:"))}\n`);
+				process.stderr.write(t("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n"));
+				process.stderr.write(`${chalk.yellow(t("\nOr create {0}", `${ModelsConfigFile.path()}`))}\n`);
 				process.exit(1);
 			}
 

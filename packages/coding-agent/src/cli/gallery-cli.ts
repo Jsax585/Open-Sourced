@@ -7,6 +7,7 @@
  * rendered output to stdout. It exists for visual QA of tool renderers without
  * having to provoke each state through a live agent session.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
@@ -34,10 +35,10 @@ export type GalleryState = (typeof GALLERY_STATES)[number];
 
 /** User-facing labels printed above each rendered lifecycle state. */
 export const GALLERY_STATE_LABELS: Record<GalleryState, string> = {
-	streaming: "streaming args",
-	progress: "in progress",
-	success: "done",
-	error: "failed",
+	streaming: t("streaming args"),
+	progress: t("in progress"),
+	success: t("done\u0004packages/coding-agent/src/cli/gallery-cli.ts:GALLERY_STATE_LABELS.success"),
+	error: t("failed"),
 };
 
 const GALLERY_STATE_ALIASES: Record<string, GalleryState> = {
@@ -70,7 +71,7 @@ export function parseGallerySurfaces(surfaces: readonly string[] | undefined): G
 			continue;
 		}
 		if (!GALLERY_SURFACES.includes(token as GallerySurface)) {
-			throw new Error(`Invalid --surface '${raw}'. Valid values: ${GALLERY_SURFACE_TOKENS.join(", ")}`);
+			throw new Error(t("Invalid --surface '{0}'. Valid values: {1}", `${raw}`, `${GALLERY_SURFACE_TOKENS.join(", ")}`));
 		}
 		requested.add(token as GallerySurface);
 	}
@@ -84,7 +85,7 @@ export function parseGalleryStates(states: readonly string[] | undefined): Galle
 	for (const raw of states) {
 		const state = GALLERY_STATE_ALIASES[raw.trim().toLowerCase()];
 		if (!state) {
-			throw new Error(`Invalid --state '${raw}'. Valid values: ${GALLERY_STATE_TOKENS.join(", ")}`);
+			throw new Error(t("Invalid --state '{0}'. Valid values: {1}", `${raw}`, `${GALLERY_STATE_TOKENS.join(", ")}`));
 		}
 		if (!parsed.includes(state)) parsed.push(state);
 	}
@@ -253,7 +254,7 @@ async function renderGallerySections(
 			try {
 				for (const line of await renderGalleryState(name, fixture, state, width, expanded)) lines.push(line);
 			} catch (err) {
-				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
+				lines.push(theme.fg("error", t("  render failed: {0}", `${String(err)}`)));
 			}
 		}
 		sections.push({ heading, lines });
@@ -285,7 +286,7 @@ async function renderPreviewSections(
 			try {
 				for (const line of await variant.render(width, expanded)) lines.push(line);
 			} catch (err) {
-				lines.push(theme.fg("error", `  render failed: ${String(err)}`));
+				lines.push(theme.fg("error", t("  render failed: {0}", `${String(err)}`)));
 			}
 		}
 		sections.push({ heading: entry.heading, lines });
@@ -343,19 +344,19 @@ export async function runGalleryCommand(args: GalleryCommandArgs): Promise<void>
 	if (surfaces.includes("tool") && args.tool) {
 		const knownTools = Array.from(new Set([...Object.keys(toolRenderers), ...Object.keys(galleryFixtures)])).sort();
 		if (!knownTools.includes(args.tool)) {
-			process.stdout.write(`Unknown tool '${args.tool}'. Known tools: ${knownTools.join(", ")}\n`);
+			process.stdout.write(t("Unknown tool '{0}'. Known tools: {1}\n", `${args.tool}`, `${knownTools.join(", ")}`));
 			return;
 		}
 	}
 	if (surfaces.includes("composer") && args.composer && !getComposerGalleryInventory().includes(args.composer)) {
 		process.stdout.write(
-			`Unknown composer '${args.composer}'. Known composers: ${getComposerGalleryInventory().join(", ")}\n`,
+			t("Unknown composer '{0}'. Known composers: {1}\n", `${args.composer}`, `${getComposerGalleryInventory().join(", ")}`),
 		);
 		return;
 	}
 	if (surfaces.includes("segment") && args.segment && !getSegmentGalleryInventory().some(id => id === args.segment)) {
 		process.stdout.write(
-			`Unknown segment '${args.segment}'. Known segments: ${getSegmentGalleryInventory().join(", ")}\n`,
+			t("Unknown segment '{0}'. Known segments: {1}\n", `${args.segment}`, `${getSegmentGalleryInventory().join(", ")}`),
 		);
 		return;
 	}

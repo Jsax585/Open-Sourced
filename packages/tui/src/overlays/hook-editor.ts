@@ -7,6 +7,7 @@
  *   (Ctrl+Q / Ctrl+Enter) submits, bordered popup
  * - Prompt-style (ask): Enter submits, Shift+Enter inserts newline, legacy ask chrome
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { compactImageMarkers, formatVisionMarker, PLACEHOLDER_REGEX } from "../prompt/composer-attachments";
 import { extractImagePastePathsFromText } from "../prompt/custom-editor";
@@ -171,8 +172,8 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		const [primaryFollowUpKey = "ctrl+q"] = followUpKeys;
 		const externalEditorKey = editorKey("app.editor.external") || formatKeyHint("ctrl+g");
 		const hint = this.#promptStyle
-			? `${formatKeyHint("enter")} or ${formatKeyHint(primaryFollowUpKey)} submit  ${formatKeyHint("escape")} cancel  ${externalEditorKey} external editor`
-			: `${formatKeyHints(followUpKeys)} submit  ${interruptKey()} cancel  ${externalEditorKey} external editor`;
+			? t("{0} or {1} submit  {2} cancel  {3} external editor", `${formatKeyHint("enter")}`, `${formatKeyHint(primaryFollowUpKey)}`, `${formatKeyHint("escape")}`, `${externalEditorKey}`)
+			: t("{0} submit  {1} cancel  {2} external editor", `${formatKeyHints(followUpKeys)}`, `${interruptKey()}`, `${externalEditorKey}`);
 		this.#field = new FormField(this.#editor, {
 			theme: formTheme,
 			details:
@@ -187,7 +188,7 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		// Native: the field drops its terminal frame for the sheet's, and says what to type while empty.
 		const fieldRole = this.#promptStyle ? `${PART}.line` : `${PART}.field`;
 		this.#editor.describeLayout = input => ({ role: fieldRole, children: [input], caret: "input" });
-		const placeholder = [span(this.#promptStyle ? "Type your answer" : "Type here")];
+		const placeholder = [span(this.#promptStyle ? t("Type your answer") : t("Type here"))];
 		this.#editor.describePlaceholder = () => placeholder;
 
 		const head: NativeChild[] = [];
@@ -240,21 +241,21 @@ export class HookEditorComponent extends OverlayPanel implements Focusable {
 		if (this.#externalEditor) {
 			const [externalKey] = boundKeys("app.editor.external", ["ctrl+g"]);
 			buttons.push(
-				actionButton("Open in editor", "external", {
+				actionButton(t("Open in editor"), "external", {
 					...(externalKey ? { keys: externalKey } : {}),
-					title: tip([["Edit in your external editor", externalKey]]),
+					title: tip([[t("Edit in your external editor"), externalKey]]),
 				}),
 			);
 		}
 		buttons.push(
 			null,
-			actionButton("Cancel", "cancel", { keys: cancelKey, title: tip([["Cancel", cancelKey]]) }),
-			actionButton("Submit", "submit", {
+			actionButton(t("Cancel"), "cancel", { keys: cancelKey, title: tip([[t("Cancel"), cancelKey]]) }),
+			actionButton(t("Submit"), "submit", {
 				keys: submitKey,
 				tone: "accent",
 				title: tip([
-					["Submit", submitKey],
-					["New line", newlineKey],
+					[t("Submit"), submitKey],
+					[t("New line\u0004packages/tui/src/overlays/hook-editor.ts:HookEditorComponent.title"), newlineKey],
 				]),
 			}),
 		);

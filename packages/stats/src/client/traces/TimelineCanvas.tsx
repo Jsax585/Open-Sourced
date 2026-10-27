@@ -6,6 +6,7 @@
  * click-to-select, double-click-to-zoom.
  */
 
+import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -49,11 +50,11 @@ const SPAN_RADIUS = 3;
 const DIM_ALPHA = 0.3;
 
 const LANE_ORDER: Array<{ kind: TraceSpanKind; label: string }> = [
-	{ kind: "turn", label: "Input" },
-	{ kind: "model", label: "Model" },
-	{ kind: "tool", label: "Tools" },
-	{ kind: "subagent", label: "Agents" },
-	{ kind: "background", label: "Bg" },
+	{ kind: "turn", label: t("Input") },
+	{ kind: "model", label: t("Model") },
+	{ kind: "tool", label: t("Tools") },
+	{ kind: "subagent", label: t("Agents") },
+	{ kind: "background", label: t("Bg") },
 ];
 
 interface LaneRow {
@@ -520,8 +521,8 @@ export function TimelineCanvas({
 									onClick={() => onToggleCollapse(block.track.id)}
 									aria-label={
 										collapsed.has(block.track.id)
-											? `Expand ${block.track.label}`
-											: `Collapse ${block.track.label}`
+											? t("Expand {0}", `${block.track.label}`)
+											: t("Collapse {0}", `${block.track.label}`)
 									}
 									className="traces-chevron"
 								>
@@ -561,7 +562,7 @@ export function TimelineCanvas({
 					style={cssSize}
 					tabIndex={0}
 					role="application"
-					aria-label="Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection."
+					aria-label={t("Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection.")}
 					onPointerDown={handlePointerDown}
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerUp}
@@ -841,7 +842,7 @@ function renderTooltip(hover: Hit, traceStart: number, ref: React.RefObject<HTML
 			<div ref={ref} className="traces-tooltip" style={style}>
 				<div className="traces-tooltip-title">{marker.label}</div>
 				<div className="muted num">
-					{new Date(marker.time).toLocaleTimeString()} ({formatOffset(marker.time - traceStart)})
+					{new Date(marker.time).toLocaleTimeString((getLanguage() === "ko" ? "ko-KR" : "en-US"))} ({formatOffset(marker.time - traceStart)})
 				</div>
 			</div>
 		);
@@ -851,16 +852,13 @@ function renderTooltip(hover: Hit, traceStart: number, ref: React.RefObject<HTML
 	return (
 		<div ref={ref} className="traces-tooltip" style={style}>
 			<div className="traces-tooltip-title truncate">{span.label}</div>
-			<div className="muted num">
-				{formatDurationMs(span.end - span.start)} · {new Date(span.start).toLocaleTimeString()} (
-				{formatOffset(span.start - traceStart)}){span.unterminated ? " · unterminated" : ""}
-			</div>
+			<div className="muted num">{`${formatDurationMs(span.end - span.start)} · ${new Date(span.start).toLocaleTimeString((getLanguage() === "ko" ? "ko-KR" : "en-US"))} (${formatOffset(span.start - traceStart)})${span.unterminated ? t(" · unterminated") : ""}`}</div>
 			{span.kind === "model" && (
 				<div className="muted num">
-					{span.tokens !== undefined && <>{formatInteger(span.tokens)} tok</>}
+					{span.tokens !== undefined && <>{t("{0} tok", `${formatInteger(span.tokens)}`)}</>}
 					{span.cost !== undefined && <> · ${span.cost.toFixed(4)}</>}
 					{span.ttft !== undefined && <> · TTFT {formatDurationMs(span.ttft)}</>}
-					{span.isError && <> · error</>}
+					{span.isError && <>{t(" · error")}</>}
 				</div>
 			)}
 			{span.kind === "subagent" && span.model && <div className="muted num">{span.model}</div>}

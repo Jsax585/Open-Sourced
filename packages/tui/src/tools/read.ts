@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SummaryResult } from "@oh-my-pi/pi-natives";
 import { formatNumberedLine } from "./hashline-format";
 import { LINE_RANGE_CHUNK_SOURCE, parseLineRanges } from "./line-ranges";
@@ -290,15 +291,15 @@ interface ReadUrlCard {
 /** Read cards keyed by URL scheme. */
 const READ_URL_CARDS: Record<string, ReadUrlCard> = {
 	proc: {
-		label: "Process",
-		rootDetail: "jobs & services",
+		label: t("Process"),
+		rootDetail: t("jobs & services"),
 		detailsKey: "proc",
 		render: (_url, target, result, details, options, uiTheme) =>
 			renderProcRead(target, result, details?.proc, options, uiTheme),
 	},
 	cfg: {
-		label: "Config",
-		rootDetail: "all settings",
+		label: t("Config"),
+		rootDetail: t("all settings"),
 		detailsKey: "cfg",
 		render: (url, _target, result, details, options, uiTheme) =>
 			renderCfgRead(splitInternalUrlSel(url).path, result, details?.cfg, options, uiTheme),
@@ -437,14 +438,14 @@ function readNativeHead(
 		target += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 	}
 	const meta: string[] = [];
-	if (suffix) meta.push(`corrected from ${shortenPath(suffix.from)}`);
+	if (suffix) meta.push(t("corrected from {0}\u0004packages/tui/src/tools/read.ts:readNativeHead", `${shortenPath(suffix.from)}`));
 	if (details?.summary) {
 		const n = details.summary.elidedSpans;
-		meta.push(`summary: ${n} elided span${n === 1 ? "" : "s"}`);
+		meta.push(t("summary: {0} elided span{1}", `${n}`, `${n === 1 ? "" : "s"}`));
 	}
 	const conflicts = details?.conflictCount ?? 0;
 	return {
-		title: "Read",
+		title: t("Read"),
 		target: sanitizeText(target) || "…",
 		targetKind: "path",
 		href: fileHref(linkPath ?? details?.resolvedPath ?? details?.displayTarget ?? readSourceFsPath(details)),
@@ -522,7 +523,7 @@ export const readToolRenderer = {
 			typeof input?.file_path === "string" ? input.file_path : typeof input?.path === "string" ? input.path : "";
 		const routed = readUrlCard(rawPath);
 		if (routed) return { label: routed.card.label, detail: routed.target || routed.card.rootDetail };
-		return { label: "Read", detail: sanitizeText(shortenPath(rawPath)) };
+		return { label: t("Read"), detail: sanitizeText(shortenPath(rawPath)) };
 	},
 	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const rawPath =
@@ -543,7 +544,7 @@ export const readToolRenderer = {
 			pathDisplay += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 		}
 
-		const text = renderStatusLine({ icon: "pending", title: "Read", description: pathDisplay }, uiTheme);
+		const text = renderStatusLine({ icon: "pending", title: t("Read"), description: pathDisplay }, uiTheme);
 		return new Text(text, 0, 0);
 	},
 
@@ -574,7 +575,7 @@ export const readToolRenderer = {
 
 		if (result.isError) {
 			const rawErrorText = result.content?.find(c => c.type === "text")?.text ?? "";
-			const errorText = (rawErrorText || "Unknown error").replace(/^Error:\s*/, "");
+			const errorText = (rawErrorText || t("Unknown error")).replace(/^Error:\s*/, "");
 			const rawPath =
 				typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 			const filePath =
@@ -582,7 +583,7 @@ export const readToolRenderer = {
 					offset: args?.offset,
 					sourcePath: linkPath ?? result.details?.displayTarget ?? readSourceFsPath(result.details),
 				}) || sanitizeText(shortenPath(rawPath));
-			let title = filePath ? `Read ${filePath}` : "Read";
+			let title = filePath ? t("Read {0}", `${filePath}`) : t("Read");
 			if (args?.offset !== undefined || args?.limit !== undefined) {
 				const startLine = args.offset ?? 1;
 				const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
@@ -614,12 +615,12 @@ export const readToolRenderer = {
 		const fallback = details?.truncation;
 		if (details?.resolvedPath) {
 			warningLines.push(
-				uiTheme.fg("dim", wrapBrackets(`Resolved path: ${shortenPath(details.resolvedPath)}`, uiTheme)),
+				uiTheme.fg("dim", wrapBrackets(t("Resolved path: {0}", `${shortenPath(details.resolvedPath)}`), uiTheme)),
 			);
 		}
 		if (truncation) {
 			if (fallback?.firstLineExceedsLimit) {
-				let warning = `First line exceeds ${formatBytes(fallback.outputBytes ?? fallback.totalBytes)} limit`;
+				let warning = t("First line exceeds {0} limit", `${formatBytes(fallback.outputBytes ?? fallback.totalBytes)}`);
 				if (truncation.artifactId) {
 					warning += `. ${formatFullOutputReference(truncation.artifactId)}`;
 				}
@@ -636,11 +637,11 @@ export const readToolRenderer = {
 				resolvedPath: linkPath ?? details?.resolvedPath,
 				sourcePath: details?.displayTarget ?? readSourceFsPath(details),
 				suffixResolution: suffix,
-				fallbackLabel: "image",
+				fallbackLabel: t("image"),
 			});
-			const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
+			const correction = suffix ? ` ${uiTheme.fg("dim", t("(corrected from {0})", `${shortenPath(suffix.from)}`))}` : "";
 			const header = renderStatusLine(
-				{ icon: suffix ? "warning" : "success", title: "Read", description: `${displayPath}${correction}` },
+				{ icon: suffix ? "warning" : "success", title: t("Read"), description: `${displayPath}${correction}` },
 				uiTheme,
 			);
 			const detailLines = contentText
@@ -652,8 +653,8 @@ export const readToolRenderer = {
 				phase: "success",
 				sections: [
 					{
-						label: uiTheme.fg("toolTitle", "Details"),
-						content: lines.length > 0 ? lines : [uiTheme.fg("dim", "(image)")],
+						label: uiTheme.fg("toolTitle", t("Details")),
+						content: lines.length > 0 ? lines : [uiTheme.fg("dim", t("(image)"))],
 					},
 				],
 			}));
@@ -670,8 +671,8 @@ export const readToolRenderer = {
 			suffixResolution: suffix,
 			offset: args?.offset,
 		});
-		const correction = suffix ? ` ${uiTheme.fg("dim", `(corrected from ${shortenPath(suffix.from)})`)}` : "";
-		let title = displayPath ? `Read ${displayPath}${correction}` : "Read";
+		const correction = suffix ? ` ${uiTheme.fg("dim", t("(corrected from {0})", `${shortenPath(suffix.from)}`))}` : "";
+		let title = displayPath ? t("Read {0}{1}", `${displayPath}`, `${correction}`) : t("Read");
 		if (args?.offset !== undefined || args?.limit !== undefined) {
 			const startLine = args.offset ?? 1;
 			const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
@@ -765,7 +766,7 @@ export const readToolRenderer = {
 		}
 
 		if (result.isError) {
-			const message = (resultText(result) || "Unknown error").replace(/^Error:\s*/, "");
+			const message = (resultText(result) || t("Unknown error")).replace(/^Error:\s*/, "");
 			return inlineErrorView(readNativeHead(rawPath, args, details, linkPath), message);
 		}
 
@@ -776,9 +777,9 @@ export const readToolRenderer = {
 		const firstLineTooLong = truncation !== undefined && fallback?.firstLineExceedsLimit === true;
 		const foot = footnoteText(
 			compact([
-				details?.resolvedPath !== undefined && `resolved ${shortenPath(details.resolvedPath)}`,
+				details?.resolvedPath !== undefined && t("resolved {0}", `${shortenPath(details.resolvedPath)}`),
 				firstLineTooLong &&
-					`First line exceeds ${formatBytes(fallback.outputBytes ?? fallback.totalBytes)} limit${truncation.artifactId ? `. ${formatFullOutputReference(truncation.artifactId)}` : ""}`,
+					t("First line exceeds {0} limit{1}", `${formatBytes(fallback.outputBytes ?? fallback.totalBytes)}`, `${truncation.artifactId ? `. ${formatFullOutputReference(truncation.artifactId)}` : ""}`),
 			]),
 			firstLineTooLong ? { artifactError: details?.meta?.artifactError } : details?.meta,
 		);

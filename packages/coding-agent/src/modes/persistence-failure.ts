@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { SessionPersistenceNotice } from "../session/session-manager";
@@ -11,7 +12,7 @@ import type { SessionPersistenceNotice } from "../session/session-manager";
  */
 export function formatPersistenceFailure(message: string): string {
 	const detail = truncateToWidth(replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " "), TRUNCATE_LENGTHS.LINE);
-	return `Session persistence failed: ${detail}. Writes are retried; unsaved entries stay in memory until the store accepts them again.`;
+	return t("Session persistence failed: {0}. Writes are retried; unsaved entries stay in memory until the store accepts them again.", `${detail}`);
 }
 
 /**
@@ -21,7 +22,7 @@ export function formatPersistenceFailure(message: string): string {
  */
 export function formatPersistenceDurabilityFailure(message: string): string {
 	const detail = truncateToWidth(replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " "), TRUNCATE_LENGTHS.LINE);
-	return `Session persistence is still failing at shutdown: ${detail}. The session transcript is not durable; unsaved entries are lost.`;
+	return t("Session persistence is still failing at shutdown: {0}. The session transcript is not durable; unsaved entries are lost.", `${detail}`);
 }
 
 /**
@@ -35,13 +36,13 @@ export function formatPersistenceNotice(notice: SessionPersistenceNotice): strin
 	let message: string;
 	switch (notice.reason) {
 		case "open-elsewhere":
-			message = `Session ${from} is open for writing in another omp process, so this session now saves to ${to} instead of mixing its entries into that file.`;
+			message = t("Session {0} is open for writing in another omp process, so this session now saves to {1} instead of mixing its entries into that file.", `${from}`, `${to}`);
 			break;
 		case "replaced":
-			message = `Session ${from} changed on disk and no longer reads as this session; it is left untouched and this session now saves to ${to}.`;
+			message = t("Session {0} changed on disk and no longer reads as this session; it is left untouched and this session now saves to {1}.", `${from}`, `${to}`);
 			break;
 		case "contested":
-			message = `Another program kept writing to session ${from}; it is left to that writer and this session now saves to ${to}.`;
+			message = t("Another program kept writing to session {0}; it is left to that writer and this session now saves to {1}.", `${from}`, `${to}`);
 			break;
 	}
 	return replaceTabs(sanitizeText(message)).replace(/[\r\n]+/g, " ");

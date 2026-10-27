@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
@@ -343,32 +344,32 @@ function bashStatsParts(
 	const wallTimeMs = details?.wallTimeMs;
 	const statsParts: string[] = [];
 	if (details?.async?.state === "running") {
-		statsParts.push(`Backgrounded: ${details.async.jobId}`);
+		statsParts.push(t("Backgrounded: {0}", `${details.async.jobId}`));
 	}
 	if (details?.service) {
 		const service = details.service;
-		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
-		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
+		statsParts.push(t("Service: {0}", `${service.name}`), t("State: {0}", `${service.state}`));
+		statsParts.push(t("Ready: {0}", `${service.ready ? t("yes") : service.timedOut ? t("timed out") : t("no")}`));
 		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
 	}
 	if (wallTimeMs !== undefined) {
-		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
+		statsParts.push(t("Wall: {0}s", `${formatWallTimeSeconds(wallTimeMs)}`));
 	}
 	if (timeoutDisabled) {
-		statsParts.push("Timeout: disabled");
+		statsParts.push(t("Timeout: disabled"));
 	}
 	if (typeof timeoutSeconds === "number") {
 		statsParts.push(
 			requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
-				? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
-				: `Timeout: ${timeoutSeconds}s`,
+				? t("Timeout: {0}s (requested {1}s clamped)", `${timeoutSeconds}`, `${requestedTimeoutSeconds}`)
+				: t("Timeout: {0}s", `${timeoutSeconds}`),
 		);
 	}
 	if (artifactId) {
-		statsParts.push(`Artifact: ${artifactId}`);
+		statsParts.push(t("Artifact: {0}", `${artifactId}`));
 	}
 	if (isError && typeof details?.exitCode === "number") {
-		statsParts.push(`Exit: ${details.exitCode}`);
+		statsParts.push(t("Exit: {0}", `${details.exitCode}`));
 	}
 	return statsParts;
 }
@@ -393,7 +394,7 @@ function shellToolHead(
 		targetKind: intent ? "text" : undefined,
 		command,
 		exit,
-		note: settled && details?.timedOut === true ? "timed out" : undefined,
+		note: settled && details?.timedOut === true ? t("timed out") : undefined,
 	};
 }
 
@@ -408,14 +409,14 @@ function callIntent(args: unknown): string | undefined {
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
 function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
-	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
+	if (details?.async?.state === "running") parts.push(t("Job {0}", `${details.async.jobId}`));
 	const service = details?.service;
 	if (service) {
-		parts.push(`Service ${service.name}`, service.state);
-		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
+		parts.push(t("Service {0}", `${service.name}`), service.state);
+		parts.push(service.ready ? t("ready") : service.timedOut ? t("ready timed out") : t("not ready\u0004packages/tui/src/tools/bash.ts:shellFootParts"));
 		if (service.pid !== undefined) parts.push(`PID ${service.pid}`);
 	}
-	if (artifactId) parts.push(`Artifact ${artifactId}`);
+	if (artifactId) parts.push(t("Artifact {0}", `${artifactId}`));
 	return parts;
 }
 
@@ -478,7 +479,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					footerMeta:
 						elapsedMs === undefined || elapsedMs < 1000
 							? undefined
-							: uiTheme.fg("dim", `elapsed ${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`),
+							: uiTheme.fg("dim", t("elapsed {0}", `${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`)),
 					sections: [{ content: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
 				};
 			});
@@ -591,7 +592,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						isError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
-						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
+						statsParts.unshift(t("elapsed {0}", `${formatDuration(elapsedSecond * 1000)}`));
 					}
 					const footerMeta =
 						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
@@ -638,7 +639,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 									{ expanded },
 								),
 							},
-							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
+							{ label: uiTheme.fg("toolTitle", t("Output")), content: outputLines },
 						],
 					};
 

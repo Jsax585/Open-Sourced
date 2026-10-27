@@ -1,5 +1,7 @@
 /** `bash` — shell command execution: prompt line with env prefix, badges, output tail. */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
+import { formatStatus } from "../../lib/format";
 import { Badge, Badges, InvalidArg, ResultImages, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
 import { detailsRecord, display, isRecord, normalizeWs, num, resultTextOf, shortenPath, str, truncate } from "../util";
@@ -54,13 +56,13 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 
 	const stats: string[] = [];
 	if (wallTimeMs !== null) {
-		stats.push(wallTimeMs < 1000 ? `wall ${Math.round(wallTimeMs)}ms` : `wall ${(wallTimeMs / 1000).toFixed(1)}s`);
+		stats.push(wallTimeMs < 1000 ? t("wall {0}ms", `${Math.round(wallTimeMs)}`) : t("wall {0}s", `${(wallTimeMs / 1000).toFixed(1)}`));
 	}
 	if (requestedTimeoutSeconds !== null && requestedTimeoutSeconds !== timeoutSeconds) {
-		stats.push(`requested timeout ${requestedTimeoutSeconds}s clamped`);
+		stats.push(t("requested timeout {0}s clamped", `${requestedTimeoutSeconds}`));
 	}
-	if (job?.jobId) stats.push(`job ${job.jobId}`);
-	if (artifactId) stats.push(`artifact ${artifactId}`);
+	if (job?.jobId) stats.push(t("job {0}", `${job.jobId}`));
+	if (artifactId) stats.push(t("artifact {0}", `${artifactId}`));
 
 	return (
 		<>
@@ -76,14 +78,12 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					cwd && <Badge>cwd={shortenPath(cwd)}</Badge>,
 					timeoutSeconds !== null && <Badge>timeout={timeoutSeconds}s</Badge>,
 					args.pty === true && <Badge tone="accent">pty</Badge>,
-					!job && args.async === true && <Badge tone="accent">async</Badge>,
+					!job && args.async === true && <Badge tone="accent">{t("async")}</Badge>,
 					head !== null && <Badge>head={head}</Badge>,
 					tail !== null && <Badge>tail={tail}</Badge>,
-					exitCode !== null && <Badge tone="err">exit {exitCode}</Badge>,
+					exitCode !== null && <Badge tone="err">{t("exit {0}", `${exitCode}`)}</Badge>,
 					job && (
-						<Badge tone={job.state === "failed" ? "err" : job.state === "running" ? "accent" : "ok"}>
-							async {job.state}
-						</Badge>
+						<Badge tone={job.state === "failed" ? "err" : job.state === "running" ? "accent" : "ok"}>{t("async {0}", `${formatStatus(job.state)}`)}</Badge>
 					),
 				]}
 			/>

@@ -3,6 +3,7 @@
  * Standard Gemini models only (gemini-2.0-flash, gemini-2.5-*)
  */
 
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { getGeminiCliHeaders } from "@oh-my-pi/pi-catalog/wire/gemini-headers";
 import { $env } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
@@ -66,7 +67,7 @@ export async function pollOperation(
 ): Promise<LongRunningOperationResponse> {
 	for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt += 1) {
 		if (attempt > 0) {
-			onProgress?.(`Waiting for project provisioning (attempt ${attempt + 1}/${POLL_MAX_ATTEMPTS})...`);
+			onProgress?.(localize("Waiting for project provisioning (attempt {0}/{1})...", `${attempt + 1}`, `${POLL_MAX_ATTEMPTS}`));
 			throwIfLoginCancelled(signal);
 			await Bun.sleep(POLL_INTERVAL_MS);
 		}
@@ -79,7 +80,7 @@ export async function pollOperation(
 		);
 
 		if (!response.ok) {
-			throw new AIError.OAuthError(`Failed to poll operation: ${response.status} ${response.statusText}`, {
+			throw new AIError.OAuthError(localize("Failed to poll operation: {0} {1}", `${response.status}`, `${response.statusText}`), {
 				kind: "polling",
 				provider: "google-gemini-cli",
 				status: response.status,
@@ -92,7 +93,7 @@ export async function pollOperation(
 		}
 	}
 
-	throw new AIError.OAuthError(`Project provisioning did not complete after ${POLL_MAX_ATTEMPTS} attempts`, {
+	throw new AIError.OAuthError(localize("Project provisioning did not complete after {0} attempts", `${POLL_MAX_ATTEMPTS}`), {
 		kind: "timeout",
 		provider: "google-gemini-cli",
 	});
@@ -111,7 +112,7 @@ async function discoverProject(
 		...getGeminiCliHeaders(),
 	};
 
-	onProgress?.("Checking for existing Cloud Code Assist project...");
+	onProgress?.(localize("Checking for existing Cloud Code Assist project..."));
 	const loadResponse = await oauthFetch(
 		`${CODE_ASSIST_ENDPOINT}/v1internal:loadCodeAssist`,
 		{
@@ -161,8 +162,8 @@ async function discoverProject(
 			return envProjectId;
 		}
 		throw new AIError.OAuthError(
-			"This account requires setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. " +
-				"See https://goo.gle/gemini-cli-auth-docs#workspace-gca",
+			localize("This account requires setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. ") +
+				localize("See https://goo.gle/gemini-cli-auth-docs#workspace-gca"),
 			{ kind: "configuration", provider: "google-gemini-cli" },
 		);
 	}
@@ -172,13 +173,13 @@ async function discoverProject(
 
 	if (tierId !== TIER_FREE && !envProjectId) {
 		throw new AIError.OAuthError(
-			"This account requires setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. " +
-				"See https://goo.gle/gemini-cli-auth-docs#workspace-gca",
+			localize("This account requires setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. ") +
+				localize("See https://goo.gle/gemini-cli-auth-docs#workspace-gca"),
 			{ kind: "configuration", provider: "google-gemini-cli" },
 		);
 	}
 
-	onProgress?.("Provisioning Cloud Code Assist project (this may take a moment)...");
+	onProgress?.(localize("Provisioning Cloud Code Assist project (this may take a moment)..."));
 
 	const onboardBody: Record<string, unknown> = {
 		tierId,
@@ -224,9 +225,9 @@ async function discoverProject(
 	}
 
 	throw new AIError.OAuthError(
-		"Could not discover or provision a Google Cloud project. " +
-			"Try setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. " +
-			"See https://goo.gle/gemini-cli-auth-docs#workspace-gca",
+		localize("Could not discover or provision a Google Cloud project. ") +
+			localize("Try setting the GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID environment variable. ") +
+			localize("See https://goo.gle/gemini-cli-auth-docs#workspace-gca"),
 		{ kind: "validation", provider: "google-gemini-cli" },
 	);
 }
@@ -243,7 +244,7 @@ export const googleGeminiCliProjectHook: AfterExchangeHook = async (credentials,
 		typeof (raw as Record<string, unknown>).refresh_token !== "string" ||
 		(raw as Record<string, unknown>).refresh_token === ""
 	) {
-		throw new AIError.OAuthError("No refresh token received. Please try again.", {
+		throw new AIError.OAuthError(localize("No refresh token received. Please try again."), {
 			kind: "validation",
 			provider: context.provider,
 		});
@@ -255,7 +256,7 @@ export const googleGeminiCliProjectHook: AfterExchangeHook = async (credentials,
 		const validationUrl = extractGoogleValidationUrl(error instanceof Error ? error.message : String(error));
 		if (!validationUrl) throw error;
 		throw new AIError.OAuthError(
-			formatGoogleValidationRequiredMessage(validationUrl, "sign in again", credentials.email),
+			formatGoogleValidationRequiredMessage(validationUrl, localize("sign in again"), credentials.email),
 			{ kind: "validation", provider: context.provider },
 		);
 	}

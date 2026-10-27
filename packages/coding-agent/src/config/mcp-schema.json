@@ -1,18 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
-  "title": "OMP MCP configuration",
-  "description": "Schema for mcp.json, .mcp.json, .omp/mcp.json, and ~/.omp/agent/mcp.json used by the OMP coding agent.",
+  "title": "OMP MCP 설정",
+  "description": "OMP 코딩 에이전트가 사용하는 mcp.json, .mcp.json, .omp/mcp.json 및 ~/.omp/agent/mcp.json의 스키마입니다.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string",
-      "description": "Optional schema reference for editor autocomplete and validation."
+      "description": "편집기 자동 완성과 검증을 위한 선택적 스키마 참조입니다."
     },
     "mcpServers": {
       "type": "object",
-      "description": "Map of MCP server name to server configuration.",
+      "description": "MCP 서버 이름을 서버 설정에 연결하는 맵입니다.",
       "propertyNames": {
         "pattern": "^[a-zA-Z0-9_.-]{1,100}$"
       },
@@ -22,7 +22,7 @@
     },
     "disabledServers": {
       "type": "array",
-      "description": "User-level denylist for disabling discovered servers by name. Highest precedence: a server here is hidden regardless of any other source.",
+      "description": "검색된 서버를 이름으로 비활성화하는 사용자 수준 차단 목록입니다. 최우선으로 적용되며 다른 출처와 관계없이 여기에 있는 서버는 숨겨집니다.",
       "items": {
         "type": "string",
         "minLength": 1
@@ -31,7 +31,7 @@
     },
     "enabledServers": {
       "type": "array",
-      "description": "User-level allowlist that overrides a discovered server's `enabled: false` flag (e.g. when the source config is owned by another tool such as opencode.json). The denylist still wins.",
+      "description": "검색된 서버의 `enabled: false` 플래그를 재정의하는 사용자 수준 허용 목록입니다(예: 원본 설정이 opencode.json 같은 다른 도구 소유인 경우). 차단 목록이 여전히 우선합니다.",
       "items": {
         "type": "string",
         "minLength": 1
@@ -54,27 +54,27 @@
         "type": {
           "type": "string",
           "enum": ["oauth", "apikey"],
-          "description": "Auth strategy understood by OMP."
+          "description": "OMP가 지원하는 인증 전략입니다."
         },
         "credentialId": {
           "type": "string",
-          "description": "Stored OAuth credential id from agent auth storage."
+          "description": "에이전트 인증 저장소에 보관된 OAuth 인증 정보 ID입니다."
         },
         "tokenUrl": {
           "type": "string",
-          "description": "Token endpoint persisted for refresh."
+          "description": "갱신을 위해 저장된 토큰 엔드포인트입니다."
         },
         "clientId": {
           "type": "string",
-          "description": "OAuth client id persisted for refresh."
+          "description": "갱신을 위해 저장된 OAuth 클라이언트 ID입니다."
         },
         "clientSecret": {
           "type": "string",
-          "description": "OAuth client secret persisted for refresh."
+          "description": "갱신을 위해 저장된 OAuth 클라이언트 비밀 값입니다."
         },
         "resource": {
           "type": "string",
-          "description": "MCP resource URI persisted for OAuth resource indicators."
+          "description": "OAuth 리소스 표시자를 위해 저장된 MCP 리소스 URI입니다."
         }
       }
     },
@@ -104,32 +104,32 @@
         },
         "prompt": {
           "type": "string",
-          "description": "OAuth `prompt` parameter sent during authorization (default: omit unless the requested scope contains `offline_access`, which sends \"consent\"; set to \"\" to always omit)."
+          "description": "인증 중 전송할 OAuth `prompt` 매개변수입니다(기본적으로 생략하되 요청 범위에 `offline_access`가 있으면 \"consent\" 전송; 항상 생략하려면 \"\"로 설정)."
         }
       },
-      "description": "Explicit OAuth client settings for servers that need them during /mcp reauth or initial connect."
+      "description": "/mcp reauth 또는 최초 연결 시 명시적 OAuth 클라이언트 설정이 필요한 서버를 위한 설정입니다."
     },
     "serverBase": {
       "type": "object",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Whether OMP should try to connect this server."
+          "description": "OMP가 이 서버에 연결을 시도할지 여부입니다."
         },
         "timeout": {
           "type": "number",
           "minimum": 0,
-          "description": "MCP request timeout in milliseconds. Set to 0 to disable client-side MCP timeouts."
+          "description": "MCP 요청 제한 시간(밀리초)입니다. 0으로 설정하면 클라이언트 측 MCP 제한 시간을 끕니다."
         },
         "requestIdFormat": {
           "type": "string",
           "enum": ["string", "number"],
-          "description": "Encoding for outgoing JSON-RPC request ids (default: \"number\"). Use \"string\" for servers that need collision-resistant snowflake string ids instead of per-transport integers. OMP-specific: set it in an OMP-owned config (`.omp/mcp.json`, `~/.omp/agent/mcp.json`, a project `mcp.json`/`.mcp.json`, or an OMP plugin). Servers imported from another tool's config (Claude, Cursor, VS Code, Gemini, OpenCode, Windsurf) ignore it, since that key is not part of those formats."
+          "description": "전송하는 JSON-RPC 요청 ID의 인코딩입니다(기본값: \"number\"). 전송별 정수 대신 충돌 방지 snowflake 문자열 ID가 필요한 서버에는 \"string\"을 사용하세요. OMP 전용: OMP 소유 설정(`.omp/mcp.json`, `~/.omp/agent/mcp.json`, 프로젝트의 `mcp.json`/`.mcp.json` 또는 OMP 플러그인)에 지정하세요. 다른 도구(Claude, Cursor, VS Code, Gemini, OpenCode, Windsurf)의 설정에서 가져온 서버는 해당 형식에 이 키가 없으므로 무시합니다."
         },
         "instructions": {
           "type": "boolean",
           "default": true,
-          "description": "Include server-provided instructions in the system prompt. Set false to omit them without disabling the server or its tools. OMP-specific: supported by native config, standalone mcp.json/.mcp.json, and OMP extension packages; imported tool configs ignore it."
+          "description": "서버가 제공한 지침을 시스템 프롬프트에 포함합니다. 서버나 도구를 비활성화하지 않고 지침만 제외하려면 false로 설정하세요. OMP 전용: 네이티브 설정, 독립 mcp.json/.mcp.json 및 OMP 확장 기능 패키지에서 지원하며 가져온 도구 설정에서는 무시합니다."
         },
         "auth": {
           "$ref": "#/$defs/authConfig"
@@ -158,27 +158,27 @@
             "type": {
               "type": "string",
               "enum": ["stdio"],
-              "description": "Default transport when omitted."
+              "description": "생략 시 기본 전송 방식입니다."
             },
             "command": {
               "type": "string",
               "minLength": 1,
-              "description": "Executable to spawn."
+              "description": "실행할 실행 파일입니다."
             },
             "args": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Arguments passed to the stdio server process."
+              "description": "stdio 서버 프로세스에 전달할 인수입니다."
             },
             "env": {
               "$ref": "#/$defs/stringMap",
-              "description": "Environment variables passed to the stdio process."
+              "description": "stdio 프로세스에 전달할 환경 변수입니다."
             },
             "cwd": {
               "type": "string",
-              "description": "Working directory used when spawning the stdio process."
+              "description": "stdio 프로세스를 시작할 작업 디렉터리입니다."
             }
           },
           "not": {
@@ -206,16 +206,16 @@
             "type": {
               "type": "string",
               "enum": ["http"],
-              "description": "Streamable HTTP transport."
+              "description": "스트리밍 가능한 HTTP 전송입니다."
             },
             "url": {
               "type": "string",
               "minLength": 1,
-              "description": "MCP endpoint URL."
+              "description": "MCP 엔드포인트 URL입니다."
             },
             "headers": {
               "$ref": "#/$defs/stringMap",
-              "description": "HTTP headers sent with MCP requests."
+              "description": "MCP 요청과 함께 전송할 HTTP 헤더입니다."
             }
           },
           "not": {
@@ -243,16 +243,16 @@
             "type": {
               "type": "string",
               "enum": ["sse"],
-              "description": "Legacy SSE transport kept for compatibility. Prefer http for new configs."
+              "description": "호환성을 위해 유지하는 기존 SSE 전송입니다. 새 설정에는 http를 권장합니다."
             },
             "url": {
               "type": "string",
               "minLength": 1,
-              "description": "Legacy SSE endpoint URL."
+              "description": "기존 SSE 엔드포인트 URL입니다."
             },
             "headers": {
               "$ref": "#/$defs/stringMap",
-              "description": "HTTP headers sent with the SSE transport."
+              "description": "SSE 전송과 함께 보낼 HTTP 헤더입니다."
             }
           },
           "not": {

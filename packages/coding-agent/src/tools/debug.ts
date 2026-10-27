@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type DebugToolDetails, formatLocation, formatSessionSnapshot } from "@oh-my-pi/pi-tui/tools/debug";
 import * as fs from "node:fs/promises";
 import { type } from "@oh-my-pi/omptype";
@@ -549,13 +550,13 @@ export class DebugTool implements AgentTool<typeof debugSchema, DebugExecutionDe
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<DebugParams>;
-		const lines = [`Action: ${typeof params.action === "string" ? params.action : "(missing)"}`];
+		const lines = [t("Action: {0}", `${typeof params.action === "string" ? params.action : t("(missing)\u0004packages/coding-agent/src/tools/bash.ts:BashTool.formatApprovalDetails.command")}`)];
 		if (typeof params.program === "string" && params.program.length > 0) {
-			lines.push(`Program: ${truncateForPrompt(params.program)}`);
+			lines.push(t("Program: {0}", `${truncateForPrompt(params.program)}`));
 		}
 		return lines;
 	};
-	readonly label = "Debug";
+	readonly label = t("Debug");
 	readonly summary = "Debug a running process with DAP (debugger adapter protocol)";
 	readonly description: string;
 	readonly parameters = debugSchema;

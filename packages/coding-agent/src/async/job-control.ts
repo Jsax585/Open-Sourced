@@ -4,6 +4,7 @@
  * running-agents roster for activity with no job entry.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 
 import type { AsyncJob, AsyncJobDetails, AsyncJobManager, AsyncJobType } from "./job-manager";
@@ -264,17 +265,17 @@ function finiteNumber(value: unknown): number | undefined {
 export function runningTaskProgressSuffix(job: JobSnapshot, options: { duration: boolean }): string {
 	if (job.type !== "task" || job.status !== "running") return "";
 	const parts: string[] = [];
-	if (job.requests !== undefined && job.requests > 0) parts.push(`${job.requests} req`);
+	if (job.requests !== undefined && job.requests > 0) parts.push(t("{0} req\u0004packages/coding-agent/src/async/job-control.ts:runningTaskProgressSuffix", `${job.requests}`));
 	if (job.cost !== undefined && job.cost > 0) parts.push(job.cost < 0.005 ? "<$0.01" : `$${job.cost.toFixed(2)}`);
 	if (job.contextTokens !== undefined && job.contextTokens > 0) {
 		parts.push(
 			job.contextWindow !== undefined && job.contextWindow > 0
-				? `ctx ${formatNumber(job.contextTokens)}/${formatNumber(job.contextWindow)}`
-				: `ctx ${formatNumber(job.contextTokens)}`,
+				? t("ctx {0}/{1}", `${formatNumber(job.contextTokens)}`, `${formatNumber(job.contextWindow)}`)
+				: t("ctx {0}", `${formatNumber(job.contextTokens)}`),
 		);
 	}
 	if (job.completionPercent !== undefined) parts.push(`~${job.completionPercent}%`);
-	if (job.stage) parts.push(`stage: ${job.stage.replace(/\s+/g, " ")}`);
+	if (job.stage) parts.push(t("stage: {0}", `${job.stage.replace(/\s+/g, " ")}`));
 	if (parts.length === 0) return "";
 	if (options.duration) parts.unshift(formatDuration(job.durationMs));
 	return ` — ${parts.join(" · ")}`;
@@ -328,8 +329,8 @@ export function buildJobResult(
 					alreadyConsumed.has(j.id)
 						? "Delivery: already delivered or recovered."
 						: watchedByWait.has(j.id)
-							? "Delivery: delivered directly to wait."
-							: "Delivery: not auto-delivered; recovered by this snapshot.",
+							? t("Delivery: delivered directly to wait.")
+							: t("Delivery: not auto-delivered; recovered by this snapshot."),
 				);
 			}
 			if (j.resultText) {

@@ -3,6 +3,7 @@
  * (env overrides, obfuscation, hooks), `{placeholder}` templating, token
  * endpoint requests and token-response → `OAuthCredentials` projection.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	CompiledAuthValue,
 	CompiledCredentialField,
@@ -236,9 +237,9 @@ export async function postTokenRequest(
 			throw new AIError.LoginCancelledError(`OAuth login cancelled: ${String(context.signal.reason)}`);
 		}
 		if (timeoutSignal.aborted) {
-			throw new AIError.OAuthError(`Timed out waiting for ${url}`, { kind: "timeout", provider: context.provider });
+			throw new AIError.OAuthError(t("Timed out waiting for {0}", `${url}`), { kind: "timeout", provider: context.provider });
 		}
-		throw new AIError.OAuthError(`${context.provider} request to ${url} failed: ${describeError(cause)}`, {
+		throw new AIError.OAuthError(t("{0} request to {1} failed: {2}", `${context.provider}`, `${url}`, `${describeError(cause)}`), {
 			kind: errorKind,
 			provider: context.provider,
 			cause,

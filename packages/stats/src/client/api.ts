@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type {
 	CostDashboardStats,
 	FolderStats,
@@ -42,7 +43,7 @@ async function readErrorMessage(res: Response, endpoint: string): Promise<string
 	} catch {
 		// Non-JSON error body: fall through to the status line.
 	}
-	return `HTTP error ${res.status} on ${endpoint}`;
+	return t("HTTP error {1} on {0}", `${endpoint}`, `${res.status}`);
 }
 
 /**

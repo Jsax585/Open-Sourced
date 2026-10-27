@@ -6,6 +6,7 @@
  * scrollback/erase strategy, and the live geometry — the details that decide
  * which escape sequences the renderer emits.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	getCellDimensions,
 	ImageProtocol,
@@ -44,14 +45,14 @@ export interface TerminalStateInfo {
 }
 
 const IMAGE_PROTOCOL_NAMES: Record<ImageProtocol, string> = {
-	[ImageProtocol.Kitty]: "Kitty graphics",
-	[ImageProtocol.Iterm2]: "iTerm2 inline images",
+	[ImageProtocol.Kitty]: t("Kitty graphics"),
+	[ImageProtocol.Iterm2]: t("iTerm2 inline images"),
 	[ImageProtocol.Sixel]: "Sixel",
 };
 
 const NOTIFY_PROTOCOL_NAMES: Record<NotifyProtocol, string> = {
 	[NotifyProtocol.Bell]: "BEL (\\a)",
-	[NotifyProtocol.Osc99]: "OSC 99 (kitty desktop notifications)",
+	[NotifyProtocol.Osc99]: t("OSC 99 (kitty desktop notifications)"),
 	[NotifyProtocol.Osc9]: "OSC 9 (iTerm2/WezTerm)",
 };
 
@@ -66,7 +67,7 @@ export function collectTerminalState(runtime: TerminalRuntimeState): TerminalSta
 		cellWidthPx: cell.widthPx,
 		cellHeightPx: cell.heightPx,
 		trueColor: TERMINAL.trueColor,
-		imageProtocol: TERMINAL.imageProtocol === null ? "none" : IMAGE_PROTOCOL_NAMES[TERMINAL.imageProtocol],
+		imageProtocol: TERMINAL.imageProtocol === null ? t("none") : IMAGE_PROTOCOL_NAMES[TERMINAL.imageProtocol],
 		notifyProtocol: NOTIFY_PROTOCOL_NAMES[TERMINAL.notifyProtocol],
 		osc99Confirmed: isOsc99Supported(),
 		hyperlinks: TERMINAL.hyperlinks,
@@ -83,33 +84,33 @@ export function collectTerminalState(runtime: TerminalRuntimeState): TerminalSta
 	};
 }
 
-const yesNo = (value: boolean): string => (value ? "yes" : "no");
+const yesNo = (value: boolean): string => (value ? t("yes") : t("no"));
 
 /** Format terminal state for display in the debug menu. */
 export function formatTerminalState(info: TerminalStateInfo): string {
 	const lines = [
-		"Terminal State",
+		t("Terminal State"),
 		"━━━━━━━━━━━━━━",
-		`Detected:     ${info.detectedId}`,
-		`Geometry:     ${info.columns}x${info.rows} cells · cell ${info.cellWidthPx}x${info.cellHeightPx}px`,
-		info.multiplexer ? `Multiplexer:  ${info.multiplexer}` : "Multiplexer:  none",
+		t("Detected:     {0}", `${info.detectedId}`),
+		t("Geometry:     {0}x{1} cells · cell {2}x{3}px", `${info.columns}`, `${info.rows}`, `${info.cellWidthPx}`, `${info.cellHeightPx}`),
+		info.multiplexer ? t("Multiplexer:  {0}", `${info.multiplexer}`) : t("Multiplexer:  none"),
 		"",
-		"Subprotocols",
-		`  Graphics:     ${info.imageProtocol}`,
-		`  Notify:       ${info.notifyProtocol}${info.osc99Confirmed ? " · confirmed via DA" : ""}`,
-		`  Hyperlinks:   ${yesNo(info.hyperlinks)} (OSC 8)`,
-		`  True color:   ${yesNo(info.trueColor)} (24-bit SGR)`,
-		`  DECCARA:      ${yesNo(info.deccara)} (rectangular-SGR background fills)`,
-		`  Sync output:  ${yesNo(info.synchronizedOutput)} (DEC 2026)`,
+		t("Subprotocols"),
+		t("  Graphics:     {0}", `${info.imageProtocol}`),
+		t("  Notify:       {0}{1}", `${info.notifyProtocol}`, `${info.osc99Confirmed ? t(" · confirmed via DA") : ""}`),
+		t("  Hyperlinks:   {0} (OSC 8)", `${yesNo(info.hyperlinks)}`),
+		t("  True color:   {0} (24-bit SGR)", `${yesNo(info.trueColor)}`),
+		t("  DECCARA:      {0} (rectangular-SGR background fills)", `${yesNo(info.deccara)}`),
+		t("  Sync output:  {0} (DEC 2026)", `${yesNo(info.synchronizedOutput)}`),
 		"",
-		"Scrollback",
-		`  Screen->history clear: ${info.screenToScrollback ? "CSI 22 J" : "CSI 2 J (redraw)"}`,
+		t("Scrollback"),
+		t("  Screen->history clear: {0}", `${info.screenToScrollback ? "CSI 22 J" : t("CSI 2 J (redraw)")}`),
 		"",
-		"Detection signals",
-		`  TERM:                 ${info.env.TERM ?? "(unset)"}`,
-		`  TERM_PROGRAM:         ${info.env.TERM_PROGRAM ?? "(unset)"}`,
-		`  TERM_PROGRAM_VERSION: ${info.env.TERM_PROGRAM_VERSION ?? "(unset)"}`,
-		`  COLORTERM:            ${info.env.COLORTERM ?? "(unset)"}`,
+		t("Detection signals"),
+		`  TERM:                 ${info.env.TERM ?? t("(unset)\u0004packages/tui/src/apps/debug/terminal-info.ts:formatTerminalState.lines")}`,
+		`  TERM_PROGRAM:         ${info.env.TERM_PROGRAM ?? t("(unset)\u0004packages/tui/src/apps/debug/terminal-info.ts:formatTerminalState.lines")}`,
+		`  TERM_PROGRAM_VERSION: ${info.env.TERM_PROGRAM_VERSION ?? t("(unset)\u0004packages/tui/src/apps/debug/terminal-info.ts:formatTerminalState.lines")}`,
+		`  COLORTERM:            ${info.env.COLORTERM ?? t("(unset)\u0004packages/tui/src/apps/debug/terminal-info.ts:formatTerminalState.lines")}`,
 	];
 	return lines.join("\n");
 }

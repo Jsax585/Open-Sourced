@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 import { DEFAULT_RELAY_URL } from "./protocol";
 
@@ -13,8 +14,8 @@ export const cfgCollabRelayUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Relay URL",
-		description: "Relay used by /collab (wss://host[:port])",
+		label: t("Relay URL"),
+		description: t("Relay used by /collab (wss://host[:port])"),
 	},
 });
 
@@ -25,9 +26,9 @@ export const cfgCollabWebUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Web UI URL",
+		label: t("Web UI URL"),
 		description:
-			"Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only",
+			t("Browser UI used by /collab links; empty derives from collab.relayUrl; explicit http:// is localhost-only"),
 	},
 });
 
@@ -38,8 +39,8 @@ export const cfgCollabDisplayName = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Display Name",
-		description: "Name shown to other collab participants (default: OS username)",
+		label: t("Display Name"),
+		description: t("Name shown to other collab participants (default: OS username)"),
 	},
 });
 
@@ -51,20 +52,20 @@ export const cfgCollabAutoStart = register({
 	ui: {
 		tab: "interaction",
 		group: "Collab",
-		label: "Auto Start",
+		label: t("Auto Start"),
 		description:
-			"Host every interactive session via collab.relayUrl as it starts and publish it to the local registry (omp collab list); rooms rotate on session switch",
+			t("Host every interactive session via collab.relayUrl as it starts and publish it to the local registry (omp collab list); rooms rotate on session switch"),
 		options: [
-			{ value: "off", label: "Off", description: "Share only when /collab is run" },
+			{ value: "off", label: t("Off\u0004packages/coding-agent/src/collab/settings.ts:cfgCollabAutoStart.ui.options.label"), description: t("Share only when /collab is run") },
 			{
 				value: "view",
-				label: "View",
-				description: "Auto-host; the registry hands out view-only links (omp collab link --view)",
+				label: t("View"),
+				description: t("Auto-host; the registry hands out view-only links (omp collab link --view)"),
 			},
 			{
 				value: "control",
-				label: "Control",
-				description: "Auto-host; the registry hands out control links that can prompt the session",
+				label: t("Control"),
+				description: t("Auto-host; the registry hands out control links that can prompt the session"),
 			},
 		],
 	},

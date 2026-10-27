@@ -29,6 +29,7 @@
  * queued/planning until `tool_execution_start`, and only then delegate to the
  * wrapped tool's own renderer with the decoded inner args.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type AgentToolContext,
 	type AgentToolResult,
@@ -153,12 +154,12 @@ function parseDeviceArgs(
 		parsed = JSON.parse(content);
 	} catch (error) {
 		throw new ToolError(
-			`${XD_URL_PREFIX}${device.name} expects a JSON args object as content (${error instanceof Error ? error.message : String(error)}). Write \`?\` for docs.`,
+			t("{0}{1} expects a JSON args object as content ({2}). Write `?` for docs.", `${XD_URL_PREFIX}`, `${device.name}`, `${error instanceof Error ? error.message : String(error)}`),
 		);
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
 		throw new ToolError(
-			`${XD_URL_PREFIX}${device.name} content must be a JSON object, got ${Array.isArray(parsed) ? "array" : typeof parsed}.`,
+			t("{0}{1} content must be a JSON object, got {2}.", `${XD_URL_PREFIX}`, `${device.name}`, `${Array.isArray(parsed) ? "array" : typeof parsed}`),
 		);
 	}
 	// The harness only injects the intent field into top-level schemas; strip a
@@ -173,7 +174,7 @@ function parseDeviceArgs(
 		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new ToolError(`Invalid args for ${XD_URL_PREFIX}${device.name}: ${message}\n\n${docs()}`);
+		throw new ToolError(t("Invalid args for {0}{1}: {2}\n\n{3}", `${XD_URL_PREFIX}`, `${device.name}`, `${message}`, `${docs()}`));
 	}
 }
 
@@ -423,7 +424,7 @@ function resolveRequiredXdevTool(state: XdevState, name: string): Tool {
 	const inst = resolveXdevTool(state, name);
 	if (!inst) {
 		throw new ToolError(
-			`No such tool: ${XD_URL_PREFIX}${name}. Mounted devices: ${[...state.mountedNames].join(", ")}. Active top-level tools are also dispatchable via ${XD_URL_PREFIX}<tool>.`,
+			t("No such tool: {0}{1}. Mounted devices: {2}. Active top-level tools are also dispatchable via {3}<tool>.", `${XD_URL_PREFIX}`, `${name}`, `${[...state.mountedNames].join(", ")}`, `${XD_URL_PREFIX}`),
 		);
 	}
 	return inst;

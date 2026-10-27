@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, Spacer, Text } from "../index";
 import { WidthAwareText } from "../render/index";
 import { theme } from "../theme/theme";
@@ -48,7 +49,7 @@ export class ErrorBannerComponent extends Container {
 				0,
 			),
 		);
-		this.addChild(new Text(theme.fg("dim", "Dismissed when you send your next message."), 1, 0));
+		this.addChild(new Text(theme.fg("dim", t("Dismissed when you send your next message.")), 1, 0));
 		this.addChild(new DynamicBorder(str => theme.fg("error", str)));
 	}
 
@@ -63,16 +64,16 @@ export class ErrorBannerComponent extends Container {
 			this.#message
 				.split("\n")
 				.find(line => line.trim() !== "")
-				?.trim() || "Error";
+				?.trim() || t("Error");
 		const multiline = this.#message !== headline;
 		const message = this.#expanded
 			? text([span(this.#message, "error")], { wrap: "word", grow: 1 })
 			: text([span(headline, "error")], { truncate: "end", lines: 1, grow: 1, title: this.#message });
 		const children: NativeNode[] = [message];
 		if (multiline || headline.length > 80) {
-			children.push(actionButton(this.#expanded ? "Less" : "Details", "details"));
+			children.push(actionButton(this.#expanded ? t("Less") : t("Details\u0004packages/tui/src/overlays/error-banner.ts:ErrorBannerComponent.describe"), "details"));
 		}
-		if (this.#onDismiss) children.push(actionButton("Dismiss", "dismiss"));
+		if (this.#onDismiss) children.push(actionButton(t("Dismiss"), "dismiss"));
 		this.#native = node(
 			"row",
 			{ role: "omp.errorBanner", tone: "error", gap: "sm", align: this.#expanded ? "start" : "center" },

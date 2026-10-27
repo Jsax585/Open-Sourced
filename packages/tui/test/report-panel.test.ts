@@ -68,11 +68,10 @@ async function mountReport(bodyRows: number) {
 }
 
 describe("ReportPanel in text mode", () => {
-	it("grows up over the transcript to show a report that fits, without a scroll hint", async () => {
+	it("grows up over the transcript to show a report that fits", async () => {
 		const h = await mountReport(30);
 		expect(h.entries()).toEqual(Array.from({ length: 30 }, (_, i) => i));
 		expect(h.screen().some(row => row.includes("Full Changelog"))).toBe(true);
-		expect(h.screen().some(row => row.includes("scroll"))).toBe(false);
 		expect(h.panel.heightAt(80)).toBe(30 + 5);
 		h.composer.stop();
 	});
@@ -82,7 +81,6 @@ describe("ReportPanel in text mode", () => {
 		const screen = h.screen();
 		expect(screen.some(row => row.includes("Full Changelog"))).toBe(true);
 		expect(screen.at(-1)).toBe("EDITOR");
-		expect(screen.some(row => row.includes("PgUp/PgDn scroll"))).toBe(true);
 		const first = h.entries();
 		expect(first[0]).toBe(0);
 
@@ -139,7 +137,6 @@ describe("ReportPanel in text mode", () => {
 			await scheduler.settle(terminal);
 		}
 		expect(editorRow()).toBe(ROWS - 1);
-		expect(terminal.getViewport().some(row => row.includes("Tip:"))).toBe(true);
 		const viewport = composer.ui.getMutableViewport();
 		expect(viewport.top + viewport.length).toBe(ROWS);
 
@@ -187,11 +184,11 @@ describe("ReportPanel in text mode", () => {
 			onClose: () => closed++,
 		});
 		const footer = () => Bun.stripANSI(panel.render(60).join("\n"));
-		expect(footer()).toContain("Ctrl+Q to close");
+		expect(footer()).toContain("Ctrl+Q");
 
 		panel.holdFocus();
 		expect(footer()).not.toContain("Ctrl+Q");
-		expect(footer()).toContain(`${editorKey("tui.select.cancel")} to close`);
+		expect(footer()).toContain(editorKey("tui.select.cancel"));
 		panel.handleInput("\x1b");
 		expect(closed).toBe(1);
 	});

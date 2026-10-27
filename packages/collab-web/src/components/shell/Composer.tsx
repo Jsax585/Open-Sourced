@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { CollabUiRequest } from "@oh-my-pi/pi-wire";
 import { SendHorizontal, Square } from "lucide-react";
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
@@ -98,7 +99,7 @@ function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
 				onKeyDown={onKeyDown}
 				onCompositionStart={onCompositionStart}
 				onCompositionEnd={onCompositionEnd}
-				placeholder="type your response…"
+				placeholder={t("type your response…")}
 				rows={1}
 				spellCheck={false}
 			/>
@@ -107,9 +108,9 @@ function AskEditor({ prefill, onSubmit }: AskEditorProps): ReactNode {
 					type="button"
 					className="sh-btn sh-btn-primary"
 					onClick={() => onSubmit(draft)}
-					title="submit response"
+					title={t("submit response")}
 				>
-					<SendHorizontal size={12} /> <span className="sh-btn-label">Submit</span>
+					<SendHorizontal size={12} /> <span className="sh-btn-label">{t("Submit")}</span>
 				</button>
 			</div>
 		</div>
@@ -190,18 +191,16 @@ export const Composer = memo(function Composer({
 					/>
 				)}
 				<div className="sh-composer-actions sh-ask-actions">
-					<button type="button" className="sh-btn" onClick={() => client.sendUiResponse(uiRequest.reqId)}>
-						Cancel
-					</button>
+					<button type="button" className="sh-btn" onClick={() => client.sendUiResponse(uiRequest.reqId)}>{t("Cancel")}</button>
 					{busy && (
 						<button
 							type="button"
 							className="sh-btn sh-btn-stop"
 							onClick={() => client.sendAbort()}
 							disabled={!live}
-							title="stop the current turn"
+							title={t("stop the current turn")}
 						>
-							<Square size={11} /> <span className="sh-btn-label">Stop</span>
+							<Square size={11} /> <span className="sh-btn-label">{t("Stop")}</span>
 						</button>
 					)}
 				</div>
@@ -222,10 +221,10 @@ export const Composer = memo(function Composer({
 					onCompositionEnd={onCompositionEnd}
 					placeholder={
 						readOnly
-							? "Read-only session — watching only"
+							? t("Read-only session — watching only")
 							: live
-								? "Prompt the host agent…"
-								: "Waiting for the session…"
+								? t("Prompt the host agent…")
+								: t("Waiting for the session…")
 					}
 					disabled={!canPrompt}
 					rows={1}
@@ -234,7 +233,7 @@ export const Composer = memo(function Composer({
 				<div className="sh-composer-actions">
 					{busy && queued > 0 && (
 						<span className="sh-queued">
-							<span className="sh-queued-label">queued </span>×{queued}
+							<span className="sh-queued-label">{t("queued ")}</span>×{queued}
 						</span>
 					)}
 					{busy && !readOnly && (
@@ -243,9 +242,9 @@ export const Composer = memo(function Composer({
 							className="sh-btn sh-btn-stop"
 							onClick={() => client.sendAbort()}
 							disabled={!live}
-							title="stop the current turn"
+							title={t("stop the current turn")}
 						>
-							<Square size={11} /> <span className="sh-btn-label">Stop</span>
+							<Square size={11} /> <span className="sh-btn-label">{t("Stop")}</span>
 						</button>
 					)}
 					<button
@@ -253,9 +252,9 @@ export const Composer = memo(function Composer({
 						className="sh-btn sh-btn-primary"
 						onClick={send}
 						disabled={!canSend}
-						title="send (Enter)"
+						title={t("send (Enter)")}
 					>
-						<SendHorizontal size={12} /> <span className="sh-btn-label">Send</span>
+						<SendHorizontal size={12} /> <span className="sh-btn-label">{t("Send")}</span>
 					</button>
 				</div>
 			</div>

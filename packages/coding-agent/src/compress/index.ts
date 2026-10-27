@@ -9,6 +9,7 @@
  * Verification is the agent's declared loss list plus the review turn — the command
  * deliberately runs no diff or keyword check of its own.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -67,7 +68,7 @@ export async function resolveCompressTargets(patterns: readonly string[], cwd: s
 		}
 		const resolved = path.resolve(cwd, pattern);
 		const stat = await fs.stat(resolved).catch(() => undefined);
-		if (!stat?.isFile()) throw new Error(`Not a file: ${shortenPath(resolved)}`);
+		if (!stat?.isFile()) throw new Error(t("Not a file: {0}", `${shortenPath(resolved)}`));
 		found.add(resolved);
 	}
 	return [...found].sort();
@@ -77,28 +78,28 @@ export async function resolveCompressTargets(patterns: readonly string[], cwd: s
 export async function runCompressCommand(options: CompressCommandOptions): Promise<CompressResult> {
 	const maxRounds = options.maxRounds ?? DEFAULT_MAX_ROUNDS;
 	const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-	if (!Number.isInteger(maxRounds) || maxRounds <= 0) throw new Error("--rounds must be a positive integer");
-	if (!Number.isInteger(concurrency) || concurrency <= 0) throw new Error("--agents must be a positive integer");
-	if (options.inPlace && options.output) throw new Error("--in-place and --out are mutually exclusive");
+	if (!Number.isInteger(maxRounds) || maxRounds <= 0) throw new Error(t("--rounds must be a positive integer"));
+	if (!Number.isInteger(concurrency) || concurrency <= 0) throw new Error(t("--agents must be a positive integer"));
+	if (options.inPlace && options.output) throw new Error(t("--in-place and --out are mutually exclusive"));
 	// Paths and patterns follow the shell's cwd, as a file-taking CLI must; the project
 	// dir only scopes settings discovery for the sessions.
 	const invocationDir = process.cwd();
 	const cwd = getProjectDir();
 	const targets = await resolveCompressTargets(options.files, invocationDir);
-	if (targets.length === 0) throw new Error("No files to compress");
+	if (targets.length === 0) throw new Error(t("No files to compress"));
 	if (targets.length > 1 && !options.inPlace) {
-		throw new Error(`${targets.length} files matched; pass --in-place to rewrite them (--out takes a single file)`);
+		throw new Error(t("{0} files matched; pass --in-place to rewrite them (--out takes a single file)", `${targets.length}`));
 	}
 
 	const abortController = new AbortController();
-	const abort = (): void => abortController.abort(new Error("Compress interrupted"));
+	const abort = (): void => abortController.abort(new Error(t("Compress interrupted")));
 	process.once("SIGINT", abort);
 	process.once("SIGTERM", abort);
-	const progress = createProgressReporter("Compressing");
+	const progress = createProgressReporter(t("Compressing"));
 	const emitToStdout = targets.length === 1 && !options.inPlace && options.output === undefined;
 
 	try {
-		console.error(`Compressing ${targets.length} file(s)${options.model ? ` with ${options.model}` : ""}`);
+		console.error(t("Compressing {0} file(s){1}", `${targets.length}`, `${options.model ? t(" with {0}\u0004packages/coding-agent/src/compress/index.ts:runCompressCommand", `${options.model}`) : ""}`));
 		progress.start(targets.length);
 		const settled = await mapWithConcurrencyLimitAllSettled(
 			targets,
@@ -139,7 +140,7 @@ export async function runCompressCommand(options: CompressCommandOptions): Promi
 				continue;
 			}
 			const reason = outcome?.status === "rejected" ? outcome.reason : undefined;
-			const error = reason instanceof Error ? reason.message : reason ? String(reason) : "Cancelled";
+			const error = reason instanceof Error ? reason.message : reason ? String(reason) : t("Cancelled");
 			const cancelled: CompressFileResult = { path: target, status: "cancelled", rounds: 0, error };
 			files.push(cancelled);
 			// Never streamed from the worker, so report it here regardless of mode.
@@ -171,7 +172,7 @@ async function compressFile(input: {
 	const { target, cwd, options, maxRounds } = input;
 	const source = await fs.readFile(target, "utf8");
 	if (source.trim().length === 0) {
-		return { path: target, status: "stalled", rounds: 0, error: "no text to compress" };
+		return { path: target, status: "stalled", rounds: 0, error: t("no text to compress") };
 	}
 	const protocol = new CompressProtocol(source);
 	// Delimiters carry a per-run nonce so a source document — which is itself a prompt,
@@ -279,9 +280,9 @@ function reportFile(file: CompressFileResult, emitToStdout: boolean): void {
 	const metrics = file.metrics;
 	const size = metrics
 		? `${metrics.sourceTokens} → ${metrics.draftTokens} tok (${(metrics.ratio * 100).toFixed(1)}%)`
-		: "no draft";
+		: t("no draft");
 	console.error(
-		`  ${label}: ${file.status}, ${size}, ${file.rounds} draft(s), ${file.draft?.losses.length ?? 0} loss(es)`,
+		t("  {0}: {1}, {2}, {3} draft(s), {4} loss(es)", `${label}`, `${file.status}`, `${size}`, `${file.rounds}`, `${file.draft?.losses.length ?? 0}`),
 	);
 	for (const loss of file.draft?.losses ?? []) {
 		const content = loss.content.length > LOSS_PREVIEW ? `${loss.content.slice(0, LOSS_PREVIEW)}…` : loss.content;
@@ -289,10 +290,10 @@ function reportFile(file: CompressFileResult, emitToStdout: boolean): void {
 		console.error(`      ${sanitizeText(loss.reason)}`);
 	}
 	if (file.status !== "approved") {
-		console.error("      nothing written");
+		console.error(t("      nothing written"));
 		return;
 	}
-	if (file.outputPath) console.error(`      wrote ${shortenPath(file.outputPath)}`);
+	if (file.outputPath) console.error(t("      wrote {0}", `${shortenPath(file.outputPath)}`));
 	if (emitToStdout && file.draft) console.log(file.draft.text);
 }
 
@@ -310,9 +311,9 @@ function summarize(files: CompressFileResult[], emitToStdout: boolean): Compress
 	if (files.length > 1) {
 		const percent = sourceTokens === 0 ? "0.0" : (((sourceTokens - draftTokens) / sourceTokens) * 100).toFixed(1);
 		console.error(
-			`Approved ${approved}/${files.length}: ${sourceTokens} → ${draftTokens} tokens (${percent}% smaller)`,
+			t("Approved {0}/{1}: {2} → {3} tokens ({4}% smaller)", `${approved}`, `${files.length}`, `${sourceTokens}`, `${draftTokens}`, `${percent}`),
 		);
 	}
-	if (!emitToStdout && approved === 0) console.error("Nothing written");
+	if (!emitToStdout && approved === 0) console.error(t("Nothing written"));
 	return { exitCode: approved === files.length ? 0 : 1, files, sourceTokens, draftTokens };
 }

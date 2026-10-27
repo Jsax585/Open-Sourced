@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentOptions } from "@oh-my-pi/pi-agent-core";
 import type { OAuthAccessResolution, OAuthRefreshReason } from "@oh-my-pi/pi-ai";
 import type { ApiKeyResolver } from "@oh-my-pi/pi-ai/auth-retry";
@@ -51,7 +52,7 @@ export function assertSecurityIdentityMatches(
 		(account.organizationId !== undefined && account.organizationId !== resolution.orgId) ||
 		(account.organizationName !== undefined && account.organizationName !== resolution.orgName)
 	) {
-		throw new Error("Security scan authentication identity mismatch");
+		throw new Error(t("Security scan authentication identity mismatch"));
 	}
 }
 
@@ -75,11 +76,11 @@ function selectOAuthAccount(
 		return account;
 	}
 	if (requestedCredentialId !== undefined) {
-		throw new Error(`Security OAuth credential ${requestedCredentialId} is not available for ${provider}`);
+		throw new Error(t("Security OAuth credential {1} is not available for {0}", `${provider}`, `${requestedCredentialId}`));
 	}
 	if (accounts.length > 0) {
 		throw new Error(
-			`Multiple OAuth accounts are available for ${provider}; supply credentialId to pin one exact account`,
+			t("Multiple OAuth accounts are available for {0}; supply credentialId to pin one exact account", `${provider}`),
 		);
 	}
 	return undefined;
@@ -93,7 +94,7 @@ export function selectSecurityOAuthAccount(
 	sessionId?: string,
 ): SecurityAccountRef {
 	const account = selectOAuthAccount(authStorage, provider, requestedCredentialId, sessionId);
-	if (!account) throw new Error(`Security scans require a stored OAuth account for ${provider}`);
+	if (!account) throw new Error(t("Security scans require a stored OAuth account for {0}", `${provider}`));
 	return account;
 }
 
@@ -109,9 +110,9 @@ export function selectSecurityAuth(
 	if (supportsProviderAuth(model)) return { provider: model.provider, api: model.api };
 	const nativeApis = getProviderDefinition(model.provider)?.nativeAuthApis;
 	if (nativeApis) {
-		throw new Error(`Security scans do not support provider authentication for ${model.provider}/${model.api}`);
+		throw new Error(t("Security scans do not support provider authentication for {0}/{1}", `${model.provider}`, `${model.api}`));
 	}
-	throw new Error(`Security scans require a stored OAuth account for ${model.provider}`);
+	throw new Error(t("Security scans require a stored OAuth account for {0}", `${model.provider}`));
 }
 
 /** Resolves one pinned OAuth row and verifies that its durable identity has not changed. */
@@ -121,9 +122,9 @@ export async function resolveExactSecurityOAuthAccess(
 	options: { forceRefresh: boolean; refreshReason?: OAuthRefreshReason; signal?: AbortSignal },
 ): Promise<Extract<OAuthAccessResolution, { ok: true }>> {
 	const resolution = await authStorage.oauth.accessById(account.provider, account.credentialId, options);
-	if (!resolution) throw new Error("The pinned security OAuth credential is unavailable");
+	if (!resolution) throw new Error(t("The pinned security OAuth credential is unavailable"));
 	assertSecurityIdentityMatches(account, resolution);
-	if (!resolution.ok) throw new Error("The pinned security OAuth credential could not be resolved");
+	if (!resolution.ok) throw new Error(t("The pinned security OAuth credential could not be resolved"));
 	return resolution;
 }
 
@@ -140,7 +141,7 @@ export function createExactSecurityOAuthResolver(
 	const { account, authStorage } = options;
 	return model => {
 		if (model.provider !== account.provider) {
-			throw new Error("Security scan authentication provider mismatch");
+			throw new Error(t("Security scan authentication provider mismatch"));
 		}
 		const resolver: ApiKeyResolver = async context => {
 			if (context.lastChance) return undefined;
@@ -165,13 +166,13 @@ export function createSecurityAuthResolver(
 	if (isOAuthAccount(auth)) return createExactSecurityOAuthResolver({ authStorage, account: auth });
 	return model => {
 		if (model.provider !== auth.provider) {
-			throw new Error("Security scan authentication provider mismatch");
+			throw new Error(t("Security scan authentication provider mismatch"));
 		}
 		if (model.api !== auth.api) {
-			throw new Error("Security scan authentication API mismatch");
+			throw new Error(t("Security scan authentication API mismatch"));
 		}
 		if (!supportsProviderAuth(model)) {
-			throw new Error(`Security scans do not support provider authentication for ${model.provider}/${model.api}`);
+			throw new Error(t("Security scans do not support provider authentication for {0}/{1}", `${model.provider}`, `${model.api}`));
 		}
 		return providerResolver(model);
 	};

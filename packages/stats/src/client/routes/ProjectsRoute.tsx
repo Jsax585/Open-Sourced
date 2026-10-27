@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { useDeferredValue, useMemo, useState } from "react";
 import { getFolderStats } from "../api";
 import { BarList } from "../charts";
@@ -68,7 +69,7 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 	);
 	const topEmpty = (
 		<EmptyState
-			title={view.rows.length === 0 ? "No project folders in this range" : "Only temporary folders in this range"}
+			title={view.rows.length === 0 ? t("No project folders in this range") : t("Only temporary folders in this range")}
 		/>
 	);
 	// Meter scales follow the whole range so a bar's length does not change while filtering.
@@ -76,38 +77,38 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 
 	return (
 		<div className="page">
-			<PageHeader title="Projects" description={`Usage by session folder in ${meta.windowLabel}.`} />
+			<PageHeader title={t("Projects")} description={t("Usage by session folder in {0}.", `${meta.windowLabel}`)} />
 
 			<QueryView query={folders} skeleton={<ChartSkeleton height={96} />}>
 				{() => (
 					<div data-stale={folders.stale}>
 						<StatGrid min={180}>
 							<Stat
-								label="Folders"
+								label={t("Folders")}
 								value={formatInteger(view.rows.length)}
-								hint={view.temporaryCount > 0 ? `${formatInteger(view.temporaryCount)} temporary` : undefined}
+								hint={view.temporaryCount > 0 ? t("{0} temporary", `${formatInteger(view.temporaryCount)}`) : undefined}
 							/>
 							<Stat
-								label="Requests"
+								label={t("Requests")}
 								value={formatInteger(view.totalRequests)}
-								hint={`${formatInteger(view.failedRequests)} failed`}
+								hint={t("{0} failed\u0004packages/stats/src/client/routes/ProjectsRoute.tsx:ProjectsRoute", `${formatInteger(view.failedRequests)}`)}
 							/>
 							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
+								label={t("API-equivalent cost")}
+								title={t("What this usage would cost at public API rates")}
 								value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
 								hint={
-									view.unpricedRequests > 0 ? `${formatInteger(view.unpricedRequests)} unpriced` : undefined
+									view.unpricedRequests > 0 ? t("{0} unpriced", `${formatInteger(view.unpricedRequests)}`) : undefined
 								}
 							/>
 							<Stat
-								label="Conversation tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={t("Conversation tokens")}
+								title={t("Uncached input + cache reads + cache writes + output")}
 								value={formatCompact(view.conversationTokens)}
 							/>
 							<Stat
-								label="Cache rate"
-								title="Cache reads ÷ (uncached input + cache reads), across every folder"
+								label={t("Cache rate")}
+								title={t("Cache reads ÷ (uncached input + cache reads), across every folder")}
 								value={formatPercent(view.cacheRate)}
 							/>
 						</StatGrid>
@@ -116,7 +117,7 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 			</QueryView>
 
 			<div className="grid grid-2">
-				<Card index={1} title="Top by cost" description="Share of API-equivalent cost" stale={folders.stale}>
+				<Card index={1} title={t("Top by cost")} description={t("Share of API-equivalent cost")} stale={folders.stale}>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -137,7 +138,7 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 						)}
 					</QueryView>
 				</Card>
-				<Card index={2} title="Top by requests" description="Share of all requests" stale={folders.stale}>
+				<Card index={2} title={t("Top by requests")} description={t("Share of all requests")} stale={folders.stale}>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -161,27 +162,25 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 
 			<Card
 				index={3}
-				title="Folders"
+				title={t("Folders")}
 				description={
 					folders.data
 						? matching.length === view.rows.length
-							? `${formatInteger(view.rows.length)} folders`
-							: `${formatInteger(matching.length)} of ${formatInteger(view.rows.length)} folders`
+							? t("{0} folders", `${formatInteger(view.rows.length)}`)
+							: t("{1} of {0} folders", `${formatInteger(view.rows.length)}`, `${formatInteger(matching.length)}`)
 						: undefined
 				}
 				actions={
 					<>
 						{view.temporaryCount > 0 && (
-							<label className="check" title="Session folders under /tmp or /var/folders">
+							<label className="check" title={t("Session folders under /tmp or /var/folders")}>
 								<input
 									type="checkbox"
 									checked={hideTemporary}
 									onChange={e => setHideTemporary(e.target.checked)}
-								/>
-								Hide temporary ({formatInteger(view.temporaryCount)})
-							</label>
+								/>{t("Hide temporary ({0})", `${formatInteger(view.temporaryCount)}`)}</label>
 						)}
-						<SearchInput value={search} onChange={setSearch} placeholder="Filter folders…" width={240} />
+						<SearchInput value={search} onChange={setSearch} placeholder={t("Filter folders…")} width={240} />
 					</>
 				}
 				flush
@@ -198,12 +197,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 							dense
 							empty={
 								<EmptyState
-									title={view.rows.length === 0 ? "No project folders in this range" : "No folders match"}
+									title={view.rows.length === 0 ? t("No project folders in this range") : t("No folders match")}
 									hint={
 										view.rows.length === 0
-											? "Try a longer range."
+											? t("Try a longer range.")
 											: hideTemporary && view.temporaryCount > 0
-												? "Temporary folders are hidden."
+												? t("Temporary folders are hidden.")
 												: undefined
 									}
 								/>
@@ -220,34 +219,34 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 	return [
 		{
 			key: "folder",
-			header: "Folder",
+			header: t("Folder"),
 			sort: row => row.folder,
 			render: row => (
-				<span className="row projects-folder" title={row.folder || "(root)"}>
+				<span className="row projects-folder" title={row.folder || t("(root)")}>
 					<span className="mono truncate">{formatFolder(row.folder)}</span>
-					{row.temporary && <Badge>temp</Badge>}
+					{row.temporary && <Badge>{t("temp")}</Badge>}
 				</span>
 			),
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: t("Requests"),
 			align: "right",
 			sort: row => row.totalRequests,
 			render: row => (
-				<span title={`${formatPercent(row.requestShare)} of all requests`}>
+				<span title={t("{0} of all requests", `${formatPercent(row.requestShare)}`)}>
 					<MeterCell value={row.totalRequests} max={maxRequests} display={formatInteger(row.totalRequests)} />
 				</span>
 			),
 		},
 		{
 			key: "cost",
-			header: "Cost",
-			title: "API-equivalent cost at public API rates",
+			header: t("Cost"),
+			title: t("API-equivalent cost at public API rates"),
 			align: "right",
 			sort: row => row.totalCost,
 			render: row => (
-				<span title={`${formatPercent(row.costShare)} of all cost`}>
+				<span title={t("{0} of all cost", `${formatPercent(row.costShare)}`)}>
 					<MeterCell
 						value={row.totalCost}
 						max={maxCost}
@@ -259,8 +258,8 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "tokens",
-			header: "Tokens",
-			title: "Uncached input + cache reads + cache writes + output",
+			header: t("Tokens"),
+			title: t("Uncached input + cache reads + cache writes + output"),
 			align: "right",
 			sort: row => row.conversationTokens,
 			render: row => (
@@ -271,16 +270,16 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "cacheRate",
-			header: "Cache rate",
-			title: "Cache reads ÷ (uncached input + cache reads)",
+			header: t("Cache rate"),
+			title: t("Cache reads ÷ (uncached input + cache reads)"),
 			align: "right",
 			sort: row => row.cacheRate,
 			render: row => <span className="num">{formatPercent(row.cacheRate)}</span>,
 		},
 		{
 			key: "cacheSavings",
-			header: "Cache savings",
-			title: "Prompt-input cost saved versus billing the same tokens uncached",
+			header: t("Cache savings"),
+			title: t("Prompt-input cost saved versus billing the same tokens uncached"),
 			align: "right",
 			sort: row => row.cacheSavings,
 			render: row => (
@@ -291,11 +290,11 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "errorRate",
-			header: "Errors",
+			header: t("Errors"),
 			align: "right",
 			sort: row => row.errorRate,
 			render: row => (
-				<span title={`${formatInteger(row.failedRequests)} failed`}>
+				<span title={t("{0} failed\u0004packages/stats/src/client/routes/ProjectsRoute.tsx:folderColumns.render", `${formatInteger(row.failedRequests)}`)}>
 					<Badge tone={row.failedRequests > 0 ? errorRateTone(row.errorRate) : "neutral"} mono>
 						{formatErrorRate(row.errorRate)}
 					</Badge>
@@ -304,14 +303,14 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "duration",
-			header: "Avg duration",
+			header: t("Avg duration"),
 			align: "right",
 			sort: row => row.avgDuration ?? -1,
 			render: row => <span className="num">{formatDurationMs(row.avgDuration)}</span>,
 		},
 		{
 			key: "last",
-			header: "Last active",
+			header: t("Last active"),
 			align: "right",
 			sort: row => row.lastTimestamp,
 			render: row => <span className="dim">{formatRelativeTime(row.lastTimestamp)}</span>,

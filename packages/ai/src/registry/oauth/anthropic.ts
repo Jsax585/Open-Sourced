@@ -6,6 +6,7 @@
  * response omits it.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as AIError from "../../error";
 import { getClaudeCodeVersion } from "../../providers/claude-code-fingerprint";
 import type { FetchImpl } from "../../types";
@@ -71,7 +72,7 @@ export async function fetchAnthropicBootstrapIdentity(
 	try {
 		data = JSON.parse(responseBody) as AnthropicBootstrapResponse;
 	} catch (error) {
-		throw new AIError.OAuthError(`Anthropic bootstrap returned invalid JSON. url=${url}; body=${responseBody}`, {
+		throw new AIError.OAuthError(t("Anthropic bootstrap returned invalid JSON. url={0}; body={1}", `${url}`, `${responseBody}`), {
 			kind: "validation",
 			provider: "anthropic",
 			cause: error,

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { untilAborted, withTimeout } from "@oh-my-pi/pi-utils";
 import type { Page, WaitForOptions } from "puppeteer-core";
 import { puppeteerTimeoutError } from "./launch";
@@ -101,7 +102,7 @@ export async function waitForMainFrameDocument(
 			state = await withTimeout(
 				page.evaluate(readyStateInPage),
 				remaining,
-				"document state probe timed out",
+				t("document state probe timed out"),
 				signal,
 			);
 		} catch (error) {

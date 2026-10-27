@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 import { DEFAULT_STREAM_URL } from "@oh-my-pi/pi-wire";
 
@@ -15,9 +16,9 @@ export const cfgStreamServerUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Stream",
-		label: "Stream Server",
+		label: t("Stream Server"),
 		description:
-			"Live stream server used by `omp stream` (https://host[:port]); viewers watch at <base>/<your Stencil username>",
+			t("Live stream server used by `omp stream` (https://host[:port]); viewers watch at <base>/<your Stencil username>"),
 	},
 });
 
@@ -28,8 +29,8 @@ export const cfgStreamRedactPatterns = register({
 	ui: {
 		tab: "interaction",
 		group: "Stream",
-		label: "Extra Redaction Patterns",
+		label: t("Extra Redaction Patterns"),
 		description:
-			"Additional regular expressions redacted from every streamed row, on top of env/secrets.yml values and built-in credential shapes",
+			t("Additional regular expressions redacted from every streamed row, on top of env/secrets.yml values and built-in credential shapes"),
 	},
 });

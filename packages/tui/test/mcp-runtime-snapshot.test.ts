@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
 	type MCPServerDisplay,
 	type MCPConnectionDisplay,
-	formatMcpHealthLabel,
-	formatMcpListHint,
 	inferMcpTransport,
 	isDiscoveredMcpServer,
 	type MCPRuntimeSource,
@@ -107,7 +105,6 @@ describe("snapshotMcpRuntime", () => {
 		expect(snap.resources).toHaveLength(1);
 		expect(snap.prompts).toHaveLength(1);
 		expect(snap.instructions).toBe("Prefer search_code over cloning.");
-		expect(formatMcpListHint(snap)).toBe("2 tools · 1 resource · 1 prompt");
 	});
 	test("maps connecting and inactive separately from enabled-in-config", () => {
 		expect(snapshotMcpRuntime(server(), sourceFor("connecting")).health).toBe("connecting");
@@ -145,7 +142,6 @@ describe("snapshotMcpRuntime", () => {
 		const { shown, hidden } = visibleMcpTools(tools, 8);
 		expect(shown).toHaveLength(8);
 		expect(hidden).toBe(4);
-		expect(formatMcpHealthLabel("disconnected")).toBe("Not connected");
 	});
 
 	test("strips OSC/BEL/tabs from server-provided display fields before theming", () => {

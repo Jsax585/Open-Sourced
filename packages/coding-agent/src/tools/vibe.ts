@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 /**
  * Vibe mode tools — the director's entire non-read surface.
@@ -86,7 +87,7 @@ function textResult(text: string, details: VibeToolDetails): AgentToolResult<Vib
 export class VibeSpawnTool implements AgentTool<typeof vibeSpawnSchema, VibeToolDetails> {
 	readonly name = "vibe_spawn";
 	readonly approval = "exec" as const;
-	readonly label = "Vibe Spawn";
+	readonly label = t("Vibe Spawn");
 	readonly summary = "Start a persistent fast/good worker session";
 	readonly description: string;
 	readonly parameters = vibeSpawnSchema;
@@ -107,7 +108,7 @@ export class VibeSpawnTool implements AgentTool<typeof vibeSpawnSchema, VibeTool
 export class VibeSendTool implements AgentTool<typeof vibeSendSchema, VibeToolDetails> {
 	readonly name = "vibe_send";
 	readonly approval = "exec" as const;
-	readonly label = "Vibe Send";
+	readonly label = t("Vibe Send");
 	readonly summary = "Message a worker session (steer or next turn)";
 	readonly description: string;
 	readonly parameters = vibeSendSchema;
@@ -133,7 +134,7 @@ const WAIT_PROGRESS_INTERVAL_MS = 500;
 export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDetails> {
 	readonly name = "vibe_wait";
 	readonly approval = "read" as const;
-	readonly label = "Vibe Wait";
+	readonly label = t("Vibe Wait");
 	readonly summary = "Block until a worker session finishes its turn";
 	readonly description: string;
 	readonly parameters = vibeWaitSchema;
@@ -210,7 +211,7 @@ export class VibeWaitTool implements AgentTool<typeof vibeWaitSchema, VibeToolDe
 export class VibeKillTool implements AgentTool<typeof vibeKillSchema, VibeToolDetails> {
 	readonly name = "vibe_kill";
 	readonly approval = "read" as const;
-	readonly label = "Vibe Kill";
+	readonly label = t("Vibe Kill");
 	readonly summary = "Terminate a worker session";
 	readonly description: string;
 	readonly parameters = vibeKillSchema;
@@ -236,7 +237,7 @@ export class VibeKillTool implements AgentTool<typeof vibeKillSchema, VibeToolDe
 export class VibeListTool implements AgentTool<typeof vibeListSchema, VibeToolDetails> {
 	readonly name = "vibe_list";
 	readonly approval = "read" as const;
-	readonly label = "Vibe List";
+	readonly label = t("Vibe List");
 	readonly summary = "List worker sessions and their states";
 	readonly description: string;
 	readonly parameters = vibeListSchema;

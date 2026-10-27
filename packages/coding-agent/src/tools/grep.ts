@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { GrepToolDetails } from "@oh-my-pi/pi-tui/tools/grep";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -463,7 +464,7 @@ function lineRangeFetchCap(pathSpecs: readonly GrepPathSpec[], perFileKeep: numb
 function formatCappedFiles(paths: readonly string[]): string {
 	const shown = paths.slice(0, 5).join(", ");
 	const rest = paths.length - 5;
-	return rest > 0 ? `${shown} and ${rest} more ${rest === 1 ? "file" : "files"}` : shown;
+	return rest > 0 ? t("{0} and {1} more {2}", `${shown}`, `${rest}`, `${rest === 1 ? "file" : "files"}`) : shown;
 }
 
 /**
@@ -599,7 +600,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 			skipCandidate,
 		);
 	};
-	readonly label = "Grep";
+	readonly label = t("Grep");
 	readonly loadMode = "discoverable";
 	readonly summary = "Search file contents by regex";
 	get description(): string {
@@ -1224,8 +1225,8 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						shownCapped.length === 0
 							? ""
 							: isMultiScope
-								? `More than ${perFileMatchCap} matches in ${formatCappedFiles(shownCapped)}; grep keeps the first ${perFileMatchCap} per file when searching several. Search one file alone for up to ${SINGLE_FILE_MATCHES}.`
-								: `More than ${perFileMatchCap} matches; grep keeps the first ${perFileMatchCap} in a file. Add a line range (\`path:N-M\`) or narrow the pattern for the rest.`;
+								? t("More than {1} matches in {0}; grep keeps the first {2} per file when searching several. Search one file alone for up to {3}.", `${formatCappedFiles(shownCapped)}`, `${perFileMatchCap}`, `${perFileMatchCap}`, `${SINGLE_FILE_MATCHES}`)
+								: t("More than {0} matches; grep keeps the first {1} in a file. Add a line range (`path:N-M`) or narrow the pattern for the rest.", `${perFileMatchCap}`, `${perFileMatchCap}`);
 					return [limitMessage, warningNote, capNotice]
 						.filter(Boolean)
 						.map(note => `\n\n${note}`)

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TextContent } from "@oh-my-pi/pi-ai";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { sanitizeErrorLine } from "@oh-my-pi/pi-tui/chrome/error-block";
@@ -21,16 +22,16 @@ function parseSeanceArgs(args: string): ParsedSeanceArgs {
 	for (let index = 0; index < tokens.length; index++) {
 		const token = tokens[index]!;
 		if (token === "--model" || token.startsWith("--model=")) {
-			if (model !== undefined) return { error: "Use --model only once." };
+			if (model !== undefined) return { error: t("Use --model only once.") };
 			const selector = token === "--model" ? tokens[++index] : token.slice("--model=".length);
 			if (!selector || selector.startsWith("--")) {
-				return { error: "Usage: /seance [session id|path] [--model selector]" };
+				return { error: t("Usage: /seance [session id|path] [--model selector]") };
 			}
 			model = selector;
 			continue;
 		}
-		if (token.startsWith("-")) return { error: `Unknown /seance option: ${token}` };
-		if (source !== undefined) return { error: "Usage: /seance [session id|path] [--model selector]" };
+		if (token.startsWith("-")) return { error: t("Unknown /seance option: {0}", `${token}`) };
+		if (source !== undefined) return { error: t("Usage: /seance [session id|path] [--model selector]") };
 		source = token;
 	}
 	return { source, model };
@@ -39,7 +40,7 @@ function parseSeanceArgs(args: string): ParsedSeanceArgs {
 async function launchSeance(ctx: InteractiveModeContext, sourceSession: string, model?: string): Promise<void> {
 	const taskTool = ctx.session.agent.state.tools.find(tool => tool.name === "task");
 	if (!taskTool) {
-		ctx.showError("The task tool is not available for /seance.");
+		ctx.showError(t("The task tool is not available for /seance."));
 		return;
 	}
 	const params: TaskParams = {
@@ -83,15 +84,15 @@ async function launchSeance(ctx: InteractiveModeContext, sourceSession: string, 
 			(!details?.async && (details?.results?.length ?? 0) === 0)
 		) {
 			const failureMessage = failedResult?.aborted
-				? failedResult.abortReason || content || failedResult.error || "Seance preflight failed."
-				: content || failedResult?.error || "Seance preflight failed.";
+				? failedResult.abortReason || content || failedResult.error || t("Seance preflight failed.")
+				: content || failedResult?.error || t("Seance preflight failed.");
 			ctx.showError(sanitizeErrorLine(failureMessage));
 			return;
 		}
-		const state = details?.async?.state === "running" ? "running" : "completed";
+		const state = details?.async?.state === "running" ? t("running") : t("completed\u0004reviewed-expression");
 		const taskLabel = taskIds.size > 0 ? [...taskIds].join(", ") : jobId;
 		const modelLabel = selectedModel ? ` · ${selectedModel}` : "";
-		ctx.showStatus(sanitizeErrorLine(`Seance ${state}${taskLabel ? `: ${taskLabel}` : ""}${modelLabel}`));
+		ctx.showStatus(sanitizeErrorLine(t("Seance {0}{1}{2}", `${state}`, `${taskLabel ? `: ${taskLabel}` : ""}`, `${modelLabel}`)));
 	} catch (error) {
 		ctx.showError(sanitizeErrorLine(error));
 	}
@@ -111,7 +112,7 @@ async function chooseSeanceModel(
 		);
 		const seanceAgent = agents.find(agent => agent.name === SEANCE_AGENT_NAME);
 		if (!seanceAgent || !isBundledSeance(seanceAgent)) {
-			throw new Error("A custom `seance` agent overrides the bundled one; rename it to use /seance.");
+			throw new Error(t("A custom `seance` agent overrides the bundled one; rename it to use /seance."));
 		}
 		const source = await resolveSeanceSource(selector, {
 			cwd: ctx.sessionManager.getCwd(),
@@ -126,17 +127,17 @@ async function chooseSeanceModel(
 		// No saved model to offer: go straight to the one-off model picker.
 		const choice =
 			source.modelSelectors.length === 0
-				? "Choose another model"
-				: await ctx.showHookSelector("Consult this session with", [
+				? t("Choose another model")
+				: await ctx.showHookSelector(t("Consult this session with"), [
 						{
-							label: "Use saved model",
-							description: "Use the active role or default model saved with this session",
+							label: t("Use saved model"),
+							description: t("Use the active role or default model saved with this session"),
 						},
-						{ label: "Choose another model", description: "Select a one-off model for this consultation" },
+						{ label: t("Choose another model"), description: t("Select a one-off model for this consultation") },
 					]);
-		if (choice === "Use saved model") {
+		if (choice === t("Use saved model")) {
 			void launchSeance(ctx, sourceSession);
-		} else if (choice === "Choose another model") {
+		} else if (choice === t("Choose another model")) {
 			ctx.showModelSelector({
 				selectOnly: {
 					onSelect: picked => launchSeance(ctx, sourceSession, picked),
@@ -151,7 +152,7 @@ async function chooseSeanceModel(
 export const SEANCE_SLASH_COMMAND: SlashCommandSpec = {
 	name: "seance",
 	icon: "ghost",
-	description: "Consult a saved session without resuming it",
+	description: t("Consult a saved session without resuming it"),
 	inlineHint: "[session id|path] [--model selector]",
 	allowArgs: true,
 	handleTui: async (command, runtime) => {

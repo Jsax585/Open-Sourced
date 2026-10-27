@@ -11,6 +11,7 @@
  * - Legacy .windsurfrules file
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { tryParseJson } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { readFile } from "../capability/fs";
@@ -41,7 +42,7 @@ function parseServerConfig(
 	scope: "user" | "project",
 ): { server?: MCPServer; warning?: string } {
 	if (typeof serverConfig !== "object" || serverConfig === null) {
-		return { warning: `Invalid server config for "${name}" in ${path}` };
+		return { warning: t("Invalid server config for \"{1}\" in {0}", `${path}`, `${name}`) };
 	}
 
 	const server = expandEnvVarsDeep(serverConfig as Record<string, unknown>);

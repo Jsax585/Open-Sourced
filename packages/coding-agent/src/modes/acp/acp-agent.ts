@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -811,16 +812,16 @@ export class AcpAgent implements Agent {
 		const authMethods: AuthMethod[] = [
 			{
 				id: "agent",
-				name: "Use existing local credentials",
-				description: "Authenticate via the provider keys/OAuth state already configured under ~/.omp.",
+				name: t("Use existing local credentials"),
+				description: t("Authenticate via the provider keys/OAuth state already configured under ~/.omp."),
 			},
 		];
 		if (params.clientCapabilities?.auth?.terminal === true) {
 			authMethods.push({
 				type: "terminal",
 				id: "terminal",
-				name: "Set up omp in terminal",
-				description: "Launch the omp TUI to add provider keys and select models.",
+				name: t("Set up omp in terminal"),
+				description: t("Launch the omp TUI to add provider keys and select models."),
 				args: [ACP_TERMINAL_AUTH_FLAG],
 			});
 		}
@@ -2218,12 +2219,12 @@ export class AcpAgent implements Agent {
 	}
 
 	#getAvailableModes(session: AgentSession): Array<{ id: string; name: string; description: string }> {
-		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: "Default", description: "Standard ACP headless mode" }];
+		const modes = [{ id: ACP_DEFAULT_MODE_ID, name: t("Default"), description: t("Standard ACP headless mode") }];
 		if (cfgPlanEnabled.get(session.settings)) {
 			modes.push({
 				id: ACP_PLAN_MODE_ID,
-				name: "Plan",
-				description: "Read-only planning mode that drafts a plan to a markdown file before any code changes",
+				name: t("Plan"),
+				description: t("Read-only planning mode that drafts a plan to a markdown file before any code changes"),
 			});
 		}
 		void session;

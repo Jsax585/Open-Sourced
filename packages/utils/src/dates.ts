@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 /** Behavior-compatible reimplementation of date-fns's used surface. */
 
 const MONTHS = [
@@ -143,10 +144,6 @@ export function format(value: Date | number, pattern: string): string {
 	return result;
 }
 
-function plural(count: number, singular: string): string {
-	return `${count} ${count === 1 ? singular : `${singular}s`}`;
-}
-
 function completedMonths(earlier: Date, later: Date): number {
 	let months = (later.getFullYear() - earlier.getFullYear()) * 12 + later.getMonth() - earlier.getMonth();
 	if (months === 0) return 0;
@@ -165,30 +162,30 @@ function distanceWords(earlier: Date, later: Date): string {
 	const timezoneOffset = (later.getTimezoneOffset() - earlier.getTimezoneOffset()) * 60;
 	const minutes = Math.round((seconds - timezoneOffset) / 60);
 
-	if (minutes < 2) return minutes === 0 ? "less than a minute" : "1 minute";
-	if (minutes < 45) return plural(minutes, "minute");
-	if (minutes < 90) return "about 1 hour";
-	if (minutes < 1_440) return `about ${plural(Math.round(minutes / 60), "hour")}`;
-	if (minutes < 2_520) return "1 day";
-	if (minutes < 43_200) return plural(Math.round(minutes / 1_440), "day");
-	if (minutes < 86_400) return `about ${plural(Math.round(minutes / 43_200), "month")}`;
+	if (minutes < 2) return minutes === 0 ? t("less than a minute") : t("1 minute");
+	if (minutes < 45) return t("{0} minutes", `${(minutes)}`);
+	if (minutes < 90) return t("about 1 hour");
+	if (minutes < 1_440) return t("about {0} hours", `${(Math.round(minutes / 60))}`);
+	if (minutes < 2_520) return t("1 day");
+	if (minutes < 43_200) return t("{0} days", `${(Math.round(minutes / 1440))}`);
+	if (minutes < 86_400) return t("about {0} month{1}", `${(Math.round(minutes / 43200))}`, `${(Math.round(minutes / 43200) === 1 ? "" : "s")}`);
 
 	const months = completedMonths(earlier, later);
-	if (months < 12) return plural(Math.round(minutes / 43_200), "month");
+	if (months < 12) return t("{0} months", `${(Math.round(minutes / 43200))}`);
 
 	const years = Math.trunc(months / 12);
 	const remainingMonths = months % 12;
-	if (remainingMonths < 3) return `about ${plural(years, "year")}`;
-	if (remainingMonths < 9) return `over ${plural(years, "year")}`;
-	return `almost ${plural(years + 1, "year")}`;
+	if (remainingMonths < 3) return t("about {0} year{1}", `${(years)}`, `${(years === 1 ? "" : "s")}`);
+	if (remainingMonths < 9) return t("over {0} year{1}", `${(years)}`, `${(years === 1 ? "" : "s")}`);
+	return t("almost {0} years", `${(years + 1)}`);
 }
 
-/** Describe the distance from a date to now using date-fns's English thresholds. */
+/** Describe the distance from a date to now using date-fns's thresholds and Korean labels. */
 export function formatDistanceToNow(value: Date | number, options: { addSuffix?: boolean } = {}): string {
 	const date = asDate(value);
 	const now = new Date(Date.now());
 	const isFuture = date.getTime() > now.getTime();
 	const words = isFuture ? distanceWords(now, date) : distanceWords(date, now);
 	if (!options.addSuffix) return words;
-	return isFuture ? `in ${words}` : `${words} ago`;
+	return isFuture ? t("in {0}\u0004packages/tui/src/tools/task.ts:renderAgentProgress.waitLabel", `${words}`) : t("{0} ago", `${words}`);
 }

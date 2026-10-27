@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { scheduler } from "node:timers/promises";
 import {
 	Agent,
@@ -1152,7 +1153,7 @@ export class SessionAdvisors {
 					if (emitWarnings) {
 						this.#host.emitNotice(
 							"warning",
-							`Advisor "${config.name}": no model matched "${config.model}"`,
+							localize("Advisor \"{0}\": no model matched \"{1}\"", `${config.name}`, `${config.model}`),
 							"advisor",
 						);
 					}
@@ -1615,7 +1616,7 @@ export class SessionAdvisors {
 					const message = error instanceof Error ? error.message : String(error);
 					this.#host.emitNotice(
 						"warning",
-						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorAgent.state.model)}: ${message}`,
+						localize("Advisor{0} unavailable for {1}: {2}", `${slug ? ` "${advisorName}"` : ""}`, `${formatModelString(advisorAgent.state.model)}`, `${message}`),
 						"advisor",
 					);
 				},
@@ -1623,7 +1624,7 @@ export class SessionAdvisors {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "quota_exhausted" });
 					this.#host.emitNotice(
 						"warning",
-						`Advisor "${advisorName}" quota exhausted — pausing until reset.`,
+						localize("Advisor \"{0}\" quota exhausted — pausing until reset.", `${advisorName}`),
 						"advisor",
 					);
 				},

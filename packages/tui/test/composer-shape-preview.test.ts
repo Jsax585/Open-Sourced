@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import { renderComposerShapePreview } from "../src/overlays/composer-shape-preview";
 import { getComposerShapeOptions, installExtensionComposerShape } from "../src/overlays/composer-shape-registry";
 import { initTheme, setTheme } from "../src/theme/theme";
-import { type ComposerStyle, visibleWidth } from "../src/index";
+import { type ComposerStyle, getComposerStyle, visibleWidth } from "../src/index";
 
 beforeAll(async () => {
 	await initTheme();
@@ -14,9 +14,26 @@ describe("composer shape preview", () => {
 		// still emit an explicit contrast foreground instead of ESC[39m, matching
 		// the live editor so the preview stays readable on a light terminal.
 		await setTheme("light");
-		const box = renderComposerShapePreview("box", 80).join("\n");
-		expect(box).not.toContain("\x1b[39mAsk anything");
-		expect(box).toMatch(/\x1b\[38[;0-9]*mAsk anything/);
+		const style = getComposerStyle("box");
+		const dispose = installExtensionComposerShape({
+			label: "Contrast probe",
+			description: "",
+			style: {
+				...style,
+				id: "extension-contrast-probe",
+				filledSurface: false,
+				renderRow: context => {
+					expect(context.text).not.toStartWith("\x1b[39m");
+					expect(context.text).toMatch(/^\x1b\[38[;0-9]*m/);
+					return style.renderRow(context);
+				},
+			},
+		});
+		try {
+			renderComposerShapePreview("extension-contrast-probe", 80);
+		} finally {
+			dispose();
+		}
 	});
 
 	it("borrows status rows from the live status source per shape layout", async () => {
@@ -110,7 +127,6 @@ describe("composer shape preview", () => {
 			const rendered = renderComposerShapePreview("extension-dock", 76).join("\n");
 			expect(rendered).toContain("=".repeat(76));
 			expect(rendered).toContain("EXT ");
-			expect(rendered).toContain("Ask anything");
 		} finally {
 			dispose();
 		}

@@ -1,4 +1,5 @@
 /** `web_search` — provider-backed web search with synthesized answer and sources. */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Kv, KvGrid, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -16,12 +17,12 @@ function formatAge(seconds: unknown): string {
 	const s = num(seconds);
 	if (s === null || s < 0) return "";
 	const m = Math.floor(s / 60);
-	if (m < 60) return `${m}m ago`;
+	if (m < 60) return t("{0}m ago", `${m}`);
 	const h = Math.floor(m / 60);
-	if (h < 24) return `${h}h ago`;
+	if (h < 24) return t("{0}h ago", `${h}`);
 	const d = Math.floor(h / 24);
-	if (d < 365) return `${d}d ago`;
-	return `${Math.floor(d / 365)}y ago`;
+	if (d < 365) return t("{0}d ago", `${d}`);
+	return t("{0}y ago", `${Math.floor(d / 365)}`);
 }
 
 function Summary({ args }: ToolRenderProps): ReactNode {
@@ -41,7 +42,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 
 function SourceRow({ source, index }: { source: Record<string, unknown>; index: number }): ReactNode {
 	const url = str(source.url) ?? "";
-	const title = str(source.title)?.trim() || url || "Untitled";
+	const title = str(source.title)?.trim() || url || t("Untitled");
 	const domain = url ? getDomain(url) : "";
 	const age = formatAge(source.ageSeconds) || (str(source.publishedDate) ?? "");
 	return (
@@ -86,10 +87,10 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		const outTok = num(usage.outputTokens);
 		const totalTok = num(usage.totalTokens);
 		const searchReqs = num(usage.searchRequests);
-		if (inTok !== null) usageParts.push(`in ${inTok}`);
-		if (outTok !== null) usageParts.push(`out ${outTok}`);
-		if (totalTok !== null) usageParts.push(`total ${totalTok}`);
-		if (searchReqs !== null) usageParts.push(`search ${searchReqs}`);
+		if (inTok !== null) usageParts.push(t("in {0}\u0004packages/collab-web/src/tool-render/tools/web-search.tsx:Body", `${inTok}`));
+		if (outTok !== null) usageParts.push(t("out {0}", `${outTok}`));
+		if (totalTok !== null) usageParts.push(t("total {0}", `${totalTok}`));
+		if (searchReqs !== null) usageParts.push(t("search {0}", `${searchReqs}`));
 	}
 
 	return (
@@ -99,14 +100,14 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					recency && `recency=${recency}`,
 					limit !== null && `limit=${limit}`,
 					numResults !== null && `results=${numResults}`,
-					response && `${sources.length} source${sources.length === 1 ? "" : "s"}`,
+					response && t("{0} source{1}", `${sources.length}`, `${sources.length === 1 ? "" : "s"}`),
 				]}
 			/>
 			{(query !== null || providerInfo || usageParts.length > 0) && (
 				<KvGrid>
-					{query !== null && <Kv k="query">{query}</Kv>}
-					{providerInfo && <Kv k="provider">{providerInfo}</Kv>}
-					{usageParts.length > 0 && <Kv k="usage">{usageParts.join(" · ")}</Kv>}
+					{query !== null && <Kv k={t("query")}>{query}</Kv>}
+					{providerInfo && <Kv k={t("provider")}>{providerInfo}</Kv>}
+					{usageParts.length > 0 && <Kv k={t("usage")}>{usageParts.join(" · ")}</Kv>}
 				</KvGrid>
 			)}
 			{errorMsg && !resultTextOf(result) && <Note tone="err">{errorMsg}</Note>}

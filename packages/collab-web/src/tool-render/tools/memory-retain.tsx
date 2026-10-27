@@ -1,4 +1,5 @@
 /** `retain` — store facts in long-term memory (one bullet per stored item). */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, InvalidArg, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -31,7 +32,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	const first = items[0] ? truncate(normalizeWs(items[0].content), 80) : "";
 	return (
 		<>
-			<Badge tone="accent">{count === 1 ? "1 memory" : `${count} memories`}</Badge>
+			<Badge tone="accent">{count === 1 ? t("1 memory") : t("{0} memories", `${count}`)}</Badge>
 			{first && <span className="tv-trunc">{first}</span>}
 		</>
 	);
@@ -45,7 +46,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	let confirmation: string | null = null;
 	if (result && result.isError !== true) {
 		const text = resultTextOf(result).trim().replace(/\.$/, "");
-		confirmation = text || (count !== null ? `${count === 1 ? "1 memory" : `${count} memories`} retained` : null);
+		confirmation = text || (count !== null ? count === 1 ? t("1 memory retained") : t("{0} memories retained", `${count}`) : null);
 	}
 	return (
 		<>

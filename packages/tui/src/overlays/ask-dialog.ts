@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
@@ -100,7 +101,7 @@ import { getKeybindings } from "../keybindings";
 import { plainText } from "../native/spans";
 
 const OTHER_OPTION = "Other (type your own)";
-const SUBMIT_OPTION = "Submit";
+const SUBMIT_OPTION = localize("Submit");
 const RECOMMENDED_SUFFIX = " (Recommended)";
 /** Native labels: the free-text row and the answers-review tab. */
 const OTHER_LABEL = "Other…";
@@ -109,7 +110,7 @@ const REVIEW_TAB = "Review";
 // Action rows appended by the guest race participant. An option sanitizing
 // to one of these must disambiguate identically on both sides, or the same
 // question renders different rows depending on who answers.
-const GUEST_ACTION_LABELS = ["Chat about this", "Next →"];
+const GUEST_ACTION_LABELS = [localize("Chat about this\u0004packages/tui/src/overlays/ask-dialog.ts:GUEST_ACTION_LABELS"), localize("Next →")];
 
 /** Fraction of the terminal the dialog may occupy. The box height is fixed
  *  at spawn from the tallest tab's content (re-measured only on viewport
@@ -361,12 +362,12 @@ function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: Questi
 		.map(entry => entry.display);
 	if (question.multi) {
 		const answers = [...selected];
-		if (state.customInput !== undefined) answers.push(`Other: “${normalizedInlineInput(state.customInput)}”`);
-		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", "unanswered");
+		if (state.customInput !== undefined) answers.push(localize("Other: “{0}”", `${normalizedInlineInput(state.customInput)}`));
+		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", localize("unanswered"));
 	}
 	if (state.customInput !== undefined) return `“${normalizedInlineInput(state.customInput)}”`;
-	if (selected.length === 0) return theme.fg("warning", "unanswered");
-	return selected[0] ?? theme.fg("warning", "unanswered");
+	if (selected.length === 0) return theme.fg("warning", localize("unanswered"));
+	return selected[0] ?? theme.fg("warning", localize("unanswered"));
 }
 
 /** Inline markdown code (`` `x` ``) as mono `code` spans, the rest plain, as the ANSI rows render it. */
@@ -394,7 +395,7 @@ function isAnswered(state: QuestionState): boolean {
 
 /** The answer to one question for the Review tab: the chosen labels (code mono), the custom answer, the note. */
 function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): readonly TspSpan[] {
-	if (!isAnswered(state)) return [span("Unanswered", "warning")];
+	if (!isAnswered(state)) return [span(localize("Unanswered"), "warning")];
 	const labels = displayOptionLabels(question);
 	const spans: TspSpan[] = [];
 	const push = (parts: readonly TspSpan[]): void => {
@@ -827,7 +828,7 @@ export class AskDialogComponent implements Component {
 						items,
 						active,
 						role: "omp.ask.questions",
-						title: "Next question  tab · Previous  shift+tab",
+						title: localize("Next question  tab · Previous  shift+tab"),
 						actions: { click: "select" },
 					},
 					undefined,
@@ -850,7 +851,7 @@ export class AskDialogComponent implements Component {
 				style: "ring",
 				size: "sm",
 				label: `${Math.ceil(left / 1000)}s`,
-				title: "Answers the recommended option when the time runs out",
+				title: localize("Answers the recommended option when the time runs out"),
 			},
 			undefined,
 			"timer",
@@ -863,20 +864,20 @@ export class AskDialogComponent implements Component {
 		const more = this.#questions.length > 1 ? `  +${this.#questions.length - 1} more` : "";
 		const summary = text(
 			[
-				span("Question  ", "muted"),
+				span(localize("Question  "), "muted"),
 				span(normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""))),
 				...(more ? [span(more, "muted")] : []),
 			],
 			{ truncate: "end", role: "omp.ask.summary" },
 		);
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const show = actionButton("Show", "show", {
+		const show = actionButton(localize("Show"), "show", {
 			tone: "accent",
 			...(hideKey ? { keys: hideKey } : {}),
-			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+			title: localize("Show the question{0}", `${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`),
 		});
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
+		const skip = actionButton(localize("Skip"), "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
 		// The summary grows (`omp.ask.summary`), end-aligning Skip and Show.
@@ -910,7 +911,7 @@ export class AskDialogComponent implements Component {
 			const recommended = rowItem.kind === "option" && question.recommended === rowItem.optionIndex;
 			const detail =
 				describeRowDetail(rowItem, question, state) ??
-				(rowItem.kind === "other" ? [span("Type your own answer")] : undefined);
+				(rowItem.kind === "other" ? [span(localize("Type your own answer"))] : undefined);
 			const role =
 				rowItem.kind === "other"
 					? question.multi
@@ -929,7 +930,7 @@ export class AskDialogComponent implements Component {
 							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
 					role,
 					...(detail ? { detail } : {}),
-					...(recommended ? { value: [span("Recommended")] } : {}),
+					...(recommended ? { value: [span(localize("Recommended"))] } : {}),
 					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
 				},
 				undefined,
@@ -960,10 +961,10 @@ export class AskDialogComponent implements Component {
 		const notice =
 			unanswered > 0
 				? [
-						span(`${unanswered} unanswered`, "warning"),
-						span(` · Submit still sends ${unanswered === this.#questions.length ? "the questions" : "the rest"}`),
+						span(localize("{0} unanswered", `${unanswered}`), "warning"),
+						span(localize(" · Submit still sends {0}", `${unanswered === this.#questions.length ? localize("the questions") : localize("the rest")}`)),
 					]
-				: [span("All answered · Submit sends them")];
+				: [span(localize("All answered · Submit sends them"))];
 		children.push(node("text", { spans: notice, role: "omp.ask.notice" }, undefined, "notice"));
 		const answers: { k: string; v: readonly TspSpan[] }[] = [];
 		for (let index = 0; index < this.#questions.length; index++) {
@@ -984,14 +985,14 @@ export class AskDialogComponent implements Component {
 	 */
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const skip = actionButton("Skip", "cancel", {
+		const skip = actionButton(localize("Skip"), "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
-			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
+			title: localize("Skip without answering{0}", `${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`),
 		});
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const hide = actionButton("Hide", "hide", {
+		const hide = actionButton(localize("Hide"), "hide", {
 			...(hideKey ? { keys: hideKey } : {}),
-			title: `Hide until you are ready to answer${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
+			title: localize("Hide until you are ready to answer{0}", `${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`),
 		});
 		const lead: NativeNode[] = this.#countdown ? [this.#describeTimer(this.#countdown, ring), hide] : [hide];
 		const inputGuard = this.options.inputGuard;
@@ -1003,26 +1004,30 @@ export class AskDialogComponent implements Component {
 			]);
 		}
 		if (this.#isSubmitTab()) {
-			const submit = actionButton("Submit", "submit", {
+			const submit = actionButton(localize("Submit"), "submit", {
 				keys: "enter",
 				tone: "accent",
-				title: "Submit answers  enter",
+				title: localize("Submit answers  enter"),
 			});
 			return actionBar([...lead, null, skip, submit]);
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		const last = this.#questions.length === 1;
-		const enterLabel = last ? "Submit" : "Next";
+		const enterLabel = last ? localize("Submit") : localize("Next");
 		// A multi-select toggles on Space; Enter moves on.
 		const submit = actionButton(enterLabel, "submit", {
 			keys: "enter",
 			tone: "accent",
-			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
+			title: question?.multi ? localize("{0}  enter · Toggle  space", `${enterLabel}`) : `${enterLabel}  enter`,
 		});
-		const note = actionButton("Note", "note", {
-			keys: "n",
-			title: "Add a note to the highlighted answer, or to the one just picked  n",
-		});
+		const note = actionButton(
+			localize("Note\u0004packages/tui/src/overlays/ask-dialog.ts:AskDialogComponent.#describeActions.note"),
+			"note",
+			{
+				keys: "n",
+				title: localize("Add a note to the highlighted answer, or to the one just picked  n"),
+			},
+		);
 		return actionBar([...lead, null, note, skip, submit]);
 	}
 
@@ -1266,7 +1271,7 @@ export class AskDialogComponent implements Component {
 					id: String(index),
 					label: questionTabLabel(question, index),
 				})),
-				{ id: "submit", label: "Submit" },
+				{ id: "submit", label: localize("Submit") },
 			];
 			this.#tabBar = new TabBar("", tabs, getTabBarTheme(), this.#activeTabIndex);
 			this.#tabBar.showHint = false;
@@ -1275,7 +1280,7 @@ export class AskDialogComponent implements Component {
 		if (this.#isSubmitTab()) {
 			this.#headerExpandable = false;
 			this.#descExpandable = false;
-			lines.push(theme.bold(theme.fg("accent", "Review answers")));
+			lines.push(theme.bold(theme.fg("accent", localize("Review answers"))));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
@@ -1484,7 +1489,7 @@ export class AskDialogComponent implements Component {
 		try {
 			const prefill =
 				state.customInput === undefined ? undefined : { text: state.customInput, images: state.customInputImages };
-			const result = await this.#openPrompt({ title: "Custom answer", question: question.question }, prefill);
+			const result = await this.#openPrompt({ title: localize("Custom answer"), question: question.question }, prefill);
 			if (result === undefined || this.#closed) return;
 			const input = splitPromptInput(result);
 			if (input.text.trim() === "") {
@@ -1524,7 +1529,7 @@ export class AskDialogComponent implements Component {
 			const prefill =
 				isReedit && state.note !== undefined ? { text: state.note, images: state.noteImages } : undefined;
 			const result = await this.#openPrompt(
-				{ title: `Note for ${rowItem.label}`, question: question.question },
+				{ title: localize("Note for {0}", `${rowItem.label}`), question: question.question },
 				prefill,
 			);
 			if (result === undefined || this.#closed) return;
@@ -1624,7 +1629,7 @@ export class AskDialogComponent implements Component {
 			allLines.push(
 				theme.fg(
 					"warning",
-					`${unanswered} unanswered question${unanswered === 1 ? "" : "s"}; ${formatKeyHint("enter")} still submits.`,
+					localize("{0} unanswered question{2}; {1} still submits.", `${unanswered}`, `${formatKeyHint("enter")}`, `${unanswered === 1 ? "" : "s"}`),
 				),
 			);
 			allLines.push("");

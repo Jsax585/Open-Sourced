@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -17,15 +18,15 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 		onSelect: (mode: "all" | "one-at-a-time") => void,
 		onCancel: () => void,
 	) {
-		super("Queue Mode", "omp.overlay.queue-mode");
+		super(t("Queue Mode"), "omp.overlay.queue-mode");
 
 		const queueModes: SelectItem[] = [
 			{
 				value: "one-at-a-time",
-				label: "one-at-a-time",
-				description: "Process queued messages one by one (recommended)",
+				label: t("one-at-a-time"),
+				description: t("Process queued messages one by one (recommended)"),
 			},
-			{ value: "all", label: "all", description: "Process all queued messages at once" },
+			{ value: "all", label: t("all\u0004packages/tui/src/overlays/queue-mode-selector.ts:QueueModeSelectorComponent.queueModes.label"), description: t("Process all queued messages at once") },
 		];
 
 		// Create selector
@@ -47,20 +48,20 @@ export class QueueModeSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Queue mode",
-			subtitle: "How messages you send while omp works are delivered",
+			title: t("Queue mode"),
+			subtitle: t("How messages you send while omp works are delivered"),
 			icon: "list",
-			noun: "modes",
+			noun: t("modes"),
 			current: [currentMode],
 			// The terminal list shows the setting's values; the sheet names them for people.
 			decorate: item =>
 				item.value === "one-at-a-time"
 					? {
-							label: "One at a time",
-							detail: "Each queued message gets its own turn",
-							badges: [{ text: "recommended" }],
+							label: t("One at a time"),
+							detail: t("Each queued message gets its own turn"),
+							badges: [{ text: t("recommended") }],
 						}
-					: { label: "All at once", detail: "Queued messages are sent together in one turn" },
+					: { label: t("All at once"), detail: t("Queued messages are sent together in one turn") },
 		});
 	}
 

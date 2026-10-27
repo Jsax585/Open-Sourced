@@ -1,4 +1,5 @@
 /** Schema-independent display definitions for the settings overlay. */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SymbolKey } from "../theme/symbols";
 
 export type SettingTab =
@@ -32,30 +33,30 @@ export const SETTING_TABS: SettingTab[] = [
 
 /** Tab display metadata - icon is a symbol key from theme.ts (tab.*) */
 export const TAB_METADATA: Record<SettingTab, TabMetadata> = {
-	appearance: { label: "Appearance", icon: "tab.appearance" },
-	model: { label: "Model", icon: "tab.model" },
-	interaction: { label: "Interaction", icon: "tab.interaction" },
-	context: { label: "Context", icon: "tab.context" },
-	memory: { label: "Memory", icon: "tab.memory" },
-	files: { label: "Files", icon: "tab.files" },
-	shell: { label: "Shell", icon: "tab.shell" },
-	tools: { label: "Tools", icon: "tab.tools" },
-	tasks: { label: "Tasks", icon: "tab.tasks" },
-	providers: { label: "Providers", icon: "tab.providers" },
+	appearance: { label: t("Appearance"), icon: "tab.appearance" },
+	model: { label: t("Model"), icon: "tab.model" },
+	interaction: { label: t("Interaction"), icon: "tab.interaction" },
+	context: { label: t("Context"), icon: "tab.context" },
+	memory: { label: t("Memory"), icon: "tab.memory" },
+	files: { label: t("Files"), icon: "tab.files" },
+	shell: { label: t("Shell"), icon: "tab.shell" },
+	tools: { label: t("Tools"), icon: "tab.tools" },
+	tasks: { label: t("Tasks"), icon: "tab.tasks" },
+	providers: { label: t("Providers"), icon: "tab.providers" },
 };
 
 /** One-sentence lead per tab, under the page title of the native settings page. */
 export const TAB_LEADS: Record<SettingTab, string> = {
-	appearance: "Theme, composer, status line and how the transcript renders.",
-	model: "Thinking, sampling, the system prompt, retries and the helper models.",
-	interaction: "Input, approvals, notifications, speech and what happens at startup.",
-	context: "What the model sees, and when and how the conversation compacts.",
-	memory: "What omp remembers across sessions and where it keeps it.",
-	files: "How files are read, summarized and edited, and the language servers.",
-	shell: "The bash tool and the eval runtimes.",
-	tools: "Which tools the model has, their limits and the external integrations.",
-	tasks: "Modes, subagents, isolation and custom commands.",
-	providers: "Services, provider protocols, timeouts and privacy.",
+	appearance: t("Theme, composer, status line and how the transcript renders."),
+	model: t("Thinking, sampling, the system prompt, retries and the helper models."),
+	interaction: t("Input, approvals, notifications, speech and what happens at startup."),
+	context: t("What the model sees, and when and how the conversation compacts."),
+	memory: t("What omp remembers across sessions and where it keeps it."),
+	files: t("How files are read, summarized and edited, and the language servers."),
+	shell: t("The bash tool and the eval runtimes."),
+	tools: t("Which tools the model has, their limits and the external integrations."),
+	tasks: t("Modes, subagents, isolation and custom commands."),
+	providers: t("Services, provider protocols, timeouts and privacy."),
 };
 
 /**

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 /**
  * TTS/STT Submit Trigger options and evaluation logic.
  */
@@ -9,23 +10,23 @@ export type SttSubmitTrigger = (typeof STT_SUBMIT_TRIGGER_VALUES)[number];
 export const STT_SUBMIT_TRIGGER_OPTIONS = [
 	{
 		value: "never",
-		label: "Never",
-		description: "Never automatically submit; insert dictation and remain in editor.",
+		label: t("Never\u0004packages/coding-agent/src/stt/submit-trigger.ts:STT_SUBMIT_TRIGGER_OPTIONS.label"),
+		description: t("Never automatically submit; insert dictation and remain in editor."),
 	},
 	{
 		value: "release",
-		label: "Release",
-		description: "Submit on release if the utterance has 2+ words to avoid accidental sends.",
+		label: t("Release"),
+		description: t("Submit on release if the utterance has 2+ words to avoid accidental sends."),
 	},
 	{
 		value: "release-complete",
-		label: "Release with complete sentence",
-		description: "Submit on release if the utterance ends with sentence-terminal punctuation (. ? ! etc.).",
+		label: t("Release with complete sentence"),
+		description: t("Submit on release if the utterance ends with sentence-terminal punctuation (. ? ! etc.)."),
 	},
 	{
 		value: "say-submit",
-		label: "When I Say Submit",
-		description: "Submit if the utterance ends with a word containing 'submit' (strips that word before submitting).",
+		label: t("When I Say Submit"),
+		description: t("Submit if the utterance ends with a word containing 'submit' (strips that word before submitting)."),
 	},
 ] satisfies ReadonlyArray<{ value: SttSubmitTrigger; label: string; description: string }>;
 

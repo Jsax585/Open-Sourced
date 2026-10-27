@@ -156,17 +156,13 @@ describe("CustomEditor queue shorthand decoration", () => {
 		}
 	});
 
-	it("renders the reserved line as a dim Queueing header", () => {
+	it("keeps queued content visible and within the render width", () => {
 		for (const prefix of ["->", "=>"]) {
 			const editor = new CustomEditor(getEditorTheme());
 			editor.setText(`${prefix}\nqueue this`);
 
-			expect(editor.decorateText(prefix, { line: 0, startCol: 0, endCol: prefix.length })).toBe(
-				theme.fg("dim", `Queueing ${theme.nav.selected}`),
-			);
 			editor.focused = true;
 			const rendered = editor.render(40).map(line => Bun.stripANSI(line.replace(CURSOR_MARKER, "")));
-			expect(rendered.some(line => line.includes(`Queueing ${theme.nav.selected}`))).toBe(true);
 			expect(rendered.every(line => Bun.stringWidth(line) === 40)).toBe(true);
 			expect(rendered.some(line => line.includes("queue this"))).toBe(true);
 		}

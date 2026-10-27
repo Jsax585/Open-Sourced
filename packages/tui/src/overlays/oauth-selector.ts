@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
@@ -91,7 +92,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			requestRender?: () => void;
 		},
 	) {
-		super(mode === "login" ? "Select provider to login" : "Select provider to logout", "omp.overlay.oauth");
+		super(mode === "login" ? localize("Select provider to login") : localize("Select provider to logout"), "omp.overlay.oauth");
 		this.#mode = mode;
 		this.#authStorage = authStorage;
 		this.#onSelectCallback = onSelect;
@@ -273,9 +274,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 
 	#renderStatusLine(_total: number): string {
 		const query = this.#menu.query.trim();
-		if (!query) return theme.fg("muted", "Type to search");
+		if (!query) return theme.fg("muted", localize("Type to search"));
 		const width = visibleWidth(this.#search.getValue()) + 1;
-		return theme.fg("muted", "Search: ") + (this.#search.render(width)[0] ?? "");
+		return theme.fg("muted", localize("Search: ")) + (this.#search.render(width)[0] ?? "");
 	}
 
 	#getProviderSearchText(provider: OAuthProviderInfo): string {
@@ -348,9 +349,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			const message =
 				this.#menu.items.length === 0
 					? this.#mode === "login"
-						? "No OAuth providers available"
-						: "No stored provider credentials to log out"
-					: "No matching providers";
+						? localize("No OAuth providers available")
+						: localize("No stored provider credentials to log out")
+					: localize("No matching providers");
 			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", message), 0, 0));
 		}
 		if (this.#statusMessage) {
@@ -434,7 +435,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			this.stopValidation();
 			this.#onSelectCallback(selectedProvider.id);
 		} else if (selectedProvider) {
-			this.#statusMessage = "Provider unavailable in this environment.";
+			this.#statusMessage = localize("Provider unavailable in this environment.");
 			this.#updateList();
 		}
 	}
@@ -477,10 +478,10 @@ export class OAuthSelectorComponent extends OverlayPanel {
 				: ORIGIN_LABELS[origin.kind]
 			: undefined;
 		const detail = !source
-			? "Not configured"
+			? localize("Not configured")
 			: origin?.kind === "oauth"
-				? `Signed in · ${source}`
-				: `API key · ${source}`;
+				? localize("Signed in · {0}", `${source}`)
+				: localize("API key · {0}", `${source}`);
 		const initials = provider.name
 			.split(/[^\p{L}\p{N}]+/u)
 			.filter(word => word.length > 0)
@@ -493,7 +494,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			detail,
 			mark: { text: initials, seed: provider.id },
 			dot,
-			...(provider.available ? {} : { disabled: "Provider unavailable in this environment" }),
+			...(provider.available ? {} : { disabled: localize("Provider unavailable in this environment") }),
 		};
 	}
 
@@ -505,25 +506,25 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		const login = this.#mode === "login";
 		const search = this.#shouldRenderSearchStatus() ? pickerQuery(this.#search) : pickerQuery(null);
 		this.#pickerRoot = dockedPicker({
-			title: login ? "Sign in" : "Sign out",
-			subtitle: login ? "Pick a provider" : "Remove stored credentials",
+			title: login ? localize("Sign in") : localize("Sign out"),
+			subtitle: login ? localize("Pick a provider") : localize("Remove stored credentials"),
 			icon: "key-round",
-			noun: "providers",
+			noun: localize("providers"),
 			size: "md",
 			layout: "cards",
 			preview: "none",
 			...search,
-			placeholder: "Search providers…",
+			placeholder: localize("Search providers…"),
 			items: this.#pickerItems,
 			...(query.length > 0 ? { order: this.#menu.visibleItems.map(provider => provider.id) } : {}),
 			selected: this.#menu.selectedKey ?? null,
 			total: all.length,
-			empty: login ? "No OAuth providers available" : "No stored provider credentials to log out",
+			empty: login ? localize("No OAuth providers available") : localize("No stored provider credentials to log out"),
 			...(this.#statusMessage ? { message: this.#statusMessage } : {}),
 			actions: [
 				pickerAction(
 					"confirm",
-					login ? "Sign in" : "Sign out",
+					login ? localize("Sign in") : localize("Sign out"),
 					"enter",
 					login ? { primary: true } : { primary: true, danger: true },
 				),
@@ -558,7 +559,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 			children.push(
 				node(
 					"input",
-					{ text: this.#search.getValue(), cursor: this.#search.getCursor(), placeholder: "Type to search" },
+					{ text: this.#search.getValue(), cursor: this.#search.getCursor(), placeholder: localize("Type to search") },
 					undefined,
 					"search",
 				),
@@ -567,9 +568,9 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		const empty =
 			this.#menu.items.length === 0
 				? this.#mode === "login"
-					? "No OAuth providers available"
-					: "No stored provider credentials to log out"
-				: "No matching providers";
+					? localize("No OAuth providers available")
+					: localize("No stored provider credentials to log out")
+				: localize("No matching providers");
 		children.push(
 			node(
 				"list",

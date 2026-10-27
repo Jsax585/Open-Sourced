@@ -2,6 +2,7 @@
  * Shared UI primitives for tool renderers. Every renderer composes these
  * instead of inventing new CSS — see tool-render.css for the `tv-` classes.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import type { ToolRenderHost, ToolResultImage, ToolResultLike } from "./types";
@@ -124,7 +125,7 @@ export function Output({ text, maxLines = 10, lang, error, variant = "plain", ti
 			)}
 			{collapsible && (
 				<button type="button" className="tv-expand" onClick={() => setExpanded(v => !v)}>
-					{expanded ? "collapse" : `⋯ ${lines.length - maxLines} more lines`}
+					{expanded ? t("collapse") : t("⋯ {0} more lines", `${lines.length - maxLines}`)}
 				</button>
 			)}
 		</div>
@@ -203,9 +204,9 @@ export function ResultImages({ result }: { result: ToolResultLike | undefined })
 					type="button"
 					style={{ all: "unset", display: "inline-flex" }}
 					onClick={() => openImage(img)}
-					aria-label={`Open tool result image ${i + 1}`}
+					aria-label={t("Open tool result image {0}", `${i + 1}`)}
 				>
-					<img className="tv-img" src={`data:${img.mimeType};base64,${img.data}`} alt={`tool result ${i + 1}`} />
+					<img className="tv-img" src={`data:${img.mimeType};base64,${img.data}`} alt={t("tool result {0}", `${i + 1}`)} />
 				</button>
 			))}
 		</div>
@@ -230,7 +231,7 @@ export function Row({ k, children }: { k?: ReactNode; children: ReactNode }): Re
 
 /** Marker for arguments that arrived with the wrong JSON type. */
 export function InvalidArg({ what }: { what?: string }): ReactNode {
-	return <span className="tv-err-text">[invalid {what ?? "arg"}]</span>;
+	return <span className="tv-err-text">{t("[invalid {0}]", `${what ?? t("arg")}`)}</span>;
 }
 
 /**
@@ -260,7 +261,7 @@ export function DiffBlock({ diff, maxLines = 80 }: { diff: string; maxLines?: nu
 			</div>
 			{collapsible && (
 				<button type="button" className="tv-expand" onClick={() => setExpanded(v => !v)}>
-					{expanded ? "collapse" : `⋯ ${lines.length - maxLines} more lines`}
+					{expanded ? t("collapse") : t("⋯ {0} more lines", `${lines.length - maxLines}`)}
 				</button>
 			)}
 		</div>

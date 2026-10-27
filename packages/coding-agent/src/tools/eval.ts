@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
@@ -284,8 +285,8 @@ async function resolveBackend(
 		throwIfAborted(probeOpts?.signal);
 		if (!availability.ok) {
 			const remedy = allowJs
-				? 'Python backend is unavailable in this session. Pass language: "js" or install the python kernel.'
-				: 'Python backend is unavailable in this session. Install the python kernel to use language: "py".';
+				? t("Python backend is unavailable in this session. Pass language: \"js\" or install the python kernel.")
+				: t("Python backend is unavailable in this session. Install the python kernel to use language: \"py\".");
 			const reason = availability.reason
 				? truncateToWidth(
 						replaceTabs(sanitizeText(shortenEmbeddedPaths(availability.reason))).replaceAll("\n", " "),
@@ -312,9 +313,9 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = isRecord(args) ? args : {};
 		const language =
-			typeof params.language === "string" ? formatEvalInputLanguage(params.language) : "javascript (default)";
+			typeof params.language === "string" ? formatEvalInputLanguage(params.language) : t("javascript (default)");
 		const code = typeof params.code === "string" ? params.code : "";
-		return [`Language: ${language}`, `Code:\n${truncateForPrompt(code)}`];
+		return [t("Language: {0}", `${language}`), t("Code:\n{0}", `${truncateForPrompt(code)}`)];
 	};
 	get summary(): string {
 		return summarizeEvalLanguages(this.#enabledLanguages());
@@ -394,7 +395,7 @@ export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly intent = (args: Partial<typeof evalSchema.infer>): string | undefined => {
 		const title = typeof args.title === "string" ? args.title : undefined;
 		const language = typeof args.language === "string" ? formatEvalInputLanguage(args.language) : "javascript";
-		return title || `running ${language}`;
+		return title || t("running {0}", `${language}`);
 	};
 
 	readonly speculation: ToolSpeculationPolicy = {

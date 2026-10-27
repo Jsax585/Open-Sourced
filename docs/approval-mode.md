@@ -1,53 +1,57 @@
-# Tool approval mode
+<a id="tool-approval-mode"></a>
+# 도구 승인 모드
 
-Tool approval has three inputs:
+도구 승인에는 세 가지 입력이 있습니다.
 
-1. **Tool declaration** — every tool may declare an `approval` tier:
-   - `read`: reads data or updates UI-only session metadata.
-   - `write`: mutates workspace/session state but does not execute arbitrary code.
-   - `exec`: executes code, shells out, drives a browser, spawns agents, or performs similarly broad actions.
-2. **Tool policy** — object-form declarations may set `policy: allow | deny | prompt`, optionally with `override`, a reason, and a `policyKey` for a dispatched sub-tool. This is used for argument-dependent safety/pattern rules.
-3. **User policy** — `tools.approval.<toolName>: allow | deny | prompt` overrides the active mode, but cannot bypass a tool's own deny/prompt policy or a non-yolo safety override.
+1. **도구 선언** — 모든 도구는 `approval` 등급을 선언할 수 있습니다.
+   - `read`: 데이터를 읽거나 UI 전용 세션 메타데이터를 업데이트합니다.
+   - `write`: 워크스페이스/세션 상태를 변경하지만 임의의 코드를 실행하지는 않습니다.
+   - `exec`: 코드를 실행하거나, 셸을 호출하거나, 브라우저를 제어하거나, 에이전트를 생성하거나, 이와 비슷하게 범위가 넓은 작업을 수행합니다.
+2. **도구 정책** — 객체 형식의 선언은 `policy: allow | deny | prompt`를 설정할 수 있으며, 선택적으로 `override`, 사유, 디스패치된 하위 도구의 `policyKey`를 지정할 수 있습니다. 이는 인수에 따라 달라지는 안전 규칙/패턴 규칙에 사용됩니다.
+3. **사용자 정책** — `tools.approval.<toolName>: allow | deny | prompt`는 활성 모드를 재정의하지만, 도구 자체의 deny/prompt 정책이나 yolo 이외 모드의 안전 재정의를 우회할 수는 없습니다.
 
-Tools without an `approval` declaration, and decisions without a valid tier, use `exec`. This is the safe default for unknown custom tools. MCP server tools declare `write`, regardless of their MCP annotations.
+`approval` 선언이 없는 도구와 유효한 등급이 없는 결정은 `exec`를 사용합니다. 이는 알 수 없는 사용자 지정 도구에 대한 안전한 기본값입니다. MCP 서버 도구는 MCP 주석과 관계없이 `write`를 선언합니다.
 
-When an execute-time caller supplies neither settings nor `autoApprove`, approval resolution fails closed to `always-ask` with no user grants. A live extension wrapper can inherit its runner's session settings when context is omitted.
+실행 시 호출자가 설정과 `autoApprove`를 모두 제공하지 않으면, 승인 결정은 안전을 위해 사용자 허용 없이 `always-ask`로 처리됩니다. 실행 중인 확장 기능 래퍼는 컨텍스트가 생략되면 자신을 실행하는 러너의 세션 설정을 상속할 수 있습니다.
 
-## Modes
+<a id="modes"></a>
+## 모드
 
-Configure with `tools.approvalMode`:
+`tools.approvalMode`로 구성합니다.
 
-| Mode                | Auto-approves                                          | Prompts for                 |
+| 모드                | 자동 승인 대상                                          | 승인 요청 대상                 |
 | ------------------- | ------------------------------------------------------ | --------------------------- |
 | `always-ask`        | `read`                                                 | `write`, `exec`             |
-| `always-ask-cached` | `read` without file targets, granted files and folders | file reads, `write`, `exec` |
+| `always-ask-cached` | 파일 대상이 없는 `read`, 허용된 파일 및 폴더 | 파일 읽기, `write`, `exec` |
 | `write`             | `read`, `write`                                        | `exec`                      |
-| `yolo` (default)    | `read`, `write`, `exec`                                | none                        |
+| `yolo`(기본값)    | `read`, `write`, `exec`                                | 없음                        |
 
-`--approval-mode <mode>` overrides the configured mode for the session. `--auto-approve` and `--yolo` force yolo execution even when an explicit `--approval-mode` is also supplied; tool/user denies and explicit tool prompt policies still apply.
+`--approval-mode <mode>`는 해당 세션에 대해 구성된 모드를 재정의합니다. `--auto-approve`와 `--yolo`는 명시적인 `--approval-mode`가 함께 제공되어도 `yolo` 실행을 강제합니다. 도구/사용자의 거부 및 명시적인 도구 승인 요청 정책은 여전히 적용됩니다.
 
-### Ask and remember (`always-ask-cached`)
+<a id="ask-and-remember-always-ask-cached"></a>
+### 확인 후 기억 (`always-ask-cached`)
 
-Ask and remember prompts like `always-ask`, and also before a tool reads a file it has not been granted. Its prompts can remember what the call touched:
+확인 후 기억 모드는 `always-ask`와 마찬가지로 승인을 요청하며, 도구가 아직 허용되지 않은 파일을 읽기 전에도 승인을 요청합니다. 승인 요청에서는 호출이 접근한 대상을 기억할 수 있습니다.
 
-- **Approve Directory: `<folder>`** grants the folder around the call. A folder grant covers the files directly inside it, never a subfolder or anything below one. The prompt names the folder and lists its entries (directories end in `/`): the first few in the dock, up to 24 in the expanded prompt (`Ctrl+O`). Larger folders show the rest as a count.
-- **Approve File** (or **Approve** for a directory or URL target) grants the exact targets.
-- **Approve Once** approves this call only.
+- **디렉터리 승인: `<folder>`**는 호출 대상이 속한 폴더를 허용합니다. 폴더 허용은 바로 그 안에 있는 파일에만 적용되며, 하위 폴더나 그 아래의 항목에는 적용되지 않습니다. 승인 요청에는 폴더 이름과 항목 목록이 표시됩니다(디렉터리는 `/`로 끝남). 도킹된 화면에는 처음 몇 개가, 확장된 승인 요청(`Ctrl+O`)에는 최대 24개가 표시됩니다. 더 큰 폴더에서는 나머지 항목 수가 표시됩니다.
+- **파일 승인**(디렉터리 또는 URL 대상인 경우 **승인**)은 정확히 해당 대상만 허용합니다.
+- **이번만 승인**은 이번 호출만 승인합니다.
 
-The **Remember across sessions** toggle above these answers decides where a grant lives. When it is off, the grant stays in memory for this conversation only: `/new`, a session switch, and other sessions in the same process start without it. When it is on, the grant is written to `approval-cache.db` in the agent directory and covers every later session. Hosts without the dialog (RPC, ACP, collab guests) get both lifetimes as separate choices: `Approve File`, `Always Approve File`, and so on.
+이 선택지 위에 있는 **세션 간 기억** 토글은 허용 내역의 저장 위치를 결정합니다. 꺼져 있으면 허용 내역은 이 대화의 메모리에만 유지됩니다. `/new`, 세션 전환, 같은 프로세스의 다른 세션은 해당 허용 내역 없이 시작합니다. 켜져 있으면 허용 내역이 에이전트 디렉터리의 `approval-cache.db`에 기록되어 이후의 모든 세션에 적용됩니다. 대화 상자가 없는 호스트(RPC, ACP, collab 게스트)에서는 두 유효기간이 `파일 승인`, `항상 파일 승인` 등 별도의 선택지로 제공됩니다.
 
-- Grants record the capability tier they authorized. A write grant also covers reads of the same target; a read grant never covers a write or exec call.
-- The tools that read files report the files and folders they touch: `read`, `grep`, `glob`, `ast_grep`, `find`, and the legacy `read`/`grep`/`find`/`ls` shims. A recursive search reaches below subfolders, so it needs a tree grant of its own; approving one also records the folder grant it includes. A root list such as `src;other` is keyed one root at a time.
-- Other read-tier tools (`lsp`, `debug`, `github`, `todo`, …) stay auto-approved as in `always-ask`. This mode decides when you are asked; it does not sandbox reads.
-- Reads of public web URLs are never gated. URLs whose host is `localhost`, a private, loopback, or link-local IP literal, a single-label name, or a `.local`/`.internal` name are gated like files. Hostnames are not resolved, so a public name that points at a private address is not detected. Internal URLs (`xd://…`, `local://…`) are keyed by their normalized form.
-- An exec or write call that reports no targets (`bash`, `eval`, `browser`, `task`, MCP tools) prompts as in `always-ask`, with the usual **Approve `<tool>` for this session** choice.
-- A read of `file.ts:120-140` and a write to `file.ts` share one key: selectors are peeled, the path is resolved against the session cwd and through symlinks (including a symlinked parent of a file that does not exist yet), and on Windows case is folded.
-- Grant answers appear only on prompts the mode raised. Prompts forced by a tool policy, an `override` (bash critical commands), a `tools.approval.<tool>: prompt` rule, or a pending provider safety check keep plain Approve/Deny and record nothing.
-- `/forget-approvals` clears the database and every conversation's session grants for the active agent directory. Deleting rows (`DELETE FROM grants`) or the file works too; every check reads the database fresh, so no restart is needed.
+- 허용 내역에는 승인한 기능 등급이 기록됩니다. 쓰기 허용은 같은 대상의 읽기도 허용하지만, 읽기 허용은 쓰기나 exec 호출을 허용하지 않습니다.
+- 파일을 읽는 도구는 접근하는 파일과 폴더를 보고합니다. 해당 도구는 `read`, `grep`, `glob`, `ast_grep`, `find`와 레거시 `read`/`grep`/`find`/`ls` shim입니다. 재귀 검색은 하위 폴더 아래까지 접근하므로 별도의 트리 허용이 필요합니다. 트리 접근을 승인하면 그에 포함되는 폴더 허용도 함께 기록됩니다. `src;other`와 같은 루트 목록은 루트별로 키가 지정됩니다.
+- 다른 read 등급 도구(`lsp`, `debug`, `github`, `todo`, …)는 `always-ask`와 마찬가지로 계속 자동 승인됩니다. 이 모드는 언제 승인을 요청할지 결정할 뿐, 읽기를 샌드박스로 격리하지는 않습니다.
+- 공개 웹 URL 읽기는 승인 절차를 거치지 않습니다. 호스트가 `localhost`, 사설·루프백·링크 로컬 IP 리터럴, 단일 레이블 이름 또는 `.local`/`.internal` 이름인 URL은 파일과 마찬가지로 승인이 필요합니다. 호스트 이름을 조회하지 않으므로 사설 주소를 가리키는 공개 이름은 감지되지 않습니다. 내부 URL(`xd://…`, `local://…`)은 정규화된 형식을 키로 사용합니다.
+- 대상을 보고하지 않는 exec 또는 write 호출(`bash`, `eval`, `browser`, `task`, MCP 도구)은 `always-ask`와 마찬가지로 승인을 요청하며, 일반적인 **이 세션에서 `<tool>` 승인** 선택지를 제공합니다.
+- `file.ts:120-140` 읽기와 `file.ts` 쓰기는 하나의 키를 공유합니다. 선택자를 제거하고, 세션 cwd를 기준으로 경로를 해석하며, 심볼릭 링크를 따라 실제 경로를 확인합니다(아직 존재하지 않는 파일의 상위 경로에 있는 심볼릭 링크 포함). Windows에서는 대소문자 차이도 정규화합니다.
+- 허용 내역을 남기는 선택지는 모드가 발생시킨 승인 요청에만 표시됩니다. 도구 정책, `override`(bash의 위험한 명령), `tools.approval.<tool>: prompt` 규칙 또는 대기 중인 제공업체 안전 검사로 강제된 승인 요청은 일반 승인/거부 선택지를 유지하며 아무것도 기록하지 않습니다.
+- `/forget-approvals`는 활성 에이전트 디렉터리의 데이터베이스와 모든 대화의 세션 허용 내역을 지웁니다. 행을 삭제하거나(`DELETE FROM grants`) 파일을 삭제해도 됩니다. 검사할 때마다 데이터베이스를 새로 읽으므로 재시작할 필요가 없습니다.
 
-## Restricted folders
+<a id="restricted-folders"></a>
+## 제한된 폴더
 
-`tools.restrictedFolders` lists folders where every action needs an explicit approval, whatever the approval mode (`yolo` and `--auto-approve` included) and whatever was remembered:
+`tools.restrictedFolders`는 승인 모드(`yolo`와 `--auto-approve` 포함)나 기억된 허용 내역에 관계없이 모든 작업에 명시적인 승인이 필요한 폴더 목록입니다.
 
 ```yaml
 tools:
@@ -56,16 +60,17 @@ tools:
     - C:/work/payments
 ```
 
-- A restricted folder covers itself and everything below it. A call whose targets fall inside it (`read`, `write`, `edit`, `grep`, `glob`, `ast_grep`, `find`, and any tool reporting `approvalCacheTargets`) prompts with `Reason: Restricted folder: <folder>`. A recursive search rooted above a restricted folder prompts too, because it reads into it; a one-level listing of the parent does not.
-- Paths are compared like Ask and remember keys: `~` is expanded, relative entries resolve against the session cwd, symlinks are resolved, and on Windows case is folded. `/a/foo` never covers `/a/foobar`.
-- A tool that names no path (`bash`, `eval`, `browser`, MCP tools, eval preludes) is matched by the directory it runs in: its `cwd` argument when it has one, else the session cwd. The command text is not parsed, so a `bash` call running outside the folder that names a file inside it does not match; use a `tools.approval.bash` policy for that.
-- The prompt offers plain **Approve** / **Deny**: no session answer, no grant, and no ACP "Always allow" covers it, so every call asks again. A `deny` policy (tool or `tools.approval.<tool>: deny`) still denies.
-- Without an interactive UI (print mode, headless subagents, the Cursor exec bridge) the call is refused, like any other prompt with nobody to answer it.
-- The `/settings` panel edits the list as JSON under Interaction → Approvals. It is hidden when project config supplies the list, so a project value is never promoted to global config.
+- 제한된 폴더는 해당 폴더 자체와 그 아래의 모든 항목을 포함합니다. 대상이 이 범위 안에 있는 호출(`read`, `write`, `edit`, `grep`, `glob`, `ast_grep`, `find` 및 `approvalCacheTargets`를 보고하는 모든 도구)은 `Reason: Restricted folder: <folder>` 사유로 승인을 요청합니다. 제한된 폴더의 상위 경로에서 시작하는 재귀 검색도 해당 폴더 내부를 읽으므로 승인을 요청하지만, 상위 폴더의 한 단계 목록 조회는 요청하지 않습니다.
+- 경로는 확인 후 기억 키와 같은 방식으로 비교합니다. `~`를 확장하고, 상대 경로는 세션 cwd를 기준으로 해석하며, 심볼릭 링크를 따라 실제 경로를 확인하고, Windows에서는 대소문자를 정규화합니다. `/a/foo`는 `/a/foobar`를 포함하지 않습니다.
+- 경로를 지정하지 않는 도구(`bash`, `eval`, `browser`, MCP 도구, eval 프렐류드)는 실행 디렉터리를 기준으로 판단합니다. `cwd` 인수가 있으면 그 값을, 없으면 세션 cwd를 사용합니다. 명령 텍스트는 파싱하지 않으므로 폴더 밖에서 실행되는 `bash` 호출이 폴더 안의 파일을 지정해도 일치하지 않습니다. 이런 경우에는 `tools.approval.bash` 정책을 사용하세요.
+- 승인 요청은 일반 **승인** / **거부**만 제공합니다. 세션 단위 응답, 허용 내역, ACP의 "항상 허용"으로도 우회할 수 없으므로 호출할 때마다 다시 묻습니다. 도구 또는 `tools.approval.<tool>: deny`의 `deny` 정책은 여전히 거부합니다.
+- 대화형 UI가 없는 환경(출력 모드, 헤드리스 하위 에이전트, Cursor exec 브리지)에서는 응답할 사람이 없는 다른 승인 요청과 마찬가지로 호출을 거부합니다.
+- `/settings` 패널의 상호작용 → 승인에서 목록을 JSON으로 편집할 수 있습니다. 프로젝트 설정에서 목록을 제공하면 이 항목은 숨겨지므로 프로젝트 값이 전역 설정으로 승격되지 않습니다.
 
-## User overrides
+<a id="user-overrides"></a>
+## 사용자 재정의
 
-`tools.approval` is honored in every mode:
+`tools.approval`은 모든 모드에서 적용됩니다.
 
 ```yaml
 tools:
@@ -76,77 +81,81 @@ tools:
     mcp__filesystem_delete: deny
 ```
 
-For MCP tools, key the policy by the exact final registered name. The ordinary form is
-`mcp__<sanitized_server>_<sanitized_tool>`. A redundant `<server>_` prefix is removed from the tool name,
-so server `echo` tool `echo_it` is registered as `mcp__echo_it`. Names longer than 64 characters are
-capped with a deterministic hash suffix; use the final capped name rather than the uncapped pattern. See
-[MCP tool naming](./mcp-server-tool-authoring.md#naming-and-collision-domain).
+MCP 도구는 최종 등록된 정확한 이름을 정책 키로 사용하세요. 일반적인 형식은
+`mcp__<sanitized_server>_<sanitized_tool>`입니다. 도구 이름에서 중복되는 `<server>_` 접두사는 제거되므로,
+서버 `echo`의 도구 `echo_it`는 `mcp__echo_it`로 등록됩니다. 64자를 초과하는 이름은
+결정론적 해시 접미사를 붙여 길이가 제한됩니다. 길이 제한 전의 패턴이 아니라 최종적으로 제한된 이름을 사용하세요.
+[MCP 도구 이름 지정](./mcp-server-tool-authoring.md#naming-and-collision-domain)을 참고하세요.
 
-The sanitizer lowercases names and retains letters, digits, and underscores. For MCP names changed by the older digit-stripping sanitizer, a legacy `deny` or `prompt` key is inherited only when no current-name policy applies; legacy `allow` is never inherited.
+이름 정제기는 이름을 소문자로 바꾸고 문자, 숫자, 밑줄을 유지합니다. 이전의 숫자 제거 정제기로 인해 이름이 바뀐 MCP 도구의 경우, 현재 이름에 적용되는 정책이 없을 때만 레거시 `deny` 또는 `prompt` 키를 상속합니다. 레거시 `allow`는 절대 상속하지 않습니다.
 
-A decision's `policyKey` selects `tools.approval.<policyKey>` first, falling back to the invoking tool's policy when the keyed policy is missing or invalid. For example, `write` to a mounted `xd://lsp` device consults `tools.approval.lsp` before `tools.approval.write` and uses the device operation's tier.
+결정의 `policyKey`는 먼저 `tools.approval.<policyKey>`를 선택하고, 해당 키의 정책이 없거나 유효하지 않으면 호출한 도구의 정책으로 대체합니다. 예를 들어 마운트된 `xd://lsp` 장치에 대한 `write`는 `tools.approval.write`보다 먼저 `tools.approval.lsp`를 확인하며, 장치 작업의 등급을 사용합니다.
 
-Resolution per tool call:
+도구 호출별 결정 절차는 다음과 같습니다.
 
-1. Evaluate `tool.approval(args)`; omitted/malformed decisions default to tier `exec`.
-2. A tool-declared `policy: deny` always denies. A user `deny` is checked next and also always denies.
-3. In `yolo`, an explicit tool `allow`/`prompt` policy wins; otherwise the valid user policy wins, or the call is allowed. The `override` flag alone does not force a prompt in `yolo`.
-4. In non-yolo modes, an `override: true` decision allows only an accompanying tool `policy: allow`; every other non-denied case prompts.
-5. Without an override, an explicit tool `allow`/`prompt` policy wins, then a valid user policy wins.
-6. With no explicit policy, the active mode auto-approves or prompts by tier. In `always-ask-cached`, a call whose `approvalCacheTargets` are all granted is allowed instead.
+1. `tool.approval(args)`를 평가합니다. 결정이 생략되었거나 형식이 잘못되었으면 기본 등급은 `exec`입니다.
+2. 도구가 선언한 `policy: deny`는 항상 거부합니다. 그다음 사용자 `deny`를 확인하며, 이 역시 항상 거부합니다.
+3. `yolo`에서는 명시적인 도구 `allow`/`prompt` 정책이 우선합니다. 그렇지 않으면 유효한 사용자 정책이 우선하며, 해당 정책도 없으면 호출을 허용합니다. `override` 플래그만으로는 `yolo`에서 승인 요청을 강제하지 않습니다.
+4. yolo 이외의 모드에서는 `override: true` 결정에 도구 `policy: allow`가 함께 있는 경우에만 허용합니다. 그 밖에 거부되지 않은 모든 경우에는 승인을 요청합니다.
+5. 재정의가 없으면 명시적인 도구 `allow`/`prompt` 정책이 우선하고, 그다음 유효한 사용자 정책이 우선합니다.
+6. 명시적인 정책이 없으면 활성 모드가 등급에 따라 자동 승인하거나 승인을 요청합니다. `always-ask-cached`에서는 `approvalCacheTargets`가 모두 허용된 호출을 대신 허용합니다.
 
-Policy strings are trimmed and case-normalized. Invalid user values are ignored.
+정책 문자열은 앞뒤 공백을 제거하고 대소문자를 정규화합니다. 유효하지 않은 사용자 값은 무시합니다.
 
-Approval is resolved again after extension `tool_call` handlers revise the input, against the arguments that will actually execute. A deny blocks execution before a prompt; a call that still requires a prompt fails rather than silently allowing it when no interactive UI is available.
+확장 기능의 `tool_call` 핸들러가 입력을 수정한 뒤에는 실제 실행될 인수를 기준으로 승인을 다시 결정합니다. 거부는 승인 요청 전에 실행을 차단합니다. 여전히 승인 요청이 필요한 호출은 대화형 UI를 사용할 수 없을 때 묵시적으로 허용되는 대신 실패합니다.
 
-## Safety overrides
+<a id="safety-overrides"></a>
+## 안전 재정의
 
-A tool can force a prompt with object-form approval:
+도구는 객체 형식 승인을 사용하여 승인 요청을 강제할 수 있습니다.
 
 ```ts
 approval: { tier: "exec", override: true, reason: "Critical pattern detected" }
 ```
 
-`bash` uses this for critical destructive patterns such as `rm -rf /`, fork bombs, remote-fetch-then-execute, writes to `/etc/passwd`, and host shutdown commands. It also supports configured `bash.patterns` rules: `deny` is absolute, `prompt` forces a prompt, and `allow` explicitly allows a matching simple command at the `write` tier. Reasons appear in the approval prompt. In `yolo`, a bare critical override is ignored, but an explicit tool/user `prompt` or `deny` policy is still enforced.
-For standalone bash commands, critical detection takes precedence over matching `allow`/`prompt` pattern returns (but not `deny`), replacing them with that bare safety override.
+`bash`는 `rm -rf /`, 포크 폭탄, 원격에서 가져온 뒤 실행하기, `/etc/passwd`에 쓰기, 호스트 종료 명령과 같은 심각한 파괴적 패턴에 이를 사용합니다. 구성된 `bash.patterns` 규칙도 지원합니다. `deny`는 무조건 거부하고, `prompt`는 승인 요청을 강제하며, `allow`는 일치하는 단순 명령을 `write` 등급에서 명시적으로 허용합니다. 사유는 승인 요청에 표시됩니다. `yolo`에서는 정책 없이 지정된 위험 작업 재정의를 무시하지만, 명시적인 도구/사용자 `prompt` 또는 `deny` 정책은 여전히 적용합니다.
+독립적인 bash 명령에서는 위험 감지가 일치하는 `allow`/`prompt` 패턴의 반환값보다 우선하며(`deny`는 제외), 해당 반환값을 이 안전 재정의만 있는 결정으로 대체합니다.
 
-`bash.allowCompoundCommands` is off by default. When enabled, it recognizes only flat chains joined by `&&` whose segments consist of literal arguments. Rules remain ordered within each segment: the first matching rule wins for that segment. Explicit restrictions are combined conservatively across the chain: any matching `deny` wins, otherwise any matching `prompt` wins. A restriction matching the complete chain but no individual segment remains a whole-chain veto.
+`bash.allowCompoundCommands`는 기본적으로 꺼져 있습니다. 활성화하면 각 구간이 리터럴 인수로 이루어지고 `&&`로 연결된 단순한 명령 체인만 인식합니다. 각 구간 내에서는 규칙 순서가 유지되며, 처음 일치하는 규칙이 해당 구간에 적용됩니다. 명시적인 제한은 체인 전체에 걸쳐 보수적으로 결합됩니다. 일치하는 `deny`가 하나라도 있으면 그것이 우선하고, 그렇지 않으면 일치하는 `prompt`가 하나라도 있을 때 그것이 우선합니다. 전체 체인에는 일치하지만 개별 구간에는 일치하지 않는 제한은 전체 체인에 대한 차단 조건으로 유지됩니다.
 
-All matching whole-chain restrictions are considered, so a later whole-chain deny overrides an earlier prompt. The opt-in requires a positively identified POSIX-quoting shell through the centralized shell classifier. Cmd, PowerShell, fish, and unknown shells retain legacy approval behavior.
+일치하는 모든 전체 체인 제한을 검토하므로, 뒤에 있는 전체 체인 deny가 앞의 prompt보다 우선합니다. 이 선택적 기능을 사용하려면 중앙 셸 분류기를 통해 POSIX 인용 규칙을 사용하는 셸임이 명확히 확인되어야 합니다. Cmd, PowerShell, fish 및 알 수 없는 셸은 기존 승인 동작을 유지합니다.
 
-These explicit chain and segment restrictions are resolved before the existing raw and canonical critical-command checks. After those checks, a chain whose segments all explicitly resolve to `allow` receives the `write`-tier allow; if any segment is unmatched, bash instead retains its standalone `exec` approval tier with no explicit policy. The generic resolver then applies `tools.approval.bash`, followed by the active approval mode, exactly as it would for a standalone command. An unmatched segment therefore prompts only when that existing tool-wide policy or mode requires it. Expansions, assignments, other control flow, redirections, globbing, newlines, malformed syntax, and shell-state-changing builtins do not qualify and retain legacy approval behavior.
+이러한 명시적인 체인 및 구간 제한은 기존의 원본 및 정규화된 위험 명령 검사보다 먼저 처리됩니다. 해당 검사가 끝난 뒤 모든 구간이 명시적으로 `allow`로 결정되는 체인은 `write` 등급의 허용을 받습니다. 일치하지 않는 구간이 하나라도 있으면 bash는 명시적인 정책 없이 독립 실행 시의 `exec` 승인 등급을 유지합니다. 그러면 일반 결정기가 독립 명령과 정확히 같은 방식으로 `tools.approval.bash`를 적용한 뒤 활성 승인 모드를 적용합니다. 따라서 일치하지 않는 구간은 기존의 도구 전체 정책이나 모드가 요구하는 경우에만 승인 요청을 발생시킵니다. 확장, 할당, 그 밖의 제어 흐름, 리디렉션, 글로빙, 줄바꿈, 잘못된 구문, 셸 상태를 변경하는 내장 명령은 이 조건에 해당하지 않으며 기존 승인 동작을 유지합니다.
 
-This pattern policy controls approval for the `bash` tool; it is not process or filesystem containment. An approved command retains the shell's ambient filesystem, network, and subprocess access. The `eval` tool also declares the `exec` tier and can spawn a shell via subprocess, so a `bash.patterns` `deny` rule does not apply to the same command run through `eval` — under `yolo`, that `exec` call resolves to `allow`. To gate the shell `eval` can reach, add a `tools.approval.eval` policy (`prompt` or `deny`) alongside `bash.patterns`.
+이 패턴 정책은 `bash` 도구의 승인을 제어하며, 프로세스나 파일시스템을 격리하지는 않습니다. 승인된 명령은 셸이 원래 가지고 있던 파일시스템, 네트워크 및 하위 프로세스 접근 권한을 그대로 유지합니다. `eval` 도구도 `exec` 등급을 선언하며 하위 프로세스를 통해 셸을 생성할 수 있으므로, `bash.patterns`의 `deny` 규칙은 `eval`을 통해 실행되는 동일한 명령에는 적용되지 않습니다. `yolo`에서는 해당 `exec` 호출이 `allow`로 결정됩니다. `eval`이 접근할 수 있는 셸에 승인 절차를 적용하려면 `bash.patterns`와 함께 `tools.approval.eval` 정책(`prompt` 또는 `deny`)을 추가하세요.
 
-### Computer safety
+<a id="computer-safety"></a>
+### 컴퓨터 안전
 
-The disabled-by-default Eval [`computer` API](./computer-use.md) chooses its tier per call:
+기본적으로 비활성화된 Eval [`computer` API](./computer-use.md)는 호출마다 등급을 선택합니다.
 
-- direct helpers (`computer.windows()`, `win.screenshot()`, `win.ax()`, `el.bounds()`, `computer.clipboard.read()`, …) use `read` when the invoked method is inspection-only and `exec` for input, focus, mutation, and `clipboard.write`; read calls also run under the worker's read-only guard;
-- `computer.run(fnOrCode, options)` uses `read` only for `read_only: true` (JavaScript trailing option or Python keyword); `read_only: false`, a missing field, malformed arguments, or any other value uses `exec`.
+- 직접 호출하는 헬퍼(`computer.windows()`, `win.screenshot()`, `win.ax()`, `el.bounds()`, `computer.clipboard.read()`, …)는 호출된 메서드가 조회 전용이면 `read`를 사용하고, 입력, 포커스, 변경 및 `clipboard.write`에는 `exec`를 사용합니다. 읽기 호출은 워커의 읽기 전용 보호 장치 아래에서 실행됩니다.
+- `computer.run(fnOrCode, options)`은 `read_only: true`(JavaScript의 마지막 옵션 또는 Python 키워드)인 경우에만 `read`를 사용합니다. `read_only: false`, 필드 누락, 잘못된 형식의 인수 또는 그 밖의 값은 모두 `exec`를 사용합니다.
 
-The approval prompt shows `read-only` when applicable, followed by the resolved JavaScript (truncated to 2,000 characters by the standard formatter). For `computer.run`, `read_only: true` also enables the worker's desktop guard: input, focus, mutation, and clipboard writes throw. It is not static analysis or a general JavaScript sandbox.
+승인 요청에는 해당하는 경우 읽기 전용(`read-only`)이 표시되고, 그 뒤에 해석된 JavaScript가 표시됩니다(표준 포매터에 의해 2,000자로 잘림). `computer.run`에서는 `read_only: true`가 워커의 데스크톱 보호 장치도 활성화합니다. 입력, 포커스, 변경 및 클립보드 쓰기는 예외를 발생시킵니다. 이는 정적 분석이나 범용 JavaScript 샌드박스가 아닙니다.
 
-Separately, provider-originated computer-use calls may carry `pendingSafetyChecks` metadata. Any pending check forces an interactive prompt regardless of yolo or per-tool `allow`. The prompt lists each safety-check code, message, and sanitized/truncated data. Without an interactive UI, the call fails closed with `pending provider safety checks but no interactive UI is available`.
+별도로, 제공업체에서 시작한 컴퓨터 사용 호출에는 `pendingSafetyChecks` 메타데이터가 포함될 수 있습니다. 대기 중인 검사가 있으면 yolo 또는 도구별 `allow`와 관계없이 대화형 승인 요청이 강제됩니다. 승인 요청에는 각 안전 검사의 코드, 메시지, 정제되고 길이가 제한된 데이터가 나열됩니다. 대화형 UI가 없으면 호출은 안전을 위해 실패 처리되며, 제공업체 안전 검사가 대기 중이지만 사용 가능한 대화형 UI가 없다는 오류(`pending provider safety checks but no interactive UI is available`)가 표시됩니다.
 
-Tool approval does not authorize the underlying real-world action. On-screen text is untrusted and cannot override direct user instructions. Consequential actions still require point-of-risk confirmation of the exact target, scope, and values unless the user's direct message already authorized them.
+도구 승인이 그에 따른 현실 세계의 작업까지 허가하는 것은 아닙니다. 화면에 표시된 텍스트는 신뢰할 수 없으며 사용자의 직접적인 지시를 재정의할 수 없습니다. 중대한 결과를 초래하는 작업은 사용자의 직접 메시지에서 이미 허가한 경우가 아니라면, 위험이 발생하는 시점에 정확한 대상, 범위 및 값에 대한 확인을 여전히 받아야 합니다.
 
-## Per-tool prompt details
+<a id="per-tool-prompt-details"></a>
+## 도구별 승인 요청 상세 정보
 
-Tools can add approval-prompt body lines with `formatApprovalDetails(args)`. The standard prompt includes:
+도구는 `formatApprovalDetails(args)`로 승인 요청 본문에 줄을 추가할 수 있습니다. 표준 승인 요청에는 다음이 포함됩니다.
 
-- `Allow tool: <name>`
-- `Origin: MCP server tool` for unannotated `mcp__...` tools
-- `Reason: <reason>` when the tool decision supplies one
-- tool-specific details such as command, path, code, browser action, or subagent assignment
+- `도구 허용: <name>`
+- 주석이 없는 `mcp__...` 도구의 경우 `출처: MCP 서버 도구`
+- 도구 결정에서 사유를 제공한 경우 `사유: <reason>`
+- 명령, 경로, 코드, 브라우저 작업 또는 하위 에이전트 할당 등 도구별 상세 정보
 
-In the interactive UI the prompt docks above the composer until answered with a list of choices: **Approve**, **Approve `<tool>` for this session**, and **Deny**. With an empty composer the arrow keys move between them and `Enter` takes the highlighted one (Approve on mount); `Ctrl+Enter` (or `Ctrl+Q`; rebind `app.approval.approve`) approves this call outright and `Esc` denies. `Enter` and the approve key are ignored for the first half second, so a key meant for the composer (or the follow-up key, pressed mid-run) as the prompt appears cannot answer it. The session choice approves later calls of the same tool (or `xd://` device) at the same tier until the session ends or changes; it is offered only for prompts the approval mode raised, never for critical-command overrides, explicit `prompt` policies, or provider safety checks, which ask every time. The composer keeps its cursor and takes typing, to deny and steer instead: while it holds a draft, the highlight sits on Deny, relabeled **Deny and send message**, the arrows and `Enter` edit and send the draft, and `Ctrl+C` clears it rather than denying. Sending a message while calls wait (from the composer, Tern, or a collab guest) denies every pending approval, and any the same tool batch asks for before the message is delivered, then steers the turn with that message, so the agent learns why instead of guessing at a bare denial. To leave the composer its room, the prompt summarizes the tool's details to one row (each detail's first line, `…` when more is left out), always built from the input that will run; `Ctrl+O` (`app.tools.expand`, or Details in Tern) shows every detail in full, and `PgUp`/`PgDn` scroll them. In Tern, a click on a choice takes it. RPC, ACP, and other hosts without an approval dialog get a select with the same choices and the full details.
+대화형 UI에서는 응답할 때까지 승인 요청이 입력창 위에 도킹되어 **승인**, **이 세션에서 `<tool>` 승인**, **거부** 선택지 목록을 표시합니다. 입력창이 비어 있으면 방향키로 선택지 사이를 이동하고 `Enter`로 강조된 항목을 선택합니다(처음 표시될 때는 승인). `Ctrl+Enter`(또는 `Ctrl+Q`; `app.approval.approve`로 키 재설정)는 이번 호출을 바로 승인하고, `Esc`는 거부합니다. 처음 0.5초 동안은 `Enter`와 승인 키가 무시되므로, 승인 요청이 나타나는 순간 입력창에 입력하려던 키(또는 실행 중 누른 후속 키)가 승인 요청에 응답하지 못하도록 합니다. 세션 선택지는 세션이 끝나거나 바뀔 때까지 같은 도구(또는 `xd://` 장치)의 같은 등급에 해당하는 후속 호출을 승인합니다. 이 선택지는 승인 모드가 발생시킨 요청에만 제공되며, 위험 명령 재정의, 명시적인 `prompt` 정책 또는 제공업체 안전 검사에는 제공되지 않습니다. 이 경우에는 매번 확인합니다. 입력창은 커서를 유지하고 입력을 계속 받아들이므로, 거부하고 방향을 제시할 수도 있습니다. 초안이 있으면 강조 표시가 거부에 놓이고 이름이 **거부하고 메시지 보내기**로 바뀝니다. 방향키와 `Enter`는 초안을 편집하고 전송하며, `Ctrl+C`는 거부하는 대신 초안을 지웁니다. 호출이 대기하는 동안 입력창, Tern 또는 collab 게스트에서 메시지를 보내면 대기 중인 모든 승인과 메시지가 전달되기 전에 같은 도구 배치가 요청하는 모든 승인을 거부한 뒤, 그 메시지로 턴의 방향을 조정합니다. 따라서 에이전트는 단순한 거부만 보고 추측하는 대신 그 이유를 알게 됩니다. 입력창의 공간을 확보하기 위해 승인 요청은 도구의 상세 정보를 한 줄로 요약합니다(각 상세 정보의 첫 줄을 표시하고, 생략된 내용이 있으면 `…`로 표시). 이 요약은 항상 실제 실행될 입력을 바탕으로 생성됩니다. `Ctrl+O`(`app.tools.expand`, 또는 Tern의 상세 정보)는 모든 상세 정보를 전체 표시하고, `PgUp`/`PgDn`으로 스크롤할 수 있습니다. Tern에서는 선택지를 클릭하면 해당 선택지가 적용됩니다. 승인 대화 상자가 없는 RPC, ACP 및 기타 호스트에는 같은 선택지와 전체 상세 정보가 포함된 선택 입력이 제공됩니다.
 
-An Ask and remember prompt with grants lists the **Remember across sessions** toggle and the grant choices above **Approve Once**, which is highlighted on mount. `Enter` on the toggle flips it, and the grant labels switch to their **Always …** forms. `Ctrl+Enter` still approves only this call.
+허용 선택지가 있는 확인 후 기억 승인 요청은 **세션 간 기억** 토글과 허용 선택지를 **이번만 승인** 위에 나열하며, 처음 표시될 때는 **이번만 승인**이 강조됩니다. 토글에서 `Enter`를 누르면 상태가 전환되고, 허용 레이블은 **항상 …** 형식으로 바뀝니다. `Ctrl+Enter`는 여전히 이번 호출만 승인합니다.
 
-## Defining approval on tools
+<a id="defining-approval-on-tools"></a>
+## 도구에 승인 정의하기
 
-Built-in and custom tools share the same shape:
+내장 도구와 사용자 지정 도구는 같은 형식을 사용합니다.
 
 ```ts
 export type ToolTier = "read" | "write" | "exec";
@@ -166,9 +175,9 @@ formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 approvalCacheTargets?: (args: unknown) => readonly string[] | undefined;
 ```
 
-`approvalCacheTargets` returns the keys `always-ask-cached` checks and records for a call: absolute file paths (derive them with `approvalTargetKey` so selectors, cwd, and symlinks resolve the same way the built-in tools do) or normalized internal URLs. `ToolDefinition` and `CustomTool` accept the same hook. A tool that omits it is resolved by tier alone, as in `always-ask`.
+`approvalCacheTargets`는 `always-ask-cached`가 호출에 대해 확인하고 기록하는 키를 반환합니다. 키는 절대 파일 경로(선택자, cwd, 심볼릭 링크가 내장 도구와 같은 방식으로 해석되도록 `approvalTargetKey`로 생성) 또는 정규화된 내부 URL입니다. `ToolDefinition`과 `CustomTool`은 같은 훅을 지원합니다. 이를 생략한 도구는 `always-ask`에서와 마찬가지로 등급만으로 승인 여부를 결정합니다.
 
-Examples:
+예시:
 
 ```ts
 approval: "read";
@@ -186,34 +195,36 @@ approval: (args) =>
     : "write";
 ```
 
-## ACP sessions
+<a id="acp-sessions"></a>
+## ACP 세션
 
-ACP (`omp acp`) uses the same settings resolver as normal OMP launches. Global `~/.omp/agent/config.yml` applies, project config for the ACP session `cwd` applies, and any `--config <file>` overlays passed to the ACP server process apply to sessions created by that process.
+ACP(`omp acp`)는 일반 OMP 실행과 동일한 설정 결정기를 사용합니다. 전역 `~/.omp/agent/config.yml`, ACP 세션의 `cwd`에 대한 프로젝트 구성, ACP 서버 프로세스에 전달된 모든 `--config <file>` 오버레이가 해당 프로세스에서 생성된 세션에 적용됩니다.
 
-To auto-approve ACP tool calls, set the mode in global or project config:
+ACP 도구 호출을 자동 승인하려면 전역 또는 프로젝트 구성에서 모드를 설정하세요.
 
 ```yaml
 tools:
   approvalMode: yolo
 ```
 
-Or launch the ACP server with a runtime override or a one-process config overlay:
+또는 런타임 재정의나 단일 프로세스용 구성 오버레이를 사용하여 ACP 서버를 시작하세요.
 
 ```bash
 omp acp --yolo
 omp acp --auto-approve
 omp acp --approval-mode yolo
-omp acp --config ./acp-yolo.yml   # file contains tools.approvalMode: yolo
+omp acp --config ./acp-yolo.yml   # 파일에 tools.approvalMode: yolo 포함
 ```
 
-Precedence is the normal settings precedence: runtime flags (`--approval-mode`, `--auto-approve`, `--yolo`) override `--config` overlays, which override project config, which overrides global config. ACP does not currently define a `session/new`, `session/load`, or `session/resume` approval-policy field, so ACP clients that need per-session yolo should launch a separate `omp acp` process with one of the flags above or with a session-specific `--config` overlay.
+우선순위는 일반적인 설정 우선순위와 같습니다. 런타임 플래그(`--approval-mode`, `--auto-approve`, `--yolo`)가 `--config` 오버레이보다 우선하고, 오버레이는 프로젝트 구성보다, 프로젝트 구성은 전역 구성보다 우선합니다. ACP는 현재 `session/new`, `session/load`, `session/resume`의 승인 정책 필드를 정의하지 않습니다. 따라서 세션별 yolo가 필요한 ACP 클라이언트는 위 플래그 중 하나 또는 세션 전용 `--config` 오버레이를 사용하여 별도의 `omp acp` 프로세스를 시작해야 합니다.
 
-`tools.approvalMode: yolo` fully applies to ACP when explicitly configured or supplied by a runtime flag: it skips ordinary tier-based OMP prompts and the ACP client gate unless the resolved tool or user policy requires a prompt or denies the call. The schema default is also `yolo`, but without an explicit opt-in, unmatched bash commands and destructive file operations still require an ACP client grant.
+`tools.approvalMode: yolo`를 명시적으로 구성하거나 런타임 플래그로 제공하면 ACP에 완전히 적용됩니다. 결정된 도구 또는 사용자 정책이 승인을 요청하거나 호출을 거부하지 않는 한, 일반적인 등급 기반 OMP 승인 요청과 ACP 클라이언트 승인 절차를 건너뜁니다. 스키마 기본값도 `yolo`이지만, 명시적으로 활성화하지 않으면 일치하는 규칙이 없는 bash 명령과 파괴적인 파일 작업에는 여전히 ACP 클라이언트의 허용이 필요합니다.
 
-For `bash`, ACP resolves `bash.patterns`, critical-command overrides, per-tool policies, and the approval mode before requesting permission: `allow` runs without a card, `deny` blocks without a card, and `prompt` uses `session/request_permission`. An “Always allow” choice covers later ordinary `bash` calls in the session; critical commands and explicit prompt patterns still require a card on every call.
+`bash`의 경우 ACP는 권한을 요청하기 전에 `bash.patterns`, 위험 명령 재정의, 도구별 정책, 승인 모드를 처리합니다. `allow`는 카드 없이 실행하고, `deny`는 카드 없이 차단하며, `prompt`는 `session/request_permission`을 사용합니다. “항상 허용” 선택지는 세션 내의 이후 일반 `bash` 호출에 적용됩니다. 위험 명령과 명시적인 prompt 패턴은 여전히 호출할 때마다 카드가 필요합니다.
 
-For `delete`, `move`, and `edit` patches containing deletion or rename operations, the additional editor-side gate remains operation-category scoped. Ordinary file-content edits do not use that extra gate. Generic approval prompts use form elicitation when the client advertises `elicitation.form`. A rejected, cancelled, or unsupported prompt rejects or cancels the tool call.
+`delete`, `move` 및 삭제나 이름 변경 작업이 포함된 `edit` 패치의 경우, 편집기 측 추가 승인 절차는 계속 작업 범주별로 적용됩니다. 일반적인 파일 내용 편집에는 이 추가 절차를 사용하지 않습니다. 클라이언트가 `elicitation.form`을 지원한다고 알리면 일반 승인 요청은 양식 기반 입력 요청을 사용합니다. 승인 요청이 거부되거나 취소되거나 지원되지 않으면 도구 호출도 거부되거나 취소됩니다.
 
-## Subagents
+<a id="subagents"></a>
+## 하위 에이전트
 
-Subagents run headless with `tools.approvalMode: yolo` so ordinary tier-based prompts do not stall them. The parent `task` approval is the authorization boundary. Per-tool policies still use the normal resolver: user `deny` remains absolute, and any call that resolves to `prompt` rejects because a headless subagent cannot satisfy it.
+하위 에이전트는 일반적인 등급 기반 승인 요청으로 인해 멈추지 않도록 `tools.approvalMode: yolo`를 사용하여 헤드리스로 실행됩니다. 상위 `task` 승인이 권한 부여의 경계입니다. 도구별 정책은 여전히 일반 결정기를 사용합니다. 사용자 `deny`는 항상 우선하며, `prompt`로 결정되는 모든 호출은 헤드리스 하위 에이전트가 승인 요청에 응답할 수 없으므로 거부됩니다.

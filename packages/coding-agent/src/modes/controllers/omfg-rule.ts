@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Judge } from "@oh-my-pi/pi-ai";
@@ -94,7 +95,7 @@ function normalizeConditionRegex(condition: string): { condition: string } | { e
 			} catch {}
 		}
 		const message = originalError instanceof Error ? originalError.message : String(originalError);
-		return { error: `Invalid condition regex ${JSON.stringify(condition)}: ${message}` };
+		return { error: t("Invalid condition regex {0}: {1}", `${JSON.stringify(condition)}`, `${message}`) };
 	}
 }
 
@@ -105,7 +106,7 @@ function unescapeRegexConditionOnce(condition: string): string {
 export function parseGeneratedRule(text: string): GeneratedRuleParseResult {
 	const jsonText = extractGeneratedRuleJson(text);
 	if (!jsonText) {
-		return { error: "Missing generated rule JSON object" };
+		return { error: t("Missing generated rule JSON object") };
 	}
 
 	const payloadResult = parseGeneratedRulePayload(jsonText);
@@ -115,7 +116,7 @@ export function parseGeneratedRule(text: string): GeneratedRuleParseResult {
 
 	const ruleName = sanitizeRuleName(payloadResult.name);
 	if (ruleName.length === 0) {
-		return { error: "Rule name must contain at least one letter or digit" };
+		return { error: t("Rule name must contain at least one letter or digit") };
 	}
 
 	let condition: string[] | undefined;
@@ -139,7 +140,7 @@ export function parseGeneratedRule(text: string): GeneratedRuleParseResult {
 
 	const manager = new TtsrManager();
 	if (!manager.addRule(rule)) {
-		return { error: "Rule has no valid trigger or reachable scope" };
+		return { error: t("Rule has no valid trigger or reachable scope") };
 	}
 
 	return { rule, fileContent };
@@ -204,38 +205,38 @@ function parseGeneratedRulePayload(jsonText: string): GeneratedRulePayload | { e
 		parsed = JSON.parse(jsonText);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		return { error: `Generated rule JSON is invalid: ${message}` };
+		return { error: t("Generated rule JSON is invalid: {0}", `${message}`) };
 	}
 
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		return { error: "Generated rule JSON must be an object" };
+		return { error: t("Generated rule JSON must be an object") };
 	}
 
 	const object = parsed as Record<string, unknown>;
 	const rawName = stringField(object, "name");
 	if (!rawName) {
-		return { error: "Generated rule JSON must include a non-empty name" };
+		return { error: t("Generated rule JSON must include a non-empty name") };
 	}
 	const description = stringField(object, "description") ?? stringField(object, "desc");
 	if (!description) {
-		return { error: "Generated rule JSON must include a non-empty description" };
+		return { error: t("Generated rule JSON must include a non-empty description") };
 	}
 
 	const condition = stringArrayField(object, "condition") ?? stringArrayField(object, "cond");
 	const astCondition = stringArrayField(object, "astCondition");
 	const question = stringField(object, "question");
 	if (!condition && !astCondition && !question) {
-		return { error: "Generated rule JSON must include a `condition`, `astCondition`, or `question`" };
+		return { error: t("Generated rule JSON must include a `condition`, `astCondition`, or `question`") };
 	}
 
 	const scope = stringArrayField(object, "scope");
 	if (!scope || scope.length === 0) {
-		return { error: "Generated rule JSON must include at least one scope" };
+		return { error: t("Generated rule JSON must include at least one scope") };
 	}
 
 	const body = stringField(object, "body");
 	if (!body) {
-		return { error: "Generated rule JSON must include a non-empty body" };
+		return { error: t("Generated rule JSON must include a non-empty body") };
 	}
 
 	return { name: rawName, description, condition, astCondition, question, scope, body };

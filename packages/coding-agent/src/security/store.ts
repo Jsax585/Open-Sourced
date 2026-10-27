@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
@@ -187,12 +188,12 @@ export class SecurityStore {
 	}
 
 	#scanDirectory(scanId: string): string {
-		if (!/^secscan_[a-zA-Z0-9]+$/.test(scanId)) throw new Error(`Invalid security scan id: ${scanId}`);
+		if (!/^secscan_[a-zA-Z0-9]+$/.test(scanId)) throw new Error(t("Invalid security scan id: {0}", `${scanId}`));
 		return path.join(this.#projectDirectory, "scans", scanId);
 	}
 
 	#planPath(planId: string): string {
-		if (!/^secplan_[a-zA-Z0-9]+$/.test(planId)) throw new Error(`Invalid security plan id: ${planId}`);
+		if (!/^secplan_[a-zA-Z0-9]+$/.test(planId)) throw new Error(t("Invalid security plan id: {0}", `${planId}`));
 		return path.join(this.#projectDirectory, "plans", `${planId}.json`);
 	}
 
@@ -219,16 +220,16 @@ export class SecurityStore {
 	async #readIndex(): Promise<SecurityStoreIndex> {
 		const value = (await readJsonFile(this.#indexPath())) as Partial<SecurityStoreIndex>;
 		if (value.schemaVersion !== STORE_SCHEMA_VERSION || value.projectKey !== this.#projectKey) {
-			throw new Error(`Unsupported security store index at ${this.#indexPath()}`);
+			throw new Error(t("Unsupported security store index at {0}", `${this.#indexPath()}`));
 		}
 		if (!Array.isArray(value.scanIds) || !value.scanIds.every(id => typeof id === "string")) {
-			throw new Error(`Invalid security store scan index at ${this.#indexPath()}`);
+			throw new Error(t("Invalid security store scan index at {0}", `${this.#indexPath()}`));
 		}
 		if (
 			value.planIds !== undefined &&
 			(!Array.isArray(value.planIds) || !value.planIds.every(id => typeof id === "string"))
 		) {
-			throw new Error(`Invalid security store plan index at ${this.#indexPath()}`);
+			throw new Error(t("Invalid security store plan index at {0}", `${this.#indexPath()}`));
 		}
 		return { ...value, planIds: value.planIds ?? [] } as SecurityStoreIndex;
 	}
@@ -240,7 +241,7 @@ export class SecurityStore {
 	async #putBundleUnlocked(input: SecurityScanBundle): Promise<void> {
 		const bundle = parseSecurityScanBundle(input);
 		if (bundle.scan.projectKey !== this.#projectKey) {
-			throw new Error(`Security scan project key ${bundle.scan.projectKey} does not match ${this.#projectKey}`);
+			throw new Error(t("Security scan project key {0} does not match {1}", `${bundle.scan.projectKey}`, `${this.#projectKey}`));
 		}
 		const scanDirectory = this.#scanDirectory(bundle.scan.id);
 		await ensurePrivateDirectory(scanDirectory);
@@ -278,7 +279,7 @@ export class SecurityStore {
 		await withSecurityStoreWrite(this.#projectDirectory, async () => {
 			const plan = parseSecurityScanPlan(input);
 			if (plan.repositoryRoot !== this.#repositoryRoot) {
-				throw new Error(`Security plan repository ${plan.repositoryRoot} does not match ${this.#repositoryRoot}`);
+				throw new Error(t("Security plan repository {0} does not match {1}", `${plan.repositoryRoot}`, `${this.#repositoryRoot}`));
 			}
 			await writeSecurityFileAtomic(this.#planPath(plan.id), `${JSON.stringify(plan, null, 2)}\n`);
 			const index = await this.#readIndex();
@@ -320,7 +321,7 @@ export class SecurityStore {
 		const scan = await this.getScan(scanId);
 		if (!scan) return null;
 		const rawFindings = await readJsonFile(path.join(this.#scanDirectory(scanId), "findings.json"));
-		if (!Array.isArray(rawFindings)) throw new Error(`Invalid findings list for ${scanId}`);
+		if (!Array.isArray(rawFindings)) throw new Error(t("Invalid findings list for {0}", `${scanId}`));
 		const findings = rawFindings.map(parseSecurityFinding);
 		const report = await readOptionalText(path.join(this.#scanDirectory(scanId), "report.md"));
 		const sarifText = await readOptionalText(path.join(this.#scanDirectory(scanId), "results.sarif"));
@@ -365,9 +366,9 @@ export class SecurityStore {
 	): Promise<SecurityFinding> {
 		return withSecurityStoreWrite(this.#projectDirectory, async () => {
 			const bundle = await this.#getBundleUnlocked(scanId);
-			if (!bundle) throw new Error(`Unknown security scan: ${scanId}`);
+			if (!bundle) throw new Error(t("Unknown security scan: {0}", `${scanId}`));
 			const index = bundle.findings.findIndex(finding => finding.id === findingId);
-			if (index < 0) throw new Error(`Unknown security finding: ${findingId}`);
+			if (index < 0) throw new Error(t("Unknown security finding: {0}", `${findingId}`));
 			const canonicalDisposition: SecurityDisposition = { status: disposition.status };
 			if (disposition.rationale !== undefined) canonicalDisposition.rationale = disposition.rationale;
 			if (disposition.updatedAt !== undefined) canonicalDisposition.updatedAt = disposition.updatedAt;
@@ -388,9 +389,9 @@ export class SecurityStore {
 	): Promise<SecurityFinding> {
 		return withSecurityStoreWrite(this.#projectDirectory, async () => {
 			const bundle = await this.#getBundleUnlocked(scanId);
-			if (!bundle) throw new Error(`Unknown security scan: ${scanId}`);
+			if (!bundle) throw new Error(t("Unknown security scan: {0}", `${scanId}`));
 			const index = bundle.findings.findIndex(finding => finding.id === findingId);
-			if (index < 0) throw new Error(`Unknown security finding: ${findingId}`);
+			if (index < 0) throw new Error(t("Unknown security finding: {0}", `${findingId}`));
 			const finding = bundle.findings[index];
 			const evidenceById = new Map(finding.evidence.map(item => [item.id, item]));
 			for (const item of evidence) evidenceById.set(item.id, item);
@@ -402,7 +403,7 @@ export class SecurityStore {
 			if (validation.validatedAt !== undefined) canonicalValidation.validatedAt = validation.validatedAt;
 			for (const evidenceId of canonicalValidation.evidenceIds) {
 				if (!evidenceById.has(evidenceId)) {
-					throw new Error(`Unknown security validation evidence: ${evidenceId}`);
+					throw new Error(t("Unknown security validation evidence: {0}", `${evidenceId}`));
 				}
 			}
 			bundle.findings[index] = parseSecurityFinding({
@@ -419,8 +420,8 @@ export class SecurityStore {
 	async compare(beforeScanId: string, afterScanId: string): Promise<SecurityComparisonReport> {
 		const before = await this.getBundle(beforeScanId);
 		const after = await this.getBundle(afterScanId);
-		if (!before) throw new Error(`Unknown security scan: ${beforeScanId}`);
-		if (!after) throw new Error(`Unknown security scan: ${afterScanId}`);
+		if (!before) throw new Error(t("Unknown security scan: {0}", `${beforeScanId}`));
+		if (!after) throw new Error(t("Unknown security scan: {0}", `${afterScanId}`));
 		return compareSecurityLineage(before, after);
 	}
 

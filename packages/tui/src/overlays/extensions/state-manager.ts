@@ -1,4 +1,5 @@
 /** Pure dashboard tree, filtering, and selection state. */
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { FuzzyQuery, FuzzyText } from "../../fuzzy";
 import {
 	type DashboardState,
@@ -191,25 +192,25 @@ export function applyFilter(extensions: Extension[], query: string): Extension[]
 function getKindDisplayName(kind: ExtensionKind): string {
 	switch (kind) {
 		case "extension-module":
-			return "Extension Modules";
+			return localize("Extension Modules");
 		case "skill":
-			return "Skills";
+			return localize("Skills");
 		case "rule":
 			return "Rules";
 		case "tool":
-			return "Tools";
+			return localize("Tools");
 		case "mcp":
-			return "MCP Servers";
+			return localize("MCP Servers");
 		case "prompt":
-			return "Prompts";
+			return localize("Prompts");
 		case "instruction":
-			return "Instructions";
+			return localize("Instructions");
 		case "context-file":
-			return "Context Files";
+			return localize("Context Files");
 		case "hook":
-			return "Hooks";
+			return localize("Hooks");
 		case "slash-command":
-			return "Slash Commands";
+			return localize("Slash Commands");
 		default:
 			return kind;
 	}
@@ -231,7 +232,7 @@ export function buildProviderTabs(extensions: Extension[], providers: readonly E
 	// ALL tab first
 	tabs.push({
 		id: "all",
-		label: "ALL",
+		label: localize("ALL"),
 		enabled: true,
 		count: extensions.length,
 	});

@@ -7,6 +7,7 @@
  * credentials produced no usage report are listed too, so the output
  * always covers the full credential pool.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	ANTHROPIC_OAUTH_GRANT_TTL_MS,
 	type AuthAccountPolicy,
@@ -251,11 +252,11 @@ function formatUnitValue(value: number, unit: UsageUnit): string {
 }
 
 const UNIT_SUFFIX: Record<UsageUnit, string> = {
-	tokens: " tokens",
-	requests: " requests",
-	credits: " credits",
-	minutes: " min",
-	bytes: " bytes",
+	tokens: t(" tokens"),
+	requests: t(" requests"),
+	credits: t(" credits"),
+	minutes: t(" min"),
+	bytes: t(" bytes"),
 	percent: "",
 	usd: "",
 	unknown: "",
@@ -271,7 +272,7 @@ function describeAmount(limit: UsageLimit): string {
 			`${formatUnitValue(amount.used, amount.unit)} / ${formatUnitValue(amount.limit, amount.unit)}${UNIT_SUFFIX[amount.unit]}`,
 		);
 	} else if (absoluteUnit && amount.remaining !== undefined) {
-		parts.push(`${formatUnitValue(amount.remaining, amount.unit)}${UNIT_SUFFIX[amount.unit]} left`);
+		parts.push(t("{0}{1} left", `${formatUnitValue(amount.remaining, amount.unit)}`, `${UNIT_SUFFIX[amount.unit]}`));
 	} else if (
 		absoluteUnit &&
 		amount.used !== undefined &&
@@ -280,14 +281,14 @@ function describeAmount(limit: UsageLimit): string {
 		amount.remaining === undefined &&
 		fraction === undefined
 	) {
-		parts.push(`${formatUnitValue(amount.used, amount.unit)}${UNIT_SUFFIX[amount.unit]} used`);
+		parts.push(t("{0}{1} used", `${formatUnitValue(amount.used, amount.unit)}`, `${UNIT_SUFFIX[amount.unit]}`));
 	}
 	if (fraction !== undefined) {
-		parts.push(`${(fraction * 100).toFixed(1)}% used`);
+		parts.push(t("{0}% used", `${(fraction * 100).toFixed(1)}`));
 	} else if (amount.remainingFraction !== undefined) {
-		parts.push(`${(amount.remainingFraction * 100).toFixed(1)}% left`);
+		parts.push(t("{0}% left", `${(amount.remainingFraction * 100).toFixed(1)}`));
 	}
-	if (parts.length === 0) parts.push("no data");
+	if (parts.length === 0) parts.push(t("no data"));
 	return parts.join(" · ");
 }
 
@@ -322,7 +323,7 @@ function reportAccountLabel(report: UsageReport, index: number): string {
 		const scoped = limit.scope.accountId ?? limit.scope.projectId;
 		if (scoped) return scoped;
 	}
-	return `account ${index + 1}`;
+	return t("account {0}", `${index + 1}`);
 }
 
 /** Bold identity plus the dim same-email qualifier and plan the main view shows. */
@@ -352,7 +353,7 @@ function formatReportIdentity(
 	const org = typeof metaOrgName === "string" && metaOrgName ? metaOrgName : metaOrgId;
 	if (typeof org === "string" && org && org !== label) identity += chalk.dim(` · ${redaction?.get(org) ?? org}`);
 	const plan = report.metadata?.planType;
-	if (typeof plan === "string" && plan.trim()) identity += chalk.dim(` · plan: ${plan.trim()}`);
+	if (typeof plan === "string" && plan.trim()) identity += chalk.dim(t(" · plan: {0}", `${plan.trim()}`));
 	return identity;
 }
 
@@ -365,12 +366,12 @@ function formatAccountHeader(
 ): string {
 	const status = aggregateStatus(report.limits);
 	let header = `${STATUS_COLOR[status]("●")} ${formatReportIdentity(report, peers, index, redaction)}`;
-	if (report.metadata?.daybreak === true) header += chalk.cyan(" · daybreak");
+	if (report.metadata?.daybreak === true) header += chalk.cyan(t(" · daybreak"));
 	const resets = summarizeUsageResetCredits(report.resetCredits, nowMs);
 	if (resets && resets.bankedCount > 0) {
-		header += chalk.cyan(` · ✦ ${resets.bankedCount} saved reset${resets.bankedCount === 1 ? "" : "s"}`);
+		header += chalk.cyan(t(" · ✦ {0} saved reset{1}", `${resets.bankedCount}`, `${resets.bankedCount === 1 ? "" : "s"}`));
 		if (resets.redeemableCount !== resets.bankedCount) {
-			header += chalk.dim(` · ${resets.redeemableCount} usable now`);
+			header += chalk.dim(t(" · {0} usable now", `${resets.redeemableCount}`));
 		}
 		const expiring = classifyResetExpiry(report, nowMs);
 		if (expiring) {
@@ -383,19 +384,19 @@ function formatAccountHeader(
 			const expiryMs = Date.parse(resets.soonestExpiry);
 			if (expiryMs > nowMs) {
 				header += chalk.dim(
-					` · soonest expires in ${formatDuration(expiryMs - nowMs)} (${resets.soonestExpiry.slice(0, 10)})`,
+					t(" · soonest expires in {0} ({1})", `${formatDuration(expiryMs - nowMs)}`, `${resets.soonestExpiry.slice(0, 10)}`),
 				);
 			} else {
-				header += chalk.dim(` · expired (${resets.soonestExpiry.slice(0, 10)})`);
+				header += chalk.dim(t(" · expired ({0})", `${resets.soonestExpiry.slice(0, 10)}`));
 			}
 		}
 		if (resets.redeemableCount === 0 && resets.unavailableReason) {
 			const reason = sanitizeText(resets.unavailableReason.replace(/[\r\n\t]+/g, " "));
-			header += chalk.dim(` · unavailable: ${reason}`);
+			header += chalk.dim(t(" · unavailable: {0}", `${reason}`));
 		}
 	}
 	if (report.fetchedAt && nowMs - report.fetchedAt > 90_000) {
-		header += chalk.dim(` · fetched ${formatDuration(nowMs - report.fetchedAt)} ago`);
+		header += chalk.dim(t(" · fetched {0} ago", `${formatDuration(nowMs - report.fetchedAt)}`));
 	}
 	return header;
 }
@@ -407,7 +408,7 @@ function formatLimitLine(limit: UsageLimit, labelWidth: number, nowMs: number): 
 	const details: string[] = [describeAmount(limit)];
 	const resetsAt = limit.window?.resetsAt;
 	if (resetsAt !== undefined && resetsAt > nowMs) {
-		details.push(`${limit.window?.resetLabel ?? "resets"} in ${formatDuration(resetsAt - nowMs)}`);
+		details.push(t("{1} in {0}", `${formatDuration(resetsAt - nowMs)}`, `${limit.window?.resetLabel ?? t("resets\u0004runtime-action")}`));
 	}
 	const lines = [
 		`      ${STATUS_COLOR[status]("●")} ${padded}  ${renderBar(limit)}  ${chalk.dim(details.join(" · "))}`,
@@ -474,7 +475,7 @@ function collectProviderLimitTemplates(
 
 function formatMissingLimitLine(template: ProviderLimitTemplate, labelWidth: number): string {
 	const padded = template.title.padEnd(labelWidth);
-	return `      ${chalk.dim("○")} ${padded}  ${chalk.dim("·".repeat(BAR_WIDTH))}  ${chalk.dim("not reported")}`;
+	return `      ${chalk.dim("○")} ${padded}  ${chalk.dim("·".repeat(BAR_WIDTH))}  ${chalk.dim(t("not reported"))}`;
 }
 
 /** Per-window capacity stat: how much account quota is burned and left. */
@@ -579,9 +580,9 @@ function formatReloginDeadline(
 	if (remaining > RELOGIN_WARN_WINDOW_MS) return undefined;
 	const label = accountIdentityLabel(account, redaction);
 	if (remaining <= 0) {
-		return `  ${chalk.red(`⚠ ${label} — grant is past Anthropic's ~30d lifetime; re-login now`)}`;
+		return `  ${chalk.red(t("⚠ {0} — grant is past Anthropic's ~30d lifetime; re-login now", `${label}`))}`;
 	}
-	return `  ${chalk.yellow(`⚠ ${label} — re-login within ${formatDuration(remaining)} (Anthropic expires OAuth grants ~30d after login)`)}`;
+	return `  ${chalk.yellow(t("⚠ {0} — re-login within {1} (Anthropic expires OAuth grants ~30d after login)", `${label}`, `${formatDuration(remaining)}`))}`;
 }
 
 /**
@@ -630,7 +631,7 @@ function shortDisableCause(cause: string): string {
 
 /** Label for a disabled tombstone, masking each identity part under `--redact`. */
 function disabledIdentityLabel(summary: DisabledCredentialSummary, redaction?: Map<string, string>): string {
-	const base = summary.email ?? summary.accountId ?? "OAuth account";
+	const base = summary.email ?? summary.accountId ?? t("OAuth account");
 	const masked = redaction?.get(base) ?? base;
 	const org = summary.orgName ?? summary.orgId;
 	if (!org || org === base) return masked;
@@ -714,13 +715,15 @@ function computePolicyDiagnostics(
 }
 
 function formatPolicyLine(policy: UsagePolicyDiagnostics): string {
-	const reclaimLabel = policy.reclaimAbovePct === undefined ? "" : ` · reclaim above ${policy.reclaimAbovePct}%`;
-	const prefix = `policy: priority ${policy.priority} · reserve ${policy.reservePct}% (${policy.reserveSource})${reclaimLabel}`;
+	const reclaimLabel = policy.reclaimAbovePct === undefined ? "" : t(" · reclaim above {0}%", `${policy.reclaimAbovePct}`);
+	const reserveSource = policy.reserveSource === "global" ? t("global") : t("override");
+	const prefix = t("policy: priority {0} · reserve {1}% ({4}){3}", `${(policy.priority)}`, `${(policy.reservePct)}`, `${(reserveSource)}`, `${(reclaimLabel)}`, `${(policy.reserveSource)}`);
 	if (policy.remainingPct === undefined) {
-		return `${prefix} · ${policy.state === "exhausted" ? "exhausted" : "reserve unknown"}`;
+		return `${prefix} · ${policy.state === "exhausted" ? t("exhausted") : t("reserve unknown")}`;
 	}
-	const state = policy.state === "inside-reserve" ? "inside reserve" : policy.state;
-	return `${prefix} · ${state} · ${policy.remainingPct.toFixed(1)}% left`;
+	const state =
+		policy.state === "inside-reserve" ? t("inside reserve") : policy.state === "exhausted" ? t("exhausted") : t("reserve unknown\u0004packages/coding-agent/src/cli/usage-cli.ts:formatPolicyLine.state");
+	return t("{0} · {1} · {2}% left", `${prefix}`, `${state}`, `${policy.remainingPct.toFixed(1)}`);
 }
 
 /** Add policy only where the text view displays it (providers with a configured account policy). */
@@ -762,17 +765,17 @@ export function annotateUsagePolicy(
 /** `1 expires in 6h`, or `2 expire, soonest in 6h`. */
 function formatExpiringResets(warning: ResetExpiryWarning, nowMs: number): string {
 	const due = formatDuration(warning.expiresAtMs - nowMs);
-	return warning.count === 1 ? `1 expires in ${due}` : `${warning.count} expire, soonest in ${due}`;
+	return warning.count === 1 ? t("1 expires in {0}", `${due}`) : t("{0} expire, soonest in {1}", `${warning.count}`, `${due}`);
 }
 
 function formatResetSpendVerdict(verdict: ResetSpendVerdict): string {
 	const outcome =
 		verdict.kind === "auto"
-			? "an open interactive omp session spends it by its last 5 min if eligible then"
+			? t("an open interactive omp session spends it by its last 5 min if eligible then")
 			: verdict.kind === "ask"
-				? "an open interactive omp session asks before spending it"
-				: "not spent automatically";
-	return `→ ${outcome}  (${verdict.setting}: ${verdict.mode})${verdict.eligibleNow ? "" : " · not eligible now"}`;
+				? t("an open interactive omp session asks before spending it")
+				: t("not spent automatically");
+	return `→ ${outcome}  (${verdict.setting}: ${verdict.mode})${verdict.eligibleNow ? "" : t(" · not eligible now")}`;
 }
 
 /**
@@ -792,7 +795,7 @@ function formatResetExpiryBanner(
 	const lost = verdicts.every(verdict => verdict.kind === "off");
 	const lines = [
 		chalk.red.bold(
-			`▲ ${count} saved reset${count === 1 ? " expires" : "s expire"} within 24h${lost ? " and will be lost" : ""}`,
+			t("▲ {0} saved reset{2} within 24h{1}", `${count}`, `${lost ? t(" and will be lost") : ""}`, `${count === 1 ? " expires" : "s expire"}`),
 		),
 	];
 	expiring.forEach(({ report, warning }, index) => {
@@ -800,7 +803,7 @@ function formatResetExpiryBanner(
 		const identity = formatReportIdentity(report, peers, peers.indexOf(report), redaction);
 		const expiry = new Date(warning.expiresAtMs);
 		const expiresAt = `${expiry.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${expiry.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`;
-		const used = `${limitTitle(warning.limit)} ${Math.round(warning.usedFraction * 100)}% used`;
+		const used = t("{0} {1}% used", `${limitTitle(warning.limit)}`, `${Math.round(warning.usedFraction * 100)}`);
 		lines.push(
 			`  ${formatResetProviderName(warning.provider)} · ${identity} · ${formatExpiringResets(warning, nowMs)} (${expiresAt}) · ${used}`,
 		);
@@ -813,7 +816,7 @@ function formatResetExpiryBanner(
 		const command =
 			stored.length === 1 ? `/usage reset ${warning.provider}/${stored[0]!.credentialId}` : "/usage reset";
 		lines.push(
-			`    ${verdicts[index]!.kind === "off" ? "spend it" : "or now"}:  ${chalk.cyan(command)} ${chalk.dim("in omp")}`,
+			`    ${verdicts[index]!.kind === "off" ? t("spend it") : t("or now")}:  ${chalk.cyan(command)} ${chalk.dim(t("in omp"))}`,
 		);
 	});
 	return lines;
@@ -862,8 +865,8 @@ export function formatUsageBreakdown(
 
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(0, ...displayReports.map(report => report.fetchedAt ?? 0));
-	const headerSuffix = latestFetchedAt ? chalk.dim(` · fetched ${formatDuration(nowMs - latestFetchedAt)} ago`) : "";
-	lines.push(`${chalk.bold("Usage")}${headerSuffix}`);
+	const headerSuffix = latestFetchedAt ? chalk.dim(t(" · fetched {0} ago", `${formatDuration(nowMs - latestFetchedAt)}`)) : "";
+	lines.push(`${chalk.bold(t("Usage"))}${headerSuffix}`);
 	const expiring = displayReports.flatMap(report => {
 		const warning = classifyResetExpiry(report, nowMs);
 		return warning?.tier === "imminent" ? [{ report, warning }] : [];
@@ -878,7 +881,7 @@ export function formatUsageBreakdown(
 		const accountCount = providerReports.length + providerUnreported.length;
 		lines.push("");
 		lines.push(
-			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accountCount} ${accountCount === 1 ? "account" : "accounts"}`)}`,
+			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(t("— {0} {1}", `${accountCount}`, `${accountCount === 1 ? "account" : "accounts"}`))}`,
 		);
 		// Provider-wide disclaimers render once per provider, not per limit.
 		const providerNotes = [...new Set(providerReports.flatMap(report => report.notes ?? []))];
@@ -902,7 +905,7 @@ export function formatUsageBreakdown(
 				);
 			}
 			if (report.limits.length === 0) {
-				lines.push(`      ${chalk.dim("no limits reported")}`);
+				lines.push(`      ${chalk.dim(t("no limits reported"))}`);
 				return;
 			}
 			const limitsByKey = Map.groupBy(report.limits, limitRowKey);
@@ -918,7 +921,7 @@ export function formatUsageBreakdown(
 
 		for (const account of providerUnreported) {
 			const label = accountIdentityLabel(account, redaction);
-			lines.push(`  ${chalk.dim("○")} ${chalk.dim(`${label} — no usage data`)}`);
+			lines.push(`  ${chalk.dim("○")} ${chalk.dim(t("{0} — no usage data", `${label}`))}`);
 			if (policyOptions && account.type === "oauth" && policyProviders.has(provider)) {
 				lines.push(
 					`      ${chalk.dim(formatPolicyLine(computePolicyDiagnostics(provider, accountOAuthIdentity(account), undefined, policyOptions)))}`,
@@ -928,9 +931,9 @@ export function formatUsageBreakdown(
 
 		for (const summary of disabledByProvider.get(provider) ?? []) {
 			const label = disabledIdentityLabel(summary, redaction);
-			const ago = summary.disabledAtMs !== undefined ? ` ${formatDuration(nowMs - summary.disabledAtMs)} ago` : "";
+			const ago = summary.disabledAtMs !== undefined ? t(" {0} ago", `${formatDuration(nowMs - summary.disabledAtMs)}`) : "";
 			lines.push(
-				`  ${chalk.red(`✗ ${label} — disabled${ago}: ${sanitizeText(shortDisableCause(summary.cause))}`)} ${chalk.dim("(re-login to restore)")}`,
+				`  ${chalk.red(t("✗ {0} — disabled{1}: {2}", `${label}`, `${ago}`, `${sanitizeText(shortDisableCause(summary.cause))}`))} ${chalk.dim(t("(re-login to restore)"))}`,
 			);
 		}
 
@@ -944,9 +947,9 @@ export function formatUsageBreakdown(
 		if (stats.length > 0) {
 			const parts = stats.map(stat => {
 				const meterLabel = stat.meter ? ` (${stat.meter.charAt(0).toUpperCase()}${stat.meter.slice(1)})` : "";
-				return `${stat.window}${meterLabel} → ${stat.usedAccounts.toFixed(2)}/${stat.accounts} ${stat.accounts === 1 ? "account" : "accounts"} used (${stat.remainingAccounts.toFixed(2)}× quota left)`;
+				return t("{0}{1} → {3}/{2} {5} used ({4}× quota left)", `${stat.window}`, `${meterLabel}`, `${stat.accounts}`, `${stat.usedAccounts.toFixed(2)}`, `${stat.remainingAccounts.toFixed(2)}`, `${stat.accounts === 1 ? "account" : "accounts"}`);
 			});
-			lines.push(`  ${chalk.dim(`capacity: ${parts.join(" · ")}`)}`);
+			lines.push(`  ${chalk.dim(t("capacity: {0}", `${parts.join(" · ")}`))}`);
 		}
 	}
 
@@ -1067,14 +1070,14 @@ export function formatUsageHistory(
 
 	const lines: string[] = [];
 	lines.push(
-		`${chalk.bold("Usage history")}${chalk.dim(` · last ${formatDuration(nowMs - sinceMs)} · peak per bucket`)}`,
+		`${chalk.bold(t("Usage history"))}${chalk.dim(t(" · last {0} · peak per bucket", `${formatDuration(nowMs - sinceMs)}`))}`,
 	);
 
 	for (const provider of [...providers.keys()].sort((a, b) => a.localeCompare(b))) {
 		const accounts = providers.get(provider) ?? new Map<string, HistoryAccount>();
 		lines.push("");
 		lines.push(
-			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(`— ${accounts.size} ${accounts.size === 1 ? "account" : "accounts"}`)}`,
+			`${chalk.bold.cyan(formatProviderName(provider))} ${chalk.dim(t("— {0} {1}", `${accounts.size}`, `${accounts.size === 1 ? "account" : "accounts"}`))}`,
 		);
 		const sortedAccounts = [...accounts.values()].sort((a, b) => a.label.localeCompare(b.label));
 		const reports = provider === "openai-codex" ? sortedAccounts.map(historyIdentityReport) : undefined;
@@ -1094,9 +1097,9 @@ export function formatUsageHistory(
 				const peakFraction = fractions.length > 0 ? Math.max(...fractions) : undefined;
 				const status = historyStatus(latestFraction, latestEntry?.status);
 				const details: string[] = [];
-				if (latestFraction !== undefined) details.push(`latest ${(latestFraction * 100).toFixed(1)}%`);
-				if (peakFraction !== undefined) details.push(`peak ${(peakFraction * 100).toFixed(1)}%`);
-				details.push(`${series.entries.length} snapshot${series.entries.length === 1 ? "" : "s"}`);
+				if (latestFraction !== undefined) details.push(t("latest {0}%", `${(latestFraction * 100).toFixed(1)}`));
+				if (peakFraction !== undefined) details.push(t("peak {0}%", `${(peakFraction * 100).toFixed(1)}`));
+				details.push(t("{0} snapshot{1}", `${series.entries.length}`, `${series.entries.length === 1 ? "" : "s"}`));
 				lines.push(
 					`      ${STATUS_COLOR[status]("●")} ${series.title.padEnd(labelWidth)}  ${renderHistorySparkline(series.entries, sinceMs, nowMs)}  ${chalk.dim(details.join(" · "))}`,
 				);
@@ -1141,9 +1144,9 @@ function formatNoProviderCredentials(provider: string, storedAccounts: UsageAcco
 	const stored = [...new Set(storedAccounts.map(account => account.provider))].sort();
 	const hint =
 		stored.length > 0
-			? `Providers with stored credentials: ${stored.join(", ")}.`
-			: "Run `omp` and use /login to add accounts.";
-	return `No credentials stored for provider "${provider}". ${hint}\n`;
+			? t("Providers with stored credentials: {0}.", `${stored.join(", ")}`)
+			: t("Run `omp` and use /login to add accounts.");
+	return t("No credentials stored for provider \"{0}\". {1}\n", `${provider}`, `${hint}`);
 }
 
 /** Apply a redaction mask to an optional identity field. */
@@ -1194,16 +1197,16 @@ function formatTokenCount(value: number): string {
  */
 export function formatClientUsage(clients: ClientUsageClientSummary[], sinceMs: number, nowMs: number): string {
 	const lines: string[] = [];
-	lines.push(chalk.bold(`Per-client token burn since ${new Date(sinceMs).toISOString().slice(0, 10)}`));
-	const headers = ["app", "provider", "requests", "input", "output", "cache r", "cache w", "total", "est cost"];
+	lines.push(chalk.bold(t("Per-client token burn since {0}", `${new Date(sinceMs).toISOString().slice(0, 10)}`)));
+	const headers = [t("app"), t("provider"), t("requests"), t("input"), t("output"), t("cache r"), t("cache w"), t("total"), t("est cost")];
 	for (const client of clients) {
 		const label = client.hostname ?? client.installId;
 		const idNote = client.hostname ? ` · ${client.installId.slice(0, 8)}` : "";
-		const lastSeen = `last seen ${formatDuration(Math.max(0, nowMs - client.lastSeen))} ago`;
+		const lastSeen = t("last seen {0} ago", `${formatDuration(Math.max(0, nowMs - client.lastSeen))}`);
 		lines.push("");
 		lines.push(`${chalk.cyan(label)}${chalk.dim(idNote)} ${chalk.dim(`· ${lastSeen}`)}`);
 		if (client.providers.length === 0) {
-			lines.push(chalk.dim("  no usage in this window"));
+			lines.push(chalk.dim(t("  no usage in this window")));
 			continue;
 		}
 		const rows: string[][] = client.providers.map(usage => [
@@ -1228,7 +1231,7 @@ export function formatClientUsage(clients: ClientUsageClientSummary[], sinceMs: 
 		);
 		rows.push([
 			"",
-			"total",
+			t("total"),
 			formatNumber(total.requests),
 			"",
 			"",
@@ -1295,7 +1298,7 @@ function formatOAuthIdentityKeys(rows: readonly OAuthIdentityKeyRow[]): string {
 			lines.push(chalk.bold(provider));
 		}
 		if (row.identityKey === null) {
-			lines.push(chalk.dim("  (no identity key: no pool can name this account)"));
+			lines.push(chalk.dim(t("  (no identity key: no pool can name this account)")));
 			continue;
 		}
 		const orgName = row.orgName ? sanitizeText(row.orgName.replace(/[\r\n\t]+/g, " ")) : undefined;
@@ -1348,7 +1351,7 @@ async function runUsageResetCommand(
 		}
 		if (target.account === "active") {
 			failUsageReset(
-				`\`${RESET_COMMAND}\` runs outside a session, so no account is active. Name one by the credential id \`${RESET_COMMAND}\` lists.`,
+				t("`{0}` runs outside a session, so no account is active. Name one by the credential id `{1}` lists.", `${RESET_COMMAND}`, `${RESET_COMMAND}`),
 			);
 			return;
 		}
@@ -1357,7 +1360,7 @@ async function runUsageResetCommand(
 		const provider = normalizeResetProvider(cmd.provider);
 		if (!provider) {
 			failUsageReset(
-				"Saved resets exist only for Codex and Claude accounts. Use --provider openai-codex or anthropic.",
+				t("Saved resets exist only for Codex and Claude accounts. Use --provider openai-codex or anthropic."),
 			);
 			return;
 		}
@@ -1440,13 +1443,13 @@ async function runUsageResetCommand(
 			return;
 		}
 		if (accounts.length === 0) {
-			const names = providers.map(formatResetProviderName).join(" or ");
-			process.stderr.write(chalk.yellow(`No ${names} accounts found. Run \`omp\` and use /login to add one.\n`));
+			const names = providers.map(formatResetProviderName).join(t(" or "));
+			process.stderr.write(chalk.yellow(t("No {0} accounts found. Run `omp` and use /login to add one.\n", `${names}`)));
 			process.exitCode = 1;
 			return;
 		}
-		const lines = ["Saved rate-limit resets:", ...accounts.map(formatResetUsageAccountLine)];
-		lines.push("", `Spend one with \`${RESET_COMMAND} <provider>/<credential id>\`.`);
+		const lines = [t("Saved rate-limit resets:"), ...accounts.map(formatResetUsageAccountLine)];
+		lines.push("", t("Spend one with `{0} <provider>/<credential id>`.", `${RESET_COMMAND}`));
 		process.stdout.write(`${lines.join("\n")}\n`);
 		return;
 	}
@@ -1461,7 +1464,7 @@ async function runUsageResetCommand(
 	const lockKey = resetAccountLockKey(target);
 	if (!lockKey) {
 		failUsageReset(
-			`${who}: this login stores no account id or email to fence the spend against other omp processes, so nothing was spent. Run \`omp\` and use /login to sign in to it again.`,
+			t("{0}: this login stores no account id or email to fence the spend against other omp processes, so nothing was spent. Run `omp` and use /login to sign in to it again.", `${who}`),
 		);
 		return;
 	}
@@ -1496,8 +1499,8 @@ async function runUsageResetCommand(
 		const ago = formatDuration(Date.now() - result.atMs);
 		failUsageReset(
 			result.state === "reset"
-				? `${who}: another omp process spent a saved reset on this account ${ago} ago, so this one was not spent. Check \`omp usage\` before spending another.`
-				: `${who}: another omp process started spending a saved reset on this account ${ago} ago, so nothing was spent. Try again in a minute.`,
+				? t("{0}: another omp process spent a saved reset on this account {1} ago, so this one was not spent. Check `omp usage` before spending another.", `${who}`, `${ago}`)
+				: t("{0}: another omp process started spending a saved reset on this account {1} ago, so nothing was spent. Try again in a minute.", `${who}`, `${ago}`),
 		);
 		return;
 	}
@@ -1531,9 +1534,9 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			}
 			await authStorage.usage.invalidate(provider);
 			if (provider) {
-				process.stdout.write(`Invalidated cached usage reports for provider "${provider}".\n`);
+				process.stdout.write(t("Invalidated cached usage reports for provider \"{0}\".\n", `${provider}`));
 			} else {
-				process.stdout.write("Invalidated cached usage reports for all providers.\n");
+				process.stdout.write(t("Invalidated cached usage reports for all providers.\n"));
 			}
 			return;
 		}
@@ -1541,7 +1544,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			if (cmd.redact) {
 				process.stderr.write(
 					chalk.red(
-						"`omp usage accounts` prints identity keys verbatim for configuration; --redact does not apply.\n",
+						t("`omp usage accounts` prints identity keys verbatim for configuration; --redact does not apply.\n"),
 					),
 				);
 				process.exitCode = 1;
@@ -1561,9 +1564,9 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 				return;
 			}
 			if (rows.length === 0) {
-				const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";
+				const scope = cmd.provider ? t(" for provider \"{0}\"", `${cmd.provider}`) : "";
 				process.stderr.write(
-					chalk.yellow(`No OAuth accounts found${scope}. Run \`omp\` and use /login to add accounts.\n`),
+					chalk.yellow(t("No OAuth accounts found{0}. Run `omp` and use /login to add accounts.\n", `${scope}`)),
 				);
 				process.exitCode = 1;
 				return;
@@ -1592,7 +1595,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			if (clients.length === 0) {
 				process.stderr.write(
 					chalk.yellow(
-						"No per-client usage recorded yet. Broker-connected clients and the auth-gateway report token burn automatically; set OMP_AUTH_BROKER_URL (or run this on the broker host).\n",
+						t("No per-client usage recorded yet. Broker-connected clients and the auth-gateway report token burn automatically; set OMP_AUTH_BROKER_URL (or run this on the broker host).\n"),
 					),
 				);
 				process.exitCode = 1;
@@ -1625,10 +1628,10 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 				return;
 			}
 			if (entries.length === 0) {
-				const scope = cmd.provider ? ` for provider "${cmd.provider}"` : "";
+				const scope = cmd.provider ? t(" for provider \"{0}\"", `${cmd.provider}`) : "";
 				process.stderr.write(
 					chalk.yellow(
-						`No usage history recorded${scope} yet. Snapshots accumulate whenever usage is fetched (TUI footer, /usage, omp usage).\n`,
+						t("No usage history recorded{0} yet. Snapshots accumulate whenever usage is fetched (TUI footer, /usage, omp usage).\n", `${scope}`),
 					),
 				);
 				process.exitCode = 1;
@@ -1731,9 +1734,9 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 			if (cmd.provider) {
 				message = formatNoProviderCredentials(cmd.provider, storedAccounts);
 			} else if (storedAccounts.length > 0) {
-				message = "No usage data. Stored credentials are for providers without a usage endpoint.\n";
+				message = t("No usage data. Stored credentials are for providers without a usage endpoint.\n");
 			} else {
-				message = "No credentials found. Run `omp` and use /login to add accounts.\n";
+				message = t("No credentials found. Run `omp` and use /login to add accounts.\n");
 			}
 			process.stderr.write(chalk.yellow(message));
 			process.exitCode = 1;
@@ -1751,7 +1754,7 @@ export async function runUsageCommand(cmd: UsageCommandArgs): Promise<void> {
 		// Broker-backed reads (`clients`, `--history`) fail on an unreachable or
 		// pre-endpoint broker; report one line instead of a stack dump.
 		if (!(error instanceof AuthBrokerError)) throw error;
-		process.stderr.write(`${chalk.red(`Error: auth broker request failed: ${error.message}`)}\n`);
+		process.stderr.write(`${chalk.red(t("Error: auth broker request failed: {0}", `${error.message}`))}\n`);
 		process.exitCode = 1;
 	} finally {
 		authStorage.close();

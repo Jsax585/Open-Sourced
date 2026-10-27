@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	CustomCommand,
 	CustomCommandAPI,
@@ -92,32 +93,32 @@ const ANNOTATE_MODE_COMPLETIONS: readonly AutocompleteItem[] = [
 	{
 		value: "last ",
 		label: "last",
-		description: "Annotate the latest assistant reply",
+		description: t("Annotate the latest assistant reply"),
 	},
 	{
 		value: "session ",
 		label: "session",
-		description: "Annotate a message or code block from this session",
+		description: t("Annotate a message or code block from this session"),
 	},
 	{
 		value: "code-review ",
 		label: "code-review",
-		description: "Annotate local changes, a GitHub pull request, or a GitLab merge request",
+		description: t("Annotate local changes, a GitHub pull request, or a GitLab merge request"),
 	},
 ];
 
 const ANNOTATE_GUIDANCE_COMPLETIONS: readonly AutocompleteItem[] = [
 	{
 		value: "./",
-		label: "<file path>",
-		description: "Annotate a file by path",
-		hint: "Annotate a file; paths with spaces stay unquoted",
+		label: t("<file path>"),
+		description: t("Annotate a file by path"),
+		hint: t("Annotate a file; paths with spaces stay unquoted"),
 	},
 	{
 		value: '"',
-		label: '"prompt text"',
-		description: "Annotate literal prompt text",
-		hint: "Wrap literal prompt text in matching quotes",
+		label: t("\"prompt text\""),
+		description: t("Annotate literal prompt text"),
+		hint: t("Wrap literal prompt text in matching quotes"),
 	},
 ];
 

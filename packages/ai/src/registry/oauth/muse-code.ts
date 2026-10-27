@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import * as AIError from "../../error";
 import type { AfterExchangeHook, ExchangeContext } from "../hooks/types";
@@ -56,11 +57,11 @@ export function parseMuseCodeCredential(value: string): MuseCodeCredential {
 	try {
 		payload = JSON.parse(value);
 	} catch (cause) {
-		throw new AIError.ConfigurationError("Muse Code credential is invalid; sign in again", { cause });
+		throw new AIError.ConfigurationError(t("Muse Code credential is invalid; sign in again"), { cause });
 	}
 	const parsed = museCodeCredentialSchema(payload);
 	if (parsed instanceof type.errors || !parsed.oauthAccessToken.trim() || !parsed.apiKey.trim()) {
-		throw new AIError.ConfigurationError("Muse Code credential is invalid; sign in again");
+		throw new AIError.ConfigurationError(t("Muse Code credential is invalid; sign in again"));
 	}
 	return parsed;
 }
@@ -88,7 +89,7 @@ export async function requestMuseCodeKey(
 	const text = await response.text();
 	if (!response.ok) {
 		const excerpt = text.trim() ? ` ${text.slice(0, 500).trim()}` : "";
-		throw new AIError.OAuthError(`Muse Code key exchange failed: ${response.status}${excerpt}`, {
+		throw new AIError.OAuthError(t("Muse Code key exchange failed: {0}{1}", `${response.status}`, `${excerpt}`), {
 			kind: "token-exchange",
 			provider: PROVIDER,
 			status: response.status,
@@ -98,7 +99,7 @@ export async function requestMuseCodeKey(
 	try {
 		payload = JSON.parse(text);
 	} catch (cause) {
-		throw new AIError.OAuthError("Muse Code key exchange returned invalid JSON", {
+		throw new AIError.OAuthError(t("Muse Code key exchange returned invalid JSON"), {
 			kind: "validation",
 			provider: PROVIDER,
 			status: response.status,
@@ -107,7 +108,7 @@ export async function requestMuseCodeKey(
 	}
 	const parsed = museCodeKeyResponseSchema(payload);
 	if (parsed instanceof type.errors) {
-		throw new AIError.OAuthError(`Invalid Muse Code key response: ${parsed.summary}`, {
+		throw new AIError.OAuthError(t("Invalid Muse Code key response: {0}", `${parsed.summary}`), {
 			kind: "validation",
 			provider: PROVIDER,
 		});
@@ -148,11 +149,11 @@ export const attachMuseCodeApiKey: AfterExchangeHook = async (
 		const actionUrl = payload.action_url?.trim() || payload.require_payment_action_url?.trim();
 		if (payload.require_payment === true || actionUrl) {
 			throw new AIError.OAuthError(
-				actionUrl ? `Muse Code subscription is required: ${actionUrl}` : "Muse Code subscription is required",
+				actionUrl ? t("Muse Code subscription is required: {0}", `${actionUrl}`) : t("Muse Code subscription is required"),
 				{ kind: "entitlement", provider: PROVIDER },
 			);
 		}
-		throw new AIError.OAuthError("Muse Code key response is missing api_key", {
+		throw new AIError.OAuthError(t("Muse Code key response is missing api_key"), {
 			kind: "validation",
 			provider: PROVIDER,
 		});
@@ -160,7 +161,7 @@ export const attachMuseCodeApiKey: AfterExchangeHook = async (
 	const email = payload.user_email?.trim().toLowerCase();
 	const accountId = payload.user_id?.trim() || email;
 	if (!accountId) {
-		throw new AIError.OAuthError("Muse Code key response is missing a stable account identity", {
+		throw new AIError.OAuthError(t("Muse Code key response is missing a stable account identity"), {
 			kind: "validation",
 			provider: PROVIDER,
 		});

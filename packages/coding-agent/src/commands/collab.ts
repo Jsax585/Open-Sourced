@@ -1,6 +1,7 @@
 /**
  * Discover local Collab hosts and retrieve a link on explicit request.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { runCollabLinkCommand, runCollabListCommand } from "../cli/collab-cli";
 import { collabHelp as commandHelp } from "../cli/command-help";
@@ -11,19 +12,19 @@ export default class Collab extends Command {
 
 	static args = {
 		action: Args.string({
-			description: "list (default) or link",
+			description: t("list (default) or link"),
 			required: false,
 			options: ["list", "link"],
 		}),
-		selector: Args.string({ description: "Host instance ID or PID (link only)", required: false }),
+		selector: Args.string({ description: t("Host instance ID or PID (link only)"), required: false }),
 	};
 
 	static flags = {
 		view: Flags.boolean({
-			description: "Request a view-only link instead of control access (link only)",
+			description: t("Request a view-only link instead of control access (link only)"),
 			default: false,
 		}),
-		json: Flags.boolean({ char: "j", description: "Emit deterministic machine-readable JSON", default: false }),
+		json: Flags.boolean({ char: "j", description: t("Emit deterministic machine-readable JSON"), default: false }),
 	};
 
 	static examples = [
@@ -37,7 +38,7 @@ export default class Collab extends Command {
 		const { args, argv, flags } = await this.parse(Collab);
 		if ((args.action ?? "list") === "list") {
 			if (argv.length > 1 || flags.view) {
-				throw new CliUsageError("collab list accepts no selector or --view (usage: collab list [--json])");
+				throw new CliUsageError(t("collab list accepts no selector or --view (usage: collab list [--json])"));
 			}
 			await runCollabListCommand({ json: flags.json });
 			return;
@@ -45,14 +46,14 @@ export default class Collab extends Command {
 
 		if (argv.length !== 2 || !args.selector) {
 			throw new CliUsageError(
-				"collab link requires exactly one selector (usage: collab link <instanceId|pid> [--view] [--json])",
+				t("collab link requires exactly one selector (usage: collab link <instanceId|pid> [--view] [--json])"),
 			);
 		}
 		try {
 			await runCollabLinkCommand({ selector: args.selector, view: flags.view, json: flags.json });
 		} catch (error) {
 			if (!(error instanceof CollabLinkError)) throw error;
-			process.stderr.write(`error: ${error.message}\n`);
+			process.stderr.write(t("error: {0}\n", `${error.message}`));
 			process.exitCode = 1;
 		}
 	}

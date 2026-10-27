@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	getSegmenter,
@@ -185,10 +186,10 @@ function drawBanner(
 	const esc = formatKeyHint("escape");
 	const subtitleText =
 		event.kind === "unscheduled-weekly-reset"
-			? `Weekly usage cleared early · ${esc} to return`
+			? t("Weekly usage cleared early · {0} to return", `${esc}`)
 			: event.added === 1
-				? `New reset banked · ${event.available} available · ${esc} to return`
-				: `${event.added} resets banked · ${event.available} available · ${esc} to return`;
+				? t("New reset banked · {0} available · {1} to return", `${event.available}`, `${esc}`)
+				: t("{0} resets banked · {1} available · {2} to return", `${event.added}`, `${event.available}`, `${esc}`);
 	const title = truncateToWidth(titleText, innerWidth, "");
 	const subtitle = truncateToWidth(subtitleText, innerWidth, "");
 	const titleOffset = Math.floor((innerWidth - visibleWidth(title)) / 2);
@@ -267,13 +268,13 @@ function drawBurst(
  * is ANSI-only art.
  */
 function describeCodexResetFireworks(event: CodexResetFireworksEvent): NativeNode {
-	const title = event.kind === "unscheduled-weekly-reset" ? "OpenAI reset" : "Saved reset";
+	const title = event.kind === "unscheduled-weekly-reset" ? t("OpenAI reset") : t("Saved reset");
 	const subtitle =
 		event.kind === "unscheduled-weekly-reset"
-			? "Weekly usage cleared early"
+			? t("Weekly usage cleared early")
 			: event.added === 1
-				? `New reset banked · ${event.available} available`
-				: `${event.added} resets banked · ${event.available} available`;
+				? t("New reset banked · {0} available", `${event.available}`)
+				: t("{0} resets banked · {1} available", `${event.added}`, `${event.available}`);
 	const spark = (glyph: string, color: FireworkColor): TspSpan =>
 		span(glyph, FIREWORK_THEME_COLORS[color], { fx: "pulse" });
 	// The sheet is the frame (Tern bursts confetti from the pane's top edge for this role).
@@ -289,7 +290,7 @@ function describeCodexResetFireworks(event: CodexResetFireworksEvent): NativeNod
 				},
 			}),
 			text([span(subtitle, FIREWORK_THEME_COLORS.cyan)]),
-			actionBar([null, actionButton("Close", "close", { keys: "escape" })]),
+			actionBar([null, actionButton(t("Close"), "close", { keys: "escape" })]),
 		],
 		{ align: "center", gap: "sm" },
 	);

@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { repairCollapsedScheme, tryExtractEmbeddedUrlSelector } from "@oh-my-pi/pi-tui/tools/fetch";
 import type { ReadUrlToolDetails } from "@oh-my-pi/pi-tui/tools/fetch";
 import type { Database } from "bun:sqlite";
@@ -1570,7 +1571,7 @@ async function renderUrl(
 				const ext = getExtensionHint(docUrl, binary.contentDisposition);
 				const converted = await convertWithMarkit(binary.buffer, ext, timeout, signal);
 				if (converted.ok && converted.content.trim().length > htmlResult.content.length) {
-					notes.push(`Extracted and converted document: ${docUrl}`);
+					notes.push(localize("Extracted and converted document: {0}", `${docUrl}`));
 					const output = finalizeOutput(converted.content);
 					return {
 						url,
@@ -1584,10 +1585,10 @@ async function renderUrl(
 					};
 				}
 				if (!converted.ok && converted.error) {
-					notes.push(`markit conversion failed: ${converted.error}`);
+					notes.push(localize("markit conversion failed: {0}", `${converted.error}`));
 				}
 			} else if (binary.error) {
-				notes.push(`Binary fetch failed: ${binary.error}`);
+				notes.push(localize("Binary fetch failed: {0}", `${binary.error}`));
 			}
 		}
 

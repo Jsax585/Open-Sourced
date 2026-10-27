@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { $which } from "@oh-my-pi/pi-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { DoctorCheck } from "./types";
@@ -7,9 +8,9 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 
 	// Check external tools
 	const tools = [
-		{ name: "sd", description: "Find-replace" },
+		{ name: "sd", description: t("Find-replace") },
 		{ name: "sg", description: "AST-grep" },
-		{ name: "git", description: "Version control" },
+		{ name: "git", description: t("Version control") },
 	];
 
 	for (const tool of tools) {
@@ -17,7 +18,7 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 		checks.push({
 			name: tool.name,
 			status: path ? "ok" : "warning",
-			message: path ? `Found at ${path}` : `${tool.description} not found - some features may be limited`,
+			message: path ? t("Found at {0}", `${path}`) : t("{0} not found - some features may be limited", `${tool.description}`),
 		});
 	}
 
@@ -25,7 +26,7 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 	const apiKeys = [
 		{ name: "ANTHROPIC_API_KEY", description: "Anthropic API" },
 		{ name: "OPENAI_API_KEY", description: "OpenAI API" },
-		{ name: "EXA_API_KEY", description: "Exa search" },
+		{ name: "EXA_API_KEY", description: t("Exa search") },
 	];
 
 	for (const key of apiKeys) {
@@ -33,7 +34,7 @@ export async function runDoctorChecks(): Promise<DoctorCheck[]> {
 		checks.push({
 			name: key.name,
 			status: hasKey ? "ok" : "warning",
-			message: hasKey ? "Configured" : `Not set - ${key.description} unavailable`,
+			message: hasKey ? t("Configured") : t("Not set - {0} unavailable", `${key.description}`),
 		});
 	}
 

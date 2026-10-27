@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added language-pack support to collaboration UI and shared browser tool renderers.
+
 ## [18.8.0] - 2026-10-07
 
 ### Changed

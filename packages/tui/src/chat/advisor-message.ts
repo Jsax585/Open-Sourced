@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component } from "../tui";
 import { Disclosure } from "../components/disclosure";
 import { visibleWidth } from "../utils";
@@ -64,7 +65,7 @@ class AdvisorHeader implements Component {
 		width = Math.max(1, width);
 		if (this.#cache?.width === width) return this.#cache.lines;
 		const uiTheme = this.#uiTheme;
-		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(`${uiTheme.status.info} Advisor`));
+		const tag = uiTheme.fg("customMessageLabel", uiTheme.bold(t("{0} Advisor", `${uiTheme.status.info}`)));
 		const lines = [
 			truncateToWidth(`${tag} ${uiTheme.fg("dim", this.#meta.join(uiTheme.sep.dot))}`, width, Ellipsis.Unicode),
 		];
@@ -103,7 +104,7 @@ class AdvisorNotes implements Component {
 			const uiTheme = this.#uiTheme;
 			const rail = uiTheme.fg("dim", uiTheme.symbol("advisor.rail"));
 			const hidden = this.#hidden;
-			lines.push(`  ${rail} ${uiTheme.fg("dim", `… +${hidden} more ${hidden === 1 ? "note" : "notes"}`)}`);
+			lines.push(`  ${rail} ${uiTheme.fg("dim", t("… +{0} more {1}", `${hidden}`, `${hidden === 1 ? "note" : "notes"}`))}`);
 		}
 		const rendered = lines.map(line => truncateToWidth(line, width, Ellipsis.Unicode));
 		this.#cache = { width, lines: rendered };
@@ -156,10 +157,10 @@ const RANKS: readonly AdvisorRank[] = ["blocker", "concern", "nit", "note"];
 
 /** Each rank's native look, GitHub-alert style: card/icon tone, Tern icon name, label and its span style. */
 const RANK_LOOK: Record<AdvisorRank, { tone: TspTone; icon: string; label: string; style: string }> = {
-	blocker: { tone: "error", icon: "octagon-alert", label: "Blocker", style: "error strong" },
-	concern: { tone: "warning", icon: "warn", label: "Concern", style: "warning strong" },
-	nit: { tone: "neutral", icon: "lightbulb", label: "Nit", style: "strong" },
-	note: { tone: "neutral", icon: "info", label: "Note", style: "strong" },
+	blocker: { tone: "error", icon: "octagon-alert", label: t("Blocker\u0004packages/tui/src/chat/advisor-message.ts:RANK_LOOK.blocker.label"), style: "error strong" },
+	concern: { tone: "warning", icon: "warn", label: t("Concern\u0004packages/tui/src/chat/advisor-message.ts:RANK_LOOK.concern.label"), style: "warning strong" },
+	nit: { tone: "neutral", icon: "lightbulb", label: t("Nit"), style: "strong" },
+	note: { tone: "neutral", icon: "info", label: t("Note"), style: "strong" },
 };
 
 function rankOf(entry: AdvisorNote): AdvisorRank {
@@ -177,7 +178,7 @@ function tallySpans(notes: readonly AdvisorNote[]): TspSpan[] {
 		const count = notes.filter(entry => rankOf(entry) === rank).length;
 		if (count === 0) continue;
 		if (spans.length > 0) spans.push(span(" · ", "dim"));
-		spans.push(span(`${count} ${rank}${count === 1 ? "" : "s"}`, RANK_LOOK[rank].style));
+		spans.push(span(t("{1} {2}{3}", `${(RANK_LOOK[rank].label)}`, `${(count)}`, `${(rank)}`, `${(count === 1 ? "" : "s")}`), RANK_LOOK[rank].style));
 	}
 	return spans;
 }
@@ -216,8 +217,8 @@ export function createAdvisorMessageCard(
 ): AdvisorMessageCard {
 	const notes = details?.notes ?? [];
 	const blockers = notes.filter(note => note.severity === "blocker").length;
-	const meta: string[] = [`${notes.length} ${notes.length === 1 ? "note" : "notes"}`];
-	if (blockers > 0) meta.push(uiTheme.fg("error", `${blockers} blocker${blockers === 1 ? "" : "s"}`));
+	const meta: string[] = [t("{0} {1}\u0004packages/tui/src/chat/advisor-message.ts:createAdvisorMessageCard.meta", `${notes.length}`, `${notes.length === 1 ? "note" : "notes"}`)];
+	if (blockers > 0) meta.push(uiTheme.fg("error", t("{0} blocker{1}", `${blockers}`, `${blockers === 1 ? "" : "s"}`)));
 	let override: boolean | undefined;
 	let lastGlobal = getExpanded();
 	const expanded = (): boolean => {
@@ -239,7 +240,7 @@ export function createAdvisorMessageCard(
 			[
 				node("icon", { name: look.icon, tone: look.tone }),
 				text(tallySpans(notes), { grow: 1 }),
-				text([span(sources.size === 1 && sole ? sole : "Advisor", "dim")], { role: "omp.advisor.source" }),
+				text([span(sources.size === 1 && sole ? sole : t("Advisor"), "dim")], { role: "omp.advisor.source" }),
 			],
 			"head",
 		);

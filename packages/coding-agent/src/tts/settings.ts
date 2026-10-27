@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 import {
 	DEFAULT_TTS_SPEED,
@@ -19,8 +20,8 @@ export const cfgTtsLocalVoice = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Local TTS Voice",
-		description: "Kokoro voice used by the local TTS backend (American/British, female/male)",
+		label: t("Local TTS Voice"),
+		description: t("Kokoro voice used by the local TTS backend (American/British, female/male)"),
 		options: TTS_LOCAL_VOICE_OPTIONS,
 	},
 });
@@ -32,8 +33,8 @@ export const cfgTtsLocalSpeed = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Local TTS Speed",
-		description: "Speaking rate of the local TTS backend (tts tool, omp say). 1 = normal; clamped to 0.5–2.5",
+		label: t("Local TTS Speed"),
+		description: t("Speaking rate of the local TTS backend (tts tool, omp say). 1 = normal; clamped to 0.5–2.5"),
 		options: TTS_SPEED_OPTIONS,
 	},
 });
@@ -45,8 +46,8 @@ export const cfgSpeechEnabled = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Speech Vocalization",
-		description: "Speak the assistant's output aloud through the speakers as it streams",
+		label: t("Speech Vocalization"),
+		description: t("Speak the assistant's output aloud through the speakers as it streams"),
 	},
 });
 
@@ -58,13 +59,13 @@ export const cfgSpeechMode = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Speech Vocalization Mode",
+		label: t("Speech Vocalization Mode"),
 		description:
-			"What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end",
+			t("What to speak: all = assistant messages + thinking; assistant = messages only; yield = only the final message at turn end"),
 		options: [
-			{ value: "all", label: "All (messages + thinking)" },
-			{ value: "assistant", label: "Assistant messages" },
-			{ value: "yield", label: "Final message only" },
+			{ value: "all", label: t("All (messages + thinking)") },
+			{ value: "assistant", label: t("Assistant messages") },
+			{ value: "yield", label: t("Final message only") },
 		],
 	},
 });
@@ -76,9 +77,9 @@ export const cfgSpeechEnhanced = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Enhanced Speech Rewriting",
+		label: t("Enhanced Speech Rewriting"),
 		description:
-			"Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure",
+			t("Rewrite assistant output into natural spoken prose with the tiny/smol model before synthesis (describes code, drops links and markdown). Falls back to mechanical cleanup on failure"),
 	},
 });
 
@@ -90,8 +91,8 @@ export const cfgSpeechVoice = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Speech Vocalization Voice",
-		description: "Kokoro voice used when speaking the assistant's output aloud",
+		label: t("Speech Vocalization Voice"),
+		description: t("Kokoro voice used when speaking the assistant's output aloud"),
 		options: TTS_LOCAL_VOICE_OPTIONS,
 	},
 });
@@ -103,8 +104,8 @@ export const cfgSpeechSpeed = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: "Speech Vocalization Speed",
-		description: "Speaking rate when reading the assistant's output aloud. 1 = normal; clamped to 0.5–2.5",
+		label: t("Speech Vocalization Speed"),
+		description: t("Speaking rate when reading the assistant's output aloud. 1 = normal; clamped to 0.5–2.5"),
 		options: TTS_SPEED_OPTIONS,
 	},
 });

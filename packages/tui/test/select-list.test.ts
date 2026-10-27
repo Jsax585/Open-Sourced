@@ -251,7 +251,6 @@ describe("SelectList", () => {
 		const rendered = list.render(80).join("\n");
 		expect(rendered).toContain("OpenCode Go");
 		expect(rendered).not.toContain("Ollama");
-		expect(rendered).toContain("Search: og");
 		expect(list.getSelectedItem()?.value).toBe("opencode-go");
 	});
 
@@ -267,7 +266,6 @@ describe("SelectList", () => {
 		const rendered = list.render(80).join("\n");
 		expect(rendered).toContain("Alpha");
 		expect(rendered).toContain("Beta");
-		expect(rendered).not.toContain("Search:");
 		expect(list.getSelectedItem()?.value).toBe("alpha");
 	});
 

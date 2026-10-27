@@ -1,7 +1,10 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { browserLanguagePackScript } from "@oh-my-pi/pi-utils/browser-i18n";
+import { getLanguage } from "@oh-my-pi/pi-utils/i18n";
 import { $, type Server } from "bun";
 import {
 	getCostDashboardStats,
@@ -73,7 +76,7 @@ async function getEmbeddedClientFiles(): Promise<Map<string, Blob>> {
 	const archive = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 	if (!archive) {
 		throw new Error(
-			"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
+			t("Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets."),
 		);
 	}
 
@@ -152,7 +155,7 @@ const ensureClientBuild = async () => {
 	if (buildResult.exitCode !== 0) {
 		const output = buildResult.text().trim();
 		const details = output ? `\n${output}` : "";
-		throw new Error(`Failed to build stats client (exit ${buildResult.exitCode})${details}`);
+		throw new Error(t("Failed to build stats client (exit {0}){1}", `${buildResult.exitCode}`, `${details}`));
 	}
 };
 
@@ -208,9 +211,9 @@ export async function handleApi(req: Request): Promise<Response> {
 	}
 
 	if (path === "/api/frustration/judge" || path === "/api/frustration/cancel") {
-		if (req.method !== "POST") return Response.json({ error: "POST required" }, { status: 405 });
+		if (req.method !== "POST") return Response.json({ error: t("POST required") }, { status: 405 });
 		if (req.headers.get(STATS_ACTION_HEADER) !== "1") {
-			return Response.json({ error: `${STATS_ACTION_HEADER}: 1 header required` }, { status: 403 });
+			return Response.json({ error: t("{0}: 1 header required", `${STATS_ACTION_HEADER}`) }, { status: 403 });
 		}
 		if (path === "/api/frustration/cancel") return Response.json(cancelFrustrationRun());
 		const result = await startFrustrationRun(range);
@@ -262,14 +265,14 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	if (path.startsWith("/api/request/")) {
 		const id = path.split("/").pop();
-		if (!id) return new Response("Bad Request", { status: 400 });
+		if (!id) return new Response(t("Bad Request"), { status: 400 });
 		const details = await getRequestDetails(parseInt(id, 10));
-		if (!details) return new Response("Not Found", { status: 404 });
+		if (!details) return new Response(t("Not Found"), { status: 404 });
 		return Response.json(details);
 	}
 
 	if (path === "/api/sync") {
-		if (req.method !== "POST") return Response.json({ error: "POST required" }, { status: 405 });
+		if (req.method !== "POST") return Response.json({ error: t("POST required") }, { status: 405 });
 		statsLive().requestSync();
 		return Response.json(statsLive().status(), { status: 202 });
 	}
@@ -288,7 +291,7 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/session/trace") {
 		const file = url.searchParams.get("file");
-		if (!file) return Response.json({ error: "file required" }, { status: 400 });
+		if (!file) return Response.json({ error: t("file required") }, { status: 400 });
 		try {
 			// ETag-first: compare the client's etag against the
 			// root+child fingerprint WITHOUT building the trace. A matching
@@ -312,7 +315,7 @@ export async function handleApi(req: Request): Promise<Response> {
 			return Response.json(trace, { headers: { ETag: etag } });
 		} catch (err) {
 			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
-			if (isEnoent(err)) return Response.json({ error: "session not found" }, { status: 404 });
+			if (isEnoent(err)) return Response.json({ error: t("session not found") }, { status: 404 });
 			throw err;
 		}
 	}
@@ -320,10 +323,10 @@ export async function handleApi(req: Request): Promise<Response> {
 	if (path === "/api/session/entry") {
 		const file = url.searchParams.get("file");
 		const id = url.searchParams.get("id");
-		if (!file || !id) return Response.json({ error: "file and id required" }, { status: 400 });
+		if (!file || !id) return Response.json({ error: t("file and id required") }, { status: 400 });
 		try {
 			const entry = await getTraceEntry(file, id);
-			if (!entry) return Response.json({ error: "entry not found" }, { status: 404 });
+			if (!entry) return Response.json({ error: t("entry not found") }, { status: 404 });
 			return Response.json({ entry });
 		} catch (err) {
 			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
@@ -331,17 +334,26 @@ export async function handleApi(req: Request): Promise<Response> {
 		}
 	}
 
-	return new Response("Not Found", { status: 404 });
+	return new Response(t("Not Found"), { status: 404 });
 }
 
 /**
  * Handle static file requests.
  */
+async function clientResponse(file: Blob): Promise<Response> {
+	if (!file.type.startsWith("text/html")) return new Response(file);
+	const language = getLanguage();
+	const html = (await file.text())
+		.replace(/<html\b[^>]*>/i, `<html lang="${language}">`)
+		.replace(/<head>/i, `<head>${browserLanguagePackScript()}`);
+	return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+}
+
 async function handleStatic(requestPath: string): Promise<Response> {
 	if (USE_EMBEDDED_CLIENT) {
 		const files = await getEmbeddedClientFiles();
 		const file = files.get(requestPath.slice(1)) ?? files.get("index.html");
-		return file ? new Response(file) : new Response("Not Found", { status: 404 });
+		return file ? clientResponse(file) : new Response(t("Not Found"), { status: 404 });
 	}
 
 	const filePath = requestPath === "/" ? "/index.html" : requestPath;
@@ -349,16 +361,16 @@ async function handleStatic(requestPath: string): Promise<Response> {
 
 	const file = Bun.file(fullPath);
 	if (await file.exists()) {
-		return new Response(file);
+		return clientResponse(file);
 	}
 
 	// SPA fallback
 	const index = Bun.file(path.join(STATIC_DIR, "index.html"));
 	if (await index.exists()) {
-		return new Response(index);
+		return clientResponse(index);
 	}
 
-	return new Response("Not Found", { status: 404 });
+	return new Response(t("Not Found"), { status: 404 });
 }
 
 /** Format a dashboard origin, including brackets required by IPv6 literals. */
@@ -414,7 +426,7 @@ function createDashboardServer(port: number, hostname: string): Server<undefined
 			} catch (error) {
 				logger.error("Stats dashboard request failed", { path, error: String(error) });
 				return Response.json(
-					{ error: error instanceof Error ? error.message : "Unknown error" },
+					{ error: error instanceof Error ? error.message : t("Unknown error") },
 					{ status: 500, headers: dashboardHeaders },
 				);
 			}
@@ -544,7 +556,7 @@ export async function startServer(
 		try {
 			return register(createDashboardServer(port, hostname));
 		} catch (retryError) {
-			throw new Error(`Failed to start stats dashboard on ${hostname}:${port} after reclaiming it.`, {
+			throw new Error(t("Failed to start stats dashboard on {0}:{1} after reclaiming it.", `${hostname}`, `${port}`), {
 				cause: retryError,
 			});
 		}

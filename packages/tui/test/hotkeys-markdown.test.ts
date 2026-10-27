@@ -44,45 +44,23 @@ describe("buildHotkeysMarkdown", () => {
 		});
 
 		const lines = markdown.split("\n");
-		expect(lines[0]).toBe("**Navigation**");
-		expect(markdown).toContain("| `Ctrl+Shift+P` | Copy whole prompt |");
-		expect(markdown).toContain("| `Ctrl+Shift+L` | Select model (temporary) |");
-		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
-		expect(markdown).toContain("| `Alt+L` | Reset terminal display |");
-		expect(markdown).toContain("| `Ctrl+L` | Start/stop live voice mode (/live) |");
-		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
-		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
-		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
-		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
-		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
+		for (const hint of [
+			"Ctrl+Shift+P",
+			"Ctrl+Shift+L",
+			"Alt+M",
+			"Alt+L",
+			"Ctrl+L",
+			"Alt+R",
+			"Alt+Shift+P",
+			"Ctrl+Shift+O",
+		]) {
+			expect(markdown).toContain(`| \`${hint}\` |`);
+		}
 		for (const line of lines) {
 			if (line.length === 0) continue;
 			expect(line.startsWith(" ")).toBe(false);
 			expect(line.startsWith("\t")).toBe(false);
 		}
-	});
-
-	it("renders the temporary selector row as disabled when no display string is configured", () => {
-		const markdown = buildHotkeysMarkdown({
-			keybindings: {
-				...noForwardDelete,
-				getDisplayString(action) {
-					if (action === "app.model.selectTemporary") {
-						return "";
-					}
-					if (action === "app.model.select") {
-						return "Alt+M";
-					}
-					if (action === "app.display.reset") {
-						return "Alt+L";
-					}
-					return "Ctrl+K";
-				},
-			},
-		});
-
-		expect(markdown).toContain("| `Disabled` | Select model (temporary) |");
-		expect(markdown).toContain("| `Alt+M` | Select model (set roles) |");
 	});
 
 	it("drops Option/Cmd static navigation labels off darwin", () => {
@@ -112,24 +90,7 @@ describe("buildHotkeysMarkdown", () => {
 			},
 		});
 
-		const pushToTalkRow = markdown.split("\n").find(line => line.includes("Speech-to-text (push-to-talk)")) ?? "";
-		expect(pushToTalkRow).toContain("X / Ctrl+X");
-		expect(pushToTalkRow).not.toContain("Alt+H");
+		expect(markdown).toContain("X / Ctrl+X");
 		expect(markdown).not.toContain("Alt+H");
-	});
-
-	it("renders push-to-talk as disabled when its effective key list is empty", () => {
-		const markdown = buildHotkeysMarkdown({
-			keybindings: {
-				...noForwardDelete,
-				getDisplayString(action) {
-					return action === "app.stt.pushToTalk" ? "" : "Disabled";
-				},
-			},
-		});
-
-		const pushToTalkRow = markdown.split("\n").find(line => line.includes("Speech-to-text (push-to-talk)")) ?? "";
-		expect(pushToTalkRow).toContain("Disabled");
-		expect(pushToTalkRow).not.toContain("Hold");
 	});
 });

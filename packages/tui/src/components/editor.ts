@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { getProjectDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import {
@@ -88,10 +89,10 @@ export interface NativeEditorLayout {
  */
 const VIM_MODE_LABELS: Record<VimMode, string | undefined> = {
 	insert: undefined,
-	normal: "NORMAL",
-	visual: "VISUAL",
-	"visual-line": "VISUAL",
-	replace: "REPLACE",
+	normal: localize("NORMAL"),
+	visual: localize("VISUAL"),
+	"visual-line": localize("VISUAL"),
+	replace: localize("REPLACE"),
 };
 
 const PASSTHROUGH_COLOR = (text: string): string => text;

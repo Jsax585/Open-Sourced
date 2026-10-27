@@ -2,6 +2,7 @@
  * xAI OAuth endpoint discovery, identity, and billing helpers.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as AIError from "../../error";
 import type { FetchImpl } from "../../types";
 
@@ -46,14 +47,14 @@ export function validateXAIEndpoint(url: string, field: string): string {
 	try {
 		parsed = new URL(url);
 	} catch {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	if (parsed.protocol !== "https:") {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	const host = parsed.hostname.toLowerCase();
 	if (!host || !isXaiAuthHostname(host)) {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	return url;
 }
@@ -67,14 +68,14 @@ export function validateXAIBillingEndpoint(url: string, field: string = "billing
 	try {
 		parsed = new URL(url);
 	} catch {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	if (parsed.protocol !== "https:") {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	const host = parsed.hostname.toLowerCase();
 	if (!host || !isXaiBillingHostname(host)) {
-		throw new AIError.OAuthError(`Invalid xAI ${field}: ${url}`, { kind: "validation", provider: "xai" });
+		throw new AIError.OAuthError(t("Invalid xAI {0}: {1}", `${field}`, `${url}`), { kind: "validation", provider: "xai" });
 	}
 	return url;
 }
@@ -95,7 +96,7 @@ async function xaiOAuthDiscovery(
 		});
 	} catch (error) {
 		throw new AIError.OAuthError(
-			`xAI OIDC discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+			t("xAI OIDC discovery failed: {0}", `${error instanceof Error ? error.message : String(error)}`),
 			{
 				kind: "discovery",
 				provider: "xai",
@@ -115,7 +116,7 @@ async function xaiOAuthDiscovery(
 		payload = await response.json();
 	} catch (error) {
 		throw new AIError.OAuthError(
-			`xAI OIDC discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+			t("xAI OIDC discovery returned invalid JSON: {0}", `${error instanceof Error ? error.message : String(error)}`),
 			{ kind: "validation", provider: "xai", cause: error },
 		);
 	}

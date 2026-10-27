@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { readShellWord } from "../tools/shell-tokenize";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 
@@ -30,7 +31,7 @@ const TIME_UNITS_MS = new Map<string, number>([
 ]);
 
 const LOOP_USAGE =
-	"Usage: /loop [count|duration] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop 10m, /loop 20 --until 'bun test' fix the failing tests.";
+	t("Usage: /loop [count|duration] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop 10m, /loop 20 --until 'bun test' fix the failing tests.");
 
 /**
  * Flag → `until` polarity. `--while` continues while the command succeeds;
@@ -123,16 +124,16 @@ function takeLoopCondition(input: string): { condition?: LoopConditionConfig; re
 		const name = /^(--[a-z][a-z-]*)(?=[\s=]|$)/.exec(rest)?.[1];
 		const until = name === undefined ? undefined : CONDITION_FLAGS[name];
 		if (name === undefined || until === undefined) {
-			return `Unknown /loop flag ${name ?? rest.split(/\s+/, 1)[0]}. ${LOOP_USAGE}`;
+			return t("Unknown /loop flag {0}. {1}", `${name ?? rest.split(/\s+/, 1)[0]}`, `${LOOP_USAGE}`);
 		}
-		if (condition) return "Use only one of --while or --until.";
+		if (condition) return t("Use only one of --while or --until.");
 
 		const afterName = rest.slice(name.length);
 		const valueText = afterName.startsWith("=") ? afterName.slice(1) : afterName;
 		const value = readShellWord(valueText);
-		if (value === "unterminated") return `${name} has an unterminated quote.`;
+		if (value === "unterminated") return t("{0} has an unterminated quote.", `${name}`);
 		if (value === undefined || !value.value.trim() || valueText.trim().startsWith("-")) {
-			return `${name} needs a shell command. Quote it when it contains spaces: /loop ${name} 'bun test'.`;
+			return t("{0} needs a shell command. Quote it when it contains spaces: /loop {1} 'bun test'.", `${name}`, `${name}`);
 		}
 		condition = { command: value.value.trim(), until };
 		rest = value.rest;
@@ -144,7 +145,7 @@ function takeLoopCondition(input: string): { condition?: LoopConditionConfig; re
 function makeIterations(amountText: string): LoopLimitConfig | string {
 	const amount = Number(amountText);
 	if (!Number.isSafeInteger(amount) || amount <= 0) {
-		return "Loop count must be a positive integer.";
+		return t("Loop count must be a positive integer.");
 	}
 	return { kind: "iterations", iterations: amount };
 }
@@ -152,7 +153,7 @@ function makeIterations(amountText: string): LoopLimitConfig | string {
 function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | string {
 	const amount = Number(amountText);
 	if (!Number.isSafeInteger(amount) || amount <= 0) {
-		return "Loop duration must be positive.";
+		return t("Loop duration must be positive.");
 	}
 	return { kind: "duration", durationMs: amount * unitMs };
 }
@@ -173,15 +174,15 @@ function parseCompoundDuration(token: string): LoopLimitConfig | string | undefi
 		if (!match) return LOOP_USAGE;
 		const unitMs = TIME_UNITS_MS.get(match[2]);
 		if (unitMs === undefined) {
-			return "Loop duration unit must be seconds, minutes, or hours.";
+			return t("Loop duration unit must be seconds, minutes, or hours.");
 		}
 		const amount = Number(match[1]);
 		if (!Number.isSafeInteger(amount) || amount <= 0) {
-			return "Loop duration must be positive.";
+			return t("Loop duration must be positive.");
 		}
 		totalMs += amount * unitMs;
 	}
-	if (totalMs <= 0) return "Loop duration must be positive.";
+	if (totalMs <= 0) return t("Loop duration must be positive.");
 	return { kind: "duration", durationMs: totalMs };
 }
 

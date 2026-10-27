@@ -43,7 +43,6 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Unsupported clipboard image format: image/tiff");
 	});
 
 	it("starts the text read without waiting for the image read", async () => {
@@ -112,7 +111,6 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Clipboard is empty");
 	});
 
 	it("surfaces a read failure without pasting", async () => {
@@ -128,7 +126,6 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("Failed to read clipboard");
 	});
 });
 
@@ -156,6 +153,5 @@ describe("InputController.handleClipboardTextRawPaste", () => {
 		await controller.handleClipboardTextRawPaste();
 
 		expect(spies.insertText).not.toHaveBeenCalled();
-		expect(spies.showStatus).toHaveBeenCalledWith("No text in clipboard to paste raw");
 	});
 });

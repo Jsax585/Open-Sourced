@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { bandComposerStyle } from "./band";
 import { borderlessComposerStyle } from "./borderless";
 import { boxComposerStyle } from "./box";
@@ -43,9 +44,9 @@ export function isFilledComposerStyle(style: ComposerStyle): boolean {
  */
 export function registerComposerStyle(style: ComposerStyle): () => void {
 	const id = style.id.trim();
-	if (id.length === 0 || id !== style.id) throw new TypeError("Composer style id must be a non-empty trimmed string");
-	if (isBuiltinComposerStyle(id)) throw new Error(`Cannot replace built-in composer style "${id}"`);
-	if (extensionComposerStyles.has(id)) throw new Error(`Composer style "${id}" is already registered`);
+	if (id.length === 0 || id !== style.id) throw new TypeError(t("Composer style id must be a non-empty trimmed string"));
+	if (isBuiltinComposerStyle(id)) throw new Error(t("Cannot replace built-in composer style \"{0}\"", `${id}`));
+	if (extensionComposerStyles.has(id)) throw new Error(t("Composer style \"{0}\" is already registered", `${id}`));
 	extensionComposerStyles.set(id, style);
 	return () => {
 		if (extensionComposerStyles.get(id) === style) extensionComposerStyles.delete(id);

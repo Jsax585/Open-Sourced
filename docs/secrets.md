@@ -1,64 +1,64 @@
-# Secret Obfuscation
+# 비밀 정보 난독화
 
-Redacts sensitive values (API keys, tokens, passwords) in conversation messages sent to LLM providers. When enabled, configured secrets and built-in credential-shaped token patterns are replaced in supported message and replay text fields. Static system prompts, static tool definitions, and binary payloads are not redacted by this subsystem. Reversible placeholders are restored in model-authored tool arguments before execution and when local session context is rebuilt for display or resume.
+LLM 제공자에게 전송하는 대화 메시지에서 민감한 값(API 키, 토큰, 비밀번호)을 가립니다. 이 기능을 활성화하면 지원되는 메시지 및 재전송 텍스트 필드에서 설정된 비밀 정보와 내장 자격 증명 형태의 토큰 패턴을 대체합니다. 정적 시스템 프롬프트, 정적 도구 정의, 바이너리 페이로드에는 이 하위 시스템의 가림 처리가 적용되지 않습니다. 복원 가능한 자리표시자는 모델이 작성한 도구 인수에서 실행 전에 복원되며, 로컬 세션 컨텍스트를 표시하거나 재개하기 위해 재구성할 때도 복원됩니다.
 
-## Enabling
+## 활성화
 
-Disabled by default. Toggle via `/settings` UI or directly in `config.yml`:
+기본적으로 비활성화되어 있습니다. `/settings` UI에서 전환하거나 `config.yml`에 직접 설정할 수 있습니다.
 
 ```yaml
 secrets:
   enabled: true
 ```
 
-## How it works
+## 작동 방식
 
-1. On session startup, secrets are collected from:
-   - **Environment variables** whose names match common secret patterns (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `OAUTH`) with values at least 8 characters long
-   - **`secrets.yml` files** (see below)
-   - Built-in reversible regexes for common credential shapes that appear only in session content or tool results: GitHub, GitLab, OpenAI, and Anthropic tokens, AWS access keys, Google API keys, Slack tokens, npm tokens, Stripe secret and restricted keys and webhook secrets, Hugging Face tokens, SendGrid keys, JWTs, Bearer header tokens, and PEM private key blocks
-   - Passwords embedded in connection-URL environment values — any variable holding a `scheme://user:password@host`-style value (for example `DATABASE_URL`) has its password registered regardless of the variable name when it is at least 8 characters long. Both raw and percent-decoded forms are collected when they meet that limit.
+1. 세션 시작 시 다음 소스에서 비밀 정보를 수집합니다.
+   - 이름이 일반적인 비밀 정보 패턴(`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `OAUTH`)에 일치하고 값의 길이가 8자 이상인 **환경 변수**
+   - **`secrets.yml` 파일**(아래 참조)
+   - 세션 내용이나 도구 결과에만 나타나는 일반적인 자격 증명 형태를 탐지하는 내장 복원 가능 정규식: GitHub, GitLab, OpenAI, Anthropic 토큰, AWS 액세스 키, Google API 키, Slack 토큰, npm 토큰, Stripe 비밀 키 및 제한된 키와 웹훅 비밀 값, Hugging Face 토큰, SendGrid 키, JWT, Bearer 헤더 토큰, PEM 개인 키 블록
+   - 연결 URL 환경 변수 값에 포함된 비밀번호 — `scheme://user:password@host` 형태의 값이 있는 모든 변수(예: `DATABASE_URL`)는 변수 이름과 관계없이 비밀번호 길이가 8자 이상이면 등록됩니다. 원본과 퍼센트 디코딩된 형태 모두 이 길이 조건을 충족하면 수집됩니다.
 
-2. Provider-visible text has matching values replaced with deterministic placeholders such as `$$3P8W5JH1TK2Q$$`, `$$3P8W5JH1TK2Q:L$$`, or `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$`.
+2. 제공자에게 보이는 텍스트에서 일치하는 값을 `$$3P8W5JH1TK2Q$$`, `$$3P8W5JH1TK2Q:L$$`, `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$` 같은 결정적 자리표시자로 대체합니다.
 
-3. Live model-authored tool arguments are deep-walked and placeholders are restored before the tool executes. Session context restores placeholders for local display/resume and re-obfuscates it before provider replay. Replace-mode substitutions are one-way and are not restored.
+3. 모델이 실시간으로 작성한 도구 인수의 중첩 구조를 모두 순회하며 도구 실행 전에 자리표시자를 복원합니다. 세션 컨텍스트는 로컬 표시 및 재개를 위해 자리표시자를 복원하고, 제공자에게 재전송하기 전에 다시 난독화합니다. replace 모드의 치환은 단방향이며 복원되지 않습니다.
 
-Two modes control what happens to each secret:
+각 비밀 정보의 처리 방식은 두 가지 모드로 제어합니다.
 
-| Mode                  | Behavior                                                                                      | Reversible |
+| 모드                  | 동작                                                                                      | 복원 가능 |
 | --------------------- | --------------------------------------------------------------------------------------------- | ---------- |
-| `obfuscate` (default) | Replaced with a deterministic `$$HASH(:hint)$$` or `$$FRIENDLY_HASH(:hint)$$` placeholder     | Yes        |
-| `replace`             | Replaced with the configured `replacement`, or a deterministic same-length value when omitted | No         |
+| `obfuscate` (기본값) | 결정적 `$$HASH(:hint)$$` 또는 `$$FRIENDLY_HASH(:hint)$$` 자리표시자로 대체 | 예 |
+| `replace` | 설정된 `replacement`로 대체하며, 생략하면 길이가 같은 결정적 값으로 대체 | 아니요 |
 
-Obfuscate-mode plain values and regex matches shorter than 8 characters are ignored to avoid redacting ordinary short words. Replace mode can handle short values; a replace-mode regex with no custom replacement is rejected only when every possible 1–2 character match would be impossible to redact to a distinct stable value.
+일반적인 짧은 단어를 가리지 않도록 obfuscate 모드에서는 8자 미만의 일반 값과 정규식 일치를 무시합니다. replace 모드는 짧은 값도 처리할 수 있습니다. 사용자 지정 대체 값이 없는 replace 모드 정규식은 가능한 모든 1~2자 일치를 서로 구별되는 안정적인 값으로 가릴 수 없는 경우에만 거부됩니다.
 
 ## secrets.yml
 
-Define custom secret entries in YAML. Two locations are checked:
+YAML로 사용자 지정 비밀 정보 항목을 정의합니다. 다음 두 위치를 확인합니다.
 
-| Level   | Path                       | Purpose                     |
+| 수준 | 경로 | 용도 |
 | ------- | -------------------------- | --------------------------- |
-| Global  | `<active-agent-dir>/secrets.yml` (normally `~/.omp/agent/secrets.yml`) | Secrets across projects using that agent directory |
-| Project | `<cwd>/.omp/secrets.yml`   | Project-specific secrets    |
+| 전역 | `<active-agent-dir>/secrets.yml` (일반적으로 `~/.omp/agent/secrets.yml`) | 해당 에이전트 디렉터리를 사용하는 프로젝트 전반의 비밀 정보 |
+| 프로젝트 | `<cwd>/.omp/secrets.yml` | 프로젝트별 비밀 정보 |
 
-Project entries override global entries with matching `content`. The global location follows the session's agent directory, including named profiles and explicit SDK agent-directory overrides.
+프로젝트 항목은 `content`가 일치하는 전역 항목을 덮어씁니다. 전역 위치는 이름 있는 프로필과 SDK의 명시적 에이전트 디렉터리 재정의를 포함하여 세션의 에이전트 디렉터리를 따릅니다.
 
-### Schema
+### 스키마
 
-Each entry in the array has these fields:
+배열의 각 항목에는 다음 필드가 있습니다.
 
-| Field          | Type                         | Required | Description                                                   |
+| 필드 | 타입 | 필수 | 설명 |
 | -------------- | ---------------------------- | -------- | ------------------------------------------------------------- |
-| `type`         | `"plain"` or `"regex"`       | Yes      | Match strategy                                                |
-| `content`      | string                       | Yes      | The secret value (plain) or regex pattern (regex)             |
-| `mode`         | `"obfuscate"` or `"replace"` | No       | Default: `"obfuscate"`                                        |
-| `replacement`  | string                       | No       | Custom replacement (replace mode only)                        |
-| `flags`        | string                       | No       | Regex flags (regex type only)                                 |
-| `friendlyName` | string                       | No       | Sanitized model-visible label for obfuscate-mode placeholders |
+| `type` | `"plain"` 또는 `"regex"` | 예 | 일치 전략 |
+| `content` | string | 예 | 비밀 값(plain) 또는 정규식 패턴(regex) |
+| `mode` | `"obfuscate"` 또는 `"replace"` | 아니요 | 기본값: `"obfuscate"` |
+| `replacement` | string | 아니요 | 사용자 지정 대체 값(replace 모드 전용) |
+| `flags` | string | 아니요 | 정규식 플래그(regex 타입 전용) |
+| `friendlyName` | string | 아니요 | obfuscate 모드 자리표시자에서 모델에 표시할 정제된 레이블 |
 
-### Examples
+### 예제
 
-#### Plain secrets
+#### 일반 비밀 값
 
 ```yaml
 # Obfuscate a specific API key (default mode)
@@ -72,9 +72,9 @@ Each entry in the array has these fields:
   replacement: "********"
 ```
 
-#### Friendly names
+#### 알기 쉬운 이름
 
-`friendlyName` adds semantic context to reversible obfuscation placeholders without exposing the secret value:
+`friendlyName`은 비밀 값을 노출하지 않으면서 복원 가능한 난독화 자리표시자에 의미적 맥락을 더합니다.
 
 ```yaml
 - type: plain
@@ -82,24 +82,24 @@ Each entry in the array has these fields:
   friendlyName: GitHub Token
 ```
 
-This produces placeholders shaped like `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$`. The friendly name is sanitized to uppercase letters and digits, capped at 32 characters, and omitted if it sanitizes to an empty value. Invalid optional `friendlyName` metadata does not disable the secret entry; the secret still obfuscates with an unlabeled placeholder. A label is also dropped for a particular placeholder if it would expose a configured literal secret or match a configured secret regex.
+이렇게 하면 `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$` 형태의 자리표시자가 생성됩니다. 알기 쉬운 이름은 대문자와 숫자만 남도록 정제되고 최대 32자로 제한되며, 정제 후 빈 값이 되면 생략됩니다. 선택적 `friendlyName` 메타데이터가 잘못되어도 비밀 정보 항목은 비활성화되지 않으며, 레이블 없는 자리표시자로 계속 난독화됩니다. 특정 자리표시자의 레이블이 설정된 리터럴 비밀 값을 노출하거나 설정된 비밀 정보 정규식에 일치하는 경우에도 해당 레이블은 제거됩니다.
 
-Native Responses replay plaintext is obfuscated too, including message text, tool arguments/results, and file/web-search text. Dynamic definitions in `mcp_list_tools`, `tool_search_output`, and `additional_tools` also redact tool/namespace descriptions, shell skill descriptions, MCP annotations, and schema descriptive annotations and examples. Schema constraints (including `enum`/`const`), execution defaults, unknown schema extensions, identifiers, authentication/routing settings, and grammars remain unchanged and outside text redaction. Static `context.tools`, system prompts, and image/file bytes are unchanged.
+네이티브 Responses 재전송의 평문도 난독화됩니다. 여기에는 메시지 텍스트, 도구 인수 및 결과, 파일 및 웹 검색 텍스트가 포함됩니다. `mcp_list_tools`, `tool_search_output`, `additional_tools`의 동적 정의에서도 도구 및 네임스페이스 설명, 셸 스킬 설명, MCP 주석, 스키마의 설명용 주석과 예제를 가립니다. 스키마 제약 조건(`enum`/`const` 포함), 실행 기본값, 알 수 없는 스키마 확장, 식별자, 인증 및 라우팅 설정, 문법은 변경되지 않으며 텍스트 가림 처리 대상이 아닙니다. 정적 `context.tools`, 시스템 프롬프트, 이미지 및 파일 바이트도 변경되지 않습니다.
 
-Native collision values are collected through the same field traversal before redaction, so a value found only in a dynamic definition or search item can invalidate an earlier friendly prefix in history or pending advisor updates. Advisors re-scrub replay and its next-compaction source after maintenance commits, including snapshots containing newly discovered values. Encrypted replay and unknown protocol variants remain opaque; encrypted history cannot be retrospectively inspected or rewritten.
+네이티브 충돌 값은 가림 처리 전에 동일한 필드 순회를 통해 수집되므로, 동적 정의나 검색 항목에만 있는 값도 기록이나 대기 중인 어드바이저 업데이트의 기존 알기 쉬운 접두사를 무효화할 수 있습니다. 어드바이저는 유지 관리 커밋 후 새로 발견된 값이 포함된 스냅샷까지 포함하여 재전송 내용과 다음 압축의 원본을 다시 정제합니다. 암호화된 재전송과 알 수 없는 프로토콜 변형은 내부를 볼 수 없는 상태로 유지됩니다. 암호화된 기록은 소급하여 검사하거나 다시 쓸 수 없습니다.
 
-The 12-character hash base is an HMAC of the exact secret under a private per-install key (stored at `~/.omp/agent/secret-placeholder.key`, or `$XDG_STATE_HOME/omp/secret-placeholder.key` on XDG-enabled installs, never sent to a model). This prevents a transcript reader from dictionary-hashing a placeholder back to its secret. Secrets that differ only by case receive independent bases, so seeing one placeholder does not let a provider synthesize another by changing the case hint. If the key cannot be persisted on the lazy built-in-token path, the session warns and uses a process-ephemeral key; obfuscation remains reversible within that process but placeholders are not stable across restarts. A case-hint suffix labels the casing of the redacted value:
+12자 해시 본문은 설치별 비공개 키를 사용하여 정확한 비밀 값에 대해 계산한 HMAC입니다. 이 키는 `~/.omp/agent/secret-placeholder.key`에 저장되며, XDG가 활성화된 설치에서는 `$XDG_STATE_HOME/omp/secret-placeholder.key`에 저장됩니다. 모델에는 절대 전송되지 않습니다. 따라서 대화 기록을 읽는 사람이 사전의 후보 값을 해싱하여 자리표시자에서 비밀 값을 역추적할 수 없습니다. 대소문자만 다른 비밀 값에도 독립적인 해시 본문이 부여되므로, 제공자는 자리표시자 하나를 보고 대소문자 힌트만 바꾸어 다른 자리표시자를 만들어 낼 수 없습니다. 지연 처리되는 내장 토큰 경로에서 키를 영구 저장할 수 없으면 세션은 경고를 표시하고 프로세스 수명 동안만 유지되는 임시 키를 사용합니다. 해당 프로세스 안에서는 난독화를 계속 복원할 수 있지만, 재시작 후에는 자리표시자가 동일하게 유지되지 않습니다. 대소문자 힌트 접미사는 가려진 값의 대소문자 형태를 나타냅니다.
 
-| Hint | Meaning                                        |
+| 힌트 | 의미 |
 | ---- | ---------------------------------------------- |
-| `:U` | all cased ASCII letters are uppercase          |
-| `:L` | all cased ASCII letters are lowercase          |
-| `:C` | first cased ASCII letter uppercase, rest lower |
-| `:M` | mixed ASCII casing                             |
+| `:U` | 대소문자 구분이 있는 모든 ASCII 문자가 대문자 |
+| `:L` | 대소문자 구분이 있는 모든 ASCII 문자가 소문자 |
+| `:C` | 대소문자 구분이 있는 첫 ASCII 문자는 대문자, 나머지는 소문자 |
+| `:M` | ASCII 대소문자가 혼합됨 |
 
-`friendlyName` on regex entries labels the configured regex entry, not the matched value. Keep regex labels broad enough to be true for every match.
+정규식 항목의 `friendlyName`은 일치한 값이 아니라 설정된 정규식 항목을 나타냅니다. 모든 일치 결과에 적용될 수 있도록 정규식 레이블을 충분히 포괄적으로 지정하세요.
 
-#### Regex secrets
+#### 정규식 비밀 정보
 
 ```yaml
 # Obfuscate any AWS-style key
@@ -116,9 +116,9 @@ The 12-character hash base is an HMAC of the exact secret under a private per-in
   content: "/bearer\\s+[a-zA-Z0-9._~+\\/=-]+/i"
 ```
 
-Regex entries always scan globally (the `g` flag is enforced automatically). The regex literal syntax `/pattern/flags` is supported as an alternative to separate `content` + `flags` fields. Escaped slashes within the pattern (`\\/`) are handled correctly.
+정규식 항목은 항상 전체를 검색합니다(`g` 플래그가 자동으로 적용됩니다). `content`와 `flags` 필드를 따로 지정하는 대신 `/pattern/flags` 정규식 리터럴 구문도 사용할 수 있습니다. 패턴 안의 이스케이프된 슬래시(`\\/`)도 올바르게 처리됩니다.
 
-#### Replace mode with regex
+#### 정규식을 사용하는 replace 모드
 
 ```yaml
 # One-way replace connection strings (not reversible)
@@ -128,26 +128,26 @@ Regex entries always scan globally (the `g` flag is enforced automatically). The
   replacement: "postgres://***"
 ```
 
-## Invalid entries and files
+## 잘못된 항목과 파일
 
-- A missing `secrets.yml` is treated as no entries.
-- A parse failure or non-array document is ignored with a warning.
-- Invalid entries are skipped individually with a warning. `type` must be `plain` or `regex`; `content` must be a non-empty string; `mode`, `replacement`, `flags`, and regex syntax are validated as shown above.
-- Invalid optional `friendlyName` metadata is dropped without dropping an otherwise valid entry.
+- `secrets.yml`이 없으면 항목이 없는 것으로 처리합니다.
+- 파싱에 실패하거나 문서가 배열이 아니면 경고와 함께 무시합니다.
+- 잘못된 항목은 각각 경고와 함께 건너뜁니다. `type`은 `plain` 또는 `regex`여야 하고, `content`는 비어 있지 않은 문자열이어야 합니다. `mode`, `replacement`, `flags`, 정규식 구문은 위 설명에 따라 검증됩니다.
+- 선택적 `friendlyName` 메타데이터가 잘못되었으면 이를 제거하되, 나머지가 유효한 항목 자체는 유지합니다.
 
-## Interaction with automatic detection
+## 자동 탐지와의 상호 작용
 
-Environment variables are collected first, file-defined entries follow, and the built-in credential regex runs last so configured entries see matching content before the generic detector. Duplicate environment values are collapsed within the environment scan. Environment and file entries are not deduplicated against each other, so a plain value present in both is registered twice; both placeholders restore to the same secret, so deobfuscation is unaffected.
+환경 변수를 먼저 수집하고 파일에 정의된 항목을 그다음에 수집하며, 내장 자격 증명 정규식은 마지막에 실행됩니다. 따라서 일반 탐지기보다 설정된 항목이 일치하는 내용을 먼저 처리합니다. 환경 변수 검색 중 중복 값은 하나로 합쳐집니다. 환경 변수 항목과 파일 항목 사이에서는 중복을 제거하지 않으므로, 양쪽에 있는 일반 값은 두 번 등록됩니다. 두 자리표시자 모두 같은 비밀 값으로 복원되므로 난독화 해제에는 영향이 없습니다.
 
-## Key files
+## 주요 파일
 
-- `packages/coding-agent/src/secrets/index.ts` -- loading, merging, env var collection
-- `packages/coding-agent/src/secrets/obfuscator.ts` -- `SecretObfuscator` class, placeholder generation, message obfuscation
-- `packages/coding-agent/src/secrets/regex.ts` -- regex literal parsing and compilation
-- `packages/coding-agent/src/secrets/message-transform.ts` -- provider-context and local-context transforms
-- `packages/coding-agent/src/secrets/patterns.ts` -- built-in credential patterns
-- `packages/coding-agent/src/secrets/settings.ts` -- `secrets.enabled` setting definition
+- `packages/coding-agent/src/secrets/index.ts` -- 로드, 병합, 환경 변수 수집
+- `packages/coding-agent/src/secrets/obfuscator.ts` -- `SecretObfuscator` 클래스, 자리표시자 생성, 메시지 난독화
+- `packages/coding-agent/src/secrets/regex.ts` -- 정규식 리터럴 파싱 및 컴파일
+- `packages/coding-agent/src/secrets/message-transform.ts` -- 제공자 컨텍스트 및 로컬 컨텍스트 변환
+- `packages/coding-agent/src/secrets/patterns.ts` -- 내장 자격 증명 패턴
+- `packages/coding-agent/src/secrets/settings.ts` -- `secrets.enabled` 설정 정의
 
-## See also
+## 함께 보기
 
-- [`auth-broker-gateway.md`](./auth-broker-gateway.md) -- remote credential vault and forward-proxy that keep provider OAuth refresh tokens and access tokens off developer hosts entirely (complementary to in-process obfuscation).
+- [`auth-broker-gateway.md`](./auth-broker-gateway.md) -- 제공자 OAuth 갱신 토큰과 액세스 토큰을 개발자 호스트에 전혀 두지 않도록 하는 원격 자격 증명 저장소 및 정방향 프록시(프로세스 내부 난독화를 보완).

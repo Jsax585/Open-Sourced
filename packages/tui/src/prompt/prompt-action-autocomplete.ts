@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type AutocompleteItem,
 	type AutocompleteProvider,
@@ -284,49 +285,49 @@ export function createPromptActionAutocompleteProvider(
 	const actions: PromptActionDefinition[] = [
 		{
 			id: "copy-line",
-			label: "Copy current line",
+			label: t("Copy current line"),
 			description: formatKeyHints(options.keybindings.getKeys("app.clipboard.copyLine")),
 			keywords: ["copy", "line", "clipboard", "current"],
 			execute: options.copyCurrentLine,
 		},
 		{
 			id: "copy-prompt",
-			label: "Copy whole prompt",
+			label: t("Copy whole prompt\u0004packages/tui/src/prompt/prompt-action-autocomplete.ts:createPromptActionAutocompleteProvider.actions.label"),
 			description: formatKeyHints(options.keybindings.getKeys("app.clipboard.copyPrompt")),
 			keywords: ["copy", "prompt", "clipboard", "message"],
 			execute: options.copyPrompt,
 		},
 		{
 			id: "undo",
-			label: "Undo",
+			label: t("Undo"),
 			description: formatKeyHints(editorKeybindings.getKeys("tui.editor.undo")),
 			keywords: ["undo", "revert", "edit", "history"],
 			execute: options.undo,
 		},
 		{
 			id: "cursor-message-end",
-			label: "Move cursor to message end",
-			description: "Current message",
+			label: t("Move cursor to message end"),
+			description: t("Current message"),
 			keywords: ["move", "cursor", "message", "end", "prompt", "last", "bottom"],
 			execute: options.moveCursorToMessageEnd,
 		},
 		{
 			id: "cursor-message-start",
-			label: "Move cursor to message start",
-			description: "Current message",
+			label: t("Move cursor to message start"),
+			description: t("Current message"),
 			keywords: ["move", "cursor", "message", "start", "beginning", "prompt", "first", "top"],
 			execute: options.moveCursorToMessageStart,
 		},
 		{
 			id: "cursor-line-start",
-			label: "Move cursor to line start",
+			label: t("Move cursor to line start"),
 			description: formatKeyHints(editorKeybindings.getKeys("tui.editor.cursorLineStart")),
 			keywords: ["move", "cursor", "line", "start", "beginning", "home"],
 			execute: options.moveCursorToLineStart,
 		},
 		{
 			id: "cursor-line-end",
-			label: "Move cursor to line end",
+			label: t("Move cursor to line end"),
 			description: formatKeyHints(editorKeybindings.getKeys("tui.editor.cursorLineEnd")),
 			keywords: ["move", "cursor", "line", "end"],
 			execute: options.moveCursorToLineEnd,

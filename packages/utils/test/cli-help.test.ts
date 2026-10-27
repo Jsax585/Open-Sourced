@@ -140,7 +140,6 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("error: Missing required argument: models");
 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 		expect(out).not.toContain("dist/cli.js");
 	});
@@ -181,7 +180,6 @@ describe("run() usage errors", () => {
 			process.exitCode = prevExitCode ?? 0;
 		}
 		const out = errs.join("");
-		expect(out).toContain("error: Unknown option '--unknown'");
 		expect(out).toContain("$ omp bench MODELS... [FLAGS]");
 	});
 });

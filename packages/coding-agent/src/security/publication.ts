@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
@@ -125,7 +126,7 @@ function normalizePublishedPath(input: string): string {
 		/^[a-zA-Z]:\//.test(normalized) ||
 		segments.some(segment => segment === "..")
 	) {
-		throw new Error(`Security finding paths must be repository-relative: ${input}`);
+		throw new Error(t("Security finding paths must be repository-relative: {0}", `${input}`));
 	}
 	return normalized;
 }
@@ -136,7 +137,7 @@ function toLocation(
 ): SecurityLocation {
 	const normalizedPath = normalizePublishedPath(input.path);
 	if (!pathMatchesSecurityScope(normalizedPath, plan.target.includePaths, plan.target.excludePaths)) {
-		throw new Error(`Security finding path is outside the immutable scan scope: ${input.path}`);
+		throw new Error(t("Security finding path is outside the immutable scan scope: {0}", `${input.path}`));
 	}
 	const location: SecurityLocation = {
 		path: normalizedPath,
@@ -335,13 +336,13 @@ export function createSecurityPublicationTool(
 	let published = false;
 	return {
 		name: "security_publish",
-		label: "Publish Security Scan",
+		label: t("Publish Security Scan"),
 		description: securityPublishDescription.trim(),
 		parameters: securityPublishSchema,
 		approval: "write",
 		strict: true,
 		async execute(_toolCallId, params) {
-			if (published) throw new Error(`Security scan ${options.scanId} has already been published`);
+			if (published) throw new Error(t("Security scan {0} has already been published", `${options.scanId}`));
 			published = true;
 			let persisted = false;
 			try {

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { decodeBase64ImageData, formatBytes, parseImageMetadata, SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils";
 
@@ -40,7 +41,7 @@ export class ImageInputTooLargeError extends Error {
 	readonly maxBytes: number;
 
 	constructor(bytes: number, maxBytes: number) {
-		super(`Image file too large: ${formatBytes(bytes)} exceeds ${formatBytes(maxBytes)} limit.`);
+		super(t("Image file too large: {0} exceeds {1} limit.", `${formatBytes(bytes)}`, `${formatBytes(maxBytes)}`));
 		this.name = "ImageInputTooLargeError";
 		this.bytes = bytes;
 		this.maxBytes = maxBytes;
@@ -58,7 +59,7 @@ export class InvalidImageDataError extends Error {
 	readonly reason: string;
 
 	constructor(label: string, mimeType: string, reason: string) {
-		super(`${label} is not a decodable ${mimeType} image: ${reason}`);
+		super(t("{0} is not a decodable {1} image: {2}", `${label}`, `${mimeType}`, `${reason}`));
 		this.name = "InvalidImageDataError";
 		this.reason = reason;
 	}
@@ -88,7 +89,7 @@ export async function imageDecodeFailureReason(image: ImageContent): Promise<str
 	const { bytes } = decoded;
 	const detected = parseImageMetadata(bytes);
 	if (detected && detected.mimeType !== image.mimeType.toLowerCase()) {
-		return `declared ${image.mimeType} but contains ${detected.mimeType}`;
+		return t("declared {0} but contains {1}", `${image.mimeType}`, `${detected.mimeType}`);
 	}
 	try {
 		// Decode in full (that is what catches a hole in the compressed stream),

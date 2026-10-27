@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { UsageResetCreditDetail } from "@oh-my-pi/pi-ai";
 import { Container, matchesKey, ScrollView, Spacer, Text, TruncatedText } from "../index";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
@@ -111,7 +112,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 	#pickerItems: readonly TspPickerItem[] | undefined;
 
 	constructor(accounts: ResetUsageAccount[], onSelect: (account: ResetUsageAccount) => void, onCancel: () => void) {
-		super("Spend a saved rate-limit reset", "omp.overlay.reset-usage");
+		super(localize("Spend a saved rate-limit reset"), "omp.overlay.reset-usage");
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		const firstRedeemable = accounts.find(account => account.redeemableCount > 0);
@@ -182,7 +183,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 
 		if (total === 0) {
 			this.#listContainer.addChild(
-				new TruncatedText(theme.fg("muted", "No provider accounts with saved resets"), 0, 0),
+				new TruncatedText(theme.fg("muted", localize("No provider accounts with saved resets")), 0, 0),
 			);
 		}
 
@@ -206,12 +207,12 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const subject = account.credit?.title ? `“${account.credit.title}”` : "1 saved reset";
 		const notes: string[] = [];
 		if (account.credit?.program === "juniper_tide") {
-			notes.push("This resets Claude's 5h session limit only; weekly limits stay unchanged.");
+			notes.push(localize("This resets Claude's 5h session limit only; weekly limits stay unchanged."));
 		} else if (account.credit?.clears?.length) {
 			notes.push(`Covers ${account.credit.clears.map(formatUsageResetWindow).join(", ")}.`);
 		}
 		if (account.credit?.requiresLimit === false) {
-			notes.push("Optional early use: this can be spent before the covered limit is reached.");
+			notes.push(localize("Optional early use: this can be spent before the covered limit is reached."));
 		}
 		return { subject, notes };
 	}
@@ -266,8 +267,8 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		if (!account) return;
 		if (account.redeemableCount <= 0) {
 			this.#statusMessage = account.unavailableReason
-				? `That account's saved resets are unavailable: ${account.unavailableReason}`
-				: "That account has no saved resets usable right now.";
+				? localize("That account's saved resets are unavailable: {0}", `${account.unavailableReason}`)
+				: localize("That account has no saved resets usable right now.");
 			this.#updateList();
 			return;
 		}
@@ -306,7 +307,7 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: [span("No provider accounts with saved resets", "muted")],
+					empty: [span(localize("No provider accounts with saved resets"), "muted")],
 					max: { lines: RESET_SELECTOR_MAX_VISIBLE },
 				},
 				this.#nativeItems,
@@ -338,18 +339,18 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 		const pending = this.#menu.visibleItems.find(item => this.#menu.isPending(item));
 		// The strip asks the question over the row; what the reset covers reads in the subtitle meanwhile.
 		let confirm: TspPickerProps["confirm"] = null;
-		let subtitle: TspPickerProps["subtitle"] = "Spend a saved reset to refresh an account's rate limit now";
+		let subtitle: TspPickerProps["subtitle"] = localize("Spend a saved reset to refresh an account's rate limit now");
 		if (pending) {
 			const { subject, notes } = this.#confirmationNotes(pending);
-			confirm = { text: `Spend ${subject} on ${oneLine(pending.label)}?`, act: "confirm", label: "Spend" };
+			confirm = { text: localize("Spend {1} on {0}?", `${oneLine(pending.label)}`, `${subject}`), act: "confirm", label: localize("Spend\u0004packages/tui/src/overlays/reset-usage-selector.ts:ResetUsageSelectorComponent.#describePicker.label") };
 			if (notes.length > 0) subtitle = oneLine(notes.join(" "));
 		}
 		if (this.#statusMessage) subtitle = [span(oneLine(this.#statusMessage), "warning")];
 		this.#pickerRoot = dockedPicker({
-			title: "Rate-limit resets",
+			title: localize("Rate-limit resets"),
 			subtitle,
 			icon: "refresh",
-			noun: "accounts",
+			noun: localize("accounts"),
 			size: "md",
 			layout: "cards",
 			preview: "none",
@@ -363,8 +364,8 @@ export class ResetUsageSelectorComponent extends OverlayPanel {
 				.filter(account => account.active)
 				.map(account => this.#menu.adapter.getKey(account)),
 			selected: this.#menu.selectedKey ?? null,
-			empty: "No provider accounts with saved resets",
-			actions: [pickerAction("confirm", "Spend reset", "enter", { primary: true }), CLOSE_ACTION],
+			empty: localize("No provider accounts with saved resets"),
+			actions: [pickerAction("confirm", localize("Spend reset"), "enter", { primary: true }), CLOSE_ACTION],
 			confirm,
 		});
 		return this.#pickerRoot;

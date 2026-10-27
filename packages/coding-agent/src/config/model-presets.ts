@@ -10,6 +10,7 @@
  * `--config` overlay, a project config in global mode, or the global config in
  * project mode) are reported back instead of being silently kept.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
@@ -32,20 +33,20 @@ type PresetLookup = { kind: "found"; preset: ModelPreset } | { kind: "missing" }
 
 /** Validate one raw `modelPresets` entry; hand-edited config can hold anything. */
 function parseModelPreset(raw: unknown): ModelPreset | string {
-	if (!isRecord(raw)) return "it is not a mapping";
+	if (!isRecord(raw)) return t("it is not a mapping");
 	const roles = raw.modelRoles;
-	if (!isRecord(roles)) return "`modelRoles` is missing or not a mapping";
+	if (!isRecord(roles)) return t("`modelRoles` is missing or not a mapping");
 	const modelRoles: Record<string, string> = {};
 	for (const role of Object.keys(roles)) {
 		const value = roles[role];
-		if (typeof value !== "string" || value.trim() === "") return `role \`${role}\` is not a model selector`;
+		if (typeof value !== "string" || value.trim() === "") return t("role `{0}` is not a model selector", `${role}`);
 		modelRoles[role] = value;
 	}
 	const level = raw.defaultThinkingLevel;
 	if (level === undefined) return { modelRoles };
 	const thinking = typeof level === "string" ? parseConfiguredThinkingLevel(level) : undefined;
 	if (thinking === undefined || !isDefaultThinkingLevel(thinking)) {
-		return "`defaultThinkingLevel` is not a thinking level";
+		return t("`defaultThinkingLevel` is not a thinking level");
 	}
 	return { modelRoles, defaultThinkingLevel: thinking };
 }
@@ -103,7 +104,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
  */
 export function saveModelPreset(settings: Settings, name: string): ModelPreset {
 	if (!isValidModelPresetName(name)) {
-		throw new Error(`Invalid preset name "${name}": use a letter, then letters, digits, - or _`);
+		throw new Error(t("Invalid preset name \"{0}\": use a letter, then letters, digits, - or _", `${name}`));
 	}
 	const modelRoles: Record<string, string> = {};
 	for (const [role, selector] of Object.entries(settings.getModelRoles())) {
@@ -145,19 +146,19 @@ export function modelPresetShadowOwner(
 }
 
 const SOURCE_LABELS: Record<SettingProvenance, string> = {
-	env: "environment",
-	runtime: "command line",
-	overlay: "--config file",
-	project: "project config",
-	global: "global config",
-	default: "default",
+	env: t("environment"),
+	runtime: t("command line"),
+	overlay: t("--config file"),
+	project: t("project config"),
+	global: t("global config"),
+	default: t("default"),
 };
 
 /** Status line after saving `name`, naming the higher layer whose same-name preset still wins, if any. */
 export function modelPresetSavedMessage(settings: Settings, name: string): string {
 	const owner = modelPresetShadowOwner(settings, name);
-	if (owner === undefined) return `Saved model preset "${name}"`;
-	return `Saved model preset "${name}" to the global config, but the ${SOURCE_LABELS[owner]} still defines a preset of the same name, which takes precedence`;
+	if (owner === undefined) return t("Saved model preset \"{0}\"", `${name}`);
+	return t("Saved model preset \"{0}\" to the global config, but the {1} still defines a preset of the same name, which takes precedence", `${name}`, `${SOURCE_LABELS[owner]}`);
 }
 
 /** Serialize default-role mutations with the model hub's assign/unassign paths. */
@@ -244,12 +245,12 @@ function resolveLiveDefault(
 		preset.defaultThinkingLevel ?? parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
 	if (!roleValue) {
 		const model = pickAutomaticDefault(session, candidates);
-		return model ? { model, thinkingLevel: fallbackLevel } : "no model with configured credentials is available";
+		return model ? { model, thinkingLevel: fallbackLevel } : t("no model with configured credentials is available");
 	}
 	const resolved = resolveModelRoleValue(roleValue, candidates, { settings });
-	if (!resolved.model) return `default model \`${roleValue}\` is not available`;
+	if (!resolved.model) return t("default model `{0}` is not available", `${roleValue}`);
 	if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
-		return `no credentials for ${resolved.model.provider}/${resolved.model.id}`;
+		return t("no credentials for {0}/{1}", `${resolved.model.provider}`, `${resolved.model.id}`);
 	}
 	return {
 		model: resolved.model,
@@ -352,16 +353,16 @@ async function applyModelPresetLocked(
 		};
 		const resolved = resolveModelRoleValue(presetDefault, candidates, { settings, roleLookup });
 		if (!resolved.model)
-			return { kind: "unavailable", reason: `default model \`${presetDefault}\` is not available` };
+			return { kind: "unavailable", reason: t("default model `{0}` is not available", `${presetDefault}`) };
 		if (!session.modelRegistry.hasConfiguredAuth(resolved.model)) {
 			return {
 				kind: "unavailable",
-				reason: `no credentials for ${resolved.model.provider}/${resolved.model.id}`,
+				reason: t("no credentials for {0}/{1}", `${resolved.model.provider}`, `${resolved.model.id}`),
 			};
 		}
 	} else if (!pickAutomaticDefault(session, candidates)) {
 		// No `default` to apply and nothing to fall back to: refuse before writing.
-		return { kind: "unavailable", reason: "no model with configured credentials is available" };
+		return { kind: "unavailable", reason: t("no model with configured credentials is available") };
 	}
 
 	writePresetRoles(settings, preset);
@@ -390,7 +391,7 @@ async function applyModelPresetLocked(
 }
 
 function describeRoleValue(value: string | undefined): string {
-	return value ?? "(unset)";
+	return value ?? t("(unset)");
 }
 
 /** One line per role (and the thinking level) the preset could not set, for status output. */
@@ -400,11 +401,11 @@ export function describeShadowedRoles(
 ): string[] {
 	const lines = shadowed.map(
 		entry =>
-			`${entry.role}: ${describeRoleValue(entry.actual)} from ${SOURCE_LABELS[entry.source]} (preset: ${describeRoleValue(entry.expected)})`,
+			t("{0}: {1} from {2} (preset: {3})", `${entry.role}`, `${describeRoleValue(entry.actual)}`, `${SOURCE_LABELS[entry.source]}`, `${describeRoleValue(entry.expected)}`),
 	);
 	if (thinking) {
 		lines.push(
-			`defaultThinkingLevel: ${describeRoleValue(thinking.actual)} from ${SOURCE_LABELS[thinking.source]} (preset: ${thinking.expected})`,
+			t("defaultThinkingLevel: {0} from {1} (preset: {2})", `${describeRoleValue(thinking.actual)}`, `${SOURCE_LABELS[thinking.source]}`, `${thinking.expected}`),
 		);
 	}
 	return lines;
@@ -419,19 +420,19 @@ export function isCleanModelPresetSwitch(result: ModelPresetSwitchResult): boole
 export function formatModelPresetSwitch(name: string, result: ModelPresetSwitchResult): string {
 	switch (result.kind) {
 		case "missing":
-			return `Preset not found: ${name}`;
+			return t("Preset not found: {0}", `${name}`);
 		case "invalid":
-			return `Preset "${name}" is malformed: ${result.reason}`;
+			return t("Preset \"{0}\" is malformed: {1}", `${name}`, `${result.reason}`);
 		case "unavailable":
-			return `Preset "${name}" not applied: ${result.reason}`;
+			return t("Preset \"{0}\" not applied: {1}", `${name}`, `${result.reason}`);
 		case "failed":
-			return `Preset "${name}" roles saved, but the model was not switched: ${result.reason}`;
+			return t("Preset \"{0}\" roles saved, but the model was not switched: {1}", `${name}`, `${result.reason}`);
 		case "switched": {
 			const thinking = result.thinkingLevel ? ` · ${result.thinkingLevel}` : "";
 			const model = `${result.model.provider}/${result.model.id}${thinking}`;
 			const elsewhere = describeShadowedRoles(result.shadowed, result.shadowedThinking);
-			if (elsewhere.length === 0) return `Switched to preset "${name}" (${model})`;
-			return `Switched to preset "${name}" (${model}); still set elsewhere: ${elsewhere.join("; ")}`;
+			if (elsewhere.length === 0) return t("Switched to preset \"{0}\" ({1})", `${name}`, `${model}`);
+			return t("Switched to preset \"{0}\" ({1}); still set elsewhere: {2}", `${name}`, `${model}`, `${elsewhere.join("; ")}`);
 		}
 	}
 }

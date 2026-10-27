@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as url from "node:url";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { BracketedPasteHandler } from "../bracketed-paste";
@@ -51,7 +52,7 @@ import { fgOrPlain, theme } from "../theme/theme";
 const SHELL_SIGIL_RE = /^\s*(?:!!?|\$\$?)[ \t]?/;
 
 /** The untitled session's TSP placeholder; the rotating ANSI hints (thinking effort, …) move into control tooltips. */
-const NATIVE_COMPOSER_PLACEHOLDER = "What are we cooking?";
+const NATIVE_COMPOSER_PLACEHOLDER = localize("What are we cooking?");
 
 /** Live composer state the TSP layout shows; the interactive host wires {@link CustomEditor.composerState}. */
 export interface ComposerNativeState {
@@ -899,7 +900,7 @@ export class CustomEditor extends Editor {
 					);
 					if (this.#queueShorthandActive && (value.startsWith("->") || value.startsWith("=>"))) {
 						const icon = typeof theme === "undefined" ? "➤" : theme.nav.selected;
-						return `${fgOrPlain("dim", `Queueing ${icon}`)}${highlighted.slice(2)}`;
+						return `${fgOrPlain("dim", localize("Queueing {0}", `${icon}`))}${highlighted.slice(2)}`;
 					}
 					if (this.#queueListActive) {
 						const markerMatch = QUEUE_LIST_MARKER_RE.exec(value);
@@ -1071,7 +1072,7 @@ export class CustomEditor extends Editor {
 	override describePlaceholder = (): TspText => {
 		const { viewing, title } = this.composerState();
 		const agent = viewing?.at(-1);
-		if (agent !== undefined) return `Message ${agent}`;
+		if (agent !== undefined) return localize("Message {0}", `${agent}`);
 		if (!title) return NATIVE_COMPOSER_PLACEHOLDER;
 		if (this.#titlePlaceholder?.title !== title) {
 			this.#titlePlaceholder = { title, text: [{ t: `“${title}”`, s: "em" }] };
@@ -1159,7 +1160,7 @@ export class CustomEditor extends Editor {
 								rate !== undefined &&
 									node(
 										"rate",
-										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: "Generation rate" },
+										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: localize("Generation rate") },
 										undefined,
 										"rate",
 									),
@@ -1204,7 +1205,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.crumb",
 					text: id,
 					wrap: "none",
-					title: `View ${id}`,
+					title: localize("View {0}", `${id}`),
 					actions: { click: `${FOCUS_ACTION}${id}` },
 				},
 				undefined,
@@ -1215,7 +1216,7 @@ export class CustomEditor extends Editor {
 			row(
 				[
 					node("icon", { name: "eye" }, undefined, "icon"),
-					node("text", { text: "Viewing", wrap: "none" }, undefined, "label"),
+					node("text", { text: localize("Viewing"), wrap: "none" }, undefined, "label"),
 					...crumbs,
 					node("text", { role: "omp.composer.agent", text: agent, wrap: "none" }, undefined, "agent"),
 					node(
@@ -1224,12 +1225,12 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.exit",
 							gap: "xs",
 							align: "center",
-							title: `Back to the main session  ${back}`,
+							title: localize("Back to the main session  {0}", `${back}`),
 							actions: { click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` },
 						},
 						[
 							node("kbd", { keys: [interruptKey] }, undefined, "key"),
-							node("text", { text: "main", wrap: "none" }, undefined, "label"),
+							node("text", { text: localize("main"), wrap: "none" }, undefined, "label"),
 						],
 						"exit",
 					),
@@ -1238,7 +1239,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.focus",
 					gap: "xs",
 					align: "center",
-					title: `Viewing subagent ${agent}: what you send goes to it`,
+					title: localize("Viewing subagent {0}: what you send goes to it", `${agent}`),
 				},
 			),
 			"focus",
@@ -1266,7 +1267,7 @@ export class CustomEditor extends Editor {
 						{
 							level: thinking,
 							role: "omp.composer.model.effort",
-							title: `Thinking effort: ${thinking}${thinkingHint}`,
+							title: localize("Thinking effort: {0}{1}", `${thinking}`, `${thinkingHint}`),
 							actions: { click: "thinking.cycle" },
 						},
 						undefined,
@@ -1282,7 +1283,7 @@ export class CustomEditor extends Editor {
 					gap: "xs",
 					align: "center",
 					tone: facts.model.tone,
-					title: modelKey ? `Switch model  ${formatTooltipKey(modelKey)}` : "Switch model",
+					title: modelKey ? localize("Switch model  {0}", `${formatTooltipKey(modelKey)}`) : localize("Switch model"),
 					actions: { click: "status.model" },
 				},
 				[
@@ -1301,7 +1302,7 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.effort",
 							gap: "xs",
 							align: "center",
-							title: `Thinking effort${thinkingHint}`,
+							title: localize("Thinking effort{0}", `${thinkingHint}`),
 							actions: { click: "thinking.cycle" },
 						},
 						[
@@ -1332,20 +1333,20 @@ export class CustomEditor extends Editor {
 							align: "center",
 							tone: recording ? "error" : starting || transcribing ? "pending" : undefined,
 							title: recording
-								? "Stop recording and transcribe"
+								? localize("Stop recording and transcribe")
 								: starting
-									? "Cancel dictation"
+									? localize("Cancel dictation")
 									: transcribing
-										? "Transcribing dictation"
-										: "Start dictation",
+										? localize("Transcribing dictation")
+										: localize("Start dictation"),
 							// The model can take a while to load on first use, so a start stays cancellable.
 							actions: transcribing ? undefined : { click: "dictation.toggle" },
 						},
 						starting || transcribing
-							? [node("spinner", { label: starting ? "Starting…" : "Transcribing…" }, undefined, "pending")]
+							? [node("spinner", { label: starting ? localize("Starting…") : localize("Transcribing…") }, undefined, "pending")]
 							: compact([
 									node("icon", { name: recording ? "stop" : "mic" }, undefined, "icon"),
-									recording && node("text", { text: "Recording · Stop", wrap: "none" }, undefined, "label"),
+									recording && node("text", { text: localize("Recording · Stop"), wrap: "none" }, undefined, "label"),
 								]),
 						"dictation",
 					);
@@ -1355,9 +1356,9 @@ export class CustomEditor extends Editor {
 					"text",
 					{
 						role: "omp.composer.stop",
-						text: "Stop",
+						text: localize("Stop"),
 						tone: "error",
-						title: `Stop  ${formatTooltipKey(interruptKey)}`,
+						title: localize("Stop  {0}", `${formatTooltipKey(interruptKey)}`),
 						actions: { click: "interrupt" },
 					},
 					undefined,
@@ -1368,7 +1369,7 @@ export class CustomEditor extends Editor {
 					{
 						role: "omp.composer.send",
 						keys: ["enter"],
-						title: dictating ? "Finish dictation before sending" : `Send  ${formatTooltipKey("enter")}`,
+						title: dictating ? localize("Finish dictation before sending") : localize("Send  {0}", `${formatTooltipKey("enter")}`),
 						tone: dictating ? "muted" : undefined,
 						actions: dictating ? undefined : { click: "submit" },
 					},
@@ -1376,12 +1377,12 @@ export class CustomEditor extends Editor {
 					"send",
 				);
 		if (!shell) return { focus, mode: undefined, model, effort, dictation, submit };
-		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
+		const runs = shell.kind === "bash" ? localize("Runs in your shell") : localize("Runs in Python");
 		const mode = keyed(
 			row(
 				compact([
 					shell.excluded &&
-						node("icon", { name: "eye-off", title: "Not sent to the model" }, undefined, "excluded"),
+						node("icon", { name: "eye-off", title: localize("Not sent to the model\u0004packages/tui/src/prompt/custom-editor.ts:CustomEditor.#describeComposerControls.mode.title") }, undefined, "excluded"),
 					node(
 						"text",
 						{ spans: [span(shell.kind, shell.kind === "bash" ? "bashMode" : "pythonMode")], wrap: "none" },
@@ -1393,7 +1394,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.mode",
 					gap: "xs",
 					align: "center",
-					title: shell.excluded ? `${runs} · not sent to the model` : runs,
+					title: shell.excluded ? localize("{0} · not sent to the model", `${runs}`) : runs,
 				},
 			),
 			"mode",

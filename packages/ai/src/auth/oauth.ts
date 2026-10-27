@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "../registry";
@@ -69,7 +70,7 @@ export class OAuthAccounts implements OAuthApi {
 			? (signal?: AbortSignal) =>
 					untilAborted(signal, () =>
 						ctrl.onPrompt({
-							message: "Paste the authorization code (or full redirect URL):",
+							message: t("Paste the authorization code (or full redirect URL):"),
 						}),
 					)
 			: undefined;

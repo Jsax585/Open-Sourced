@@ -1,5 +1,7 @@
 /** `goal` — goal-mode lifecycle: set/check/complete/resume/drop an objective with an optional token budget. */
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
+import { fmtTokens, formatStatus } from "../../lib/format";
 import type { Tone } from "../parts";
 import { Badge, InvalidArg, Kv, KvGrid, Note, Output, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -33,9 +35,9 @@ function goalOf(details: Record<string, unknown> | null): GoalView | null {
 function describeOp(op: string | null): string {
 	switch (op) {
 		case "create":
-			return "set";
+			return t("set");
 		case "get":
-			return "check";
+			return t("check");
 		default:
 			return op ?? "?";
 	}
@@ -55,35 +57,23 @@ function statusTone(status: string): Tone | undefined {
 	}
 }
 
-/** Compact count: 999, 1.5K, 25K, 1.5M, 2B. */
-function fmtNum(n: number): string {
-	if (n < 1_000) return `${n}`;
-	const scaled = (v: number): string => {
-		const s = v < 10 ? v.toFixed(1) : `${Math.round(v)}`;
-		return s.endsWith(".0") ? s.slice(0, -2) : s;
-	};
-	if (n < 1_000_000) return `${scaled(n / 1_000)}K`;
-	if (n < 1_000_000_000) return `${scaled(n / 1_000_000)}M`;
-	return `${scaled(n / 1_000_000_000)}B`;
-}
-
 /** Coarse duration label from seconds: 45s, 12m, 3h, 2d. */
 function fmtDuration(seconds: number): string {
 	const s = Math.max(0, Math.round(seconds));
-	if (s < 60) return `${s}s`;
+	if (s < 60) return t("{0}s", `${s}`);
 	const m = Math.round(s / 60);
-	if (m < 60) return `${m}m`;
+	if (m < 60) return t("{0}m", `${m}`);
 	const h = Math.round(m / 60);
-	if (h < 48) return `${h}h`;
-	return `${Math.round(h / 24)}d`;
+	if (h < 48) return t("{0}h", `${h}`);
+	return t("{0}d", `${Math.round(h / 24)}`);
 }
 
 /** "12K / 100K tokens (88K left)" or "12K tokens" without a budget. */
 function tokensLine(goal: GoalView): string {
-	const used = fmtNum(goal.tokensUsed ?? 0);
-	if (goal.tokenBudget === null) return `${used} tokens`;
+	const used = fmtTokens(goal.tokensUsed ?? 0);
+	if (goal.tokenBudget === null) return t("{0} tokens", `${used}`);
 	const left = Math.max(0, goal.tokenBudget - (goal.tokensUsed ?? 0));
-	return `${used} / ${fmtNum(goal.tokenBudget)} tokens (${fmtNum(left)} left)`;
+	return t("{0} / {1} tokens ({2} left)", `${used}`, `${fmtTokens(goal.tokenBudget)}`, `${fmtTokens(left)}`);
 }
 
 function Summary({ args, result }: ToolRenderProps): ReactNode {
@@ -95,11 +85,11 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{op === null && args.op !== undefined ? <InvalidArg what="op" /> : <span>{describeOp(op)}</span>}
-			{goal && <Badge tone={statusTone(goal.status)}>{goal.status}</Badge>}
+			{goal && <Badge tone={statusTone(goal.status)}>{formatStatus(goal.status)}</Badge>}
 			{objective !== null && objective.trim() !== "" && (
 				<span className="tv-muted">“{truncate(normalizeWs(objective), 64)}”</span>
 			)}
-			{budget !== null && <span className="tv-faint">budget {fmtNum(budget)}</span>}
+			{budget !== null && <span className="tv-faint">{t("budget {0}", `${fmtTokens(budget)}`)}</span>}
 		</>
 	);
 }
@@ -115,24 +105,24 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<Kv k="op">{describeOp(op)}</Kv>
+				<Kv k={t("op")}>{describeOp(op)}</Kv>
 				{goal && (
-					<Kv k="status">
-						<Badge tone={statusTone(goal.status)}>{goal.status}</Badge>
+					<Kv k={t("status")}>
+						<Badge tone={statusTone(goal.status)}>{formatStatus(goal.status)}</Badge>
 					</Kv>
 				)}
-				{objective !== null && objective.trim() !== "" && <Kv k="objective">{objective.trim()}</Kv>}
+				{objective !== null && objective.trim() !== "" && <Kv k={t("objective")}>{objective.trim()}</Kv>}
 				{hasTokens && goal ? (
-					<Kv k="tokens">{tokensLine(goal)}</Kv>
+					<Kv k={t("tokens")}>{tokensLine(goal)}</Kv>
 				) : (
-					budgetArg !== null && <Kv k="budget">{fmtNum(budgetArg)} tokens</Kv>
+					budgetArg !== null && <Kv k={t("budget")}>{t("{0} tokens", `${fmtTokens(budgetArg)}`)}</Kv>
 				)}
 				{goal !== null && goal.timeUsedSeconds !== null && goal.timeUsedSeconds > 0 && (
-					<Kv k="elapsed">{fmtDuration(goal.timeUsedSeconds)}</Kv>
+					<Kv k={t("elapsed")}>{fmtDuration(goal.timeUsedSeconds)}</Kv>
 				)}
 			</KvGrid>
-			{details !== null && goal === null && !result?.isError && <Note tone="warn">no active goal</Note>}
-			{report !== null && report !== "" && <Output text={report} title="Report" maxLines={12} />}
+			{details !== null && goal === null && !result?.isError && <Note tone="warn">{t("no active goal")}</Note>}
+			{report !== null && report !== "" && <Output text={report} title={t("Report")} maxLines={12} />}
 			{(goal === null || result?.isError) && <ResultText result={result} maxLines={10} />}
 		</>
 	);

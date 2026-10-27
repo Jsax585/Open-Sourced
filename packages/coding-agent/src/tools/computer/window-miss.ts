@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { DesktopWindow } from "@oh-my-pi/pi-natives";
 import { truncate } from "@oh-my-pi/pi-utils/format";
 
@@ -25,13 +26,13 @@ export function describeWindowMiss(
 	const call = `computer.apps.open(${JSON.stringify(app)})`;
 	const hint =
 		route === "shows-window"
-			? `${call} opens it by that exact name or ID, or shows a window of it if it runs without one, and returns it with that window (window: null if none appears within 3 s).\n`
-			: `${call} launches it by that exact name or ID.\n`;
+			? t("{0} opens it by that exact name or ID, or shows a window of it if it runs without one, and returns it with that window (window: null if none appears within 3 s).\n", `${call}`)
+			: t("{0} launches it by that exact name or ID.\n", `${call}`);
 	const note =
 		needle !== undefined && !windows.some(window => matched(window.app))
-			? `No open window belongs to an app matching ${JSON.stringify(app)}.\n${hint}`
+			? t("No open window belongs to an app matching {0}.\n{1}", `${JSON.stringify(app)}`, `${hint}`)
 			: "";
-	if (windows.length === 0) return `${note}No windows are open.`;
+	if (windows.length === 0) return t("{0}No windows are open.", `${note}`);
 	const byApp = Map.groupBy(windows, window => window.app);
 	const focusedApp = windows.find(window => window.focused)?.app;
 	const rank = (name: string): number => (matched(name) ? 0 : name === focusedApp ? 1 : 2);

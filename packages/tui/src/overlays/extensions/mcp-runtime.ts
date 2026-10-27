@@ -54,6 +54,7 @@ export interface MCPConnectionDisplay {
 	prompts?: MCPResourceDisplay[];
 }
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { PREVIEW_LIMITS } from "../../render/render-utils";
 import {
 	sanitizeDisplayField,
@@ -274,9 +275,9 @@ export function formatMcpHealthLabel(health: MCPConnectionHealth): string {
 		case "connecting":
 			return "Connecting";
 		case "disconnected":
-			return "Not connected";
+			return t("Not connected");
 		case "inactive":
-			return "Inactive";
+			return t("Inactive");
 	}
 }
 

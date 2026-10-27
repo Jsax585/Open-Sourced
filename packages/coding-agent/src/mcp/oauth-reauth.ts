@@ -13,6 +13,7 @@
  * Callers supply only presentation: how the authorization URL and progress are
  * shown, and (TUI only) where manual code input comes from.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { getMCPConfigPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import type { OAuthController } from "@oh-my-pi/pi-ai/oauth/types";
@@ -411,7 +412,7 @@ export async function resolveMcpOAuthEndpointsFromServer(
 				? await discoverOAuthEndpoints(config.url, undefined, undefined, { signal: opts.signal })
 				: null;
 		if (!discovered) {
-			throw new McpReauthRefusalError("Server connection succeeded without OAuth; reauthorization is not required.");
+			throw new McpReauthRefusalError(t("Server connection succeeded without OAuth; reauthorization is not required."));
 		}
 		return discovered;
 	}
@@ -439,7 +440,7 @@ export async function resolveMcpOAuthEndpointsFromServer(
 	}
 
 	if (!oauth) {
-		throw new Error("Could not discover OAuth endpoints from server response.");
+		throw new Error(t("Could not discover OAuth endpoints from server response."));
 	}
 
 	return oauth;
@@ -505,7 +506,7 @@ export async function runMcpOAuthFlow(opts: McpOAuthFlowRunOptions): Promise<OAu
 		new URL(opts.tokenUrl);
 	} catch {
 		throw new Error(
-			`Invalid OAuth URLs. Please check:\n  Authorization URL: ${opts.authUrl}\n  Token URL: ${opts.tokenUrl}`,
+			t("Invalid OAuth URLs. Please check:\n  Authorization URL: {0}\n  Token URL: {1}", `${opts.authUrl}`, `${opts.tokenUrl}`),
 		);
 	}
 
@@ -623,15 +624,15 @@ export async function runMcpOAuthFlow(opts: McpOAuthFlowRunOptions): Promise<OAu
 
 		// Provide helpful error messages based on failure type
 		if (errorMsg.includes("timeout") || errorMsg.includes("timed out")) {
-			throw new Error("OAuth flow timed out. Please try again.");
+			throw new Error(t("OAuth flow timed out. Please try again."));
 		} else if (errorMsg.includes("403") || errorMsg.includes("unauthorized")) {
-			throw new Error("OAuth authorization failed. Please check your client credentials.");
+			throw new Error(t("OAuth authorization failed. Please check your client credentials."));
 		} else if (errorMsg.includes("invalid_grant")) {
-			throw new Error("OAuth authorization code is invalid or expired. Please try again.");
+			throw new Error(t("OAuth authorization code is invalid or expired. Please try again."));
 		} else if (errorMsg.includes("ECONNREFUSED") || errorMsg.includes("fetch failed")) {
-			throw new Error("Could not connect to OAuth server. Please check the URLs and your network connection.");
+			throw new Error(t("Could not connect to OAuth server. Please check the URLs and your network connection."));
 		} else {
-			throw new Error(`OAuth authentication failed: ${errorMsg}`);
+			throw new Error(t("OAuth authentication failed: {0}", `${errorMsg}`));
 		}
 	} finally {
 		opts.releaseManualInput?.();
@@ -733,7 +734,7 @@ export async function reauthorizeMcpServer(
 ): Promise<McpReauthOutcome> {
 	const { authStorage } = opts;
 	if (found.config.enabled === false) {
-		throw new McpReauthRefusalError(`Server "${name}" is disabled. Run /mcp enable ${name} first.`);
+		throw new McpReauthRefusalError(t("Server \"{0}\" is disabled. Run /mcp enable {1} first.", `${name}`, `${name}`));
 	}
 
 	const currentAuth = found.config.auth;

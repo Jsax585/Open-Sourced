@@ -8,6 +8,7 @@
  * `spelling.autocomplete` setting. Comparison typing never teaches the
  * engines: lanes send no feedback and nothing is synced into history.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	type Focusable,
@@ -107,7 +108,7 @@ class Lane {
 
 	/** Loading, the error, or confidence and latency of the latest answer. */
 	#summary(): { text: string; error: boolean } | undefined {
-		if (this.pending > 0 && !this.answer) return { text: "loading…", error: false };
+		if (this.pending > 0 && !this.answer) return { text: t("loading…"), error: false };
 		const answer = this.answer;
 		if (!answer) return undefined;
 		if (answer.error) return { text: answer.error, error: true };
@@ -227,17 +228,17 @@ class PredictCompareComponent implements Component, Focusable {
 								text: value,
 								cursor,
 								prompt: this.#input.prompt,
-								placeholder: "Type to compare engines",
+								placeholder: t("Type to compare engines"),
 								ghost: ghosts[0] || undefined,
 							}),
 							"input",
 						),
 						this.#describeLanes(value, ghosts),
 						actionBar([
-							actionButton(`Accept ${ENGINES[0]}`, "accept", { keys: "tab", tone: "accent" }),
-							actionButton("Clear", "clear", { keys: "enter" }),
+							actionButton(t("Accept {0}", `${ENGINES[0]}`), "accept", { keys: "tab", tone: "accent" }),
+							actionButton(t("Clear"), "clear", { keys: "enter" }),
 							null,
-							actionButton("Quit", "quit", { keys: "escape" }),
+							actionButton(t("Quit"), "quit", { keys: "escape" }),
 						]),
 					],
 					{ role: "omp.app.predict", gap: "md", grow: 1 },
@@ -253,7 +254,7 @@ class PredictCompareComponent implements Component, Focusable {
 					row(
 						[
 							text("omp predict", { role: "omp.app.title" }),
-							text([span(`${this.#lanes.length} engines · comparison typing never teaches them`, "muted")], {
+							text([span(t("{0} engines · comparison typing never teaches them", `${this.#lanes.length}`), "muted")], {
 								truncate: "end",
 							}),
 						],
@@ -262,7 +263,7 @@ class PredictCompareComponent implements Component, Focusable {
 					row(
 						compact([
 							pending &&
-								row([node("spinner", { style: "dots" }), text([span("predicting", "dim")])], {
+								row([node("spinner", { style: "dots" }), text([span(t("predicting"), "dim")])], {
 									gap: "xs",
 									align: "center",
 									role: "omp.app.fresh",
@@ -270,8 +271,8 @@ class PredictCompareComponent implements Component, Focusable {
 							node("icon", {
 								name: "x",
 								role: "omp.app.ibtn",
-								title: "Quit  esc",
-								aria: "Quit",
+								title: t("Quit  esc"),
+								aria: t("Quit"),
 								actions: { click: "quit" },
 							}),
 						]),
@@ -290,9 +291,9 @@ class PredictCompareComponent implements Component, Focusable {
 		return keyed(
 			node("table", {
 				cols: [
-					{ id: "engine", head: "Engine", truncate: "end" },
-					{ id: "completion", head: "Completion", truncate: "start", grow: 1 },
-					{ id: "stats", head: "Confidence · latency", align: "end", priority: 1 },
+					{ id: "engine", head: t("Engine"), truncate: "end" },
+					{ id: "completion", head: t("Completion"), truncate: "start", grow: 1 },
+					{ id: "stats", head: t("Confidence · latency"), align: "end", priority: 1 },
 				],
 				rows: this.#lanes.map((lane, index) => {
 					const ghost = ghosts[index] ?? "";
@@ -313,7 +314,7 @@ class PredictCompareComponent implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const value = this.#input.getValue();
 		const header = `${chalk.bold("omp predict")} ${chalk.dim(
-			`· type to compare engines · ${formatKeyHint("tab")} accepts ${ENGINES[0]} · ${formatKeyHint("enter")} clears · ${formatKeyHint("escape")} quits`,
+			t("· type to compare engines · {0} accepts {1} · {2} clears · {3} quits", `${formatKeyHint("tab")}`, `${ENGINES[0]}`, `${formatKeyHint("enter")}`, `${formatKeyHint("escape")}`),
 		)}`;
 		const textWidth = Math.max(8, width - LABEL_WIDTH - STATS_WIDTH - 2);
 		const rows = this.#lanes.map(lane => {

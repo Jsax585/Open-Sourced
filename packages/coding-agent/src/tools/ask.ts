@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
 /**
  * Ask Tool - Interactive user prompting during execution
@@ -48,9 +49,9 @@ import { describeAttachedImagesForTextModel, shouldDescribeImagesForTextModel } 
 // Types
 // =============================================================================
 
-export const OTHER_OPTION = "Other (type your own)";
-const CHAT_ABOUT_THIS_OPTION = "Chat about this";
-const NEXT_OPTION = "Next →";
+export const OTHER_OPTION = t("Other (type your own)");
+const CHAT_ABOUT_THIS_OPTION = t("Chat about this\u0004packages/coding-agent/src/tools/ask.ts:CHAT_ABOUT_THIS_OPTION");
+const NEXT_OPTION = t("Next →");
 const RESERVED_OPTION_LABELS: Record<string, true> = {
 	[OTHER_OPTION]: true,
 	[CHAT_ABOUT_THIS_OPTION]: true,
@@ -130,14 +131,14 @@ function toSelectOption(option: AskOption, label = option.label): ExtensionUISel
 // Constants
 // =============================================================================
 
-const RECOMMENDED_SUFFIX = " (Recommended)";
+const RECOMMENDED_SUFFIX = t(" (Recommended)");
 // Window after the timeout deadline within which an `undefined` selection is
 // attributed to a UI-enforced timeout (for surfaces that close the dialog at
 // the deadline but never invoke `onTimeout`). Cancels beyond it are user Esc.
 const TIMEOUT_DETECTION_TOLERANCE_MS = 1_000;
 
 function getDoneOptionLabel(): string {
-	return `${theme.status.success} Done selecting`;
+	return t("{0} Done selecting", `${theme.status.success}`);
 }
 
 /** Add "(Recommended)" suffix to the option at the given index if not already present */
@@ -247,8 +248,8 @@ async function askSingleQuestion(
 			timeoutTriggered = true;
 		};
 		let navigationAction: "back" | "forward" | undefined;
-		const questionHint = navigation ? `${formatKeyHints(["left", "right"])} question  ` : "";
-		const helpText = `${editorKeys("tui.select.up", "tui.select.down")} navigate  ${formatKeyHint("enter")} select  ${questionHint}${editorKey("tui.select.cancel")} cancel`;
+		const questionHint = navigation ? t("{0} question  ", `${formatKeyHints(["left", "right"])}`) : "";
+		const helpText = t("{0} navigate  {1} select  {2}{3} cancel", `${editorKeys("tui.select.up", "tui.select.down")}`, `${formatKeyHint("enter")}`, `${questionHint}`, `${editorKey("tui.select.cancel")}`);
 		const timeoutMs = typeof timeout === "number" && timeout > 0 ? timeout : undefined;
 		const timeoutController = timeoutMs === undefined ? undefined : new AbortController();
 		const dialogSignal =
@@ -345,7 +346,7 @@ async function askSingleQuestion(
 			for (let i = 0; i < questionOptions.length; i++) {
 				if (selected.has(questionOptions[i]!.label)) checkedIndices.push(i);
 			}
-			const prefix = selected.size > 0 ? `(${selected.size} selected) ` : "";
+			const prefix = selected.size > 0 ? t("({0} selected) ", `${selected.size}`) : "";
 			const {
 				choice,
 				timedOut: selectTimedOut,
@@ -547,7 +548,7 @@ type AskParams = AskToolInput;
 export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	readonly name = "ask";
 	readonly approval = "read" as const;
-	readonly label = "Ask";
+	readonly label = t("Ask\u0004packages/coding-agent/src/tools/ask.ts:AskTool.label");
 	readonly summary = "Ask the user a clarifying question";
 	readonly description: string;
 	readonly parameters = askSchema;
@@ -591,7 +592,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		if (method === "off") return;
 		TERMINAL.sendNotification({
 			title: "omp",
-			body: "Waiting for input",
+			body: t("Waiting for input"),
 			type: "ask",
 			urgency: "normal",
 			actions: "focus",
@@ -654,7 +655,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
 			context?.abort();
-			throw new ToolAbortError("Ask tool requires interactive mode");
+			throw new ToolAbortError(t("Ask tool requires interactive mode"));
 		}
 		// Models occasionally inject `\r` runs into string values (observed with
 		// GLM via OpenRouter); sanitize before the dialog renders or the answer
@@ -787,7 +788,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				const richResult = signal ? await untilAborted(signal, showRichDialog) : await showRichDialog();
 				if (!richResult) {
 					context.abort();
-					throw new ToolAbortError("Ask tool was cancelled by the user");
+					throw new ToolAbortError(t("Ask tool was cancelled by the user"));
 				}
 				if (richResult.kind === "chat") {
 					const questionText = params.questions.map(q => q.question).join("\n");
@@ -802,7 +803,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					};
 				}
 				if (richResult.results.length !== params.questions.length) {
-					throw new Error("Ask dialog returned a result count that does not match the requested questions");
+					throw new Error(t("Ask dialog returned a result count that does not match the requested questions"));
 				}
 				const results: QuestionResult[] = [];
 				// Each prompt numbers markers from 1; shift them so `[Image #N]` indexes all result images.
@@ -811,7 +812,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					const question = params.questions[index];
 					const result = richResult.results[index];
 					if (!question || !result || result.id !== question.id) {
-						throw new Error("Ask dialog returned results that do not match the requested question order");
+						throw new Error(t("Ask dialog returned results that do not match the requested question order"));
 					}
 					const customOffset = answerImages.length;
 					if (result.customInputImages) answerImages.push(...result.customInputImages);
@@ -848,7 +849,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.customInput === undefined)
 					) {
 						context.abort();
-						throw new ToolAbortError("Ask tool was cancelled by the user");
+						throw new ToolAbortError(t("Ask tool was cancelled by the user"));
 					}
 					const details: AskToolDetails = {
 						question: result.question,
@@ -869,7 +870,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				return { content: [{ type: "text" as const, text: responseText }, ...imageBlocks], details };
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") {
-					throw new ToolAbortError("Ask input was cancelled");
+					throw new ToolAbortError(t("Ask input was cancelled"));
 				}
 				throw error;
 			}
@@ -901,7 +902,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				return { optionLabels, selectedOptions, customInput, note, navigation, cancelled, timedOut };
 			} catch (error) {
 				if (error instanceof Error && error.name === "AbortError") {
-					throw new ToolAbortError("Ask input was cancelled");
+					throw new ToolAbortError(t("Ask input was cancelled"));
 				}
 				throw error;
 			}
@@ -913,7 +914,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 			if (!timedOut && (cancelled || (selectedOptions.length === 0 && customInput === undefined))) {
 				context.abort();
-				throw new ToolAbortError("Ask tool was cancelled by the user");
+				throw new ToolAbortError(t("Ask tool was cancelled by the user"));
 			}
 			const details: AskToolDetails = {
 				question: q.question,
@@ -940,7 +941,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		let questionIndex = 0;
 		while (questionIndex < params.questions.length) {
 			const q = params.questions[questionIndex];
-			if (!q) throw new Error("Ask question index exceeded the requested question list");
+			if (!q) throw new Error(t("Ask question index exceeded the requested question list"));
 			const previous = resultsByIndex[questionIndex];
 			const navigation: NavigationControls = {
 				allowBack: questionIndex > 0,
@@ -959,7 +960,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 			if (cancelled && !timedOut) {
 				context.abort();
-				throw new ToolAbortError("Ask tool was cancelled by the user");
+				throw new ToolAbortError(t("Ask tool was cancelled by the user"));
 			}
 
 			resultsByIndex[questionIndex] = {

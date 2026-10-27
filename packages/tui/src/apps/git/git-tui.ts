@@ -27,6 +27,7 @@
  * on a clean tree, which shows the HEAD commit instead of a change list.
  */
 
+import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatKeyHint, formatKeyHints, formatTooltipKey } from "../../app-keybindings";
 import { SplitPane } from "../../components/layout/split-pane";
@@ -104,13 +105,13 @@ export function gitFooterHints(clean: boolean, focus: Focus): string {
 	const edit = clean
 		? ""
 		: focus === "diff"
-			? ` · ${formatKeyHints(["s", "u"])} stage · ${formatKeyHints(["x", "delete"])} discard`
-			: ` · ${formatKeyHint("space")} stage · ${formatKeyHint("delete")} discard`;
-	const commit = clean ? "" : ` · ${formatKeyHint("c")} commit`;
-	const select = clean || focus !== "diff" ? "" : ` · ${formatKeyHints(["shift+up", "shift+down"])} select`;
+			? localize(" · {0} stage · {1} discard", `${formatKeyHints(["s", "u"])}`, `${formatKeyHints(["x", "delete"])}`)
+			: localize(" · {0} stage · {1} discard", `${formatKeyHint("space")}`, `${formatKeyHint("delete")}`);
+	const commit = clean ? "" : localize(" · {0} commit", `${formatKeyHint("c")}`);
+	const select = clean || focus !== "diff" ? "" : localize(" · {0} select", `${formatKeyHints(["shift+up", "shift+down"])}`);
 	return focus === "diff"
-		? `${formatKeyHints(["alt+down", "alt+up"])} hunk · ${formatKeyHints(["]", "["])} file${select}${edit} · ${formatKeyHint("v")} view${commit} · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`
-		: `${formatKeyHints(["up", "down"])} move · ${formatKeyHints(["left", "right"])} fold${edit} · ${formatKeyHint("enter")} open · ${formatKeyHints(["alt+down", "alt+up"])} hunk${commit} · ${formatKeyHint("t")} tree · ${formatKeyHint("?")} keys · ${formatKeyHint("q")} quit`;
+		? localize("{0} hunk · {1} file{2}{3} · {4} view{5} · {6} keys · {7} quit", `${formatKeyHints(["alt+down", "alt+up"])}`, `${formatKeyHints(["]", "["])}`, `${select}`, `${edit}`, `${formatKeyHint("v")}`, `${commit}`, `${formatKeyHint("?")}`, `${formatKeyHint("q")}`)
+		: localize("{0} move · {1} fold{2} · {3} open · {4} hunk{5} · {6} tree · {7} keys · {8} quit", `${formatKeyHints(["up", "down"])}`, `${formatKeyHints(["left", "right"])}`, `${edit}`, `${formatKeyHint("enter")}`, `${formatKeyHints(["alt+down", "alt+up"])}`, `${commit}`, `${formatKeyHint("t")}`, `${formatKeyHint("?")}`, `${formatKeyHint("q")}`);
 }
 
 /** Tone of a status message: its colour in the header and its span token natively. */
@@ -121,10 +122,10 @@ const NARROW_COLS = 100;
 
 /** The views of the native segmented control, in omp's `1`–`4` order. */
 const VIEW_TABS: readonly { id: ViewMode; label: string }[] = [
-	{ id: "file", label: "File" },
-	{ id: "split", label: "Split" },
-	{ id: "inline", label: "Inline" },
-	{ id: "hunk", label: "Hunks" },
+	{ id: "file", label: localize("File") },
+	{ id: "split", label: localize("Split\u0004packages/tui/src/apps/git/git-tui.ts:VIEW_TABS.label") },
+	{ id: "inline", label: localize("Inline") },
+	{ id: "hunk", label: localize("Hunks") },
 ];
 
 interface UiHit {
@@ -322,7 +323,7 @@ class GitTuiComponent implements Component {
 		this.#pane.patchTarget = this.#patchTargetFor(file);
 		const seq = ++this.#loadSeq;
 		if (!file) {
-			this.#pane.emptyMessage = this.#model.clean && !this.#model.headCommit ? "No commits yet" : "No changes";
+			this.#pane.emptyMessage = this.#model.clean && !this.#model.headCommit ? localize("No commits yet") : localize("No changes");
 			this.#pane.setDocument(null, "empty");
 			this.#ui.requestRender();
 			return;
@@ -395,7 +396,7 @@ class GitTuiComponent implements Component {
 				this.#pendingDiscard = key;
 				this.#setStatus(
 					"warning",
-					`Discard changes to ${action.selection.label}? Press ${formatKeyHint("delete")} again to confirm`,
+					localize("Discard changes to {0}? Press {1} again to confirm", `${action.selection.label}`, `${formatKeyHint("delete")}`),
 				);
 				return;
 			}
@@ -407,23 +408,23 @@ class GitTuiComponent implements Component {
 			switch (action.type) {
 				case "discard":
 					await this.#model.discard(action.selection.files);
-					this.#setStatus("success", `Discarded ${action.selection.label}`);
+					this.#setStatus("success", localize("Discarded {0}", `${action.selection.label}`));
 					break;
 				case "stage":
 					await this.#model.stage(action.selection?.files);
-					this.#setStatus("success", action.selection ? `Staged ${action.selection.label}` : "Staged all changes");
+					this.#setStatus("success", action.selection ? localize("Staged {0}", `${action.selection.label}`) : localize("Staged all changes"));
 					break;
 				case "unstage":
 					await this.#model.unstage(action.selection?.files);
 					this.#setStatus(
 						"success",
-						action.selection ? `Unstaged ${action.selection.label}` : "Unstaged all changes",
+						action.selection ? localize("Unstaged {0}", `${action.selection.label}`) : localize("Unstaged all changes"),
 					);
 					break;
 				case "stage-ai": {
 					const abort = new AbortController();
 					this.#aiStageAbort = abort;
-					this.#setStatus("accent", `Filtering changes: ${action.prompt}`);
+					this.#setStatus("accent", localize("Filtering changes: {0}", `${action.prompt}`));
 					try {
 						const outcome = await this.#host.aiStage({
 							cwd: this.#model.cwd,
@@ -435,16 +436,16 @@ class GitTuiComponent implements Component {
 							},
 						});
 						if (outcome.stagedHunks === 0 && outcome.wholeFiles === 0) {
-							this.#setStatus("warning", `No changes matched "${action.prompt}"`);
+							this.#setStatus("warning", localize("No changes matched \"{0}\"", `${action.prompt}`));
 						} else {
 							const parts: string[] = [];
-							if (outcome.stagedHunks > 0) parts.push(`${outcome.stagedHunks} of ${outcome.totalHunks} hunks`);
+							if (outcome.stagedHunks > 0) parts.push(localize("{1} of {0} hunks", `${outcome.totalHunks}`, `${outcome.stagedHunks}`));
 							if (outcome.wholeFiles > 0) {
-								parts.push(`${outcome.wholeFiles} whole file${outcome.wholeFiles === 1 ? "" : "s"}`);
+								parts.push(localize("{0} whole file{1}", `${outcome.wholeFiles}`, `${outcome.wholeFiles === 1 ? "" : "s"}`));
 							}
 							this.#setStatus(
 								"success",
-								`Staged ${parts.join(" + ")} (${outcome.matchedFiles}/${outcome.totalFiles} files matched)`,
+								localize("Staged {0} ({2}/{1} files matched)", `${parts.join(" + ")}`, `${outcome.totalFiles}`, `${outcome.matchedFiles}`),
 							);
 						}
 					} finally {
@@ -456,7 +457,7 @@ class GitTuiComponent implements Component {
 					const abort = new AbortController();
 					this.#generationAbort = abort;
 					this.#sidebar.setGenerating(true);
-					this.#setStatus("accent", "Generating commit message…");
+					this.#setStatus("accent", localize("Generating commit message…"));
 					try {
 						const generated = await this.#host.generateCommitMessage({
 							cwd: this.#model.cwd,
@@ -468,13 +469,13 @@ class GitTuiComponent implements Component {
 						});
 						this.#sidebar.setGeneratedCommit(generated.commit);
 						if (generated.validationError) {
-							this.#setStatus("warning", `Generated message needs review: ${generated.validationError}`);
+							this.#setStatus("warning", localize("Generated message needs review: {0}", `${generated.validationError}`));
 						} else {
 							this.#setStatus(
 								"success",
 								generated.stagedAll
-									? "Staged all changes and generated commit message"
-									: "Generated commit message",
+									? localize("Staged all changes and generated commit message")
+									: localize("Generated commit message"),
 							);
 						}
 					} finally {
@@ -487,7 +488,7 @@ class GitTuiComponent implements Component {
 					if (action.stageAll) await this.#model.stage();
 					await this.#model.commit(action.message, { amend: action.amend });
 					this.#sidebar.clearForm();
-					this.#setStatus("success", action.amend ? "Amended commit" : "Created commit");
+					this.#setStatus("success", action.amend ? localize("Amended commit") : localize("Created commit"));
 					break;
 				}
 			}
@@ -503,7 +504,7 @@ class GitTuiComponent implements Component {
 		if (!hunk.patch) return;
 		if (action === "discard" && this.#pendingDiscard !== hunk.patch) {
 			this.#pendingDiscard = hunk.patch;
-			this.#setStatus("warning", `Discard hunk? Press ${formatKeyHint("x")} (or click) again to confirm`);
+			this.#setStatus("warning", localize("Discard hunk? Press {0} (or click) again to confirm", `${formatKeyHint("x")}`));
 			return;
 		}
 		this.#pendingDiscard = null;
@@ -515,7 +516,7 @@ class GitTuiComponent implements Component {
 			else await this.#model.applyPatch(hunk.patch, { reverse: true });
 			this.#setStatus(
 				"success",
-				action === "stage" ? "Staged hunk" : action === "unstage" ? "Unstaged hunk" : "Discarded hunk",
+				action === "stage" ? localize("Staged hunk") : action === "unstage" ? localize("Unstaged hunk") : localize("Discarded hunk"),
 			);
 			await this.#refresh(true);
 		} catch (error) {
@@ -532,12 +533,12 @@ class GitTuiComponent implements Component {
 		const intent = action === "stage" ? "apply" : "revert";
 		const patch = buildLineSelectionPatch(doc, span.from, span.to, intent);
 		if (!patch) {
-			this.#setStatus("warning", "Selection contains no changes");
+			this.#setStatus("warning", localize("Selection contains no changes"));
 			return;
 		}
 		if (action === "discard" && this.#pendingDiscard !== patch) {
 			this.#pendingDiscard = patch;
-			this.#setStatus("warning", `Discard selected lines? Press ${formatKeyHint("x")} again to confirm`);
+			this.#setStatus("warning", localize("Discard selected lines? Press {0} again to confirm", `${formatKeyHint("x")}`));
 			return;
 		}
 		this.#pendingDiscard = null;
@@ -551,10 +552,10 @@ class GitTuiComponent implements Component {
 			this.#setStatus(
 				"success",
 				action === "stage"
-					? "Staged selection"
+					? localize("Staged selection")
 					: action === "unstage"
-						? "Unstaged selection"
-						: "Discarded selection",
+						? localize("Unstaged selection")
+						: localize("Discarded selection"),
 			);
 			await this.#refresh(true);
 		} catch (error) {
@@ -614,10 +615,10 @@ class GitTuiComponent implements Component {
 		this.#setStatus(
 			"dim",
 			this.#whitespace === "off"
-				? "Showing all changes"
+				? localize("Showing all changes")
 				: this.#whitespace === "whitespace"
-					? "Ignoring whitespace-only line changes"
-					: "Ignoring formatting and import-only changes",
+					? localize("Ignoring whitespace-only line changes")
+					: localize("Ignoring formatting and import-only changes"),
 		);
 		this.#rebuildDocument();
 	}
@@ -801,18 +802,18 @@ class GitTuiComponent implements Component {
 			const doc = this.#pane.doc;
 			if (doc) row.add(`  ${theme.fg("success", `+${doc.additions}`)} ${theme.fg("error", `−${doc.deletions}`)}`);
 		} else {
-			row.add(theme.fg("dim", "no file selected"));
+			row.add(theme.fg("dim", localize("no file selected")));
 		}
 
 		const right = new HitRow();
 		const asset = this.#contents?.kind === "asset" ? this.#contents : null;
 		const contentKind =
-			asset && (asset.old.kind === "image" || asset.new.kind === "image") ? "Media" : asset ? "Binary" : "UTF-8";
+			asset && (asset.old.kind === "image" || asset.new.kind === "image") ? localize("Media") : asset ? localize("Binary") : "UTF-8";
 		right.add(theme.fg("dim", contentKind)).add("  ");
 		if (file?.area === "unstaged")
-			right.button(pill(" Stage File ", theme.getColorHex("toolDiffAdded")), () => this.#stageCurrentFile());
+			right.button(pill(localize(" Stage File "), theme.getColorHex("toolDiffAdded")), () => this.#stageCurrentFile());
 		else if (file?.area === "staged")
-			right.button(pill(" Unstage File ", theme.getColorHex("warning")), () => this.#stageCurrentFile());
+			right.button(pill(localize(" Unstage File "), theme.getColorHex("warning")), () => this.#stageCurrentFile());
 		right.add(" ").button(softPill(` ${glyphs.close} `), () => this.#done.resolve());
 
 		// The empty middle carries the key hints (or a fresh status message).
@@ -841,12 +842,12 @@ class GitTuiComponent implements Component {
 		row.add(" ");
 		const scope =
 			file?.area === "staged"
-				? tintChip(" Staged ", theme.getColorHex("success"))
+				? tintChip(localize(" Staged "), theme.getColorHex("success"))
 				: file?.area === "unstaged"
-					? tintChip(file.kind === "untracked" ? " Untracked " : " Unstaged ", theme.getColorHex("warning"))
+					? tintChip(file.kind === "untracked" ? localize(" Untracked ") : localize(" Unstaged "), theme.getColorHex("warning"))
 					: file
-						? tintChip(` ${this.#model.headCommit?.shortSha ?? "commit"} `, theme.getColorHex("accent"))
-						: theme.fg("dim", ` ${this.#model.branch ?? "detached"} `);
+						? tintChip(` ${this.#model.headCommit?.shortSha ?? localize("commit")} `, theme.getColorHex("accent"))
+						: theme.fg("dim", ` ${this.#model.branch ?? localize("detached")} `);
 		row.add(scope);
 
 		// Hunk nav + one segmented view control ⟨file│split│inline│hunk⟩,
@@ -1031,13 +1032,13 @@ class GitTuiComponent implements Component {
 			}
 			const scope =
 				file.area === "staged"
-					? { text: "Staged", tone: "success" as const }
+					? { text: localize("Staged"), tone: "success" as const }
 					: file.area === "unstaged"
-						? { text: file.kind === "untracked" ? "Untracked" : "Unstaged", tone: "warning" as const }
-						: { text: this.#model.headCommit?.shortSha ?? "commit", tone: "accent" as const };
+						? { text: file.kind === "untracked" ? localize("Untracked") : localize("Unstaged"), tone: "warning" as const }
+						: { text: this.#model.headCommit?.shortSha ?? localize("commit"), tone: "accent" as const };
 			left.push(node("badge", { text: scope.text, tone: scope.tone }));
 		} else {
-			left.push(text([span(this.#model.branch ?? "detached", "muted")], { role: "omp.app.git.path" }));
+			left.push(text([span(this.#model.branch ?? localize("detached"), "muted")], { role: "omp.app.git.path" }));
 		}
 		const iconButton = (name: string, act: string, title: string, on?: boolean): NativeNode =>
 			node(
@@ -1049,8 +1050,8 @@ class GitTuiComponent implements Component {
 		const right: NativeNode[] = [
 			row(
 				[
-					iconButton("chev-up", "prev-hunk", `Previous change (${formatTooltipKey("alt+up")})`),
-					iconButton("chev", "next-hunk", `Next change (${formatTooltipKey("alt+down")})`),
+					iconButton("chev-up", "prev-hunk", localize("Previous change ({0})", `${formatTooltipKey("alt+up")}`)),
+					iconButton("chev", "next-hunk", localize("Next change ({0})", `${formatTooltipKey("alt+down")}`)),
 				],
 				{ gap: "none", align: "center" },
 			),
@@ -1071,26 +1072,26 @@ class GitTuiComponent implements Component {
 					"type",
 					"whitespace",
 					this.#whitespace === "off"
-						? `Ignore whitespace (${formatTooltipKey("b")})`
+						? localize("Ignore whitespace ({0})", `${formatTooltipKey("b")}`)
 						: this.#whitespace === "whitespace"
-							? `Ignoring whitespace; also ignore formatting (${formatTooltipKey("b")})`
-							: `Ignoring formatting and imports; show all (${formatTooltipKey("b")})`,
+							? localize("Ignoring whitespace; also ignore formatting ({0})", `${formatTooltipKey("b")}`)
+							: localize("Ignoring formatting and imports; show all ({0})", `${formatTooltipKey("b")}`),
 					this.#whitespace !== "off",
 				),
-				iconButton("corner-down-right", "wrap", `Wrap lines (${formatTooltipKey("w")})`, this.#pane.wrap),
+				iconButton("corner-down-right", "wrap", localize("Wrap lines ({0})", `${formatTooltipKey("w")}`), this.#pane.wrap),
 			);
 		}
 		if (file?.area === "unstaged" || file?.area === "staged") {
 			right.push(
-				actionButton(file.area === "unstaged" ? "Stage file" : "Unstage file", "stage-file", {
+				actionButton(file.area === "unstaged" ? localize("Stage file") : localize("Unstage file"), "stage-file", {
 					keys: "s",
-					title: `${file.area === "unstaged" ? "Stage" : "Unstage"} ${file.path}`,
+					title: `${file.path} ${file.area === "unstaged" ? localize("Stage") : localize("Unstage")}`,
 				}),
 			);
 		}
 		right.push(
-			iconButton("keyboard", "help", `Keyboard shortcuts (${formatTooltipKey("?")})`),
-			iconButton("x", "close", `Close (${formatTooltipKey("q")})`),
+			iconButton("keyboard", "help", localize("Keyboard shortcuts ({0})", `${formatTooltipKey("?")}`)),
+			iconButton("x", "close", localize("Close ({0})", `${formatTooltipKey("q")}`)),
 		);
 		return keyed(
 			row(
@@ -1138,11 +1139,11 @@ class GitTuiComponent implements Component {
 			return keyed(
 				col(
 					[
-						text([span("Binary or media file", "strong")]),
+						text([span(localize("Binary or media file"), "strong")]),
 						node("kv", {
 							items: [
-								{ k: "before", v: assetText(contents.old) },
-								{ k: "after", v: assetText(contents.new) },
+								{ k: localize("before"), v: assetText(contents.old) },
+								{ k: localize("after"), v: assetText(contents.new) },
 							],
 							layout: "grid",
 						}),
@@ -1154,7 +1155,7 @@ class GitTuiComponent implements Component {
 		}
 		if (this.#pane.state === "streaming" || this.#pane.state === "loading") {
 			return keyed(
-				row([node("spinner", { style: "dots" }), text([span(`Loading ${file?.path ?? "diff"}…`, "muted")])], {
+				row([node("spinner", { style: "dots" }), text([span(localize("Loading {0}…", `${file?.path ?? localize("diff")}`), "muted")])], {
 					gap: "sm",
 					align: "center",
 					role: "omp.app.git.state",
@@ -1168,7 +1169,7 @@ class GitTuiComponent implements Component {
 					text([span(this.#pane.emptyMessage, "strong")]),
 					text([
 						span(
-							this.#model.clean ? "The working tree is clean." : "Pick a file on the right to see its changes.",
+							this.#model.clean ? localize("The working tree is clean.") : localize("Pick a file on the right to see its changes."),
 							"muted",
 						),
 					]),
@@ -1231,7 +1232,7 @@ const MEDIA_COMPARE_LINK = "git-compare";
  */
 function mediaColumn(side: "before" | "after", asset: FileAssetSide, ref: MediaRef | undefined): NativeNode {
 	const head = keyed(
-		text([span(assetTitle(side === "before" ? "Before" : "After", asset), "strong")], {
+		text([span(assetTitle(side === "before" ? localize("Before") : localize("After"), asset), "strong")], {
 			truncate: "end",
 			role: "omp.app.git.media-head",
 		}),
@@ -1247,7 +1248,7 @@ function mediaColumn(side: "before" | "after", asset: FileAssetSide, ref: MediaR
 		: keyed(
 				text(
 					asset.kind === "empty"
-						? [span(side === "before" ? "Did not exist" : "Deleted", "muted")]
+						? [span(side === "before" ? localize("Did not exist") : localize("Deleted"), "muted")]
 						: assetText(asset).map(fact => span(fact.t, "muted")),
 					{ role: "omp.app.git.media-none" },
 				),
@@ -1262,17 +1263,17 @@ function assetText(asset: AssetFileContents["old"]): TspSpan[] {
 		bytes === undefined ? "" : bytes < 1024 ? ` · ${bytes} B` : ` · ${(bytes / 1024).toFixed(1)} KB`;
 	switch (asset.kind) {
 		case "empty":
-			return [span("none", "dim")];
+			return [span(localize("none"), "dim")];
 		case "text":
-			return [span(`text${size(asset.byteLength)}`)];
+			return [span(localize("text{0}", `${size(asset.byteLength)}`))];
 		case "image":
-			return [span(`image ${asset.image.widthPx}×${asset.image.heightPx}${size(asset.image.byteLength)}`)];
+			return [span(localize("image {0}×{1}{2}", `${asset.image.widthPx}`, `${asset.image.heightPx}`, `${size(asset.image.byteLength)}`))];
 		case "binary":
-			return [span(`binary${size(asset.byteLength)}`)];
+			return [span(localize("binary{0}", `${size(asset.byteLength)}`))];
 		case "tooLarge":
-			return [span(`too large to diff${size(asset.byteLength)}`)];
+			return [span(localize("too large to diff{0}", `${size(asset.byteLength)}`))];
 		case "lfsMissing":
-			return [span(`LFS object ${asset.oid.slice(0, 12)} not fetched${size(asset.byteLength)}`)];
+			return [span(localize("LFS object {0} not fetched{1}", `${asset.oid.slice(0, 12)}`, `${size(asset.byteLength)}`))];
 	}
 }
 

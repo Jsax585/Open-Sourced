@@ -1,3 +1,4 @@
+import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import { X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getToolDashboardStats } from "../api";
@@ -44,17 +45,17 @@ export interface ToolsRouteProps {
 type CallMetric = "calls" | "errors";
 
 const METRIC_OPTIONS = [
-	{ value: "calls" as const, label: "Calls" },
-	{ value: "errors" as const, label: "Errors" },
+	{ value: "calls" as const, label: localize("Calls") },
+	{ value: "errors" as const, label: localize("Errors") },
 ];
 
 /** Tools stacked individually in the calls chart; the rest fold into "Other". */
 const TOP_TOOLS = 6;
 
 const ATTRIBUTION_NOTE =
-	"Tokens and API-equivalent cost of each invoking turn, split evenly across that turn's tool calls";
+	localize("Tokens and API-equivalent cost of each invoking turn, split evenly across that turn's tool calls");
 
-const NO_CALLS = <EmptyState title="No tool calls in this range" />;
+const NO_CALLS = <EmptyState title={localize("No tool calls in this range")} />;
 
 export function ToolsRoute({ active, range }: ToolsRouteProps) {
 	const tools = useQuery(["tools", range], ({ signal }) => getToolDashboardStats(range, signal), { enabled: active });
@@ -73,8 +74,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Tools"
-				description={`Which tools omp called in ${meta.windowLabel}, how often they failed, and what they cost.`}
+				title={localize("Tools")}
+				description={localize("Which tools omp called in {0}, how often they failed, and what they cost.", `${meta.windowLabel}`)}
 			/>
 
 			<QueryView query={tools} skeleton={<ChartSkeleton height={112} />}>
@@ -84,63 +85,63 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 						<div data-stale={tools.stale} className="stack" style={{ gap: 16 }}>
 							<StatGrid min={190}>
 								<Stat
-									label="Tool calls"
+									label={localize("Tool calls")}
 									value={formatInteger(t.calls)}
-									hint={`${formatInteger(t.errors)} failed`}
+									hint={localize("{0} failed\u0004packages/stats/src/client/routes/ToolsRoute.tsx:ToolsRoute", `${formatInteger(t.errors)}`)}
 									spark={view.totalCalls}
 								/>
 								<Stat
-									label="Distinct tools"
+									label={localize("Distinct tools")}
 									value={formatInteger(t.tools)}
-									hint={view.rows[0] ? `Most used: ${view.rows[0].tool}` : undefined}
+									hint={view.rows[0] ? localize("Most used: {0}", `${view.rows[0].tool}`) : undefined}
 								/>
 								<Stat
-									label="Error rate"
-									title="Tool results that came back flagged as errors"
+									label={localize("Error rate")}
+									title={localize("Tool results that came back flagged as errors")}
 									value={formatErrorRate(t.calls > 0 ? t.errors / t.calls : 0)}
-									hint={`${formatInteger(t.calls - t.errors)} succeeded`}
+									hint={localize("{0} succeeded\u0004packages/stats/src/client/routes/ToolsRoute.tsx:ToolsRoute", `${formatInteger(t.calls - t.errors)}`)}
 									spark={view.totalErrors}
 									sparkColor="var(--bad)"
 								/>
 								<Stat
-									label="Attributed tokens"
+									label={localize("Attributed tokens")}
 									title={ATTRIBUTION_NOTE}
 									value={formatCompact(Math.round(t.tokens))}
-									hint={`${formatCompact(Math.round(t.output))} output`}
+									hint={localize("{0} output", `${formatCompact(Math.round(t.output))}`)}
 								/>
 								<Stat
-									label="Attributed cost"
-									title={`${ATTRIBUTION_NOTE}; API-equivalent estimate`}
+									label={localize("Attributed cost")}
+									title={localize("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`)}
 									value={formatEstimatedCost(t.cost, t.unpriced)}
 									hint={
 										t.unpriced > 0
-											? `${formatInteger(Math.round(t.unpriced))} unpriced requests`
-											: "API-equivalent"
+											? localize("{0} unpriced requests", `${formatInteger(Math.round(t.unpriced))}`)
+											: localize("API-equivalent")
 									}
 								/>
 							</StatGrid>
 							<StatGrid min={150}>
 								<Stat
 									size="sm"
-									label="Result text"
-									title="Characters of tool-result text fed back into context"
-									value={`${formatCompact(t.resultChars)} chars`}
+									label={localize("Result text")}
+									title={localize("Characters of tool-result text fed back into context")}
+									value={localize("{0} chars", `${formatCompact(t.resultChars)}`)}
 								/>
 								<Stat
 									size="sm"
-									label="Call arguments"
-									title="Characters of serialized tool-call arguments"
-									value={`${formatCompact(t.argsChars)} chars`}
+									label={localize("Call arguments")}
+									title={localize("Characters of serialized tool-call arguments")}
+									value={localize("{0} chars", `${formatCompact(t.argsChars)}`)}
 								/>
 								<Stat
 									size="sm"
-									label="Avg result per call"
-									value={`${formatCompact(t.calls > 0 ? Math.round(t.resultChars / t.calls) : 0)} chars`}
+									label={localize("Avg result per call")}
+									value={localize("{0} chars", `${formatCompact(t.calls > 0 ? Math.round(t.resultChars / t.calls) : 0)}`)}
 								/>
 								<Stat
 									size="sm"
-									label="Avg arguments per call"
-									value={`${formatCompact(t.calls > 0 ? Math.round(t.argsChars / t.calls) : 0)} chars`}
+									label={localize("Avg arguments per call")}
+									value={localize("{0} chars", `${formatCompact(t.calls > 0 ? Math.round(t.argsChars / t.calls) : 0)}`)}
 								/>
 							</StatGrid>
 						</div>
@@ -150,8 +151,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={1}
-				title={metric === "calls" ? "Calls over time" : "Errors over time"}
-				description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}, top ${TOP_TOOLS} tools stacked`}
+				title={metric === "calls" ? localize("Calls over time") : localize("Errors over time")}
+				description={localize("Per {0}, top {1} tools stacked", `${meta.bucketMs < 3_600_000 ? localize("5 minutes") : meta.bucketMs < 86_400_000 ? localize("hour") : localize("day")}`, `${TOP_TOOLS}`)}
 				actions={<Segmented size="sm" options={METRIC_OPTIONS} value={metric} onChange={setMetric} />}
 				stale={tools.stale}
 			>
@@ -165,7 +166,7 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 								hidden={hidden}
 								height={260}
 								formatTooltip={formatInteger}
-								emptyLabel={metric === "errors" ? "No tool errors in this range" : undefined}
+								emptyLabel={metric === "errors" ? localize("No tool errors in this range") : undefined}
 							/>
 							<Legend
 								items={chartSeries.map(s => ({
@@ -184,8 +185,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={2}
-				title="By tool"
-				description={`${ATTRIBUTION_NOTE}. Select a tool to break it down by model.`}
+				title={localize("By tool")}
+				description={localize("{0}. Select a tool to break it down by model.", `${ATTRIBUTION_NOTE}`)}
 				flush
 				stale={tools.stale}
 			>
@@ -207,8 +208,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={3}
-				title="By tool and model"
-				description="Which models call which tools, and how often those calls fail"
+				title={localize("By tool and model")}
+				description={localize("Which models call which tools, and how often those calls fail")}
 				flush
 				stale={tools.stale}
 				actions={
@@ -217,9 +218,9 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 							className="input tools-filter"
 							value={toolFilter ?? ""}
 							onChange={e => setToolFilter(e.target.value || null)}
-							aria-label="Filter by tool"
+							aria-label={localize("Filter by tool")}
 						>
-							<option value="">All tools</option>
+							<option value="">{localize("All tools")}</option>
 							{view.toolNames.map(name => (
 								<option key={name} value={name}>
 									{name}
@@ -233,8 +234,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 								data-size="sm"
 								data-variant="ghost"
 								data-icon="true"
-								title="Clear tool filter"
-								aria-label="Clear tool filter"
+								title={localize("Clear tool filter")}
+								aria-label={localize("Clear tool filter")}
 								onClick={() => setToolFilter(null)}
 							>
 								<X size={13} />
@@ -338,7 +339,7 @@ function buildToolColumns(
 	return [
 		{
 			key: "tool",
-			header: "Tool",
+			header: localize("Tool"),
 			sort: row => row.tool,
 			render: row => (
 				<span className="row" style={{ gap: 8 }}>
@@ -351,8 +352,8 @@ function buildToolColumns(
 		},
 		{
 			key: "trend",
-			header: "Trend",
-			title: "Calls per bucket over the range",
+			header: localize("Trend"),
+			title: localize("Calls per bucket over the range"),
 			render: row => {
 				const values = trends.get(row.tool);
 				return values && values.length > 1 ? (
@@ -364,7 +365,7 @@ function buildToolColumns(
 		},
 		{
 			key: "calls",
-			header: "Calls",
+			header: localize("Calls"),
 			align: "right",
 			sort: row => row.calls,
 			render: row => (
@@ -372,7 +373,7 @@ function buildToolColumns(
 					value={row.calls}
 					max={maxCalls}
 					display={
-						<span title={`${formatPercent(row.callFraction)} of all tool calls`}>
+						<span title={localize("{0} of all tool calls", `${formatPercent(row.callFraction)}`)}>
 							{formatInteger(row.calls)}
 							<span className="dim tools-share">{formatPercent(row.callFraction, 0)}</span>
 						</span>
@@ -382,8 +383,8 @@ function buildToolColumns(
 		},
 		{
 			key: "errorRate",
-			header: "Errors",
-			title: "Calls whose result came back flagged as an error",
+			header: localize("Errors"),
+			title: localize("Calls whose result came back flagged as an error"),
 			align: "right",
 			sort: row => row.errorRate,
 			render: row => (
@@ -397,36 +398,36 @@ function buildToolColumns(
 		},
 		{
 			key: "args",
-			header: "Args",
-			title: "Characters of serialized tool-call arguments",
+			header: localize("Args"),
+			title: localize("Characters of serialized tool-call arguments"),
 			align: "right",
 			sort: row => row.argsChars,
 			render: row => <span className="num">{formatCompact(row.argsChars)}</span>,
 		},
 		{
 			key: "result",
-			header: "Result",
-			title: "Characters of tool-result text fed back into context",
+			header: localize("Result"),
+			title: localize("Characters of tool-result text fed back into context"),
 			align: "right",
 			sort: row => row.resultChars,
 			render: row => <span className="num">{formatCompact(row.resultChars)}</span>,
 		},
 		{
 			key: "avgResult",
-			header: "Result / call",
-			title: "Mean tool-result characters per call",
+			header: localize("Result / call"),
+			title: localize("Mean tool-result characters per call"),
 			align: "right",
 			sort: row => row.avgResultChars,
 			render: row => <span className="num muted">{formatCompact(Math.round(row.avgResultChars))}</span>,
 		},
 		{
 			key: "tokens",
-			header: "Attr. tokens",
+			header: localize("Attr. tokens"),
 			title: ATTRIBUTION_NOTE,
 			align: "right",
 			sort: row => row.totalTokensShare,
 			render: row => (
-				<span className="num" title={`${formatPercent(row.tokenFraction)} of attributed tokens`}>
+				<span className="num" title={localize("{0} of attributed tokens", `${formatPercent(row.tokenFraction)}`)}>
 					{formatCompact(Math.round(row.totalTokensShare))}
 					<span className="dim tools-share">{formatPercent(row.tokenFraction, 0)}</span>
 				</span>
@@ -434,12 +435,12 @@ function buildToolColumns(
 		},
 		{
 			key: "cost",
-			header: "Attr. cost",
-			title: `${ATTRIBUTION_NOTE}; API-equivalent estimate`,
+			header: localize("Attr. cost"),
+			title: localize("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`),
 			align: "right",
 			sort: row => row.costShare,
 			render: row => (
-				<span className="num" title={`${formatPercent(row.costFraction)} of attributed cost`}>
+				<span className="num" title={localize("{0} of attributed cost", `${formatPercent(row.costFraction)}`)}>
 					{formatEstimatedCost(row.costShare, row.unpricedRequestsShare)}
 					<span className="dim tools-share">{formatPercent(row.costFraction, 0)}</span>
 				</span>
@@ -447,7 +448,7 @@ function buildToolColumns(
 		},
 		{
 			key: "lastUsed",
-			header: "Last used",
+			header: localize("Last used"),
 			align: "right",
 			sort: row => row.lastUsed,
 			render: row => <span className="muted">{formatRelativeTime(row.lastUsed)}</span>,
@@ -485,7 +486,7 @@ function ToolModelTable({
 		return [
 			{
 				key: "tool",
-				header: "Tool",
+				header: localize("Tool"),
 				sort: row => row.tool,
 				render: row => (
 					<span className="row" style={{ gap: 8 }}>
@@ -498,22 +499,22 @@ function ToolModelTable({
 			},
 			{
 				key: "model",
-				header: "Model",
+				header: localize("Model"),
 				sort: row => row.model,
 				render: row => (
-					<LabelCell primary={<span className="mono">{row.model || "(unknown)"}</span>} secondary={row.provider} />
+					<LabelCell primary={<span className="mono">{row.model || localize("(unknown)")}</span>} secondary={row.provider} />
 				),
 			},
 			{
 				key: "calls",
-				header: "Calls",
+				header: localize("Calls"),
 				align: "right",
 				sort: row => row.calls,
 				render: row => <MeterCell value={row.calls} max={maxCalls} display={formatInteger(row.calls)} />,
 			},
 			{
 				key: "errorRate",
-				header: "Errors",
+				header: localize("Errors"),
 				align: "right",
 				sort: row => row.errorRate,
 				render: row => (
@@ -527,15 +528,15 @@ function ToolModelTable({
 			},
 			{
 				key: "result",
-				header: "Result",
-				title: "Characters of tool-result text fed back into context",
+				header: localize("Result"),
+				title: localize("Characters of tool-result text fed back into context"),
 				align: "right",
 				sort: row => row.resultChars,
 				render: row => <span className="num">{formatCompact(row.resultChars)}</span>,
 			},
 			{
 				key: "tokens",
-				header: "Attr. tokens",
+				header: localize("Attr. tokens"),
 				title: ATTRIBUTION_NOTE,
 				align: "right",
 				sort: row => row.totalTokensShare,
@@ -543,15 +544,15 @@ function ToolModelTable({
 			},
 			{
 				key: "cost",
-				header: "Attr. cost",
-				title: `${ATTRIBUTION_NOTE}; API-equivalent estimate`,
+				header: localize("Attr. cost"),
+				title: localize("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`),
 				align: "right",
 				sort: row => row.costShare,
 				render: row => <span className="num">{formatEstimatedCost(row.costShare, row.unpricedRequestsShare)}</span>,
 			},
 			{
 				key: "lastUsed",
-				header: "Last used",
+				header: localize("Last used"),
 				align: "right",
 				sort: row => row.lastUsed,
 				render: row => <span className="muted">{formatRelativeTime(row.lastUsed)}</span>,
@@ -567,7 +568,7 @@ function ToolModelTable({
 			initialSort={{ key: "calls", dir: "desc" }}
 			limit={25}
 			dense
-			empty={<EmptyState title={tool ? `No calls to ${tool} in this range` : "No tool calls in this range"} />}
+			empty={<EmptyState title={tool ? localize("No calls to {0} in this range", `${tool}`) : localize("No tool calls in this range")} />}
 		/>
 	);
 }

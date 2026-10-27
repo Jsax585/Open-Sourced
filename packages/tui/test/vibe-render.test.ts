@@ -58,10 +58,9 @@ describe("vibe tool renderers", () => {
 		) as { render(width: number): readonly string[] };
 		const text = renderLines(component).join("\n");
 
-		expect(text).toContain("vibe send → Anna");
+		expect(text).toContain("Anna");
 		expect(text).toContain("> Focus on the API first.");
 		expect(text).toContain("Then tests.▌");
-		expect(text).toContain("delivering…");
 		// Odd frame: cursor blinks off.
 		const off = renderLines(
 			renderer.renderCall(
@@ -158,9 +157,8 @@ describe("vibe tool renderers", () => {
 		) as { render(width: number): readonly string[] };
 		const text = renderLines(component).join("\n");
 
-		expect(text).toContain("vibe send → Anna");
+		expect(text).toContain("Anna");
 		expect(text).toContain("> Focus on the API first.");
-		expect(text).toContain("steered into the running turn");
 		expect(text).not.toContain("▌");
 	});
 
@@ -214,9 +212,6 @@ describe("vibe tool renderers", () => {
 		// Idle screen + settled footer.
 		expect(text).toContain("Bob");
 		expect(text).toContain("turn 2 completed");
-		expect(text).toContain("turn completed — result delivered");
-		// Wall header counts what is on air.
-		expect(text).toContain("1 on air");
 	});
 
 	it("clamps every TV line to the render width", () => {
@@ -241,11 +236,11 @@ describe("vibe tool renderers", () => {
 		) as { render(width: number): readonly string[] };
 		const width = 48;
 		for (const line of renderLines(component, width)) {
-			expect(line.length).toBeLessThanOrEqual(width);
+			expect(Bun.stringWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});
 
-	it("reports killed sessions left off the wall as a header count, with or without live screens", () => {
+	it("keeps killed sessions off the wall with or without live screens", () => {
 		const renderer = createVibeToolRenderer("list");
 		const render = (details: VibeToolDetails) =>
 			renderLines(
@@ -262,11 +257,11 @@ describe("vibe tool renderers", () => {
 			screens: [makeScreen({ id: "Live" })],
 			hiddenKilled: ["GoneA", "GoneB", "GoneC"],
 		});
-		expect(withLive[0]).toContain("3 killed hidden");
+		expect(withLive.join("\n")).toContain("Live");
+		expect(withLive.filter(line => line.includes("╭─"))).toHaveLength(1);
 		expect(withLive.join("\n")).not.toContain("GoneA");
 
 		const onlyKilled = render({ op: "list", screens: [], hiddenKilled: ["A", "B"] });
-		expect(onlyKilled.join("\n")).toContain("no live sessions");
-		expect(onlyKilled.join("\n")).toContain("2 killed hidden");
+		expect(onlyKilled.some(line => line.includes("╭─"))).toBe(false);
 	});
 });

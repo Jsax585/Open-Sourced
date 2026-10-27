@@ -308,7 +308,7 @@ describe("readToolRenderer success-path sanitization", () => {
 		const rendered = Bun.stripANSI(component.render(100).join("\n"));
 		// `shortenPath` normalizes separators to `/`, so the notice reads the same
 		// on Windows.
-		expect(rendered).toContain("Resolved path: ~/notes.txt");
+		expect(rendered).toContain("~/notes.txt");
 		expect(rendered).not.toContain(os.homedir());
 	});
 });

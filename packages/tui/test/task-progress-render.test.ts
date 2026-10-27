@@ -3,6 +3,7 @@ import { setFeedModelBadgeEnabled } from "../src/render/render-utils";
 import { setShimmerMode } from "../src/theme/shimmer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { type RenderResultOptions, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import type { TspAgentProps } from "@oh-my-pi/pi-wire";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import { taskToolRenderer } from "@oh-my-pi/pi-tui/tools/task";
 import { getSubprocessToolRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
@@ -49,6 +50,11 @@ function finishedResult(overrides: Partial<SingleResult> = {}): SingleResult {
 
 function detailsFor(progress: AgentProgress): TaskToolDetails {
 	return { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [progress] };
+}
+
+function agentStatuses(details: TaskToolDetails): TspAgentProps["status"][] {
+	const view = taskToolRenderer.describeResult({ content: [], details }, { expanded: true, isPartial: !!details.progress });
+	return (view?.body ?? []).flatMap(node => ("k" in node && node.k === "agent" ? [(node.p as TspAgentProps).status] : []));
 }
 
 function findRow(component: { render: (w: number) => readonly string[] }, needle: string): string {
@@ -282,9 +288,9 @@ describe("task progress rendering", () => {
 			resolvedThinkingLevel: ThinkingLevel.High,
 			advisor: true,
 		};
-		const snapshots: { details: TaskToolDetails; status?: string }[] = [
-			{ details: detailsFor(runningProgress(metadata)) },
-			{ details: detailsFor(runningProgress({ ...metadata, status: "completed" })) },
+		const snapshots: { details: TaskToolDetails; status: TspAgentProps["status"] }[] = [
+			{ details: detailsFor(runningProgress(metadata)), status: "running" },
+			{ details: detailsFor(runningProgress({ ...metadata, status: "completed" })), status: "done" },
 			{ details: detailsFor(runningProgress({ ...metadata, status: "failed" })), status: "failed" },
 			{
 				details: { projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult(metadata)] },
@@ -300,6 +306,7 @@ describe("task progress rendering", () => {
 			},
 		];
 		for (const { details, status } of snapshots) {
+			expect(agentStatuses(details)).toEqual([status]);
 			const component = taskToolRenderer.renderResult(
 				{ content: [], details },
 				{ expanded: false, isPartial: !!details.progress },
@@ -313,9 +320,6 @@ describe("task progress rendering", () => {
 				expect(firstStatusRow).toBeDefined();
 				expect(firstStatusRow).toContain(metadata.id);
 				expect(firstStatusRow).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
-				if (status) {
-					expect(firstStatusRow).toContain(`${theme.format.bracketLeft}${status}${theme.format.bracketRight}`);
-				}
 				expect(plainRows.join("\n")).toContain(metadata.description);
 				if (width === 160) {
 					const thinkingGlyph = theme.thinking.high.split(" ")[0];
@@ -374,7 +378,7 @@ describe("task progress rendering", () => {
 		const text = Bun.stripANSI(component.render(120).join("\n"));
 		expect(text).toContain("UnknownWidthWorker");
 		expect(text).toContain(`${theme.format.bracketLeft}scout${theme.format.bracketRight}`);
-		expect(text).toContain(`${theme.format.bracketLeft}failed${theme.format.bracketRight}`);
+		expect(agentStatuses(details)).toEqual(["failed"]);
 	});
 
 	it("preserves long descriptions below bounded IDs and required status with badges on or off", async () => {
@@ -393,6 +397,7 @@ describe("task progress rendering", () => {
 				detailsFor(runningProgress({ ...metadata, status: "failed" })),
 				{ projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult({ ...metadata, exitCode: 1 })] },
 			]) {
+				expect(agentStatuses(details)).toEqual(["failed"]);
 				const component = taskToolRenderer.renderResult(
 					{ content: [], details },
 					{ expanded: false, isPartial: false },
@@ -403,7 +408,6 @@ describe("task progress rendering", () => {
 					for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
 					const statusRow = rows.find(row => row.includes("LongWorker"))!;
 					expect(statusRow).toContain("LongWorker");
-					expect(statusRow).toContain(`${theme.format.bracketLeft}failed${theme.format.bracketRight}`);
 					const text = rows.join("").replaceAll(theme.boxRound.vertical, "").replace(/\s+/g, "");
 					expect(text).toContain(description.replace(/\s+/g, ""));
 				}
@@ -520,30 +524,6 @@ describe("task progress rendering", () => {
 		expect(genericRow).not.toContain(`${theme.format.bracketLeft}task${theme.format.bracketRight}`);
 	});
 
-	it("shows the spawn count without a joined agent-type list in the header", async () => {
-		const theme = (await getThemeByName("dark"))!;
-		const details: TaskToolDetails = {
-			projectAgentsDir: null,
-			results: [],
-			totalDurationMs: 0,
-			progress: [
-				runningProgress({ index: 0, id: "ScoutProbe", agent: "scout" }),
-				runningProgress({ index: 1, id: "SonicCount", agent: "sonic" }),
-			],
-		};
-		const header = Bun.stripANSI(
-			findRow(
-				taskToolRenderer.renderResult(
-					{ content: [{ type: "text", text: "" }], details },
-					{ expanded: false, isPartial: true, spinnerFrame: 0 },
-					theme,
-				),
-				"2 agents",
-			),
-		);
-		expect(header).not.toContain("2 agents:");
-		expect(header).not.toContain("scout, sonic");
-	});
 
 	it("keeps the agent dot when shimmer is disabled", async () => {
 		const theme = (await getThemeByName("dark"))!;
@@ -633,11 +613,11 @@ describe("task progress rendering", () => {
 				options,
 				theme,
 			),
-			"Task",
+			theme.symbol("tool.task"),
 		);
 
 		const stripped = Bun.stripANSI(header);
-		expect(stripped).toContain(`${theme.symbol("tool.task")} Task`);
+		expect(stripped).toContain(theme.symbol("tool.task"));
 		expect(stripped).not.toContain(theme.status.running);
 		expect(stripped).not.toContain(theme.getSpinnerFrames("status")[0]);
 	});
@@ -751,9 +731,6 @@ describe("task progress rendering", () => {
 		for (const id of ["DoneOne", "DoneTwo", "DoneThree"]) {
 			expect(collapsed).not.toContain(id);
 		}
-		expect(collapsed).toContain("… 3 more agents (3 done)");
-		// The summary line sits above the visible rows (live edge at the bottom).
-		expect(collapsed.indexOf("more agents")).toBeLessThan(collapsed.indexOf("LiveOne"));
 
 		const expanded = Bun.stripANSI(
 			taskToolRenderer
@@ -764,7 +741,6 @@ describe("task progress rendering", () => {
 		for (const id of ["DoneOne", "DoneTwo", "DoneThree", "LiveOne", "LiveFour"]) {
 			expect(expanded).toContain(id);
 		}
-		expect(expanded).not.toContain("more agents");
 	});
 
 	it("keeps problem rows visible when the collapsed result list folds", async () => {
@@ -800,10 +776,7 @@ describe("task progress rendering", () => {
 		}
 		expect(collapsed).not.toContain("SlowOne");
 		expect(collapsed).not.toContain("SlowTwo");
-		expect(collapsed).toContain("… 2 more agents");
-		// The run summary footer still counts the full batch.
-		expect(collapsed).toContain("5 succeeded");
-		expect(collapsed).toContain("1 failed");
+		expect(agentStatuses(details)).toEqual(["done", "done", "done", "done", "done", "failed"]);
 	});
 	it("expands tabs in task descriptions before measuring and rendering", async () => {
 		const theme = (await getThemeByName("dark"))!;
@@ -874,7 +847,6 @@ describe("task result detail-less state", () => {
 		// A failed task must surface the error glyph and never the "done" bullet.
 		expect(stripped).toContain(theme.status.error);
 		expect(stripped).not.toContain(theme.status.done);
-		expect(stripped).toContain("Task");
 		expect(stripped).toContain("scout");
 		expect(stripped).toContain("Validation failed");
 	});

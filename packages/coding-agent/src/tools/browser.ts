@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
@@ -423,7 +424,7 @@ async function openOnKind(
 	// Chrome's extension debugger API exposes no Security domain, so the relay cannot honor the override.
 	if (params.ignore_https_errors && kind.kind === "relay") {
 		throw new ToolError(
-			"ignore_https_errors is not supported through the Chrome relay: the extension debugger API does not expose the CDP Security domain. Pass app.relay:false to use omp's Chromium instead.",
+			t("ignore_https_errors is not supported through the Chrome relay: the extension debugger API does not expose the CDP Security domain. Pass app.relay:false to use omp's Chromium instead."),
 		);
 	}
 
@@ -477,11 +478,11 @@ async function openOnKind(
 		try {
 			// Read before the tab is acquired, so a cancel or the deadline landing during the read leaves no tab to close.
 			if (kind.kind === "relay") {
-				stage = "reading the relay extension version";
+				stage = t("reading the relay extension version");
 				relayNotice = await relayExtensionNotice(normalizeConnectedCdpUrl(kind.cdpUrl), openSignal);
 				throwIfAborted(openSignal);
 			}
-			stage = `opening tab ${JSON.stringify(name)}`;
+			stage = t("opening tab {0}", `${JSON.stringify(name)}`);
 			const initScripts = await untilAborted(openSignal, () =>
 				resolveInitScriptSources(params.init_scripts, session.cwd),
 			);
@@ -496,7 +497,7 @@ async function openOnKind(
 			) {
 				stage = `closing tab ${JSON.stringify(name)} to reopen it`;
 				await untilAborted(openSignal, () => releaseTab(name, { kill: false, timeoutMs }));
-				stage = `opening tab ${JSON.stringify(name)}`;
+				stage = t("opening tab {0}", `${JSON.stringify(name)}`);
 			}
 			result = await untilAborted(openSignal, () =>
 				acquireTab(name, browser, {

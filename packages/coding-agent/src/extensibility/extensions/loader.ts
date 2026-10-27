@@ -1,6 +1,7 @@
 /**
  * Extension loader - loads TypeScript extension modules using native Bun import.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type * as fs1 from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -277,13 +278,13 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 	registerComposerShape(definition: ComposerShapeDefinition): void {
 		const id = definition.style.id;
 		if (id.length === 0 || id !== id.trim()) {
-			throw new TypeError("Composer shape id must be a non-empty trimmed string");
+			throw new TypeError(t("Composer shape id must be a non-empty trimmed string"));
 		}
 		if (definition.label.trim().length === 0) {
-			throw new TypeError(`Composer shape "${id}" must have a label`);
+			throw new TypeError(t("Composer shape \"{0}\" must have a label", `${id}`));
 		}
 		if (isBuiltinComposerStyle(id)) {
-			throw new Error(`Cannot replace built-in composer shape "${id}"`);
+			throw new Error(t("Cannot replace built-in composer shape \"{0}\"", `${id}`));
 		}
 		this.extension.composerShapes.set(id, definition);
 	}
@@ -346,7 +347,7 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 
 	setServiceTier(family: ServiceTierFamily, tier: ServiceTier | undefined): void {
 		if (!isServiceTierFamily(family) || (tier !== undefined && !isServiceTierForFamily(family, tier))) {
-			throw new TypeError(`Invalid service tier "${String(tier)}" for family "${String(family)}"`);
+			throw new TypeError(t("Invalid service tier \"{1}\" for family \"{0}\"", `${String(family)}`, `${String(tier)}`));
 		}
 		this.runtime.setServiceTier(family, tier);
 	}
@@ -425,14 +426,14 @@ async function importExtensionModule(extensionPath: string, cwd: string): Promis
 				path: extensionPath,
 				factory: null,
 				resolvedPath,
-				error: `Extension does not export a valid factory function: ${extensionPath}`,
+				error: t("Extension does not export a valid factory function: {0}", `${extensionPath}`),
 			};
 		}
 
 		return { path: extensionPath, factory, resolvedPath, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { path: extensionPath, factory: null, resolvedPath, error: `Failed to load extension: ${message}` };
+		return { path: extensionPath, factory: null, resolvedPath, error: t("Failed to load extension: {0}", `${message}`) };
 	}
 }
 
@@ -455,7 +456,7 @@ async function bindExtension(
 		return { extension, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { extension: null, error: `Failed to load extension: ${message}` };
+		return { extension: null, error: t("Failed to load extension: {0}", `${message}`) };
 	}
 }
 

@@ -1,3 +1,4 @@
+function ompT(source, ...values) { return source.replace(/\{(\d+)\}/g, (match, index) => index < values.length ? String(values[index]) : match); }
 // Options page for the OMP Browser Relay extension (plain JS: shipped as-is).
 const DEFAULT_PORT = 9224;
 const portInput = document.getElementById("port");
@@ -12,11 +13,11 @@ chrome.storage.local.get({ port: DEFAULT_PORT, token: "" }).then(stored => {
 document.getElementById("save").addEventListener("click", async () => {
 	const port = Number(portInput.value);
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-		status.textContent = "invalid port";
+		status.textContent = ompT("invalid port");
 		return;
 	}
 	await chrome.storage.local.set({ port, token: tokenInput.value });
-	status.textContent = "saved";
+	status.textContent = ompT("saved");
 	setTimeout(() => {
 		status.textContent = "";
 	}, 1500);

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Korean language-pack support for CLI and interactive messages, with English fallback, editable external catalogs, localized browser surfaces, and Korean documentation.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

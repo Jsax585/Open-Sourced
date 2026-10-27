@@ -1,6 +1,7 @@
 /**
  * Extension runner - executes extensions and manages their lifecycle.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type AgentMessage,
@@ -134,7 +135,7 @@ export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
 let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
 
 function throwUnsupportedServiceTierAction(): never {
-	throw new Error("This extension host does not support service-tier actions");
+	throw new Error(t("This extension host does not support service-tier actions"));
 }
 
 export function testSetExtensionHandlerTimeoutMs(timeoutMs: number): void {
@@ -483,7 +484,7 @@ const noOpUIContext: ExtensionUIContext = {
 	},
 	getAllThemes: () => Promise.resolve([]),
 	getTheme: () => Promise.resolve(undefined),
-	setTheme: (_theme: string | Theme) => Promise.resolve({ success: false, error: "UI not available" }),
+	setTheme: (_theme: string | Theme) => Promise.resolve({ success: false, error: t("UI not available") }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
@@ -723,10 +724,10 @@ export class ExtensionRunner {
 		},
 	): Promise<AgentToolResult<TDetails>> {
 		const resolved = this.#nativeToolResolver?.(name);
-		if (!resolved) throw new Error(`invokeTool: no native built-in named "${name}" to delegate to`);
+		if (!resolved) throw new Error(t("invokeTool: no native built-in named \"{0}\" to delegate to", `${name}`));
 		const depth = options?.depth ?? 0;
 		if (depth >= 8) {
-			throw new Error(`invokeTool: delegation depth exceeded 8 (recursive invokeTool for "${name}"?)`);
+			throw new Error(t("invokeTool: delegation depth exceeded 8 (recursive invokeTool for \"{0}\"?)", `${name}`));
 		}
 		const toolCallId = `invoke-${name}-${Date.now().toString(36)}-${depth}`;
 		return (await resolved.tool.execute(
@@ -1504,7 +1505,7 @@ export class ExtensionRunner {
 			runEphemeralTurn: runEphemeralTurn
 				? async options => {
 						if (this.#ephemeralTurnBlocker.getStore()) {
-							throw new Error("runEphemeralTurn cannot be called recursively from an ephemeral turn hook");
+							throw new Error(t("runEphemeralTurn cannot be called recursively from an ephemeral turn hook"));
 						}
 						// Resolve at call time so a running handler's cancellation is inherited.
 						// A saved context must not retain a completed handler's stale signal.
@@ -1856,7 +1857,7 @@ export class ExtensionRunner {
 					this.emitError({
 						extensionPath: ext.path,
 						event: "assistant_message",
-						error: "content replacement may only change text in existing blocks; block positions, non-text blocks, and other metadata must remain unchanged",
+						error: t("content replacement may only change text in existing blocks; block positions, non-text blocks, and other metadata must remain unchanged"),
 					});
 					continue;
 				}

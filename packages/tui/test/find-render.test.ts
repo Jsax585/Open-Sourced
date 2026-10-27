@@ -148,12 +148,11 @@ describe("findToolRenderer", () => {
 		expect(collapsed).toContain(":10-20");
 		expect(collapsed).not.toContain(":30-40");
 		expect(collapsed).not.toContain("verification: boom");
-		expect(collapsed).toContain("1/3 requests failed");
 		expect(expanded).toContain(":30-40");
 		expect(expanded).toContain("const attempts = 3;");
 		expect(expanded).not.toContain("\t");
 		expect(expanded).toContain("verification: boom");
-		expect(expanded).toContain("keywords: retry, budget");
+		expect(expanded).toContain("retry, budget");
 	});
 
 	it("renders the streamed phase while the call is still running", async () => {

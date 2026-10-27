@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type {
 	AgentProgress,
 	AgentSnapshot,
@@ -6,7 +7,7 @@ import type {
 } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
 import { memo, useEffect, useMemo, useState } from "react";
-import { fmtCost, fmtDuration, fmtTokens, relTime } from "../../lib/format";
+import { fmtCost, fmtDuration, fmtTokens, formatStatus, relTime } from "../../lib/format";
 import "./agents.css";
 
 /** Re-render tick so running-tool durations and relative times stay live. */
@@ -43,8 +44,8 @@ function activityLine(
 		return p.currentTool;
 	}
 	if (p?.lastIntent) return p.lastIntent;
-	if (lc) return lc.status;
-	return agent.status;
+	if (lc) return formatStatus(lc.status);
+	return formatStatus(agent.status);
 }
 
 const AgentRow = memo(function AgentRow(props: {
@@ -66,11 +67,11 @@ const AgentRow = memo(function AgentRow(props: {
 			<span className="ag-row-head">
 				<span className={`ag-dot ag-dot--${agent.status}`} />
 				<span className="ag-row-name">{agent.displayName}</span>
-				<span className="ag-chip">{agent.kind}</span>
+				<span className="ag-chip">{agent.kind === "main" ? t("Main agent") : t("Subagents")}</span>
 			</span>
 			<span className="ag-row-activity">{activityLine(agent, p, lifecycle, now)}</span>
 			<span className="ag-row-meta">
-				{p ? <span>{fmtTokens(p.tokens)} tok</span> : null}
+				{p ? <span>{t("{0} tok", `${fmtTokens(p.tokens)}`)}</span> : null}
 				{p ? <span>{fmtCost(p.cost)}</span> : null}
 				<span className="ag-row-meta-when">{relTime(agent.lastActivity)}</span>
 			</span>
@@ -104,7 +105,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 
 	return (
 		<div className="ag-panel">
-			<div className="ag-heading">Session</div>
+			<div className="ag-heading">{t("Session")}</div>
 			{sorted.mains.map(agent => (
 				<AgentRow
 					key={agent.id}
@@ -116,10 +117,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 					onSelect={onSelect}
 				/>
 			))}
-			<div className="ag-heading">
-				Subagents
-				{sorted.subs.length > 0 && <span className="ag-heading-count">{sorted.subs.length}</span>}
-			</div>
+			<div className="ag-heading">{t("Subagents{0}", `${sorted.subs.length > 0 && <span className="ag-heading-count">{sorted.subs.length}</span>}`)}</div>
 			{sorted.subs.map(agent => (
 				<AgentRow
 					key={agent.id}
@@ -131,7 +129,7 @@ export const AgentsPanel = memo(function AgentsPanel(props: {
 					onSelect={onSelect}
 				/>
 			))}
-			{sorted.subs.length === 0 ? <div className="ag-empty">No subagents yet</div> : null}
+			{sorted.subs.length === 0 ? <div className="ag-empty">{t("No subagents yet")}</div> : null}
 		</div>
 	);
 });

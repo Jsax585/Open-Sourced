@@ -79,15 +79,15 @@ describe("native transcript redesign", () => {
 		const message = harness.find(node => node.p?.role === "omp.error.message");
 		expect(texts(message)).toBe("upstream overloaded (type=server_error)");
 
-		const retry = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Retry"));
+		const retry = harness.find(node => node.p?.role === "omp.error.action" && node.p?.actions?.click === "retry");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: retry!.id, act: "retry" });
-		const copy = harness.find(node => node.p?.role === "omp.error.action" && texts(node).startsWith("Copy"));
+		const copy = harness.find(node => node.p?.role === "omp.error.action" && node.p?.actions?.click === "copy-error");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: copy!.id, act: "copy-error" });
 		expect(actions).toEqual([{ act: "retry" }, { act: "copy", text: "upstream overloaded (type=server_error)" }]);
 		expect(harness.errors).toEqual([]);
 	});
 
-	it("streams thinking under a live head, then settles to a collapsed 'Thought' line", async () => {
+	it("streams thinking under a live head, then settles to a collapsed section", async () => {
 		const component = new AssistantMessageComponent();
 		harness = await TspHarness.start();
 		harness.tui.addChild(component);
@@ -110,7 +110,6 @@ describe("native transcript redesign", () => {
 		await harness.render();
 		const done = harness.find(node => node.k === "section" && node.p?.role === "omp.thinking");
 		expect(done?.p).toMatchObject({ collapsed: true });
-		expect(texts(done)).toStartWith("Thought");
 		expect(prop(done, "took")).toBeNumber();
 		expect(harness.find(node => node.k === "spinner")).toBeUndefined();
 		expect(harness.errors).toEqual([]);
@@ -220,16 +219,12 @@ describe("native transcript redesign", () => {
 	it("shows a user message's time on the terminal's clock", async () => {
 		setTranscriptActionHandler(() => {});
 		const at = new Date(2026, 0, 1, 18, 5).getTime();
-		for (const [hour12, shown] of [
-			[false, /^18:05$/],
-			[true, /^0?6:05\s?pm$/i],
-		] as const) {
+		for (const hour12 of [false, true]) {
 			harness = await TspHarness.start(undefined, { hour12 });
 			harness.tui.addChild(new UserMessageComponent("Fix the build", { timestamp: at }));
 			await harness.render();
 			const time = harness.find(node => node.p?.role === "omp.user.time");
-			expect(texts(time)).toMatch(shown);
-			expect(String(prop(time, "title"))).toMatch(hour12 ? /pm/i : /18:05/);
+			expect(texts(time)).toBe(new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12 }));
 			harness.stop();
 			harness = undefined;
 		}

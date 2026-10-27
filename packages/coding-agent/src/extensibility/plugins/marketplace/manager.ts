@@ -6,6 +6,7 @@
  * the real `clearClaudePluginRootsCache` while tests supply a counter stub.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,7 +57,7 @@ const MAX_RUNTIME_PACKAGE_NAME_LENGTH = 214;
 
 function assertRuntimePackageName(name: string): string {
 	if (name.length > MAX_RUNTIME_PACKAGE_NAME_LENGTH || !RUNTIME_PACKAGE_NAME_RE.test(name)) {
-		throw new Error(`Invalid marketplace plugin package name: ${JSON.stringify(name)}`);
+		throw new Error(t("Invalid marketplace plugin package name: {0}", `${JSON.stringify(name)}`));
 	}
 	return name;
 }
@@ -296,7 +297,7 @@ export class MarketplaceManager {
 			pluginEntry.version.length > 0 &&
 			!isValidVersionForCache(pluginEntry.version)
 		) {
-			throw new Error(`Invalid version for cache: "${pluginEntry.version}"`);
+			throw new Error(t("Invalid version for cache: \"{0}\"", `${pluginEntry.version}`));
 		}
 
 		const marketplaceClonePath = this.#resolveMarketplaceRoot(mktEntry);
@@ -495,7 +496,7 @@ export class MarketplaceManager {
 			const stat = await fs.stat(resolved);
 			if (!stat.isFile()) throw new Error("not a file");
 		} catch {
-			throw new Error(`Plugin "${entry.name}" ${field} file does not exist`);
+			throw new Error(t("Plugin \"{0}\" {1} file does not exist", `${entry.name}`, `${field}`));
 		}
 	}
 
@@ -583,7 +584,7 @@ export class MarketplaceManager {
 	async uninstallPlugin(pluginId: string, scope?: "user" | "project", options?: { dryRun?: boolean }): Promise<void> {
 		const parsed = parsePluginId(pluginId);
 		if (!parsed) {
-			throw new Error(`Invalid plugin ID format: "${pluginId}". Expected "name@marketplace".`);
+			throw new Error(t("Invalid plugin ID format: \"{0}\". Expected \"name@marketplace\".", `${pluginId}`));
 		}
 
 		const { userEntries, projectEntries, userReg, projectReg } = await this.#findInBothRegistries(pluginId);
@@ -813,7 +814,7 @@ export class MarketplaceManager {
 	async upgradePlugin(pluginId: string, scope?: "user" | "project"): Promise<InstalledPluginEntry> {
 		const parsed = parsePluginId(pluginId);
 		if (!parsed) {
-			throw new Error(`Invalid plugin ID: "${pluginId}". Expected "name@marketplace".`);
+			throw new Error(t("Invalid plugin ID: \"{0}\". Expected \"name@marketplace\".", `${pluginId}`));
 		}
 
 		const { userEntries, projectEntries } = await this.#findInBothRegistries(pluginId);
@@ -849,7 +850,7 @@ export class MarketplaceManager {
 	async upgradePluginAcrossScopes(pluginId: string): Promise<InstalledPluginEntry[]> {
 		const parsed = parsePluginId(pluginId);
 		if (!parsed) {
-			throw new Error(`Invalid plugin ID: "${pluginId}". Expected "name@marketplace".`);
+			throw new Error(t("Invalid plugin ID: \"{0}\". Expected \"name@marketplace\".", `${pluginId}`));
 		}
 
 		const { userEntries, projectEntries } = await this.#findInBothRegistries(pluginId);
@@ -941,7 +942,7 @@ export class MarketplaceManager {
 		const linkPath = path.resolve(nodeModules, assertRuntimePackageName(packageName));
 		const relative = path.relative(nodeModules, linkPath);
 		if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-			throw new Error(`Marketplace plugin package path escapes node_modules: ${JSON.stringify(packageName)}`);
+			throw new Error(t("Marketplace plugin package path escapes node_modules: {0}", `${JSON.stringify(packageName)}`));
 		}
 		return linkPath;
 	}
@@ -1017,7 +1018,7 @@ export class MarketplaceManager {
 		for (const runtimeName of runtimeNames) {
 			const runtimeKey = runtimeName.toLowerCase();
 			if (runtimeKey === key && !owned.has(runtimeKey)) {
-				throw new Error(`Runtime package name "${packageName}" conflicts with installed package "${runtimeName}"`);
+				throw new Error(t("Runtime package name \"{0}\" conflicts with installed package \"{1}\"", `${packageName}`, `${runtimeName}`));
 			}
 		}
 	}
@@ -1101,7 +1102,7 @@ export class MarketplaceManager {
 	#registryPath(scope: "user" | "project"): string {
 		if (scope === "project") {
 			if (!this.#opts.projectInstalledRegistryPath) {
-				throw new Error("project-scoped install requires running inside a project directory");
+				throw new Error(t("project-scoped install requires running inside a project directory"));
 			}
 			return this.#opts.projectInstalledRegistryPath;
 		}
@@ -1192,7 +1193,7 @@ export class MarketplaceManager {
 			return parseMarketplaceCatalog(content, catalogPath);
 		} catch (err) {
 			if (isEnoent(err)) {
-				throw new Error(`Marketplace catalog not found at ${catalogPath}. Try: /marketplace update ${entry.name}`);
+				throw new Error(t("Marketplace catalog not found at {0}. Try: /marketplace update {1}", `${catalogPath}`, `${entry.name}`));
 			}
 			throw err;
 		}

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added shared Korean and English translation catalogs, placeholder-aware fallback, and browser-safe translation helpers.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

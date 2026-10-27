@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { pathToFileURL } from "node:url";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../sdk";
@@ -132,12 +133,12 @@ export async function renderPdfPageScreenshot(
 			session,
 		});
 		const screenshot = result.screenshots.at(-1);
-		if (!screenshot) throw new ToolError(`Chromium did not capture PDF page ${page}.`);
+		if (!screenshot) throw new ToolError(t("Chromium did not capture PDF page {0}.", `${page}`));
 		return screenshot;
 	} catch (error) {
 		if (signal?.aborted) throw new ToolAbortError();
 		if (timeoutSignal.aborted) {
-			throw new ToolError(`Timed out rendering PDF page ${page} in Chromium.`);
+			throw new ToolError(t("Timed out rendering PDF page {0} in Chromium.", `${page}`));
 		}
 		throw error;
 	} finally {

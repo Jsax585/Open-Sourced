@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
@@ -467,9 +468,9 @@ function applyTextFileConvention(
  */
 function textFileConventionNote(applied: TextFileConvention, finalText: string): string | undefined {
 	const kept: string[] = [];
-	if (applied.crlf && detectLineEnding(finalText) === "\r\n") kept.push("CRLF line endings");
+	if (applied.crlf && detectLineEnding(finalText) === "\r\n") kept.push(t("CRLF line endings"));
 	if (applied.bom && finalText.startsWith("\uFEFF")) kept.push("UTF-8 BOM");
-	return kept.length === 0 ? undefined : `Note: kept the replaced file's ${kept.join(" and ")}.`;
+	return kept.length === 0 ? undefined : t("Note: kept the replaced file's {0}.", `${kept.join(t(" and "))}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -578,18 +579,18 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<WriteParams>;
-		const targetPath = typeof params.path === "string" ? params.path : "(missing)";
+		const targetPath = typeof params.path === "string" ? params.path : t("(missing)\u0004packages/coding-agent/src/tools/bash.ts:BashTool.formatApprovalDetails.command");
 		const content = typeof params.content === "string" ? params.content : "";
 		const unwrapped = unwrapHashlineHeaderPath(targetPath);
 		if (extractUriScheme(unwrapped) === "xd") {
 			try {
 				const parsed: unknown = JSON.parse(content);
-				return [`Path: ${truncateForPrompt(targetPath)}`, ...formatApprovalArguments(parsed, { showEmpty: true })];
+				return [t("Path: {0}", `${truncateForPrompt(targetPath)}`), ...formatApprovalArguments(parsed, { showEmpty: true })];
 			} catch {
 				// Non-JSON payload falls back to raw content
 			}
 		}
-		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateForPrompt(content)}`];
+		return [t("Path: {0}", `${truncateForPrompt(targetPath)}`), t("Content:\n{0}", `${truncateForPrompt(content)}`)];
 	};
 	/**
 	 * `always-ask-cached` key: the path this write targets, unwrapped from a
@@ -602,7 +603,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const key = approvalTargetKey(this.session.cwd, unwrapHashlineHeaderPath(rawPath));
 		return key === undefined ? undefined : [key];
 	};
-	readonly label = "Write";
+	readonly label = t("Write\u0004packages/coding-agent/src/tools/write.ts:WriteTool.label");
 	get description(): string {
 		const deviceOnly = this.session.deviceOnlyWrite === true && this.session.pendingFullWriteDescription !== true;
 		return prompt.render(deviceOnly ? writeDeviceOnlyDescription : writeDescription);
@@ -762,7 +763,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					resolvedArchivePath.archiveSubPath
 				}`;
 				return {
-					content: [{ type: "text", text: `Successfully wrote ${contentBytes} bytes to ${outputPath}` }],
+					content: [{ type: "text", text: t("Successfully wrote {1} bytes to {0}", `${outputPath}`, `${contentBytes}`) }],
 					details: { resolvedPath: resolvedArchivePath.absolutePath },
 				};
 			},

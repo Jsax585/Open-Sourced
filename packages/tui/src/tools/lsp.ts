@@ -7,6 +7,7 @@
  * - Grouped references and symbols
  * - Collapsible/expandable views
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan, TspText, TspTone, TspTreeNode } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead, NativeToolView, RenderResultOptions, ToolRenderer, ToolRenderResult } from "./renderer";
 import type { Component } from "../tui";
@@ -108,7 +109,7 @@ function sanitizeInlineText(value: string): string {
 }
 
 export function renderCall(args: LspParams, _options: RenderResultOptions, theme: Theme): Text {
-	const actionLabel = (args.action ?? "request").replace(/_/g, " ");
+	const actionLabel = lspActionTitle(args.action ?? "request");
 	const queryPreview = args.query ? truncateToWidth(args.query, TRUNCATE_LENGTHS.SHORT) : undefined;
 	const symbolPreview = args.symbol
 		? truncateToWidth(sanitizeInlineText(args.symbol), TRUNCATE_LENGTHS.SHORT)
@@ -128,16 +129,16 @@ export function renderCall(args: LspParams, _options: RenderResultOptions, theme
 			target += ` (${symbolPreview})`;
 		}
 	} else if (!target && args.line !== undefined) {
-		target = `line ${args.line}`;
+		target = t("line {0}\u0004packages/tui/src/tools/lsp.ts:renderCall", `${args.line}`);
 		if (symbolPreview) {
 			target += ` (${symbolPreview})`;
 		}
 	}
 
 	const meta: string[] = [];
-	if (queryPreview && target) meta.push(`query:${queryPreview}`);
-	if (args.new_name) meta.push(`new:${args.new_name}`);
-	if (args.apply !== undefined) meta.push(`apply:${args.apply ? "true" : "false"}`);
+	if (queryPreview && target) meta.push(t("query:{0}", `${queryPreview}`));
+	if (args.new_name) meta.push(t("new:{0}", `${args.new_name}`));
+	if (args.apply !== undefined) meta.push(t("apply:{0}", `${args.apply ? t("true") : t("false")}`));
 
 	const descriptionParts = [actionLabel];
 	if (target) {
@@ -177,7 +178,7 @@ export function renderResult(
 	if (content?.type !== "text" || !("text" in content) || !content.text) {
 		const icon = formatStatusIcon("warning", theme, options.spinnerFrame);
 		const header = `${icon} LSP`;
-		return new Text([header, theme.fg("dim", "No result")].join("\n"), 0, 0);
+		return new Text([header, theme.fg("dim", t("No result"))].join("\n"), 0, 0);
 	}
 
 	const text = content.text;
@@ -198,14 +199,14 @@ export function renderResult(
 		requestLines.push(theme.fg("toolOutput", request.file));
 	}
 	if (request?.line !== undefined) {
-		requestLines.push(theme.fg("dim", `line ${request.line}`));
+		requestLines.push(theme.fg("dim", t("line {0}\u0004packages/tui/src/tools/lsp.ts:renderCall", `${request.line}`)));
 	}
 	if (request?.symbol) {
-		requestLines.push(theme.fg("dim", `symbol: ${sanitizeInlineText(request.symbol)}`));
+		requestLines.push(theme.fg("dim", t("symbol: {0}", `${sanitizeInlineText(request.symbol)}`)));
 	}
-	if (request?.query) requestLines.push(theme.fg("dim", `query: ${request.query}`));
-	if (request?.new_name) requestLines.push(theme.fg("dim", `new name: ${request.new_name}`));
-	if (request?.apply !== undefined) requestLines.push(theme.fg("dim", `apply: ${request.apply ? "true" : "false"}`));
+	if (request?.query) requestLines.push(theme.fg("dim", t("query: {0}", `${request.query}`)));
+	if (request?.new_name) requestLines.push(theme.fg("dim", t("new name: {0}", `${request.new_name}`)));
+	if (request?.apply !== undefined) requestLines.push(theme.fg("dim", t("apply: {0}", `${request.apply ? t("true") : t("false")}`)));
 
 	// The body depends only on the (immutable) text, theme and `expanded`; parse
 	// and render it once per expanded state instead of on every spinner frame.
@@ -244,7 +245,7 @@ export function renderResult(
 				bodyLines: [`${theme.styledSymbol("tool.lsp", "accent")} ${theme.fg("dim", "OK")}`],
 			};
 		}
-		return { label: "Response", state: "success", bodyLines: renderGeneric(text, lines, expanded, theme) };
+		return { label: t("Response"), state: "success", bodyLines: renderGeneric(text, lines, expanded, theme) };
 	};
 
 	return framedToolCard(theme, ({ contentWidth }) => {
@@ -280,7 +281,7 @@ export function renderResult(
 			phase: isPartial ? "partial" : state,
 			sections: [
 				...(requestLines.length > 0 ? [{ content: requestLines }] : []),
-				{ label: theme.fg("toolTitle", "Response"), content: contentLines },
+				{ label: theme.fg("toolTitle", t("Response")), content: contentLines },
 			],
 			applyBg: false,
 		};
@@ -395,7 +396,7 @@ function renderDiagnostics(
 	const meta: string[] = [];
 	if (errorCount > 0) meta.push(`${errorCount} error${errorCount !== 1 ? "s" : ""}`);
 	if (warnCount > 0) meta.push(`${warnCount} warning${warnCount !== 1 ? "s" : ""}`);
-	if (meta.length === 0) meta.push("No issues");
+	if (meta.length === 0) meta.push(t("No issues"));
 
 	const diagLines = lines.filter(l => l.includes(theme.status.error) || /:\d+:\d+/.test(l));
 	const parsedDiagnostics = diagLines
@@ -516,12 +517,12 @@ function renderReferences(refMatch: RegExpMatchArray, lines: string[], expanded:
 					const locCont = isLastLoc ? "   " : `${theme.tree.vertical}  `;
 					output += `\n ${theme.fg("dim", fileCont)}${theme.fg("dim", locBranch)} ${theme.fg(
 						"muted",
-						`line ${line}, col ${col}`,
+						t("line {0}, col {1}", `${line}`, `${col}`),
 					)}`;
 					if (expanded) {
 						output += `\n ${theme.fg("dim", fileCont)}${theme.fg("dim", locCont)}${theme.fg(
 							"muted",
-							`at ${file}:${line}:${col}`,
+							t("at {0}:{1}:{2}", `${file}`, `${line}`, `${col}`),
 						)}`;
 					}
 				}
@@ -607,7 +608,7 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 	const topLevelCount = symbols.filter(s => s.indent === 0).length;
 
 	if (expanded) {
-		let output = `${icon} ${theme.fg("dim", `in ${fileName}`)}`;
+		let output = `${icon} ${theme.fg("dim", t("in {0}\u0004packages/tui/src/tools/lsp.ts:renderSymbols.output", `${fileName}`))}`;
 
 		const prefixes = getPrefixes();
 		for (let i = 0; i < symbols.length; i++) {
@@ -617,7 +618,7 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 			const branch = symIsLast ? theme.tree.last : theme.tree.branch;
 			const detailPrefix = symIsLast ? "   " : `${theme.tree.vertical}  `;
 			output += `\n${prefix}${theme.fg("dim", branch)} ${theme.fg("accent", sym.icon)} ${theme.fg("accent", sym.name)}`;
-			output += `\n${prefix}${theme.fg("dim", detailPrefix)}${theme.fg("muted", `line ${sym.line}`)}`;
+			output += `\n${prefix}${theme.fg("dim", detailPrefix)}${theme.fg("muted", t("line {0}\u0004packages/tui/src/tools/lsp.ts:renderCall", `${sym.line}`))}`;
 		}
 		return output.split("\n");
 	}
@@ -626,14 +627,14 @@ function renderSymbols(symbolsMatch: RegExpMatchArray, lines: string[], expanded
 	const topLevel = symbols.filter(s => s.indent === 0).slice(0, 3);
 	const hasMoreSymbols = symbols.length > topLevel.length;
 	const expandHint = formatExpandHint(theme, expanded, hasMoreSymbols);
-	let output = `${icon} ${theme.fg("dim", `in ${fileName}`)}${expandHint}`;
+	let output = `${icon} ${theme.fg("dim", t("in {0}\u0004packages/tui/src/tools/lsp.ts:renderSymbols.output", `${fileName}`))}${expandHint}`;
 	for (let i = 0; i < topLevel.length; i++) {
 		const sym = topLevel[i];
 		const isLast = i === topLevel.length - 1 && topLevelCount <= 3;
 		const branch = isLast ? theme.tree.last : theme.tree.branch;
 		output += `\n ${theme.fg("dim", branch)} ${theme.fg("accent", sym.icon)} ${theme.fg("accent", sym.name)} ${theme.fg(
 			"muted",
-			`line ${sym.line}`,
+			t("line {0}\u0004packages/tui/src/tools/lsp.ts:renderCall", `${sym.line}`),
 		)}`;
 	}
 	if (topLevelCount > 3) {
@@ -662,7 +663,7 @@ function renderGeneric(text: string, lines: string[], expanded: boolean, theme: 
 				: theme.styledSymbol("status.info", "accent");
 
 	if (expanded) {
-		let output = `${icon} ${theme.fg("dim", "Output")}`;
+		let output = `${icon} ${theme.fg("dim", t("Output"))}`;
 		for (let i = 0; i < lines.length; i++) {
 			const isLast = i === lines.length - 1;
 			const branch = isLast ? theme.tree.last : theme.tree.branch;
@@ -671,7 +672,7 @@ function renderGeneric(text: string, lines: string[], expanded: boolean, theme: 
 		return output.split("\n");
 	}
 
-	const firstLine = lines[0] || "No output";
+	const firstLine = lines[0] || t("No output");
 	const expandHint = formatExpandHint(
 		theme,
 		expanded,
@@ -740,11 +741,26 @@ function severityToColor(severity: ParsedDiagnostic["severity"]): "error" | "war
 // Native (TSP) Description
 // =============================================================================
 
-/** The head verb for an LSP action (`type_definition` → `Type definition`). */
+/** Display titles only; unknown custom action names remain unchanged. */
 function lspActionTitle(action: string | undefined): string {
-	if (!action || action === "request") return "LSP";
-	const words = action.replace(/_/g, " ");
-	return words.charAt(0).toUpperCase() + words.slice(1);
+	switch (action) {
+		case undefined:
+		case "request": return "LSP";
+		case "diagnostics": return t("Diagnostics");
+		case "definition": return t("definition");
+		case "references": return t("references");
+		case "hover": return t("hover");
+		case "symbols": return t("symbols");
+		case "rename": return t("rename");
+		case "rename_file": return t("rename_file");
+		case "code_actions": return t("code_actions");
+		case "type_definition": return t("type_definition");
+		case "implementation": return t("implementation");
+		case "status": return t("status");
+		case "reload": return t("reload");
+		case "capabilities": return t("capabilities");
+		default: return action;
+	}
 }
 
 /**
@@ -768,12 +784,12 @@ function lspNativeHead(
 		target = request.query;
 		targetKind = "query";
 	} else if (request?.line !== undefined) {
-		facts.push(`line ${request.line}`);
+		facts.push(t("line {0}\u0004packages/tui/src/tools/lsp.ts:renderCall", `${request.line}`));
 	}
 	if (symbol) facts.push(symbol);
-	if (request?.query && target !== request.query) facts.push(`query:${request.query}`);
+	if (request?.query && target !== request.query) facts.push(t("query:{0}", `${request.query}`));
 	if (request?.new_name) facts.push(`\u2192 ${request.new_name}`);
-	if (request?.apply !== undefined) facts.push(`apply:${request.apply ? "true" : "false"}`);
+	if (request?.apply !== undefined) facts.push(t("apply:{0}", `${request.apply ? t("true") : t("false")}`));
 	return {
 		title: lspActionTitle(request?.action ?? fallbackAction),
 		target,
@@ -896,7 +912,7 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 	const parsed = parseLspDiagnostics(lines);
 	const counts = diagnosticCounts(parsed.diagnostics);
 	const failed =
-		parsed.failures.length > 0 ? [span(formatCount("server failure", parsed.failures.length), "error")] : undefined;
+		parsed.failures.length > 0 ? [span(t("{0} server failure{1}", `${(parsed.failures.length)}`, `${(parsed.failures.length === 1 ? "" : "s")}`), "error")] : undefined;
 	const rows: NativeNode[] = [
 		...parsed.failures.map((message, i) => statusRow(message, "error", `x${i}`)),
 		...parsed.diagnostics.map((diag, i) => diagnosticRow(diag, `d${i}`)),
@@ -904,7 +920,7 @@ function describeLspDiagnostics(request: Partial<LspParams> | undefined, fallbac
 	];
 	if (parsed.other.length > 0) rows.push(keyed(code(parsed.other.join("\n"), { wrap: true }), "other"));
 	const hasErrors = parsed.failures.length > 0 || parsed.diagnostics.some(d => d.severity === "error");
-	const meta = compact<TspText>([counts, failed, !counts && !failed && "No issues"]);
+	const meta = compact<TspText>([counts, failed, !counts && !failed && t("No issues")]);
 	const head = lspNativeHead(request, fallbackAction, meta);
 	if (parsed.diagnostics.length === 0 && parsed.failures.length === 0) {
 		return { tool: head, inline: true, body: rows.length > 0 ? rows : undefined } satisfies NativeToolView;
@@ -983,8 +999,8 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 	const fallbackAction = result.details?.action ?? "request";
 	const content = result.content?.[0];
 	const text = content?.type === "text" ? (content.text ?? "") : "";
-	if (result.isError) return inlineErrorView(lspNativeHead(request, fallbackAction), text || "LSP request failed");
-	if (!text) return { tool: lspNativeHead(request, fallbackAction, ["No result"]), tone: "warning", inline: true };
+	if (result.isError) return inlineErrorView(lspNativeHead(request, fallbackAction), text || t("LSP request failed"));
+	if (!text) return { tool: lspNativeHead(request, fallbackAction, [t("No result")]), tone: "warning", inline: true };
 
 	const lines = text.split("\n");
 	const statusError = activeThemeSymbol("status.error");
@@ -1015,7 +1031,7 @@ function describeLspResult(result: ToolRenderResult<LspToolDetails>, args: LspPa
 	if (symbolsMatch) {
 		const body = describeLspSymbols(lines);
 		return {
-			tool: lspNativeHead(request, fallbackAction, [`in ${symbolsMatch[1]}`]),
+			tool: lspNativeHead(request, fallbackAction, [t("in {0}\u0004packages/tui/src/tools/lsp.ts:renderSymbols.output", `${symbolsMatch[1]}`)]),
 			inline: true,
 			body: body ? [body] : undefined,
 			preview: { lines: 8 },

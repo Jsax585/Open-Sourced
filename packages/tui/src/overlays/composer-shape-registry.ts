@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type ComposerStyle, registerComposerStyle } from "../index";
 import type { SubmenuOption } from "./settings-defs";
 
@@ -8,43 +9,43 @@ export type ComposerShape = string;
 export const BUILTIN_COMPOSER_SHAPES = [
 	{
 		value: "band",
-		label: "Status Band (Default)",
-		description: "Flush soft-capped status band above a curved prompt, no frame",
+		label: t("Status Band (Default)"),
+		description: t("Flush soft-capped status band above a curved prompt, no frame"),
 	},
 	{
 		value: "box",
-		label: "Rounded Box",
-		description: "Status line embedded in top border, compact 2-line prompt",
+		label: t("Rounded Box"),
+		description: t("Status line embedded in top border, compact 2-line prompt"),
 	},
 	{
 		value: "claude",
 		label: "Claude Code",
-		description: "Full-width horizontal rules above and below, status line at bottom",
+		description: t("Full-width horizontal rules above and below, status line at bottom"),
 	},
 	{
 		value: "pi",
 		label: "Pi",
-		description: "Framed horizontal rules with status line at bottom",
+		description: t("Framed horizontal rules with status line at bottom"),
 	},
 	{
 		value: "borderless",
-		label: "Borderless",
-		description: "Clean prompt glyph with status line at bottom, no box borders",
+		label: t("Borderless"),
+		description: t("Clean prompt glyph with status line at bottom, no box borders"),
 	},
 	{
 		value: "rule",
-		label: "Top Rule Dock",
-		description: "Single top rule with status docked onto it and below",
+		label: t("Top Rule Dock"),
+		description: t("Single top rule with status docked onto it and below"),
 	},
 	{
 		value: "field",
-		label: "Compact Field",
-		description: "Filled one-row field with accent end caps",
+		label: t("Compact Field"),
+		description: t("Filled one-row field with accent end caps"),
 	},
 	{
 		value: "rail",
-		label: "Accent Rail",
-		description: "Filled one-row field anchored by a single accent rail",
+		label: t("Accent Rail"),
+		description: t("Filled one-row field anchored by a single accent rail"),
 	},
 ] as const;
 

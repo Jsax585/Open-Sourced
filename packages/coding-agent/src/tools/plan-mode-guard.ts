@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -135,16 +136,16 @@ export async function enforcePlanModeWrite(
 	if (!state?.enabled) return;
 
 	if (options?.move) {
-		throw new ToolError("Plan mode: renaming files is not allowed.");
+		throw new ToolError(t("Plan mode: renaming files is not allowed."));
 	}
 
 	if (options?.op === "delete") {
-		throw new ToolError("Plan mode: deleting files is not allowed.");
+		throw new ToolError(t("Plan mode: deleting files is not allowed."));
 	}
 
 	if (await targetsLocalSandbox(session, targetPath, options?.signal)) return;
 
 	throw new ToolError(
-		"Plan mode: the working tree is read-only. Write your plan to a local://<slug>-plan.md file instead.",
+		t("Plan mode: the working tree is read-only. Write your plan to a local://<slug>-plan.md file instead."),
 	);
 }

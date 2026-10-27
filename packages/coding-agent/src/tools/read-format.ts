@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type ElidedRange, formatSingleLine } from "@oh-my-pi/pi-tui/tools/read";
 import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -106,7 +107,7 @@ export function hashlineHeaderContextForText(
 	displayPath: string = formatPathRelativeToCwd(absolutePath, cwd),
 ): HashlineHeaderContext {
 	const context = recordFullHashlineContext(session, absolutePath, displayPath, fullText);
-	if (!context) throw new ToolError(`Cannot record hashline snapshot for non-absolute path: ${absolutePath}`);
+	if (!context) throw new ToolError(t("Cannot record hashline snapshot for non-absolute path: {0}", `${absolutePath}`));
 	return context;
 }
 

@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { X } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -64,7 +65,7 @@ export function Drawer({ open, onClose, title, subtitle, actions, width, childre
 						data-variant="ghost"
 						data-icon="true"
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={t("Close")}
 					>
 						<X size={16} />
 					</button>

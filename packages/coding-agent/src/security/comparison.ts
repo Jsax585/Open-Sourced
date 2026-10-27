@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { SecurityComparisonReport, SecurityFinding, SecurityFindingMatch, SecurityScanBundle } from "./contracts";
 
 export interface SecurityDifferentialFindingMatch {
@@ -215,7 +216,7 @@ export function compareSecurityLineage(
 	// claiming them "resolved" against a cancelled/partial/failed run would be a lie.
 	if (after.scan.status !== "completed") {
 		throw new Error(
-			`Security lineage comparison requires a completed after-scan; ${after.scan.id} is ${after.scan.status}`,
+			t("Security lineage comparison requires a completed after-scan; {0} is {1}", `${after.scan.id}`, `${after.scan.status}`),
 		);
 	}
 	const differential = compareSecurityProducers(before, after);
@@ -224,7 +225,7 @@ export function compareSecurityLineage(
 	const matches: SecurityFindingMatch[] = differential.matches.map(match => {
 		const beforeFinding = beforeById.get(match.referenceFindingId);
 		const afterFinding = afterById.get(match.candidateFindingId);
-		if (!beforeFinding || !afterFinding) throw new Error("Security comparison produced an invalid finding reference");
+		if (!beforeFinding || !afterFinding) throw new Error(t("Security comparison produced an invalid finding reference"));
 		return {
 			beforeFindingId: beforeFinding.id,
 			afterFindingId: afterFinding.id,

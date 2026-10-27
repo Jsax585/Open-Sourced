@@ -1,3 +1,4 @@
+import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 import "./costs.css";
 import { useMemo, useState } from "react";
 import { getCostDashboardStats } from "../api";
@@ -35,8 +36,8 @@ export interface CostsRouteProps {
 type SplitMode = "model" | "component";
 
 const SPLIT_OPTIONS = [
-	{ value: "model" as const, label: "By model" },
-	{ value: "component" as const, label: "By component" },
+	{ value: "model" as const, label: t("By model") },
+	{ value: "component" as const, label: t("By component") },
 ];
 
 /** Models stacked individually in the daily chart; the rest fold into "Other". */
@@ -46,14 +47,14 @@ const MODEL_LIMIT = 6;
 const DAY_MS = 86_400_000;
 
 const COMPONENTS = [
-	{ key: "costInput", label: "Input", color: "#5b8cff" },
-	{ key: "costOutput", label: "Output", color: "var(--chart-secondary)" },
-	{ key: "costCacheRead", label: "Cache read", color: "var(--chart-primary)" },
-	{ key: "costCacheWrite", label: "Cache write", color: "#f5b54a" },
+	{ key: "costInput", label: t("Input"), color: "#5b8cff" },
+	{ key: "costOutput", label: t("Output"), color: "var(--chart-secondary)" },
+	{ key: "costCacheRead", label: t("Cache read"), color: "var(--chart-primary)" },
+	{ key: "costCacheWrite", label: t("Cache write"), color: "#f5b54a" },
 ] as const satisfies readonly { key: keyof CostComponents; label: string; color: string }[];
 
-const UTC_DAY = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-const UTC_DAY_LONG = new Intl.DateTimeFormat(undefined, {
+const UTC_DAY = new Intl.DateTimeFormat((getLanguage() === "ko" ? "ko-KR" : "en-US"), { month: "short", day: "numeric", timeZone: "UTC" });
+const UTC_DAY_LONG = new Intl.DateTimeFormat((getLanguage() === "ko" ? "ko-KR" : "en-US"), {
 	weekday: "short",
 	month: "short",
 	day: "numeric",
@@ -70,13 +71,13 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 	// Stable columns: a fresh array would make Table re-sort on every render.
 	const columns = useMemo(() => (view ? buildCostColumns(view) : []), [view]);
 	const isEmpty = (data: CostDashboardStats) => data.costSeries.length === 0;
-	const empty = <EmptyState title="No usage in this range" hint="Pick a wider range in the top bar." />;
+	const empty = <EmptyState title={t("No usage in this range")} hint={t("Pick a wider range in the top bar.")} />;
 
 	return (
 		<div className="page">
 			<PageHeader
-				title="Costs"
-				description={`What ${meta.windowLabel} of usage would cost at public API rates. Subscription usage without a public price is counted as unpriced, not free.`}
+				title={t("Costs")}
+				description={t("What {0} of usage would cost at public API rates. Subscription usage without a public price is counted as unpriced, not free.", `${meta.windowLabel}`)}
 			/>
 
 			<QueryView
@@ -91,9 +92,9 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title="Daily estimate"
+					title={t("Daily estimate")}
 					description={
-						split === "model" ? "Per UTC day, stacked by model" : "Per UTC day, stacked by billing component"
+						split === "model" ? t("Per UTC day, stacked by model") : t("Per UTC day, stacked by billing component")
 					}
 					actions={
 						<Segmented
@@ -101,7 +102,7 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 							options={SPLIT_OPTIONS}
 							value={split}
 							onChange={setSplit}
-							aria-label="Split by"
+							aria-label={t("Split by")}
 						/>
 					}
 					stale={query.stale}
@@ -121,11 +122,11 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 										height={280}
 										format={v => formatCost(v, Number.isInteger(v) ? 0 : 2)}
 										formatTooltip={v => formatCost(v)}
-										emptyLabel="No priced usage in this range"
+										emptyLabel={t("No priced usage in this range")}
 										tooltipExtra={i =>
 											view.unpricedPerDay[i] > 0 ? (
 												<div className="chart-tooltip-row chart-tooltip-total">
-													<span className="chart-tooltip-label">Unpriced requests</span>
+													<span className="chart-tooltip-label">{t("Unpriced requests")}</span>
 													<span className="chart-tooltip-value">
 														{formatInteger(view.unpricedPerDay[i])}
 													</span>
@@ -149,7 +150,7 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 					</QueryView>
 				</Card>
 
-				<Card index={2} title="Where it went" description="Estimate by billing component" stale={query.stale}>
+				<Card index={2} title={t("Where it went")} description={t("Estimate by billing component")} stale={query.stale}>
 					<QueryView query={query} skeleton={<ChartSkeleton height={280} />} isEmpty={isEmpty} empty={empty}>
 						{() => view && <ComponentBreakdown summary={view.summary} />}
 					</QueryView>
@@ -158,8 +159,8 @@ export function CostsRoute({ active, range }: CostsRouteProps) {
 
 			<Card
 				index={3}
-				title="By model"
-				description="Estimate per model with its input, output and cache split"
+				title={t("By model")}
+				description={t("Estimate per model with its input, output and cache split")}
 				stale={query.stale}
 				flush
 			>
@@ -247,36 +248,36 @@ function CostStats({ view, stale }: { view: CostsView; stale: boolean }) {
 		<div data-stale={stale}>
 			<StatGrid min={180}>
 				<Stat
-					label="API-equivalent estimate"
-					title="What this usage would cost at public API rates"
+					label={t("API-equivalent estimate")}
+					title={t("What this usage would cost at public API rates")}
 					value={formatEstimatedCost(summary.totalCost, summary.unpricedRequests)}
-					hint={`${formatInteger(summary.requests)} requests`}
+					hint={t("{0} requests", `${formatInteger(summary.requests)}`)}
 					spark={view.dailyTotals}
 					sparkColor="var(--chart-secondary)"
 				/>
 				<Stat
-					label="Average per day"
-					title="Estimate ÷ days with any usage"
+					label={t("Average per day")}
+					title={t("Estimate ÷ days with any usage")}
 					value={formatEstimatedCost(summary.avgDailyCost, summary.unpricedRequests)}
-					hint={`over ${formatInteger(summary.activeDays)} active day${summary.activeDays === 1 ? "" : "s"}`}
+					hint={t("over {0} active day{1}", `${formatInteger(summary.activeDays)}`, `${summary.activeDays === 1 ? "" : "s"}`)}
 				/>
 				<Stat
-					label="Top model"
+					label={t("Top model")}
 					title={top ? `${top.model} (${top.provider})` : undefined}
 					value={top ? top.model : "–"}
-					hint={top ? `${formatCost(top.cost)} · ${formatPercent(top.share)} of estimate` : "Nothing priced yet"}
+					hint={top ? t("{0} · {1} of estimate", `${formatCost(top.cost)}`, `${formatPercent(top.share)}`) : t("Nothing priced yet")}
 				/>
 				<Stat
-					label="Per priced request"
-					title="Estimate ÷ requests that have a public price"
+					label={t("Per priced request")}
+					title={t("Estimate ÷ requests that have a public price")}
 					value={pricedRequests > 0 ? formatUnitCost(summary.totalCost / pricedRequests) : "–"}
-					hint={`${formatInteger(pricedRequests)} priced`}
+					hint={t("{0} priced", `${formatInteger(pricedRequests)}`)}
 				/>
 				<Stat
-					label="Unpriced requests"
-					title="Subscription usage with no public-equivalent price; excluded from the estimate"
+					label={t("Unpriced requests")}
+					title={t("Subscription usage with no public-equivalent price; excluded from the estimate")}
 					value={formatInteger(summary.unpricedRequests)}
-					hint={summary.unpricedRequests > 0 ? "excluded from the estimate" : "all usage priced"}
+					hint={summary.unpricedRequests > 0 ? t("excluded from the estimate") : t("all usage priced")}
 				/>
 			</StatGrid>
 		</div>
@@ -304,16 +305,13 @@ function ComponentBreakdown({ summary }: { summary: CostSummaryView }) {
 					</div>
 				))}
 				<div className="costs-component-row costs-component-total">
-					<span>Total</span>
+					<span>{t("Total")}</span>
 					<span className="num">{formatEstimatedCost(summary.totalCost, summary.unpricedRequests)}</span>
 					<span className="costs-component-share" />
 				</div>
 			</div>
 			{summary.unpricedRequests > 0 && (
-				<p className="micro dim">
-					{formatInteger(summary.unpricedRequests)} unpriced subscription request
-					{summary.unpricedRequests === 1 ? " is" : "s are"} not included.
-				</p>
+				<p className="micro dim">{t("{0} unpriced subscription request{1} not included.", `${formatInteger(summary.unpricedRequests)}`, `${summary.unpricedRequests === 1 ? " is" : "s are"}`)}</p>
 			)}
 		</div>
 	);
@@ -330,7 +328,7 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 	return [
 		{
 			key: "model",
-			header: "Model",
+			header: t("Model"),
 			sort: row => row.model,
 			render: row => (
 				<LabelCell
@@ -342,15 +340,15 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: t("Requests"),
 			align: "right",
 			sort: row => row.requests,
 			render: row => <span className="num">{formatInteger(row.requests)}</span>,
 		},
 		{
 			key: "cost",
-			header: "Estimate",
-			title: "API-equivalent estimate at public rates",
+			header: t("Estimate"),
+			title: t("API-equivalent estimate at public rates"),
 			align: "right",
 			sort: row => row.cost,
 			render: row => (
@@ -364,15 +362,15 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "share",
-			header: "Share",
+			header: t("Share"),
 			align: "right",
 			sort: row => row.share,
 			render: row => <span className="num muted">{row.cost > 0 ? formatPercent(row.share) : "–"}</span>,
 		},
 		{
 			key: "split",
-			header: "Split",
-			title: "Input · output · cache read · cache write",
+			header: t("Split"),
+			title: t("Input · output · cache read · cache write"),
 			width: 150,
 			render: row =>
 				row.cost > 0 ? (
@@ -386,8 +384,8 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		...componentColumns,
 		{
 			key: "perRequest",
-			header: "Per request",
-			title: "Estimate ÷ priced requests",
+			header: t("Per request"),
+			title: t("Estimate ÷ priced requests"),
 			align: "right",
 			sort: row => (row.requests > row.unpricedRequests ? row.cost / (row.requests - row.unpricedRequests) : -1),
 			render: row => (
@@ -400,8 +398,8 @@ function buildCostColumns(view: CostsView): Column<CostModelRow>[] {
 		},
 		{
 			key: "unpriced",
-			header: "Unpriced",
-			title: "Requests with no public-equivalent price",
+			header: t("Unpriced"),
+			title: t("Requests with no public-equivalent price"),
 			align: "right",
 			sort: row => row.unpricedRequests,
 			render: row =>

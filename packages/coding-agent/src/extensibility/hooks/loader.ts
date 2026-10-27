@@ -1,6 +1,7 @@
 /**
  * Hook loader - loads TypeScript hook modules using native Bun import.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import * as zod from "@oh-my-pi/omptype/zod";
@@ -101,13 +102,13 @@ async function createHookAPI(
 			options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" },
 		): void {
 			if (!sendMessageHandler) {
-				throw new Error("sendMessage handler not initialized");
+				throw new Error(t("sendMessage handler not initialized"));
 			}
 			sendMessageHandler(message, options);
 		},
 		appendEntry<T = unknown>(customType: string, data?: T): void {
 			if (!appendEntryHandler) {
-				throw new Error("appendEntry handler not initialized");
+				throw new Error(t("appendEntry handler not initialized"));
 			}
 			appendEntryHandler(customType, data);
 		},
@@ -152,7 +153,7 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
 		const factory = module.default as HookFactory;
 
 		if (typeof factory !== "function") {
-			return { hook: null, error: "Hook must export a default function" };
+			return { hook: null, error: t("Hook must export a default function") };
 		}
 
 		// Create handlers map and API
@@ -179,7 +180,7 @@ async function loadHook(hookPath: string, cwd: string): Promise<{ hook: LoadedHo
 		};
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { hook: null, error: `Failed to load hook: ${message}` };
+		return { hook: null, error: t("Failed to load hook: {0}", `${message}`) };
 	}
 }
 

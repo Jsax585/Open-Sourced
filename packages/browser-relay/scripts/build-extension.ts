@@ -17,6 +17,7 @@ import {
 	stampRelayExtensionManifest,
 	stampRelayExtensionScript,
 } from "../../coding-agent/src/tools/browser/relay/protocol";
+import { localizeBrowserHtml, localizeBrowserManifest, localizeBrowserScript } from "../../utils/src/browser-i18n";
 
 const root = path.resolve(import.meta.dir, "..");
 const repoRoot = path.resolve(root, "../..");
@@ -39,7 +40,8 @@ if (!bundle.success) {
 }
 
 for (const file of ["options.html", "options.js"]) {
-	await Bun.write(path.join(distExtension, file), Bun.file(path.join(root, "extension", file)));
+	const source = await Bun.file(path.join(root, "extension", file)).text();
+	await Bun.write(path.join(distExtension, file), file.endsWith(".html") ? localizeBrowserHtml(source) : localizeBrowserScript(source));
 }
 for (const file of ["LICENSE", "THIRD-PARTY-NOTICES.txt"]) {
 	await Bun.write(path.join(distExtension, file), Bun.file(path.join(repoRoot, file)));
@@ -53,7 +55,7 @@ const { version: ompVersion } = await Bun.file(path.join(root, "../coding-agent/
 await Bun.write(distScript, stampRelayExtensionScript(unstampedScript, ompVersion));
 await Bun.write(
 	path.join(distExtension, "manifest.json"),
-	stampRelayExtensionManifest(await Bun.file(sourceManifest).text(), ompVersion),
+	stampRelayExtensionManifest(localizeBrowserManifest(await Bun.file(sourceManifest).text()), ompVersion),
 );
 
 const zip = await $`zip -qr ../omp-browser-relay-extension.zip .`.cwd(distExtension).nothrow();
@@ -66,8 +68,8 @@ await fs.rm(assetsDir, { recursive: true, force: true });
 await Bun.write(path.join(assetsDir, "background.js.txt"), unstampedScript);
 const embeddedAssets = [
 	[sourceManifest, "manifest.json.txt"],
-	[path.join(distExtension, "options.html"), "options.html.txt"],
-	[path.join(distExtension, "options.js"), "options.js.txt"],
+	[path.join(root, "extension/options.html"), "options.html.txt"],
+	[path.join(root, "extension/options.js"), "options.js.txt"],
 	[path.join(distExtension, "LICENSE"), "LICENSE.txt"],
 	[path.join(distExtension, "THIRD-PARTY-NOTICES.txt"), "THIRD-PARTY-NOTICES.txt"],
 ] as const;

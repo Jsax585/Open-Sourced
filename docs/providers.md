@@ -1,91 +1,97 @@
-# Providers
+<a id="providers"></a>
+# 제공자
 
-Providers are the model backends `omp` can route requests to: Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, local engines like Ollama, hosted gateways, custom `models.yml` providers, and providers registered by extensions.
+제공자는 `omp`가 요청을 보낼 수 있는 모델 백엔드입니다. Anthropic, OpenAI, Google Gemini, Groq, OpenRouter, Mistral, xAI, Ollama 같은 로컬 엔진, 호스팅 게이트웨이, 사용자 지정 `models.yml` 제공자, 확장에서 등록한 제공자가 여기에 포함됩니다.
 
-A **provider** is the account or backend namespace, such as `anthropic`, `openai`, `google`, or `ollama`. A **model** is a concrete model under that provider, selected as `provider/model-id`, such as `anthropic/claude-opus-4-6`. Disabling a provider removes every model under it from selection; if you only want to narrow individual models, use model settings instead.
+**제공자**는 `anthropic`, `openai`, `google`, `ollama` 같은 계정 또는 백엔드 네임스페이스입니다. **모델**은 해당 제공자에 속한 구체적인 모델이며, `anthropic/claude-opus-4-6`처럼 `provider/model-id` 형식으로 선택합니다. 제공자를 비활성화하면 그 아래의 모든 모델이 선택 대상에서 제외됩니다. 개별 모델만 제한하려면 모델 설정을 사용하세요.
 
-This page covers how providers become available, how credentials are resolved, the provider/environment-variable map, local engines, disabling providers, and custom providers. For endpoint-specific request, reasoning, tool, stream, usage, and retry constraints, see [Provider endpoint constraints](./provider-endpoint-constraints.md). For model selection and the full `models.yml` schema, see [Model and Provider Configuration](./models.md). For config-file locations and merge precedence, see [Settings](./settings.md). For credential storage and login flows in depth, see [Secrets and credentials](./secrets.md). For the complete environment-variable reference, see [Environment variables](./environment-variables.md). For local engine setup, see [Local models](./local-models.md). For context-file discovery providers, see [Context files](./context-files.md).
+이 페이지에서는 제공자의 사용 가능 여부, 자격 증명 확인, 제공자와 환경 변수의 대응 관계, 로컬 엔진, 제공자 비활성화, 사용자 지정 제공자를 설명합니다. 엔드포인트별 요청, 추론, 도구, 스트림, 사용량, 재시도 제약은 [제공자 엔드포인트 제약](./provider-endpoint-constraints.md)을 참조하세요. 모델 선택과 전체 `models.yml` 스키마는 [모델 및 제공자 구성](./models.md), 설정 파일 위치와 병합 우선순위는 [설정](./settings.md), 자격 증명 저장과 로그인 흐름의 자세한 내용은 [비밀 정보 및 자격 증명](./secrets.md), 전체 환경 변수 참조는 [환경 변수](./environment-variables.md), 로컬 엔진 설정은 [로컬 모델](./local-models.md), 컨텍스트 파일 탐색 제공자는 [컨텍스트 파일](./context-files.md)을 참조하세요.
 
+<a id="factory-droid"></a>
 ## Factory Droid
 
-The `factory-droid` provider uses Factory's Droid subscription gateway directly. No `droid` binary, daemon, or SDK subprocess is needed for login or inference.
+`factory-droid` 제공자는 Factory의 Droid 구독 게이트웨이를 직접 사용합니다. 로그인이나 추론에 `droid` 바이너리, 데몬, SDK 하위 프로세스가 필요하지 않습니다.
 
-1. Run `omp login factory-droid` or `/login factory-droid` in an interactive session.
-2. Open the printed `auth.factory.ai/device` link in your browser, enter the displayed device code, and approve the login.
-3. Select a model, for example `factory-droid/kimi-k3`, and send a prompt. The stored WorkOS session refreshes automatically. `omp auth-broker login factory-droid` supports broker-backed credentials.
+1. 대화형 세션에서 `omp login factory-droid` 또는 `/login factory-droid`를 실행합니다.
+2. 출력된 `auth.factory.ai/device` 링크를 브라우저에서 열고, 표시된 기기 코드를 입력한 다음 로그인을 승인합니다.
+3. `factory-droid/kimi-k3` 같은 모델을 선택하고 프롬프트를 보냅니다. 저장된 WorkOS 세션은 자동으로 갱신됩니다. `omp auth-broker login factory-droid`는 브로커 기반 자격 증명을 지원합니다.
 
-Use subscription OAuth for this provider. It does not discover credentials from an installed Droid CLI or read `FACTORY_API_KEY`; Factory's separate API-key products are not part of this integration.
+이 제공자에는 구독 OAuth를 사용하세요. 설치된 Droid CLI에서 자격 증명을 탐색하거나 `FACTORY_API_KEY`를 읽지 않습니다. Factory의 별도 API 키 제품은 이 통합에 포함되지 않습니다.
 
-The roster ships as KDL (`packages/catalog/src/compat/rules/providers/factory-droid.kdl`, with each model's wire and billing pool in `rules/runtime/behavior.kdl`), maintained by hand against the Droid CLI version pinned by `FACTORY_DROID_CLIENT_VERSION` (`packages/catalog/src/wire/factory-droid.ts`). It contains concrete CLI models, not the Factory Auto Model router or app-only Flex variants. Account feature flags, hard-deprecation gates, organization policy (including explicit opt-in requirements), and serving region narrow it live; new model IDs require a catalog update. Until discovery has succeeded online, feature-gated and consent-gated models stay hidden. Offline or failed discovery can retain a cached snapshot, which is not a guarantee of current entitlement.
+모델 목록은 KDL로 제공됩니다(`packages/catalog/src/compat/rules/providers/factory-droid.kdl`, 각 모델의 전송 및 과금 풀은 `rules/runtime/behavior.kdl`). `FACTORY_DROID_CLIENT_VERSION`으로 고정된 Droid CLI 버전(`packages/catalog/src/wire/factory-droid.ts`)에 맞춰 수동으로 관리합니다. 여기에는 구체적인 CLI 모델이 포함되며 Factory Auto Model 라우터나 앱 전용 Flex 변형은 포함되지 않습니다. 계정 기능 플래그, 강제 지원 종료 조건, 조직 정책(명시적 동의 요구 사항 포함), 서비스 지역에 따라 실제 목록이 좁혀집니다. 새 모델 ID에는 카탈로그 업데이트가 필요합니다. 온라인 탐색이 성공하기 전까지 기능 또는 동의 조건이 있는 모델은 숨겨집니다. 오프라인 상태이거나 탐색에 실패하면 캐시된 스냅샷을 유지할 수 있지만, 현재 이용 권한을 보장하지는 않습니다.
 
-The roster includes Factory's `generate_image` models (`gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`, `gemini-3-pro-image-preview`) for the `image` role. They appear only after discovery reads the organization's managed settings: `imageGenerationEnabled: false` hides all of them, and `imageGenerationAllowedModelIds` narrows them (an empty list hides all). Image calls bill to the Standard Credits pool.
+이 목록에는 `image` 역할용 Factory `generate_image` 모델(`gpt-image-2.5-sunburst`, `gpt-image-2.5-flare`, `gemini-3-pro-image-preview`)도 포함됩니다. 탐색 시 조직의 관리 설정을 읽은 뒤에만 표시합니다. `imageGenerationEnabled: false`는 모두 숨기고 `imageGenerationAllowedModelIds`는 허용 모델을 제한합니다(빈 목록은 모두 숨김). 이미지 호출은 Standard Credits 풀에 청구합니다.
 
-Organization identity and residency travel with the credential serving each request, including account rotation, and each account/residency scope has its own model cache. Residency chooses the API host; the independent inference region (`global`, `us`, or `eu`) constrains upstream eligibility.
+조직 ID와 데이터 상주 지역은 계정 순환을 포함해 각 요청에 사용되는 자격 증명에 따라 전달되며, 각 계정/상주 지역 범위에는 자체 모델 캐시가 있습니다. 상주 지역은 API 호스트를 선택하고, 별도의 추론 지역(`global`, `us`, `eu`)은 업스트림 사용 자격을 제한합니다.
 
-`/usage` and `omp usage` report Standard Credits and Droid Core quota windows when the account uses token-rate-limit billing. Accounts whose billing response explicitly disables that mode remain visible with a note that no quota windows are exposed; OMP does not invent a remaining balance. The model browser shows each model's base credit rate; dollar figures are upstream list-price references, not Factory billing, and neither includes temporary promotions. Models without a dollar reference display their credit rate rather than `free`. Extra balance alone does not establish that overage billing is enabled.
+계정이 토큰 속도 제한 과금을 사용하면 `/usage`와 `omp usage`는 Standard Credits 및 Droid Core 할당량 기간을 표시합니다. 과금 응답에서 해당 모드를 명시적으로 비활성화한 계정도 표시되지만, 할당량 기간이 제공되지 않는다는 안내가 붙습니다. OMP는 잔액을 임의로 만들어 내지 않습니다. 모델 브라우저는 각 모델의 기본 크레딧 요율을 보여 줍니다. 달러 금액은 업스트림 정가 참고치이지 Factory 청구 금액이 아니며, 어느 쪽도 임시 프로모션을 포함하지 않습니다. 달러 참고치가 없는 모델은 `free` 대신 크레딧 요율을 표시합니다. 추가 잔액만으로 초과 사용 과금이 활성화되었다고 판단하지 않습니다.
 
-If account rotation would narrow the selected model's context window, OMP stops before sending that retry rather than guessing whether the existing conversation fits. Refresh discovery with `omp models refresh factory-droid` and select the region-appropriate model before retrying.
+계정 순환으로 선택한 모델의 컨텍스트 창이 줄어들 경우, OMP는 기존 대화가 들어갈지 추측하지 않고 해당 재시도를 보내기 전에 중단합니다. `omp models refresh factory-droid`로 탐색을 갱신하고 지역에 맞는 모델을 선택한 다음 다시 시도하세요.
 
-Factory's native context limits hold even when extended context is disabled. Factory GPT and Gemini routes omit output-token caps, so bounded ephemeral turns reject a `maxTokens` request instead of silently running uncapped.
+확장 컨텍스트를 비활성화해도 Factory의 기본 컨텍스트 제한은 유지됩니다. Factory GPT와 Gemini 경로는 출력 토큰 상한을 생략하므로, 제한이 있는 임시 턴은 조용히 무제한으로 실행하는 대신 `maxTokens` 요청을 거부합니다.
 
-## How `omp` decides a provider is available
+<a id="how-omp-decides-a-provider-is-available"></a>
+## `omp`의 제공자 사용 가능 여부 판단 방식
 
-The model registry composes these sources:
+모델 레지스트리는 다음 소스를 조합합니다.
 
-1. The bundled model catalog.
-2. Custom provider and model entries from the active agent directory's `models.yml` (default: `~/.omp/agent/models.yml`).
-3. Cached and runtime-discovered models for local engines and discovery-enabled hosted providers.
-4. Providers and models registered by extensions, including extension-owned discovery.
+1. 번들 모델 카탈로그.
+2. 활성 에이전트 디렉터리의 `models.yml`에 있는 사용자 지정 제공자 및 모델 항목(기본값: `~/.omp/agent/models.yml`).
+3. 로컬 엔진과 탐색이 활성화된 호스팅 제공자의 캐시된 모델 및 런타임 탐색 모델.
+4. 확장 자체 탐색을 포함해 확장에서 등록한 제공자 및 모델.
 
-Startup loads configuration and cached discovery metadata without waiting for every endpoint. Online refresh fills discovery-backed catalogs afterward. Successful authoritative discovery can replace bundled provider rows; explicit custom models and overrides are reapplied to the discovered catalog. Broker-backed gateway mode ignores local `models.yml` routing, credentials, and custom models.
+시작 시 모든 엔드포인트를 기다리지 않고 구성과 캐시된 탐색 메타데이터를 불러옵니다. 이후 온라인 갱신으로 탐색 기반 카탈로그를 채웁니다. 신뢰할 수 있는 탐색이 성공하면 번들 제공자 항목을 대체할 수 있으며, 명시적 사용자 지정 모델과 재정의는 탐색된 카탈로그에 다시 적용됩니다. 브로커 기반 게이트웨이 모드에서는 로컬 `models.yml` 라우팅, 자격 증명, 사용자 지정 모델을 무시합니다.
 
-The registry can hold a model even when it is not currently selectable. A model becomes **available** only when both conditions hold:
+레지스트리는 현재 선택할 수 없는 모델도 보유할 수 있습니다. 다음 두 조건을 모두 충족해야 모델이 **사용 가능**해집니다.
 
-1. its provider ID is **not** in the effective `disabledProviders` list; **and**
-2. the provider is either **keyless** (an implicit local provider, a custom provider with `auth: none`, or an optional-key login saved in keyless mode) **or** has configured authentication.
+1. 제공자 ID가 유효한 `disabledProviders` 목록에 **없어야** 합니다. **그리고**
+2. 제공자가 **키 불필요** 상태(암시적 로컬 제공자, `auth: none`인 사용자 지정 제공자, 키 없는 모드로 저장한 선택적 키 로그인)이거나 인증이 구성되어 있어야 합니다.
 
-Availability is a fast configuration check, not a credential validation request: it does not execute command-backed keys or refresh OAuth tokens. An invalid configured key can therefore appear available and fail at inference.
+사용 가능 여부는 빠른 구성 확인이지 자격 증명 검증 요청이 아닙니다. 명령 기반 키를 실행하거나 OAuth 토큰을 갱신하지 않습니다. 따라서 잘못 구성한 키도 사용 가능으로 표시되었다가 추론 시 실패할 수 있습니다.
 
-`disabledProviders` is checked _before_ credentials. If a provider ID is disabled, no stored key, OAuth session, environment variable, `.env` entry, or `models.yml` `apiKey` will make it selectable — the provider's models are dropped from availability regardless of credentials. Removing the ID from the effective list restores them.
+`disabledProviders`는 자격 증명보다 _먼저_ 확인합니다. 제공자 ID가 비활성화되어 있으면 저장된 키, OAuth 세션, 환경 변수, `.env` 항목, `models.yml`의 `apiKey` 중 무엇이 있어도 선택할 수 없습니다. 자격 증명과 관계없이 해당 제공자의 모델은 사용 가능 목록에서 제외됩니다. 유효한 목록에서 ID를 제거하면 복원됩니다.
 
-Implicit `ollama` and `lm-studio` discovery is keyless by default; implicit `llama.cpp` is keyless when no authentication is configured. Apple Foundation Models is also keyless on supported Apple Silicon systems. See [Built-in local engines](#built-in-local-engines).
+암시적 `ollama`와 `lm-studio` 탐색은 기본적으로 키가 필요 없으며, 암시적 `llama.cpp`도 인증을 구성하지 않았다면 키가 필요 없습니다. 지원되는 Apple Silicon 시스템의 Apple Foundation Models도 키가 필요 없습니다. [내장 로컬 엔진](#built-in-local-engines)을 참조하세요.
 
-## Credentials and precedence
+<a id="credentials-and-precedence"></a>
+## 자격 증명과 우선순위
 
-When a provider needs an API key, `omp` resolves it in this order (first match wins):
+제공자에 API 키가 필요하면 `omp`는 다음 순서로 확인합니다(처음 일치하는 항목이 우선).
 
-1. **Runtime override**: a key supplied for the current process, for example CLI `--api-key`. Never persisted.
-2. **`models.yml` config key**: an `apiKey` pinned on a custom provider, registered as a config-sourced bearer. This deliberately beats stored OAuth, so a key supplied for a custom `baseUrl` or gateway is honored instead of forwarding an upstream OAuth token the proxy would reject.
-3. **Stored OAuth credential**: refreshed when needed; multiple accounts are ranked and rotated automatically. For Anthropic and ChatGPT (Codex), each organization or workspace counts as its own account: one email holding both a Team or Enterprise seat and a personal plan can log in once per subscription (pick the workspace on the browser consent page), and rotation treats them as two accounts.
-4. **Login-sourced stored API key**: an API-key credential saved by a successful `/login`.
-5. **Extension config fallback**: an extension provider registered with both an `apiKey` reference and an OAuth/login flow ranks that reference below stored OAuth and login keys.
-6. **Provider environment variable**: including values loaded from `.env` files (see [the env-var table](#environment-variables-and-env-files)).
-7. **Other stored API key**: for example, a broker-migrated key. This is a last resort so an explicit environment variable wins.
+1. **런타임 재정의**: CLI `--api-key`처럼 현재 프로세스에 제공한 키입니다. 영구 저장하지 않습니다.
+2. **`models.yml` 구성 키**: 사용자 지정 제공자에 고정한 `apiKey`이며, 구성에서 온 bearer로 등록됩니다. 프록시가 거부할 업스트림 OAuth 토큰을 전달하는 대신 사용자 지정 `baseUrl`이나 게이트웨이에 제공한 키를 사용하도록 의도적으로 저장된 OAuth보다 우선합니다.
+3. **저장된 OAuth 자격 증명**: 필요할 때 갱신하며 여러 계정의 순위를 정하고 자동으로 순환합니다. Anthropic과 ChatGPT(Codex)는 각 조직 또는 작업 공간을 별도 계정으로 취급합니다. 하나의 이메일에 Team 또는 Enterprise 좌석과 개인 요금제가 모두 있다면 구독별로 한 번씩 로그인할 수 있습니다(브라우저 동의 페이지에서 작업 공간 선택). 계정 순환에서도 두 계정으로 취급합니다.
+4. **로그인으로 저장한 API 키**: 성공한 `/login`에서 저장한 API 키 자격 증명입니다.
+5. **확장 구성 폴백**: `apiKey` 참조와 OAuth/로그인 흐름을 모두 등록한 확장 제공자는 그 참조를 저장된 OAuth 및 로그인 키보다 낮은 우선순위에 둡니다.
+6. **제공자 환경 변수**: `.env` 파일에서 불러온 값도 포함합니다([환경 변수 표](#environment-variables-and-env-files) 참조).
+7. **그 밖의 저장된 API 키**: 예를 들어 브로커에서 마이그레이션한 키입니다. 명시적 환경 변수가 우선하도록 마지막 수단으로 사용합니다.
 
-Local credentials live in the active auth store (default: `~/.omp/agent/agent.db`); broker mode uses the configured shared auth broker. Named profiles and Linux XDG layouts can relocate the store. In the default profile, `PI_CODING_AGENT_DIR` overrides the agent directory. See [Settings](./settings.md) and [Secrets and credentials](./secrets.md) for path resolution.
+로컬 자격 증명은 활성 인증 저장소(기본값: `~/.omp/agent/agent.db`)에 저장되며, 브로커 모드는 구성된 공유 인증 브로커를 사용합니다. 이름 있는 프로필과 Linux XDG 레이아웃은 저장소 위치를 바꿀 수 있습니다. 기본 프로필에서는 `PI_CODING_AGENT_DIR`이 에이전트 디렉터리를 재정의합니다. 경로 확인 방식은 [설정](./settings.md)과 [비밀 정보 및 자격 증명](./secrets.md)을 참조하세요.
 
-### OAuth vs API key, and provider-scoped logins
+<a id="oauth-vs-api-key-and-provider-scoped-logins"></a>
+### OAuth와 API 키, 제공자 범위 로그인
 
-Logins are **provider-scoped**: authenticating `anthropic` does not authenticate `openai`, and each provider tracks its own credentials. A disabled provider stays disabled even with valid stored auth.
+로그인은 **제공자 범위**입니다. `anthropic` 인증은 `openai`를 인증하지 않으며, 각 제공자는 자체 자격 증명을 관리합니다. 비활성화된 제공자는 유효한 저장 인증이 있어도 비활성 상태를 유지합니다.
 
-Use the interactive slash commands inside a session:
+세션 안에서 대화형 슬래시 명령을 사용하세요.
 
-- `/login` — opens the OAuth/key selector. `/login <provider>` jumps straight to one provider (e.g. `/login anthropic`); for an OAuth flow that needs a pasted callback, run `/login <redirect-url>` to complete it.
-- `/logout` — opens the provider selector to remove stored credentials.
+- `/login` — OAuth/키 선택기를 엽니다. `/login <provider>`는 해당 제공자로 바로 이동합니다(예: `/login anthropic`). 콜백을 붙여 넣어야 하는 OAuth 흐름에서는 `/login <redirect-url>`로 완료합니다.
+- `/logout` — 저장된 자격 증명을 제거할 제공자 선택기를 엽니다.
 
-Outside a session, `omp login [<provider>]` runs the same login from the terminal, including extension-registered providers: it prints the auth URL (and opens it in your browser), reads any prompts from stdin, and saves to the same store sessions use — local `agent.db`, or the configured auth broker. Without a provider it shows a numbered picker. Successful login refreshes that provider's model catalog online so newly unlocked models are visible.
+세션 밖에서는 `omp login [<provider>]`가 확장 등록 제공자를 포함해 터미널에서 같은 로그인을 실행합니다. 인증 URL을 출력하고 브라우저에서 열며, stdin으로 입력을 받고, 세션과 같은 저장소(로컬 `agent.db` 또는 구성된 인증 브로커)에 저장합니다. 제공자를 생략하면 번호가 붙은 선택기가 표시됩니다. 로그인에 성공하면 해당 제공자의 모델 카탈로그를 온라인으로 갱신하여 새로 허용된 모델을 표시합니다.
 
-For headless or remote setups backed by a shared auth broker, the CLI exposes `omp auth-broker login <provider>` / `omp auth-broker logout` (and `status`, `list`, `import`, `migrate`). See [Secrets and credentials](./secrets.md) for the broker model.
+공유 인증 브로커를 사용하는 헤드리스 또는 원격 구성에서는 CLI의 `omp auth-broker login <provider>` / `omp auth-broker logout` 및 `status`, `list`, `import`, `migrate`를 사용할 수 있습니다. 브로커 모델은 [비밀 정보 및 자격 증명](./secrets.md)을 참조하세요.
 
-When a model has no credentials, `omp` tells you to run `/login` or set the provider's environment variable.
+모델에 자격 증명이 없으면 `omp`는 `/login`을 실행하거나 제공자 환경 변수를 설정하라고 안내합니다.
 
-For ClinePass, set `CLINE_API_KEY` or run `/login cline-pass` to open the Cline dashboard and validate a newly created API key against `/users/me`, without a completion probe or subscription-quota charge. OMP refreshes membership from Cline's public recommended-models endpoint and bundles reviewed Cline metadata for offline startup. New live IDs are enriched from upstream references or use conservative metadata without invented reasoning controls. `omp usage` reports five-hour, weekly, and monthly quota windows. Free-tier models are marked `(free)` and use the same key; subscription models show API-equivalent reference pricing, while streamed gateway cost is authoritative for the actual charge. Requests mirror Cline CLI client headers and a stable per-session task ID; reasoning controls remain model-specific.
+ClinePass는 `CLINE_API_KEY`를 설정하거나 `/login cline-pass`를 실행하세요. Cline 대시보드를 열고 새 API 키를 `/users/me`로 검증하며, 완성 요청으로 확인하거나 구독 할당량을 소모하지 않습니다. OMP는 Cline의 공개 추천 모델 엔드포인트에서 목록을 갱신하며 오프라인 시작을 위해 검토된 Cline 메타데이터를 번들로 제공합니다. 새로운 실시간 ID는 업스트림 참조로 보강하거나, 임의의 추론 제어를 만들지 않는 보수적인 메타데이터를 사용합니다. `omp usage`는 5시간, 주간, 월간 할당량 기간을 표시합니다. 무료 등급 모델에는 `(free)`가 표시되며 같은 키를 사용합니다. 구독 모델에는 API 환산 참고 요금이 표시되지만 실제 요금은 스트리밍된 게이트웨이 비용이 기준입니다. 요청은 Cline CLI 클라이언트 헤더와 세션별로 일정한 작업 ID를 따르며, 추론 제어는 모델별로 유지됩니다.
 
-For Command Code, set `COMMAND_CODE_API_KEY` or run `/login commandcode`; login checks the key against Command Code's `/alpha/whoami` endpoint and rejects it only on a 401, as the Command Code CLI does, so a 403 or an unreachable check keeps the key. Claude models use the Anthropic Messages endpoint, the ten GPT models use the OpenAI Responses endpoint, and every other model uses Chat Completions, the same split the Command Code CLI uses. Thinking levels, image input, output limits, and prices follow the Command Code CLI's model registry; Claude Sonnet 5.5, which that registry does not list yet, takes them from Anthropic's catalog. The GPT models can run hosted web search, but not hosted image generation, which Command Code does not serve. TypeSafe's `typesafe/jev` decision model is available to the `judge` role. `omp usage`, `/usage`, and the status line show the credit balance, plus the five-hour and weekly windows on plans that have them. These figures come from the account endpoints the Command Code CLI uses; the Provider API docs do not document them.
+Command Code는 `COMMAND_CODE_API_KEY`를 설정하거나 `/login commandcode`를 실행하세요. 로그인은 Command Code의 `/alpha/whoami` 엔드포인트로 키를 확인하며 Command Code CLI처럼 401일 때만 거부하므로, 403이거나 확인할 수 없으면 키를 유지합니다. Command Code CLI와 동일하게 Claude 모델은 Anthropic Messages, GPT 모델 10개는 OpenAI Responses, 나머지는 Chat Completions 엔드포인트를 사용합니다. 사고 수준, 이미지 입력, 출력 제한, 가격은 Command Code CLI 모델 레지스트리를 따릅니다. 아직 그 레지스트리에 없는 Claude Sonnet 5.5는 Anthropic 카탈로그를 따릅니다. GPT 모델은 호스팅 웹 검색을 실행할 수 있지만, Command Code가 제공하지 않는 호스팅 이미지 생성은 사용할 수 없습니다. TypeSafe의 `typesafe/jev` 판단 모델은 `judge` 역할에서 사용할 수 있습니다. `omp usage`, `/usage`, 상태 표시줄에는 크레딧 잔액과, 해당 요금제에 있는 경우 5시간 및 주간 사용 기간이 표시됩니다. 이 수치는 Command Code CLI가 사용하는 계정 엔드포인트에서 가져오며 Provider API 문서에는 설명되어 있지 않습니다.
 
-### Pinning a key in `models.yml`
+<a id="pinning-a-key-in-modelsyml"></a>
+### `models.yml`에 키 고정하기
 
-A custom provider's `apiKey` is resolved as **environment-variable-name-or-literal**: if the value names an exact-case environment variable with a non-empty value, that value is used; otherwise the string itself is the key. Prefixing the value with `!` runs it as a shell command and uses the trimmed stdout (see [Model and Provider Configuration](./models.md) for the full value syntax).
+사용자 지정 제공자의 `apiKey`는 **환경 변수 이름 또는 리터럴**로 해석됩니다. 대소문자가 정확히 일치하고 비어 있지 않은 환경 변수의 이름이면 해당 값을 사용하고, 아니면 문자열 자체를 키로 사용합니다. 값 앞에 `!`를 붙이면 셸 명령으로 실행하고 stdout의 앞뒤 공백을 제거한 값을 사용합니다(전체 값 문법은 [모델 및 제공자 구성](./models.md) 참조).
 
 ```yaml
 # ~/.omp/agent/models.yml
@@ -101,138 +107,142 @@ providers:
         maxTokens: 8192
 ```
 
-If `authHeader: true` is set on a custom provider, the resolved key is injected as an `Authorization: Bearer <key>` header on every request to that provider.
+사용자 지정 제공자에 `authHeader: true`를 설정하면 확인된 키가 해당 제공자의 모든 요청에 `Authorization: Bearer <key>` 헤더로 삽입됩니다.
 
-## Environment variables and `.env` files
+<a id="environment-variables-and-env-files"></a>
+## 환경 변수와 `.env` 파일
 
-The variables below supply credentials after runtime/config overrides and stored OAuth/login credentials. Providers authenticated only through login may have no key variable. Ordinary fallback names come from catalog provider KDL; auth policies can override them with ordered names or computed resolvers.
+아래 변수는 런타임/구성 재정의와 저장된 OAuth/로그인 자격 증명 다음에 자격 증명을 제공합니다. 로그인으로만 인증하는 제공자는 키 변수가 없을 수 있습니다. 일반 폴백 이름은 카탈로그 제공자 KDL에서 오며, 인증 정책은 순서가 있는 이름 목록이나 계산된 확인기로 이를 재정의할 수 있습니다.
 
-### Core providers
+<a id="core-providers"></a>
+### 주요 제공자
 
-| Provider ID      | Environment variable(s)                                                                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `anthropic`      | `ANTHROPIC_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY` (Foundry mode prefers `ANTHROPIC_FOUNDRY_API_KEY` when `CLAUDE_CODE_USE_FOUNDRY=true`)         |
-| `openai`         | `OPENAI_API_KEY`                                                                                                                                 |
-| `openai-codex`   | `OPENAI_CODEX_OAUTH_TOKEN`                                                                                                                       |
-| `google`         | `GEMINI_API_KEY`                                                                                                                                 |
-| `google-vertex`  | `GOOGLE_CLOUD_API_KEY`, or ADC (explicit `GOOGLE_APPLICATION_CREDENTIALS` or gcloud's default ADC file, plus project and location variables; see below) |
-| `groq`           | `GROQ_API_KEY`                                                                                                                                   |
-| `openrouter`     | `OPENROUTER_API_KEY`                                                                                                                             |
-| `mistral`        | `MISTRAL_API_KEY`                                                                                                                                |
-| `xai`            | `XAI_API_KEY`                                                                                                                                    |
-| `xai-oauth`      | `XAI_OAUTH_TOKEN`, then `XAI_API_KEY`                                                                                                            |
-| `github-copilot` | `COPILOT_GITHUB_TOKEN`                                                                                                                           |
-| `cursor`         | `CURSOR_ACCESS_TOKEN`                                                                                                                            |
-| `azure`          | `AZURE_OPENAI_API_KEY`                                                                                                                           |
-| `amazon-bedrock` | `AWS_BEARER_TOKEN_BEDROCK`, AWS profiles, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, or an ECS/IRSA/EC2 credential chain                        |
+| 제공자 ID | 환경 변수 |
+| --- | --- |
+| `anthropic` | `ANTHROPIC_OAUTH_TOKEN`, 다음 `ANTHROPIC_API_KEY` (`CLAUDE_CODE_USE_FOUNDRY=true`인 Foundry 모드에서는 `ANTHROPIC_FOUNDRY_API_KEY` 우선) |
+| `openai` | `OPENAI_API_KEY` |
+| `openai-codex` | `OPENAI_CODEX_OAUTH_TOKEN` |
+| `google` | `GEMINI_API_KEY` |
+| `google-vertex` | `GOOGLE_CLOUD_API_KEY` 또는 ADC(명시적 `GOOGLE_APPLICATION_CREDENTIALS` 또는 gcloud 기본 ADC 파일과 프로젝트 및 위치 변수, 아래 참조) |
+| `groq` | `GROQ_API_KEY` |
+| `openrouter` | `OPENROUTER_API_KEY` |
+| `mistral` | `MISTRAL_API_KEY` |
+| `xai` | `XAI_API_KEY` |
+| `xai-oauth` | `XAI_OAUTH_TOKEN`, 다음 `XAI_API_KEY` |
+| `github-copilot` | `COPILOT_GITHUB_TOKEN` |
+| `cursor` | `CURSOR_ACCESS_TOKEN` |
+| `azure` | `AZURE_OPENAI_API_KEY` |
+| `amazon-bedrock` | `AWS_BEARER_TOKEN_BEDROCK`, AWS 프로필, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`, 또는 ECS/IRSA/EC2 자격 증명 체인 |
 
-### Additional hosted providers
+<a id="additional-hosted-providers"></a>
+### 추가 호스팅 제공자
 
-| Provider ID                      | Environment variable(s)                                                       |
-| -------------------------------- | ----------------------------------------------------------------------------- |
-| `abliteration`                   | `ABLITERATION_API_KEY`, then `ABLIT_KEY`                                       |
-| `aiand`                          | `AIAND_API_KEY`                                                               |
-| `cerebras`                       | `CEREBRAS_API_KEY`                                                            |
-| `alibaba-token-plan`             | `ALIBABA_TOKEN_PLAN_API_KEY`, then `BAILIAN_TOKEN_PLAN_API_KEY`               |
-| `baseten`                        | `BASETEN_API_KEY`                                                             |
-| `bedrock-mantle`                 | `AWS_BEARER_TOKEN_BEDROCK` or the AWS credential chain (SigV4)                 |
-| `commandcode`                    | `COMMAND_CODE_API_KEY`, then `COMMANDCODE_API_KEY`                            |
-| `coralbricks`                    | `CORAL_API_KEY`, then `CORALBRICKS_API_KEY`                                   |
-| `deepinfra`                      | `DEEPINFRA_API_KEY`                                                           |
-| `deepseek`                       | `DEEPSEEK_API_KEY`                                                            |
-| `siliconflow`                    | `SILICONFLOW_API_KEY`                                                         |
-| `siliconflow-cn`                 | `SILICONFLOW_CN_API_KEY`                                                      |
-| `fireworks`                      | `FIREWORKS_API_KEY`                                                           |
-| `together`                       | `TOGETHER_API_KEY`                                                            |
-| `typesafe`                       | `TYPESAFE_API_KEY`                                                            |
-| `coreweave`                      | `COREWEAVE_API_KEY`, then `WANDB_API_KEY`                                     |
-| `nvidia`                         | `NVIDIA_API_KEY`                                                              |
-| `devin`                          | `DEVIN_API_KEY`                                                               |
-| `gmi-cloud`                      | `GMI_API_KEY`                                                                 |
-| `huggingface`                    | `HUGGINGFACE_HUB_TOKEN`, then `HF_TOKEN`                                      |
-| `inception`                      | `INCEPTION_API_KEY`                                                           |
-| `moonshot`                       | `MOONSHOT_API_KEY`, then `KIMI_API_KEY`                                       |
-| `stepfun`                        | `STEPFUN_API_KEY`                                                             |
-| `helmcode`                       | `HELMCODE_API_KEY`                                                            |
-| `meta`                           | `MODEL_API_KEY`, then `META_API_KEY`                                          |
-| `nanogpt`                        | `NANO_GPT_API_KEY`                                                            |
-| `novita`                         | `NOVITA_API_KEY`                                                              |
-| `venice`                         | `VENICE_API_KEY`                                                              |
-| `vercel-ai-gateway`              | `AI_GATEWAY_API_KEY` (also `VERCEL_AI_GATEWAY_API_KEY` for catalog discovery) |
-| `cloudflare-ai-gateway`          | `CLOUDFLARE_AI_GATEWAY_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
-| `cloudflare-workers-ai`          | `CLOUDFLARE_API_TOKEN`, then `CLOUDFLARE_AUTH_TOKEN`, + `CLOUDFLARE_ACCOUNT_ID` |
-| `snowflake`                      | `SNOWFLAKE_PAT` + `SNOWFLAKE_ACCOUNT`                                         |
-| `litellm`                        | `LITELLM_API_KEY`; optional `LITELLM_BASE_URL` for the proxy endpoint         |
-| `kilo`                           | `KILO_API_KEY`                                                                |
-| `zai`                            | `ZAI_API_KEY`                                                                 |
-| `zenmux`                         | `ZENMUX_API_KEY`                                                              |
-| `zhipu-coding-plan`              | `ZHIPU_API_KEY`                                                               |
-| `umans`                          | `UMANS_AI_CODING_PLAN_API_KEY`                                                |
-| `qianfan`                        | `QIANFAN_API_KEY`                                                             |
-| `qwen-portal`                    | `QWEN_OAUTH_TOKEN`, then `QWEN_PORTAL_API_KEY`                                |
-| `synthetic`                      | `SYNTHETIC_API_KEY`                                                           |
-| `minimax-code`                   | `MINIMAX_CODE_API_KEY`                                                        |
-| `minimax-code-cn`                | `MINIMAX_CODE_CN_API_KEY`                                                     |
-| `minimax`                        | `MINIMAX_API_KEY`                                                             |
-| `alibaba-coding-plan`            | `ALIBABA_CODING_PLAN_API_KEY`                                                 |
-| `sakana`                         | `SAKANA_API_KEY`, then `FUGU_API_KEY`                                         |
-| `sambanova`                      | `SAMBANOVA_API_KEY`                                                           |
-| `aimlapi`                        | `AIMLAPI_API_KEY`                                                             |
-| `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN`                                                                |
-| `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY`                                                            |
-| `cline-pass`                     | `CLINE_API_KEY`                                                               |
-| `factory-droid`                  | none — use `/login factory-droid`                                             |
-| `firepass`                       | `FIREPASS_API_KEY`                                                            |
-| `wafer-serverless`               | `WAFER_SERVERLESS_API_KEY`                                                    |
-| `xiaomi`                         | `XIAOMI_API_KEY`                                                              |
-| `xiaomi-token-plan-ams`          | `XIAOMI_TOKEN_PLAN_AMS_API_KEY`                                               |
-| `xiaomi-token-plan-cn`           | `XIAOMI_TOKEN_PLAN_CN_API_KEY`                                                |
-| `xiaomi-token-plan-sgp`          | `XIAOMI_TOKEN_PLAN_SGP_API_KEY`                                               |
-| `ollama-cloud`                   | `OLLAMA_CLOUD_API_KEY`                                                        |
-| `ollama`                         | `OLLAMA_API_KEY` (optional; local discovery is keyless by default)            |
-| `lm-studio`                      | `LM_STUDIO_API_KEY` (optional; keyless by default)                            |
-| `llama.cpp`                      | `LLAMA_CPP_API_KEY` (only when the server requires auth)                      |
-| `vllm`                           | `VLLM_API_KEY` (optional for an unauthenticated local server)                 |
-| `yolo-auto`                      | `YOLO_AUTO_API_KEY`                                                            |
-| `charm-hyper`                    | `CHARM_HYPER_API_KEY`, then `HYPER_API_KEY`                                   |
-| `singularityapi-dev`             | `SINGULARITYAPI_DEV_API_KEY`                                                  |
-| `singularityapi-tech`            | `SINGULARITYAPI_TECH_API_KEY`                                                 |
+| 제공자 ID | 환경 변수 |
+| --- | --- |
+| `abliteration` | `ABLITERATION_API_KEY`, 다음 `ABLIT_KEY` |
+| `aiand` | `AIAND_API_KEY` |
+| `cerebras` | `CEREBRAS_API_KEY` |
+| `alibaba-token-plan` | `ALIBABA_TOKEN_PLAN_API_KEY`, 다음 `BAILIAN_TOKEN_PLAN_API_KEY` |
+| `baseten` | `BASETEN_API_KEY` |
+| `bedrock-mantle` | `AWS_BEARER_TOKEN_BEDROCK` 또는 AWS 자격 증명 체인(SigV4) |
+| `commandcode` | `COMMAND_CODE_API_KEY`, 다음 `COMMANDCODE_API_KEY` |
+| `coralbricks` | `CORAL_API_KEY`, 다음 `CORALBRICKS_API_KEY` |
+| `deepinfra` | `DEEPINFRA_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
+| `siliconflow` | `SILICONFLOW_API_KEY` |
+| `siliconflow-cn` | `SILICONFLOW_CN_API_KEY` |
+| `fireworks` | `FIREWORKS_API_KEY` |
+| `together` | `TOGETHER_API_KEY` |
+| `typesafe` | `TYPESAFE_API_KEY` |
+| `coreweave` | `COREWEAVE_API_KEY`, 다음 `WANDB_API_KEY` |
+| `nvidia` | `NVIDIA_API_KEY` |
+| `devin` | `DEVIN_API_KEY` |
+| `gmi-cloud` | `GMI_API_KEY` |
+| `huggingface` | `HUGGINGFACE_HUB_TOKEN`, 다음 `HF_TOKEN` |
+| `inception` | `INCEPTION_API_KEY` |
+| `moonshot` | `MOONSHOT_API_KEY`, 다음 `KIMI_API_KEY` |
+| `stepfun` | `STEPFUN_API_KEY` |
+| `helmcode` | `HELMCODE_API_KEY` |
+| `meta` | `MODEL_API_KEY`, 다음 `META_API_KEY` |
+| `nanogpt` | `NANO_GPT_API_KEY` |
+| `novita` | `NOVITA_API_KEY` |
+| `venice` | `VENICE_API_KEY` |
+| `vercel-ai-gateway` | `AI_GATEWAY_API_KEY` (카탈로그 탐색에는 `VERCEL_AI_GATEWAY_API_KEY`도 사용) |
+| `cloudflare-ai-gateway` | `CLOUDFLARE_AI_GATEWAY_API_KEY` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
+| `cloudflare-workers-ai` | `CLOUDFLARE_API_TOKEN`, 다음 `CLOUDFLARE_AUTH_TOKEN`, + `CLOUDFLARE_ACCOUNT_ID` |
+| `snowflake` | `SNOWFLAKE_PAT` + `SNOWFLAKE_ACCOUNT` |
+| `litellm` | `LITELLM_API_KEY`; 프록시 엔드포인트용 선택 사항 `LITELLM_BASE_URL` |
+| `kilo` | `KILO_API_KEY` |
+| `zai` | `ZAI_API_KEY` |
+| `zenmux` | `ZENMUX_API_KEY` |
+| `zhipu-coding-plan` | `ZHIPU_API_KEY` |
+| `umans` | `UMANS_AI_CODING_PLAN_API_KEY` |
+| `qianfan` | `QIANFAN_API_KEY` |
+| `qwen-portal` | `QWEN_OAUTH_TOKEN`, 다음 `QWEN_PORTAL_API_KEY` |
+| `synthetic` | `SYNTHETIC_API_KEY` |
+| `minimax-code` | `MINIMAX_CODE_API_KEY` |
+| `minimax-code-cn` | `MINIMAX_CODE_CN_API_KEY` |
+| `minimax` | `MINIMAX_API_KEY` |
+| `alibaba-coding-plan` | `ALIBABA_CODING_PLAN_API_KEY` |
+| `sakana` | `SAKANA_API_KEY`, 다음 `FUGU_API_KEY` |
+| `sambanova` | `SAMBANOVA_API_KEY` |
+| `aimlapi` | `AIMLAPI_API_KEY` |
+| `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN` |
+| `opencode-zen`, `opencode-go` | `OPENCODE_API_KEY` |
+| `cline-pass` | `CLINE_API_KEY` |
+| `factory-droid` | 없음 — `/login factory-droid` 사용 |
+| `firepass` | `FIREPASS_API_KEY` |
+| `wafer-serverless` | `WAFER_SERVERLESS_API_KEY` |
+| `xiaomi` | `XIAOMI_API_KEY` |
+| `xiaomi-token-plan-ams` | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` |
+| `xiaomi-token-plan-cn` | `XIAOMI_TOKEN_PLAN_CN_API_KEY` |
+| `xiaomi-token-plan-sgp` | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
+| `ollama-cloud` | `OLLAMA_CLOUD_API_KEY` |
+| `ollama` | `OLLAMA_API_KEY` (선택 사항, 로컬 탐색은 기본적으로 키 불필요) |
+| `lm-studio` | `LM_STUDIO_API_KEY` (선택 사항, 기본적으로 키 불필요) |
+| `llama.cpp` | `LLAMA_CPP_API_KEY` (서버가 인증을 요구할 때만) |
+| `vllm` | `VLLM_API_KEY` (인증 없는 로컬 서버에서는 선택 사항) |
+| `yolo-auto` | `YOLO_AUTO_API_KEY` |
+| `charm-hyper` | `CHARM_HYPER_API_KEY`, 다음 `HYPER_API_KEY` |
+| `singularityapi-dev` | `SINGULARITYAPI_DEV_API_KEY` |
+| `singularityapi-tech` | `SINGULARITYAPI_TECH_API_KEY` |
 
-Vertex ADC availability accepts project aliases `GOOGLE_CLOUD_PROJECT`, `GCP_PROJECT`, or `GCLOUD_PROJECT`, and location aliases `GOOGLE_VERTEX_LOCATION`, `GOOGLE_CLOUD_LOCATION`, or `VERTEX_LOCATION`.
+Vertex ADC 사용 가능 여부는 프로젝트 별칭 `GOOGLE_CLOUD_PROJECT`, `GCP_PROJECT`, `GCLOUD_PROJECT`와 위치 별칭 `GOOGLE_VERTEX_LOCATION`, `GOOGLE_CLOUD_LOCATION`, `VERTEX_LOCATION`을 허용합니다.
 
-For `xai-oauth`, `XAI_API_KEY` is accepted for an explicit request but does not automatically make SuperGrok models available or preferred; automatic availability requires its dedicated `XAI_OAUTH_TOKEN` or stored/configured auth.
+`xai-oauth`의 `XAI_API_KEY`는 명시적 요청에는 허용되지만 SuperGrok 모델을 자동으로 사용 가능하게 하거나 우선 선택하지 않습니다. 자동 사용 가능 상태에는 전용 `XAI_OAUTH_TOKEN` 또는 저장/구성된 인증이 필요합니다.
 
-`/login cloudflare-ai-gateway` prompts for the gateway token, Cloudflare account ID, and gateway ID, then stores all three together. To use environment variables, set all three values listed above. OMP selects the Anthropic, OpenAI, or Workers AI gateway route for each model; you do not need a `models.yml` base URL override.
+`/login cloudflare-ai-gateway`는 게이트웨이 토큰, Cloudflare 계정 ID, 게이트웨이 ID를 입력받고 세 값을 함께 저장합니다. 환경 변수를 사용하려면 위 세 값을 모두 설정하세요. OMP는 모델별로 Anthropic, OpenAI 또는 Workers AI 게이트웨이 경로를 선택하므로 `models.yml`의 기본 URL을 재정의할 필요가 없습니다.
 
-`cloudflare-workers-ai` serves Cloudflare's Clef decision models (`cloudflare-workers-ai/@cf/cloudflare/clef` and `cloudflare-workers-ai/@cf/cloudflare/clef-flash`) as `judge` models; assign one to the `judge` role to use it. `/login cloudflare-workers-ai` prompts for a Cloudflare API token with Workers AI Read and Edit permissions (create one at `https://dash.cloudflare.com/profile/api-tokens`) and your account ID, then stores both together. To use environment variables, set `CLOUDFLARE_API_TOKEN` (or `CLOUDFLARE_AUTH_TOKEN`) and `CLOUDFLARE_ACCOUNT_ID`.
+`cloudflare-workers-ai`는 Cloudflare Clef 판단 모델(`cloudflare-workers-ai/@cf/cloudflare/clef`와 `cloudflare-workers-ai/@cf/cloudflare/clef-flash`)을 `judge` 모델로 제공합니다. 사용하려면 하나를 `judge` 역할에 지정하세요. `/login cloudflare-workers-ai`는 Workers AI Read 및 Edit 권한이 있는 Cloudflare API 토큰(`https://dash.cloudflare.com/profile/api-tokens`에서 생성)과 계정 ID를 입력받고 함께 저장합니다. 환경 변수로는 `CLOUDFLARE_API_TOKEN`(또는 `CLOUDFLARE_AUTH_TOKEN`)과 `CLOUDFLARE_ACCOUNT_ID`를 설정하세요.
 
-`/login snowflake` prompts for your Snowflake account identifier or account URL, then signs in through the browser with Snowflake's built-in local-application OAuth integration and stores the account with the token. To use environment variables instead, set both `SNOWFLAKE_PAT` and `SNOWFLAKE_ACCOUNT`.
+`/login snowflake`는 Snowflake 계정 식별자 또는 계정 URL을 입력받고 Snowflake의 내장 로컬 애플리케이션 OAuth 통합으로 브라우저 로그인한 뒤 계정과 토큰을 저장합니다. 환경 변수를 사용하려면 `SNOWFLAKE_PAT`와 `SNOWFLAKE_ACCOUNT`를 모두 설정하세요.
 
-`charm-hyper` is Charm's OpenAI-compatible inference gateway for coding agents. Issue or manage a key at `https://hyper.charm.land/`; the model list is discovered live from the provider's public `/v1/models` endpoint, and `HYPER_API_KEY` is accepted as a fallback alias for `CHARM_HYPER_API_KEY`.
+`charm-hyper`는 코딩 에이전트를 위한 Charm의 OpenAI 호환 추론 게이트웨이입니다. `https://hyper.charm.land/`에서 키를 발급하거나 관리하세요. 모델 목록은 제공자의 공개 `/v1/models` 엔드포인트에서 실시간으로 탐색하며, `HYPER_API_KEY`는 `CHARM_HYPER_API_KEY`의 폴백 별칭으로 허용됩니다.
 
-`inception` is Inception's native Mercury API. Set `INCEPTION_API_KEY` or run `/login inception` with a key from `https://platform.inceptionlabs.ai/dashboard/api-keys`, then select `inception/mercury-3`. OMP discovers chat models from `/v1/models`, including Mercury 3, Mercury 2.5, and Mercury 2; FIM/edit and Decisions-only models are excluded. Mercury 3 supports a 1,000,000-token context and up to 131,072 output tokens. Thinking levels are `minimal`, `low`, `medium`, and `high`; `minimal` maps to Inception's `instant`, and `off` requests that lowest effort rather than disabling reasoning entirely. Mercury does not stream its reasoning, so no thinking text appears and a `high` turn can be silent for minutes before its first output; OMP waits up to 10 minutes for Mercury 3's first chunk (`providers.streamFirstEventTimeoutSeconds` overrides this). While `/v1/models` reports Mercury 3 at $0, OMP prices it at the published launch rate ($0.10 input / $0.35 output per million tokens); a tariff reported by `/v1/models` takes precedence.
+`inception`은 Inception의 기본 Mercury API입니다. `INCEPTION_API_KEY`를 설정하거나 `https://platform.inceptionlabs.ai/dashboard/api-keys`의 키로 `/login inception`을 실행한 뒤 `inception/mercury-3`를 선택하세요. OMP는 `/v1/models`에서 Mercury 3, Mercury 2.5, Mercury 2를 포함한 채팅 모델을 탐색하며 FIM/편집 및 Decisions 전용 모델은 제외합니다. Mercury 3는 1,000,000토큰 컨텍스트와 최대 131,072 출력 토큰을 지원합니다. 사고 수준은 `minimal`, `low`, `medium`, `high`입니다. `minimal`은 Inception의 `instant`에 대응하며, `off`는 추론을 완전히 끄는 대신 가장 낮은 노력을 요청합니다. Mercury는 추론을 스트리밍하지 않으므로 사고 텍스트가 나타나지 않으며, `high` 턴에서는 첫 출력까지 몇 분간 조용할 수 있습니다. OMP는 Mercury 3의 첫 청크를 최대 10분 기다립니다(`providers.streamFirstEventTimeoutSeconds`로 재정의). `/v1/models`가 Mercury 3를 $0로 보고하는 동안 OMP는 공개 출시 요금(백만 토큰당 입력 $0.10 / 출력 $0.35)을 사용하며, `/v1/models`가 보고하는 요금이 있으면 그것이 우선합니다.
 
-SingularityAPI sells two unrelated products behind one brand, so OMP models them as two providers: they share no key, no billing model, and no effort ladder, and neither key is accepted by the other host.
+SingularityAPI는 하나의 브랜드 아래 서로 무관한 두 제품을 판매하므로 OMP는 별도 제공자로 취급합니다. 키, 과금 모델, 노력 단계가 공유되지 않으며 서로의 호스트에서 상대 키를 허용하지 않습니다.
 
-`singularityapi-dev` is the pay-as-you-go universal inference gateway (300+ models: DeepSeek, Kimi, GLM, frontier flagships). Create a key at `https://app.singularityapi.dev` (or run `/login singularityapi-dev`) and set `SINGULARITYAPI_DEV_API_KEY`; the roster, limits, and tariffs are discovered live from `https://api.singularityapi.dev/v1/models`.
+`singularityapi-dev`는 종량제 범용 추론 게이트웨이입니다(DeepSeek, Kimi, GLM, 최상위 플래그십 등 300개 이상 모델). `https://app.singularityapi.dev`에서 키를 생성하거나 `/login singularityapi-dev`를 실행하고 `SINGULARITYAPI_DEV_API_KEY`를 설정하세요. 목록, 제한, 요금은 `https://api.singularityapi.dev/v1/models`에서 실시간으로 탐색합니다.
 
-`singularityapi-tech` is the reserved DeepSeek lanes gateway. Usage bills against a booked reservation slot rather than prepaid credit, so a valid key with no active slot answers 403 until you book one at `https://app.singularityapi.tech`. Create an `sk-...` key there (or run `/login singularityapi-tech`), set `SINGULARITYAPI_TECH_API_KEY`, and the lane roster is discovered live from `https://api.singularityapi.tech/v1/models`.
+`singularityapi-tech`는 예약형 DeepSeek 레인 게이트웨이입니다. 선불 크레딧이 아니라 예약한 슬롯에 사용량이 청구되므로, 활성 슬롯이 없으면 유효한 키도 `https://app.singularityapi.tech`에서 예약하기 전까지 403을 반환합니다. 해당 사이트에서 `sk-...` 키를 생성하거나 `/login singularityapi-tech`를 실행하고 `SINGULARITYAPI_TECH_API_KEY`를 설정하세요. 레인 목록은 `https://api.singularityapi.tech/v1/models`에서 실시간으로 탐색합니다.
 
-OAuth-backed providers such as `anthropic`, `openai-codex`, `github-copilot`, `cursor`, `muse-code`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, `google-antigravity`, `devin`, and the GitLab providers (`gitlab-duo`, `gitlab-duo-agent`) are normally reached through `/login` rather than an environment variable. Interactive API-key logins exist too: `/login baseten`, `/login coreweave`, `/login sakana`, `/login singularityapi-dev`, and `/login singularityapi-tech` prompt for a dashboard/API key (`coreweave` additionally requires `COREWEAVE_PROJECT` for the `OpenAI-Project` header). See [Environment variables](./environment-variables.md) for search-tool and configuration variables not listed here.
+`anthropic`, `openai-codex`, `github-copilot`, `cursor`, `muse-code`, `ollama-cloud`, `qwen-portal`, `kimi-code`, `xai-oauth`, `wafer-serverless`, `google-gemini-cli`, `google-antigravity`, `devin` 및 GitLab 제공자(`gitlab-duo`, `gitlab-duo-agent`)처럼 OAuth 기반인 제공자는 보통 환경 변수 대신 `/login`으로 접근합니다. 대화형 API 키 로그인도 있습니다. `/login baseten`, `/login coreweave`, `/login sakana`, `/login singularityapi-dev`, `/login singularityapi-tech`는 대시보드/API 키를 입력받습니다(`coreweave`에는 `OpenAI-Project` 헤더용 `COREWEAVE_PROJECT`도 필요). 여기에 없는 검색 도구 및 구성 변수는 [환경 변수](./environment-variables.md)를 참조하세요.
 
-### `.env` discovery and precedence
+<a id="env-discovery-and-precedence"></a>
+### `.env` 탐색과 우선순위
 
-`omp` eagerly loads four `.env` files into the process environment before provider lookup. For each variable, the first **non-empty** source wins. Effective precedence, high to low:
+`omp`는 제공자를 조회하기 전에 네 개의 `.env` 파일을 프로세스 환경에 미리 불러옵니다. 각 변수는 **비어 있지 않은** 첫 소스가 우선합니다. 높은 순서부터 다음과 같습니다.
 
-1. Non-empty values already in the process environment.
+1. 프로세스 환경에 이미 있는 비어 있지 않은 값.
 2. `<project>/.env`
-3. The active agent directory's `.env` (default: `~/.omp/agent/.env`).
-4. The active config root's `.env` (default: `~/.omp/.env`).
+3. 활성 에이전트 디렉터리의 `.env`(기본값: `~/.omp/agent/.env`).
+4. 활성 구성 루트의 `.env`(기본값: `~/.omp/.env`).
 5. `~/.env`
 
-Existing non-empty process values are not overwritten; empty values can be filled by a later file. A non-empty project value beats the agent, config-root, and home files. Named profiles use their own config root and agent directory. Bun may also preload project dotenv variants before this loader; values already present are treated as process values.
+기존의 비어 있지 않은 프로세스 값은 덮어쓰지 않으며, 빈 값은 뒤의 파일에서 채울 수 있습니다. 비어 있지 않은 프로젝트 값은 에이전트, 구성 루트, 홈 파일보다 우선합니다. 이름 있는 프로필은 자체 구성 루트와 에이전트 디렉터리를 사용합니다. Bun이 이 로더 전에 프로젝트 dotenv 변형을 미리 불러올 수도 있으며, 이미 존재하는 값은 프로세스 값으로 취급합니다.
 
-Project-local `.env` is the simplest way to make one repository use a project-specific gateway, key, or local endpoint:
+프로젝트 로컬 `.env`는 특정 저장소에 프로젝트 전용 게이트웨이, 키, 로컬 엔드포인트를 적용하는 가장 간단한 방법입니다.
 
 ```dotenv
 # <project>/.env
@@ -240,34 +250,36 @@ OPENROUTER_API_KEY=sk-or-...
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
 
-`.env` files use Node's `parseEnv` grammar, including comments, quoted/multiline values, and `export` prefixes. After parsing:
+`.env` 파일은 주석, 따옴표/여러 줄 값, `export` 접두사를 포함한 Node의 `parseEnv` 문법을 사용합니다. 파싱 후에는 다음을 적용합니다.
 
-- keys must match `[A-Za-z_][A-Za-z0-9_]*` — other names are dropped;
-- values containing a NUL byte are dropped;
-- an `OMP_`-prefixed key is mirrored to the matching `PI_` name, overriding a same-file `PI_` entry.
+- 키는 `[A-Za-z_][A-Za-z0-9_]*`와 일치해야 하며 다른 이름은 버립니다.
+- NUL 바이트가 포함된 값은 버립니다.
+- `OMP_` 접두사 키는 대응하는 `PI_` 이름으로 복제하며 같은 파일의 `PI_` 항목을 덮어씁니다.
 
-## Built-in local engines
+<a id="built-in-local-engines"></a>
+## 내장 로컬 엔진
 
-Ollama, llama.cpp, and LM Studio are discovered automatically without needing a `models.yml` entry. Each uses a base URL that can be overridden by an environment variable:
+Ollama, llama.cpp, LM Studio는 `models.yml` 항목 없이 자동으로 탐색합니다. 각 기본 URL은 환경 변수로 재정의할 수 있습니다.
 
-| Provider ID | Base URL (env override → default)                                                 | Notes                                           |
-| ----------- | --------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `ollama`    | `OLLAMA_BASE_URL`, then `OLLAMA_HOST` (normalized), else `http://127.0.0.1:11434` | Keyless by default.                             |
-| `llama.cpp` | `LLAMA_CPP_BASE_URL`, else `http://127.0.0.1:8080`                                | Keyless unless authentication is configured.    |
-| `lm-studio` | `LM_STUDIO_BASE_URL`, else `http://127.0.0.1:1234/v1`                             | Keyless by default.                             |
+| 제공자 ID | 기본 URL(환경 재정의 → 기본값) | 참고 |
+| --- | --- | --- |
+| `ollama` | `OLLAMA_BASE_URL`, 다음 정규화된 `OLLAMA_HOST`, 아니면 `http://127.0.0.1:11434` | 기본적으로 키 불필요. |
+| `llama.cpp` | `LLAMA_CPP_BASE_URL`, 아니면 `http://127.0.0.1:8080` | 인증을 구성하지 않으면 키 불필요. |
+| `lm-studio` | `LM_STUDIO_BASE_URL`, 아니면 `http://127.0.0.1:1234/v1` | 기본적으로 키 불필요. |
 
-Implicit Ollama and llama.cpp models use `openai-responses`; LM Studio uses `openai-completions`. On macOS arm64, `apple` also probes the in-process Apple Foundation Models bridge (`local://apple-foundation-models`). It offers `apple/on-device` only when the bridge reports the model usable; an ineligible device, disabled Apple Intelligence, or build without the bridge yields no models. Its on-device context can be too small for the standard prompt plus project instructions, so OMP does not auto-select it; use `--model apple/on-device` or `/model` to opt in.
+암시적 Ollama와 llama.cpp 모델은 `openai-responses`를, LM Studio는 `openai-completions`를 사용합니다. macOS arm64에서는 `apple`도 프로세스 내 Apple Foundation Models 브리지(`local://apple-foundation-models`)를 확인합니다. 브리지가 모델 사용 가능 상태를 보고할 때만 `apple/on-device`를 제공합니다. 지원하지 않는 기기, 비활성화된 Apple Intelligence, 브리지 없는 빌드에서는 모델이 없습니다. 온디바이스 컨텍스트는 표준 프롬프트와 프로젝트 지침을 담기에 너무 작을 수 있으므로 OMP가 자동 선택하지 않습니다. `--model apple/on-device` 또는 `/model`로 명시적으로 선택하세요.
 
-These implicit engines are **skipped** when:
+다음 경우에는 암시적 엔진을 **건너뜁니다**.
 
-- a provider with the same ID is already configured in `models.yml` (your explicit config wins); or
-- the provider ID appears in the effective `disabledProviders` list.
+- 같은 ID의 제공자가 `models.yml`에 이미 구성되어 있음(명시적 구성 우선).
+- 제공자 ID가 유효한 `disabledProviders` 목록에 있음.
 
-For installing and running these engines, see [Local models](./local-models.md).
+엔진 설치 및 실행은 [로컬 모델](./local-models.md)을 참조하세요.
 
-## Disabling model providers
+<a id="disabling-model-providers"></a>
+## 모델 제공자 비활성화
 
-Use the `disabledProviders` setting to remove a provider's models from selection:
+`disabledProviders` 설정으로 제공자의 모델을 선택 대상에서 제거하세요.
 
 ```yaml
 # ~/.omp/agent/config.yml or <project>/.omp/config.yml
@@ -278,21 +290,22 @@ disabledProviders:
   - groq
 ```
 
-Provider IDs are matched exactly. Disable `google` to hide the Google Gemini API provider; the OAuth-backed Google providers `google-gemini-cli` and `google-antigravity` are separate IDs and must be disabled individually. Disable `ollama`, `llama.cpp`, or `lm-studio` to stop local discovery for that engine.
+제공자 ID는 정확히 일치해야 합니다. Google Gemini API 제공자를 숨기려면 `google`을 비활성화하세요. OAuth 기반 Google 제공자 `google-gemini-cli`와 `google-antigravity`는 별도 ID이므로 각각 비활성화해야 합니다. `ollama`, `llama.cpp`, `lm-studio`를 비활성화하면 해당 엔진의 로컬 탐색이 중지됩니다.
 
-`disabledProviders` applies uniformly to:
+`disabledProviders`는 다음 모두에 동일하게 적용됩니다.
 
-- bundled catalog providers;
-- custom `models.yml` providers;
-- runtime-discovered provider models;
-- extension-registered providers;
-- implicit local engines.
+- 번들 카탈로그 제공자.
+- 사용자 지정 `models.yml` 제공자.
+- 런타임 탐색 제공자 모델.
+- 확장 등록 제공자.
+- 암시적 로컬 엔진.
 
-Disabling a provider does not delete its stored credentials — re-enable it by removing its ID from the effective list.
+제공자를 비활성화해도 저장된 자격 증명은 삭제되지 않습니다. 유효한 목록에서 ID를 제거하면 다시 활성화됩니다.
 
-## Project-specific provider control
+<a id="project-specific-provider-control"></a>
+## 프로젝트별 제공자 제어
 
-Project settings live in `<project>/.omp/config.yml`. Use them when one repository must allow or hide a different provider set than your global default:
+프로젝트 설정은 `<project>/.omp/config.yml`에 있습니다. 특정 저장소에서 전역 기본값과 다른 제공자 집합을 허용하거나 숨겨야 할 때 사용하세요.
 
 ```yaml
 # <project>/.omp/config.yml
@@ -301,7 +314,7 @@ disabledProviders:
   - openrouter
 ```
 
-Settings arrays are **replaced** wholesale by the higher-precedence layer, not merged or appended. If the global file disables three providers and the project file disables one, the project sees only the project list:
+설정 배열은 높은 우선순위 계층의 값으로 통째로 **대체**되며 병합하거나 덧붙이지 않습니다. 전역 파일에서 세 제공자를 비활성화하고 프로젝트 파일에서 하나를 비활성화하면, 프로젝트에는 프로젝트 목록만 적용됩니다.
 
 ```yaml
 # ~/.omp/agent/config.yml
@@ -315,17 +328,18 @@ disabledProviders:
   - groq
 ```
 
-Effective result inside the project:
+프로젝트 내부의 최종 결과:
 
 ```json
 ["groq"]
 ```
 
-The project array re-enables `anthropic`, `openai`, and `google` for sessions launched from that project. If you want a project to _add_ to the global set, repeat the global IDs in the project file. See [Settings](./settings.md) for the full precedence chain, including `--config` overlays and runtime overrides.
+프로젝트 배열은 해당 프로젝트에서 시작한 세션의 `anthropic`, `openai`, `google`을 다시 활성화합니다. 프로젝트에서 전역 집합에 _추가_하려면 전역 ID도 프로젝트 파일에 다시 적으세요. `--config` 오버레이와 런타임 재정의를 포함한 전체 우선순위는 [설정](./settings.md)을 참조하세요.
 
-## Path-scoped `disabledProviders`
+<a id="path-scoped-disabledproviders"></a>
+## 경로 범위 `disabledProviders`
 
-`disabledProviders` can mix plain string entries (apply everywhere) with path-scoped entries (apply only when the current working directory matches a configured path):
+`disabledProviders`에는 일반 문자열 항목(모든 곳에 적용)과 경로 범위 항목(현재 작업 디렉터리가 구성된 경로와 일치할 때만 적용)을 섞을 수 있습니다.
 
 ```yaml
 disabledProviders:
@@ -341,40 +355,42 @@ disabledProviders:
       - openrouter
 ```
 
-- Bare string entries always apply.
-- A scoped entry applies when the current working directory **is** the configured path or sits **under** it. `~` expands to the home directory.
-- Accepted path keys: `path`, `paths`, `pathPrefix`, `pathPrefixes`.
-- Accepted value keys: `providers`, `values`, `items`.
+- 일반 문자열 항목은 항상 적용됩니다.
+- 범위 항목은 현재 작업 디렉터리가 구성한 경로와 **같거나 그 아래**에 있을 때 적용됩니다. `~`는 홈 디렉터리로 확장됩니다.
+- 허용되는 경로 키: `path`, `paths`, `pathPrefix`, `pathPrefixes`.
+- 허용되는 값 키: `providers`, `values`, `items`.
 
-For the example above:
+위 예제에서는 다음과 같습니다.
 
-- `ollama` is disabled everywhere.
-- `anthropic` and `openai` are additionally disabled under `~/projects/sensitive`.
-- `openrouter` is additionally disabled under `~/work/client-a` and `~/work/client-b`.
+- `ollama`는 모든 곳에서 비활성화됩니다.
+- `~/projects/sensitive` 아래에서는 `anthropic`과 `openai`도 비활성화됩니다.
+- `~/work/client-a`와 `~/work/client-b` 아래에서는 `openrouter`도 비활성화됩니다.
 
-Path scopes are resolved **after** the settings merge. Because a higher-precedence layer replaces the whole array, a project-level `disabledProviders` array drops any scoped entries that only existed in the global array. `enabledModels` and `enabledProviders` also support this form. See [Settings](./settings.md) for details.
+경로 범위는 설정 병합 **후에** 확인합니다. 높은 우선순위 계층이 배열 전체를 대체하므로 프로젝트 수준 `disabledProviders` 배열은 전역 배열에만 있는 범위 항목을 제거합니다. `enabledModels`와 `enabledProviders`도 이 형식을 지원합니다. 자세한 내용은 [설정](./settings.md)을 참조하세요.
 
-## Provider IDs vs discovery provider IDs
+<a id="provider-ids-vs-discovery-provider-ids"></a>
+## 제공자 ID와 탐색 제공자 ID
 
-`disabledProviders` uses a **single shared ID namespace** that gates two different subsystems:
+`disabledProviders`는 서로 다른 두 하위 시스템을 제어하는 **하나의 공유 ID 네임스페이스**를 사용합니다.
 
-- **Model providers** — the backends on this page (`anthropic`, `openai`, `ollama`, a custom `models.yml` ID, …). Disabling one removes its models from selection.
-- **Discovery providers** — sources of context files, MCP servers, commands, skills, hooks, tools, prompts, and settings. Disabling one stops that source from contributing capability items.
+- **모델 제공자** — 이 페이지의 백엔드(`anthropic`, `openai`, `ollama`, 사용자 지정 `models.yml` ID 등). 비활성화하면 해당 모델이 선택 대상에서 제거됩니다.
+- **탐색 제공자** — 컨텍스트 파일, MCP 서버, 명령, 스킬, 훅, 도구, 프롬프트, 설정의 소스입니다. 비활성화하면 해당 소스가 기능 항목을 제공하지 않습니다.
 
-| Entry type            | Examples                                                                      | Effect                                                          |
-| --------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Model provider ID     | `anthropic`, `openai`, `google`, `groq`, `openrouter`, `ollama`, `my-gateway` | Removes that provider's models from availability.               |
-| Discovery provider ID | `native`, `claude`, `codex`, `gemini`, `agents`, `github`                     | Stops that discovery source from contributing capability items. |
+| 항목 유형 | 예 | 효과 |
+| --- | --- | --- |
+| 모델 제공자 ID | `anthropic`, `openai`, `google`, `groq`, `openrouter`, `ollama`, `my-gateway` | 해당 제공자의 모델을 사용 가능 목록에서 제거합니다. |
+| 탐색 제공자 ID | `native`, `claude`, `codex`, `gemini`, `agents`, `github` | 해당 탐색 소스의 기능 항목 제공을 중지합니다. |
 
-`enabledProviders` controls opt-in user-level foreign discovery sources; it is not a model-provider allowlist. Project-level foreign sources have separate discovery behavior. Use model settings to narrow model selection.
+`enabledProviders`는 명시적으로 활성화하는 사용자 수준 외부 탐색 소스를 제어하며, 모델 제공자 허용 목록이 아닙니다. 프로젝트 수준 외부 소스는 별도의 탐색 동작을 따릅니다. 모델 선택을 제한하려면 모델 설정을 사용하세요.
 
-Watch the related names. The Google Gemini **API** models use the model provider ID `google`; `gemini` is a **discovery** provider ID (the source that reads `GEMINI.md`), not the Google model provider. Use discovery IDs only when you intend to disable an entire config source. See [Context files](./context-files.md) for the discovery-provider side.
+비슷한 이름에 주의하세요. Google Gemini **API** 모델은 모델 제공자 ID `google`을 사용합니다. `gemini`는 Google 모델 제공자가 아니라 `GEMINI.md`를 읽는 **탐색** 제공자 ID입니다. 구성 소스 전체를 비활성화하려는 경우에만 탐색 ID를 사용하세요. 탐색 제공자 측 설명은 [컨텍스트 파일](./context-files.md)을 참조하세요.
 
-## Custom providers in `models.yml`
+<a id="custom-providers-in-modelsyml"></a>
+## `models.yml`의 사용자 지정 제공자
 
-Custom providers live in `~/.omp/agent/models.yml` under `providers:`. A provider ID defined there participates in the same selection, credential resolution, and `disabledProviders` rules as built-in providers.
+사용자 지정 제공자는 `~/.omp/agent/models.yml`의 `providers:` 아래에 정의합니다. 여기에 정의한 제공자 ID는 내장 제공자와 동일한 선택, 자격 증명 확인, `disabledProviders` 규칙을 따릅니다.
 
-Minimal OpenAI-compatible provider:
+최소 OpenAI 호환 제공자:
 
 ```yaml
 providers:
@@ -389,11 +405,12 @@ providers:
         maxTokens: 8192
 ```
 
-### Zhipu BigModel account-balance keys
+<a id="zhipu-bigmodel-account-balance-keys"></a>
+### Zhipu BigModel 계정 잔액 키
 
-`/login zai` targets the global Z.AI Coding Plan endpoint, and `/login zhipu-coding-plan` targets the domestic Zhipu Coding Plan endpoint. Neither flow configures the general pay-as-you-go BigModel endpoint at `https://open.bigmodel.cn/api/paas/v4`.
+`/login zai`는 글로벌 Z.AI Coding Plan 엔드포인트를, `/login zhipu-coding-plan`은 중국 내 Zhipu Coding Plan 엔드포인트를 대상으로 합니다. 어느 흐름도 `https://open.bigmodel.cn/api/paas/v4`의 일반 종량제 BigModel 엔드포인트를 구성하지 않습니다.
 
-Use a custom provider for an API key issued from a standard BigModel account balance:
+표준 BigModel 계정 잔액에서 발급한 API 키에는 사용자 지정 제공자를 사용하세요.
 
 ```yaml
 providers:
@@ -406,9 +423,9 @@ providers:
         name: GLM-4.6 (BigModel)
 ```
 
-Set `BIGMODEL_API_KEY` to the `<id>.<secret>` key before starting `omp`, then select `bigmodel/glm-4.6`. The key does not use an `sk-` prefix.
+`omp`를 시작하기 전에 `BIGMODEL_API_KEY`를 `<id>.<secret>` 키로 설정한 뒤 `bigmodel/glm-4.6`을 선택하세요. 이 키에는 `sk-` 접두사가 없습니다.
 
-Keyless local provider (no credentials required):
+키 없는 로컬 제공자(자격 증명 불필요):
 
 ```yaml
 providers:
@@ -423,7 +440,7 @@ providers:
         maxTokens: 4096
 ```
 
-Discovery-enabled provider (models fetched from the endpoint at runtime):
+탐색 활성 제공자(런타임에 엔드포인트에서 모델을 가져옴):
 
 ```yaml
 providers:
@@ -436,9 +453,9 @@ providers:
       type: proxy
 ```
 
-For the full schema, all allowed `api` values, discovery `type`s, model overrides, and equivalence settings, see [Model and Provider Configuration](./models.md).
+전체 스키마, 허용되는 모든 `api` 값, 탐색 `type`, 모델 재정의, 동등성 설정은 [모델 및 제공자 구성](./models.md)을 참조하세요.
 
-To disable a custom provider, list its ID exactly:
+사용자 지정 제공자를 비활성화하려면 ID를 정확히 나열하세요.
 
 ```yaml
 disabledProviders:
@@ -446,14 +463,15 @@ disabledProviders:
   - team-proxy
 ```
 
-## Troubleshooting
+<a id="troubleshooting"></a>
+## 문제 해결
 
-**A provider's models are not selectable.** Confirm the provider has credentials (`/login <provider>`, an exported environment variable, or a `models.yml` `apiKey`) and that its ID is not in the effective `disabledProviders` list. Remember the rule: not disabled **and** (keyless **or** has credentials). A local engine must respond to populate discovery initially; cached catalog rows may remain visible later, but inference still needs the engine. Apple availability is checked through its in-process bridge.
+**제공자의 모델을 선택할 수 없습니다.** 제공자에 자격 증명(`/login <provider>`, 내보낸 환경 변수, `models.yml`의 `apiKey`)이 있고 그 ID가 유효한 `disabledProviders` 목록에 없는지 확인하세요. 규칙은 비활성화되지 않음 **그리고** (키 불필요 **또는** 자격 증명 있음)입니다. 로컬 엔진은 초기 탐색 목록을 채울 때 응답해야 합니다. 이후 캐시된 카탈로그 항목은 표시될 수 있지만 추론에는 여전히 엔진이 필요합니다. Apple 사용 가능 여부는 프로세스 내 브리지로 확인합니다.
 
-**The wrong key is being used (a stale key from `.env`).** Resolution favors runtime `--api-key`, then a `models.yml` config key, stored OAuth, a key saved by `/login`, extension config fallbacks, environment or `.env`, and other stored API keys. A non-empty process environment variable also beats every `.env` file, and a non-empty `<project>/.env` value beats `~/.env`. If an unexpected key wins, check for an exported shell variable and the four `.env` files in precedence order, and clear the one that should not apply.
+**잘못된 키가 사용됩니다(`.env`의 오래된 키).** 확인 우선순위는 런타임 `--api-key`, `models.yml` 구성 키, 저장된 OAuth, `/login`으로 저장한 키, 확장 구성 폴백, 환경 또는 `.env`, 그 밖의 저장된 API 키 순입니다. 비어 있지 않은 프로세스 환경 변수는 모든 `.env` 파일보다 우선하고, 비어 있지 않은 `<project>/.env` 값은 `~/.env`보다 우선합니다. 예상하지 않은 키가 선택되면 내보낸 셸 변수와 네 개의 `.env` 파일을 우선순위대로 살펴보고 적용되면 안 되는 값을 지우세요.
 
-**A provider still appears even though I disabled it.** `disabledProviders` arrays are replaced, not merged: a project `<project>/.omp/config.yml` array fully overrides the global one. Verify the _effective_ list for the directory you are in (path-scoped entries only apply at or under their configured path), and confirm the ID is spelled exactly. Use `omp config get disabledProviders` to inspect the merged value (see [Settings](./settings.md)).
+**비활성화한 제공자가 계속 표시됩니다.** `disabledProviders` 배열은 병합하지 않고 대체합니다. 프로젝트의 `<project>/.omp/config.yml` 배열은 전역 배열을 완전히 덮어씁니다. 현재 디렉터리의 _최종_ 목록을 확인하고(경로 범위 항목은 구성한 경로 및 하위에서만 적용) ID 철자가 정확한지 확인하세요. 병합된 값은 `omp config get disabledProviders`로 살펴볼 수 있습니다([설정](./settings.md) 참조).
 
-**A discovery provider name had no effect on models (or vice-versa).** The ID namespace is shared. `gemini`, `codex`, `claude`, `native`, and `agents` are discovery-source IDs; the Google model backend is `google`. Make sure you are disabling the right kind of provider.
+**탐색 제공자 이름이 모델에 영향을 주지 않습니다(또는 그 반대).** ID 네임스페이스는 공유됩니다. `gemini`, `codex`, `claude`, `native`, `agents`는 탐색 소스 ID이며 Google 모델 백엔드는 `google`입니다. 올바른 종류의 제공자를 비활성화하는지 확인하세요.
 
-**A custom `models.yml` provider does not load.** A YAML or schema error makes the registry skip the custom file. Validate the file with `omp models` (use `omp models find <substr>` to scope it to one provider). A provider with custom `models` needs `baseUrl`, authentication (`apiKey`, unless `auth: none` or `auth: oauth`), and `api` at provider level or on every model. A provider with no models is also valid when it defines at least one supported override (`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `guardrailIdentifier`, `requestMetadata`, `remoteCompaction`, `modelOverrides`, or `discovery`). Discovery providers may omit `models`, but need provider-level `api` unless `discovery.type` is `proxy`. An explicit `ollama`, `lm-studio`, or `llama.cpp` entry intentionally replaces built-in discovery for that ID. See [Model and Provider Configuration](./models.md).
+**사용자 지정 `models.yml` 제공자가 로드되지 않습니다.** YAML 또는 스키마 오류가 있으면 레지스트리는 사용자 지정 파일을 건너뜁니다. `omp models`로 파일을 검증하세요(`omp models find <substr>`로 한 제공자로 범위 제한 가능). 사용자 지정 `models`가 있는 제공자에는 `baseUrl`, 인증(`auth: none` 또는 `auth: oauth`가 아니면 `apiKey`), 제공자 수준 또는 모든 모델의 `api`가 필요합니다. 모델이 없는 제공자도 지원되는 재정의(`baseUrl`, `headers`, `apiKey`, `auth: none`, `compat`, `disableStrictTools`, `guardrailIdentifier`, `requestMetadata`, `remoteCompaction`, `modelOverrides`, `discovery`)를 하나 이상 정의하면 유효합니다. 탐색 제공자는 `models`를 생략할 수 있지만, `discovery.type`이 `proxy`가 아니면 제공자 수준 `api`가 필요합니다. 명시적 `ollama`, `lm-studio`, `llama.cpp` 항목은 의도적으로 같은 ID의 내장 탐색을 대체합니다. [모델 및 제공자 구성](./models.md)을 참조하세요.

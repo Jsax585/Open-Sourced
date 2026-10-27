@@ -3,6 +3,7 @@
  *
  * Handles `omp grep` subcommand for testing grep tool on Windows.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { GrepOutputMode, grep } from "@oh-my-pi/pi-natives";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
@@ -70,15 +71,15 @@ export function parseGrepArgs(args: string[]): GrepCommandArgs | undefined {
 
 export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 	if (!cmd.pattern) {
-		console.error(chalk.red("Error: Pattern is required"));
+		console.error(chalk.red(t("Error: Pattern is required")));
 		process.exit(1);
 	}
 
 	const searchPath = path.resolve(expandPath(cmd.path));
-	console.log(chalk.dim(`Searching in: ${searchPath}`));
-	console.log(chalk.dim(`Pattern: ${cmd.pattern}`));
+	console.log(chalk.dim(t("Searching in: {0}", `${searchPath}`)));
+	console.log(chalk.dim(t("Pattern: {0}", `${cmd.pattern}`)));
 	console.log(
-		chalk.dim(`Mode: ${cmd.mode}, Limit: ${cmd.limit}, Context: ${cmd.context}, Gitignore: ${cmd.gitignore}`),
+		chalk.dim(t("Mode: {0}, Limit: {1}, Context: {2}, Gitignore: {3}", `${cmd.mode}`, `${cmd.limit}`, `${cmd.context}`, `${cmd.gitignore}`)),
 	);
 
 	console.log("");
@@ -95,11 +96,11 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 			gitignore: cmd.gitignore,
 		});
 
-		console.log(chalk.green(`Total matches: ${result.totalMatches}`));
-		console.log(chalk.green(`Files with matches: ${result.filesWithMatches}`));
-		console.log(chalk.green(`Files searched: ${result.filesSearched}`));
+		console.log(chalk.green(t("Total matches: {0}", `${result.totalMatches}`)));
+		console.log(chalk.green(t("Files with matches: {0}", `${result.filesWithMatches}`)));
+		console.log(chalk.green(t("Files searched: {0}", `${result.filesSearched}`)));
 		if (result.limitReached) {
-			console.log(chalk.yellow(`Limit reached: true`));
+			console.log(chalk.yellow(t("Limit reached: true")));
 		}
 		console.log("");
 
@@ -120,42 +121,17 @@ export async function runGrepCommand(cmd: GrepCommandArgs): Promise<void> {
 				}
 				console.log("");
 			} else if (cmd.mode === GrepOutputMode.Count) {
-				console.log(`${chalk.cyan(displayPath)}: ${match.matchCount ?? 0} matches`);
+				console.log(t("{0}: {1} matches", `${chalk.cyan(displayPath)}`, `${match.matchCount ?? 0}`));
 			} else {
 				console.log(chalk.cyan(displayPath));
 			}
 		}
 	} catch (err) {
-		console.error(chalk.red(`Error: ${err instanceof Error ? err.message : String(err)}`));
+		console.error(chalk.red(t("Error: {0}", `${err instanceof Error ? err.message : String(err)}`)));
 		process.exit(1);
 	}
 }
 
 export function printGrepHelp(): void {
-	console.log(`${chalk.bold(`${APP_NAME} grep`)} - Test grep tool
-
-${chalk.bold("Usage:")}
-  ${APP_NAME} grep <pattern> [path] [options]
-
-${chalk.bold("Arguments:")}
-  pattern   Regex pattern to search for
-  path      Directory or file to search (default: .)
-
-${chalk.bold("Options:")}
-  -g, --glob <pattern>  Filter files by glob pattern
-  -l, --limit <n>       Max matches (default: 20)
-  -C, --context <n>     Context lines (default: 2)
-  -f, --files           Output file names only
-  -c, --count           Output match counts per file
-  -h, --help            Show this help
-  --no-gitignore        Include files excluded by .gitignore
-
-${chalk.bold("Environment:")}
-  PI_WALK_WORKERS=N    Set filesystem walker workers (default 4, 0 = auto)
-
-${chalk.bold("Examples:")}
-  ${APP_NAME} grep "import" src/
-  ${APP_NAME} grep "TODO" . --glob "*.ts"
-  ${APP_NAME} grep "function" --files
-`);
+	console.log(t("{0} - Test grep tool\n\n{1}\n  {2} grep <pattern> [path] [options]\n\n{3}\n  pattern   Regex pattern to search for\n  path      Directory or file to search (default: .)\n\n{4}\n  -g, --glob <pattern>  Filter files by glob pattern\n  -l, --limit <n>       Max matches (default: 20)\n  -C, --context <n>     Context lines (default: 2)\n  -f, --files           Output file names only\n  -c, --count           Output match counts per file\n  -h, --help            Show this help\n  --no-gitignore        Include files excluded by .gitignore\n\n{5}\n  PI_WALK_WORKERS=N    Set filesystem walker workers (default 4, 0 = auto)\n\n{6}\n  {7} grep \"import\" src/\n  {8} grep \"TODO\" . --glob \"*.ts\"\n  {9} grep \"function\" --files\n", `${chalk.bold(`${APP_NAME} grep`)}`, `${chalk.bold(t("Usage:"))}`, `${APP_NAME}`, `${chalk.bold(t("Arguments:"))}`, `${chalk.bold(t("Options:"))}`, `${chalk.bold(t("Environment:"))}`, `${chalk.bold(t("Examples:\u0004packages/coding-agent/src/cli/grep-cli.ts:printGrepHelp"))}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`));
 }

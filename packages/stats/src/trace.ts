@@ -9,6 +9,7 @@
  * coding-agent.
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pricingPeerFor } from "@oh-my-pi/pi-catalog/compat/behavior";
@@ -159,11 +160,11 @@ function resolveSessionPath(fileParam: string): string {
 	const resolved = path.resolve(fileParam);
 	const rel = path.relative(getSessionsDir(), resolved);
 	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
-		throw new TracePathError(`Path is outside the sessions directory: ${fileParam}`);
+		throw new TracePathError(t("Path is outside the sessions directory: {0}", `${fileParam}`));
 	}
 	const base = path.basename(resolved);
 	if (!base.endsWith(".jsonl") && !base.endsWith(".jsonl.gz")) {
-		throw new TracePathError(`Not a session transcript: ${fileParam}`);
+		throw new TracePathError(t("Not a session transcript: {0}", `${fileParam}`));
 	}
 	return resolved;
 }
@@ -347,7 +348,7 @@ function scanTranscript(
 					markers.push({
 						time: recordedAt,
 						kind: "session_exit",
-						label: typeof data.kind === "string" ? data.kind : "exit",
+						label: typeof data.kind === "string" ? data.kind : t("exit"),
 					});
 				}
 			}
@@ -358,20 +359,20 @@ function scanTranscript(
 			markers.push({
 				time: envelopeTs,
 				kind: "compaction",
-				label: `compaction ${compactTokens(entry.tokensBefore)}→${compactTokens(entry.tokensAfter)}`,
+				label: t("compaction {0}→{1}", `${compactTokens(entry.tokensBefore)}`, `${compactTokens(entry.tokensAfter)}`),
 			});
 			continue;
 		}
 		if (entry.type === "model_change" && envelopeTs !== undefined) {
-			markers.push({ time: envelopeTs, kind: "model_change", label: String(entry.model ?? "model change") });
+			markers.push({ time: envelopeTs, kind: "model_change", label: String(entry.model ?? t("model change")) });
 			continue;
 		}
 		if (entry.type === "mode_change" && envelopeTs !== undefined) {
-			markers.push({ time: envelopeTs, kind: "mode_change", label: String(entry.mode ?? "mode change") });
+			markers.push({ time: envelopeTs, kind: "mode_change", label: String(entry.mode ?? t("mode change")) });
 			continue;
 		}
 		if (entry.type === "reset_boundary" && envelopeTs !== undefined) {
-			markers.push({ time: envelopeTs, kind: "reset", label: "reset" });
+			markers.push({ time: envelopeTs, kind: "reset", label: t("reset") });
 			continue;
 		}
 
@@ -430,7 +431,7 @@ function scanTranscript(
 				kind: "model",
 				start,
 				end,
-				label: headText(msg.model ?? "model", LABEL_MAX),
+				label: headText(msg.model ?? t("model"), LABEL_MAX),
 			};
 			const detail = contentHead(msg.content, DETAIL_MAX);
 			if (detail) span.detail = detail;
@@ -483,7 +484,7 @@ function scanTranscript(
 				const job: PendingBackgroundJob = {
 					jobId: asyncInfo.jobId,
 					start: end,
-					label: headText(`${msg.toolName ?? "tool"} job`, LABEL_MAX),
+					label: headText(t("{0} job", `${msg.toolName ?? t("tool")}`), LABEL_MAX),
 					entryId: entry.id,
 				};
 				backgroundJobs.push(job);
@@ -528,7 +529,7 @@ function scanTranscript(
 			if (time === undefined) continue;
 			turns.push({
 				time,
-				label: contentHead(msg.content, LABEL_MAX) ?? "user",
+				label: contentHead(msg.content, LABEL_MAX) ?? t("user"),
 				entryId: entry.id,
 			});
 		}
@@ -691,8 +692,8 @@ async function buildTrackTree(
 			if (!childScan) continue;
 			const isAdvisor = name === "__advisor.jsonl" || (name.startsWith("__advisor.") && name.endsWith(".jsonl"));
 			childScan.track.label = isAdvisor
-				? "Advisor"
-				: headText(`${childScan.track.agent ?? "agent"} ${stem}`, LABEL_MAX);
+				? t("Advisor\u0004packages/coding-agent/src/config/model-roles.ts:MODEL_ROLES.advisor.name")
+				: headText(`${childScan.track.agent ?? t("agent")} ${stem}`, LABEL_MAX);
 			childrenById.set(stem, childScan);
 		}
 	}
@@ -863,7 +864,7 @@ export async function buildSessionTrace(fileParam: string, fingerprint?: TraceFi
 	if (!rootScan) {
 		throw Object.assign(new Error(`ENOENT: session not found: ${resolved}`), { code: "ENOENT" });
 	}
-	rootScan.track.label = "Main";
+	rootScan.track.label = t("Main");
 
 	let startedAt: number | undefined;
 	let endedAt: number | undefined;

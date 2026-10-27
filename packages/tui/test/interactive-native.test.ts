@@ -156,9 +156,12 @@ describe("native interactive primitives", () => {
 		expect(editorNode(editor).p?.mode).toBeUndefined();
 
 		editor.handleInput("\x1b");
-		expect(editorNode(editor).p?.mode).toBe("NORMAL");
+		const normalMode = editorNode(editor).p?.mode;
+		expect(normalMode).toBeDefined();
 		editor.handleInput("v");
-		expect(editorNode(editor).p).toMatchObject({ mode: "VISUAL", anchor: expect.any(Number) });
+		expect(editorNode(editor).p).toMatchObject({ anchor: expect.any(Number) });
+		expect(editorNode(editor).p?.mode).toBeDefined();
+		expect(editorNode(editor).p?.mode).not.toBe(normalMode);
 
 		editor.handleInput("\x1b");
 		editor.handleInput("i");

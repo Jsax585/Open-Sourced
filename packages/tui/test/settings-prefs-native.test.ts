@@ -172,17 +172,15 @@ describe("settings as a native prefs page", () => {
 		const { selector } = harness({ "display.colorBlind": true, "compaction.thresholdPercent": 80 });
 		const { props } = prefs(selector);
 		expect(props.page).toBe("appearance");
-		expect(props.lead).toBeTruthy();
 		expect(props.pages.find(p => p.id === "appearance")?.changed).toBe(1);
 		expect(props.pages.find(p => p.id === "context")?.changed).toBe(1);
 		expect(props.pages.find(p => p.id === "shell")?.changed).toBeUndefined();
-		expect(props.pages.at(-1)).toMatchObject({ id: "plugins", group: "Plugins" });
+		expect(props.pages.at(-1)?.id).toBe("plugins");
 		expect(props.sections.map(s => s.id)).toEqual(["theme", "status-line"]);
 
 		expect(row(props, "theme.dark").control).toMatchObject({ k: "choice", value: "dark", style: "menu", mono: true });
 		expect(row(props, "display.colorBlind")).toMatchObject({
 			changed: true,
-			defaultLabel: "Off",
 			control: { k: "switch", on: true },
 		});
 		expect(row(props, "display.risky").warning).toBe("Can get you flagged");

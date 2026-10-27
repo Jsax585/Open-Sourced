@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPickerGroup, TspPickerItem, TspTone } from "@oh-my-pi/pi-wire";
 import { formatKeyHint, formatKeyHints } from "../../app-keybindings";
 import type { Component } from "../../tui";
@@ -678,7 +679,7 @@ export class DebugLogViewerComponent implements Component {
 		this.#onError = options.onError;
 		this.#onUpdate = options.onUpdate;
 		this.#frame = new DebugViewerFrame({
-			title: "Recent Logs",
+			title: t("Recent Logs"),
 			getHeight: () => process.stdout.rows || this.#terminalRows || 24,
 			headerRows: 2,
 			footerRows: 2,
@@ -883,11 +884,11 @@ export class DebugLogViewerComponent implements Component {
 				const needle = query.toLowerCase();
 				for (const viewerRow of model.rows) {
 					if (viewerRow.kind === "warning") {
-						order.push({ group: "session", label: "This session" });
+						order.push({ group: "session", label: t("This session") });
 						continue;
 					}
 					if (viewerRow.kind === "load-older") {
-						items.push({ id: OLDER_ITEM, label: "Load older entries", tone: "muted" });
+						items.push({ id: OLDER_ITEM, label: t("Load older entries"), tone: "muted" });
 						order.push(OLDER_ITEM);
 						continue;
 					}
@@ -908,21 +909,21 @@ export class DebugLogViewerComponent implements Component {
 				const subtitle = [
 					`${model.visibleLogCount}/${model.logCount} entries`,
 					selected.length > 1 ? `${selected.length} selected` : undefined,
-					model.historyLimitReached ? "history limit reached" : undefined,
-					this.#loadingOlder ? "loading older…" : undefined,
+					model.historyLimitReached ? t("history limit reached") : undefined,
+					this.#loadingOlder ? t("loading older…") : undefined,
 				]
 					.filter(part => part !== undefined)
 					.join(" · ");
 				return picker(
 					{
-						title: "Recent logs",
+						title: t("Recent logs"),
 						subtitle,
 						noun: "entries",
 						size: "lg",
 						layout: "rows",
 						preview: preview ? "below" : "none",
 						...pickerQuery(this.#filter),
-						placeholder: "Filter logs…",
+						placeholder: t("Filter logs…"),
 						columns: [
 							{ id: "pid", format: "dim", priority: 0 },
 							{ id: "time", format: "dim", priority: 1 },
@@ -938,18 +939,18 @@ export class DebugLogViewerComponent implements Component {
 									: `l${cursorLog}`,
 						current: selected.length > 1 ? selected.map(index => `l${index}`) : [],
 						total: model.logCount,
-						empty: query ? "No matching log entries" : "No log entries",
+						empty: query ? t("No matching log entries") : t("No log entries"),
 						message: this.#statusMessage,
 						actions: [
-							pickerAction("copy", "Copy", "ctrl+c", { primary: true }),
-							pickerAction("all", "Select all", "ctrl+a"),
-							pickerAction("pid", "This process", "ctrl+p", { on: model.isProcessFilterEnabled() }),
-							pickerAction("older", "Load older", "ctrl+o", {
+							pickerAction("copy", t("Copy"), "ctrl+c", { primary: true }),
+							pickerAction("all", t("Select all"), "ctrl+a"),
+							pickerAction("pid", t("This process"), "ctrl+p", { on: model.isProcessFilterEnabled() }),
+							pickerAction("older", t("Load older"), "ctrl+o", {
 								disabled: model.canLoadOlder()
 									? undefined
 									: model.historyLimitReached
-										? "Log history limit reached"
-										: "No older log entries",
+										? t("Log history limit reached")
+										: t("No older log entries"),
 							}),
 							CLOSE_ACTION,
 						],
@@ -1015,7 +1016,7 @@ export class DebugLogViewerComponent implements Component {
 		let anchor: DebugViewerFrameContent["body"]["anchor"];
 
 		if (rendered.length === 0) {
-			lines.push(theme.fg("muted", "no matches"));
+			lines.push(theme.fg("muted", t("no matches")));
 			mapping.push(undefined);
 		} else {
 			for (const entry of rendered) {
@@ -1041,29 +1042,29 @@ export class DebugLogViewerComponent implements Component {
 	#summaryText(): string {
 		const selected = this.#model.getSelectedCount();
 		const expanded = this.#model.expandedCount;
-		const limitText = this.#model.historyLimitReached ? `  ${theme.fg("warning", "history limit reached")}` : "";
-		return `${theme.fg("muted", "showing")} ${theme.fg("accent", `${this.#model.visibleLogCount}/${this.#model.logCount}`)}  ${theme.fg("muted", "selected")} ${theme.fg(selected > 0 ? "accent" : "muted", String(selected))}  ${theme.fg("muted", "expanded")} ${theme.fg(expanded > 0 ? "accent" : "muted", String(expanded))}${limitText}`;
+		const limitText = this.#model.historyLimitReached ? `  ${theme.fg("warning", t("history limit reached"))}` : "";
+		return `${theme.fg("muted", t("showing"))} ${theme.fg("accent", `${this.#model.visibleLogCount}/${this.#model.logCount}`)}  ${theme.fg("muted", t("selected"))} ${theme.fg(selected > 0 ? "accent" : "muted", String(selected))}  ${theme.fg("muted", t("expanded"))} ${theme.fg(expanded > 0 ? "accent" : "muted", String(expanded))}${limitText}`;
 	}
 
 	#controlsText(): string {
-		return `${formatKeyHint("escape")} close · ${formatKeyHint("ctrl+c")} copy · ${formatKeyHints(["up", "down"])}/wheel move · ${formatKeyHints(["pageUp", "pageDown"])} page · ${formatKeyHints(["home", "end"])} first/last · click toggle · ${formatKeyHints(["shift+up", "shift+down"])} select · ${formatKeyHints(["left", "right"])} collapse/expand · ${formatKeyHint("ctrl+a")} all · ${formatKeyHint("ctrl+o")} older · ${formatKeyHint("ctrl+p")} pid`;
+		return t("{0} close · {1} copy · {2}/wheel move · {3} page · {4} first/last · click toggle · {5} select · {6} collapse/expand · {7} all · {8} older · {9} pid", `${formatKeyHint("escape")}`, `${formatKeyHint("ctrl+c")}`, `${formatKeyHints(["up", "down"])}`, `${formatKeyHints(["pageUp", "pageDown"])}`, `${formatKeyHints(["home", "end"])}`, `${formatKeyHints(["shift+up", "shift+down"])}`, `${formatKeyHints(["left", "right"])}`, `${formatKeyHint("ctrl+a")}`, `${formatKeyHint("ctrl+o")}`, `${formatKeyHint("ctrl+p")}`);
 	}
 
 	#filterText(): string {
 		const value = this.#filter.getValue();
 		const [field = ""] = this.#filter.render(visibleWidth(value) + 1);
-		const query = value.length === 0 ? field + theme.fg("muted", "type to filter") : theme.fg("accent", field);
+		const query = value.length === 0 ? field + theme.fg("muted", t("type to filter")) : theme.fg("accent", field);
 		const pidStatus = this.#model.isProcessFilterEnabled()
-			? theme.fg("success", "pid on")
-			: theme.fg("muted", "pid off");
-		const loading = this.#loadingOlder ? `  ${theme.fg("warning", "loading older…")}` : "";
-		return `${theme.fg("muted", "filter")} ${query}  ${pidStatus}${loading}`;
+			? theme.fg("success", t("pid on"))
+			: theme.fg("muted", t("pid off"));
+		const loading = this.#loadingOlder ? `  ${theme.fg("warning", t("loading older…"))}` : "";
+		return `${theme.fg("muted", t("filter"))} ${query}  ${pidStatus}${loading}`;
 	}
 
 	#statusText(): string {
 		return this.#statusMessage
 			? theme.fg("success", this.#statusMessage)
-			: theme.fg("dim", `${formatKeyHint("enter")} loads older when highlighted; printable keys update filter`);
+			: theme.fg("dim", t("{0} loads older when highlighted; printable keys update filter", `${formatKeyHint("enter")}`));
 	}
 
 	async #handleLoadOlder(additionalCount: number = LOAD_OLDER_CHUNK): Promise<void> {
@@ -1104,8 +1105,8 @@ export class DebugLogViewerComponent implements Component {
 			return await this.#model.loadOlder(additionalCount);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.#statusMessage = `Load older failed: ${message}`;
-			this.#onError?.(`Failed to load older logs: ${message}`);
+			this.#statusMessage = t("Load older failed: {0}", `${message}`);
+			this.#onError?.(t("Failed to load older logs: {0}", `${message}`));
 			this.#onUpdate?.();
 			return false;
 		} finally {
@@ -1199,7 +1200,7 @@ export class DebugLogViewerComponent implements Component {
 		const selected = selectedPayload.length === 0 ? [] : selectedPayload.split("\n");
 
 		if (selected.length === 0) {
-			const message = "No log entry selected";
+			const message = t("No log entry selected");
 			this.#statusMessage = message;
 			this.#onStatus?.(message);
 			return;
@@ -1207,13 +1208,13 @@ export class DebugLogViewerComponent implements Component {
 
 		try {
 			this.#deps.copyToClipboard(selectedPayload);
-			const message = `Copied ${selected.length} log ${selected.length === 1 ? "entry" : "entries"}`;
+			const message = t("Copied {0} log {1}", `${selected.length}`, `${selected.length === 1 ? "entry" : "entries"}`);
 			this.#statusMessage = message;
 			this.#onStatus?.(message);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.#statusMessage = `Copy failed: ${message}`;
-			this.#onError?.(`Failed to copy logs: ${message}`);
+			this.#statusMessage = t("Copy failed: {0}", `${message}`);
+			this.#onError?.(t("Failed to copy logs: {0}", `${message}`));
 		}
 	}
 }

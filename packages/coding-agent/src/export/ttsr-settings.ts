@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { combine, register, type SettingValueOf } from "../config/registry";
 
 // TTSR
@@ -13,7 +14,7 @@ export const cfgTtsrEnabled = register({
 		tab: "context",
 		group: "Rules (TTSR)",
 		label: "TTSR",
-		description: "Interrupt the agent mid-stream when output matches rule patterns (Time-Traveling Stream Rules)",
+		description: t("Interrupt the agent mid-stream when output matches rule patterns (Time-Traveling Stream Rules)"),
 	},
 });
 
@@ -25,17 +26,17 @@ export const cfgTtsrJudge = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "Judged Rules",
+		label: t("Judged Rules"),
 		description:
-			"Ask the judge model role each `question` rule about completed replies, reasoning, and tool calls; a yes injects the rule as a warning",
+			t("Ask the judge model role each `question` rule about completed replies, reasoning, and tool calls; a yes injects the rule as a warning"),
 		options: [
 			{
 				value: "auto",
-				label: "Auto",
-				description: "Judge only when the judge role resolves to a native TypeSafe jev model",
+				label: t("Auto"),
+				description: t("Judge only when the judge role resolves to a native TypeSafe jev model"),
 			},
-			{ value: "on", label: "On", description: "Always judge, whichever model the judge role resolves to" },
-			{ value: "off", label: "Off", description: "Never judge; question rules stay inactive" },
+			{ value: "on", label: t("On"), description: t("Always judge, whichever model the judge role resolves to") },
+			{ value: "off", label: t("Off"), description: t("Never judge; question rules stay inactive") },
 		],
 	},
 });
@@ -48,8 +49,12 @@ export const cfgTtsrContextMode = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "TTSR Context Mode",
-		description: "What to do with partial output when TTSR triggers",
+		label: t("TTSR Context Mode"),
+		description: t("What to do with partial output when TTSR triggers"),
+		options: [
+			{ value: "discard", label: t("discard\u0004packages/coding-agent/src/export/ttsr-settings.ts:cfgTtsrContextMode.ui.options.label") },
+			{ value: "keep", label: t("keep") },
+		],
 	},
 });
 
@@ -61,13 +66,13 @@ export const cfgTtsrInterruptMode = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "TTSR Interrupt Mode",
-		description: "When to interrupt mid-stream vs inject warning after completion",
+		label: t("TTSR Interrupt Mode"),
+		description: t("When to interrupt mid-stream vs inject warning after completion"),
 		options: [
-			{ value: "always", label: "always", description: "Interrupt on prose and tool streams" },
-			{ value: "prose-only", label: "prose-only", description: "Interrupt only on reply/thinking matches" },
-			{ value: "tool-only", label: "tool-only", description: "Interrupt only on tool-call argument matches" },
-			{ value: "never", label: "never", description: "Never interrupt; inject warning after completion" },
+			{ value: "always", label: t("always"), description: t("Interrupt on prose and tool streams") },
+			{ value: "prose-only", label: t("prose-only"), description: t("Interrupt only on reply/thinking matches") },
+			{ value: "tool-only", label: t("tool-only"), description: t("Interrupt only on tool-call argument matches") },
+			{ value: "never", label: t("never"), description: t("Never interrupt; inject warning after completion") },
 		],
 	},
 });
@@ -80,8 +85,12 @@ export const cfgTtsrRepeatMode = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "TTSR Repeat Mode",
-		description: "How rules can repeat: once per session or after a message gap",
+		label: t("TTSR Repeat Mode"),
+		description: t("How rules can repeat: once per session or after a message gap"),
+		options: [
+			{ value: "once", label: t("once") },
+			{ value: "after-gap", label: t("after-gap") },
+		],
 	},
 });
 
@@ -92,14 +101,14 @@ export const cfgTtsrRepeatGap = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "TTSR Repeat Gap",
-		description: "Messages before a rule can trigger again",
+		label: t("TTSR Repeat Gap"),
+		description: t("Messages before a rule can trigger again"),
 		options: [
-			{ value: "5", label: "5 messages" },
-			{ value: "10", label: "10 messages" },
-			{ value: "15", label: "15 messages" },
-			{ value: "20", label: "20 messages" },
-			{ value: "30", label: "30 messages" },
+			{ value: "5", label: t("5 messages") },
+			{ value: "10", label: t("10 messages") },
+			{ value: "15", label: t("15 messages") },
+			{ value: "20", label: t("20 messages") },
+			{ value: "30", label: t("30 messages") },
 		],
 	},
 });
@@ -111,8 +120,8 @@ export const cfgTtsrBuiltinRules = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "Built-in Rules",
-		description: "Load the default rules shipped with the agent (override individually with ttsr.disabledRules)",
+		label: t("Built-in Rules"),
+		description: t("Load the default rules shipped with the agent (override individually with ttsr.disabledRules)"),
 	},
 });
 
@@ -123,8 +132,8 @@ export const cfgTtsrDisabledRules = register({
 	ui: {
 		tab: "context",
 		group: "Rules (TTSR)",
-		label: "Disabled Rules",
-		description: "Rule names to ignore entirely (applies to bundled defaults and your own rules)",
+		label: t("Disabled Rules"),
+		description: t("Rule names to ignore entirely (applies to bundled defaults and your own rules)"),
 	},
 });
 

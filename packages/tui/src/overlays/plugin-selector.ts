@@ -4,6 +4,7 @@
  * Shows available plugins from all configured marketplaces in a SelectList.
  * Selecting a plugin triggers installation. Esc cancels.
  */
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -34,7 +35,7 @@ export class PluginSelectorComponent extends OverlayPanel {
 		installedIds: Set<string>,
 		callbacks: PluginSelectorCallbacks,
 	) {
-		super("Plugins", "omp.overlay.plugins");
+		super(t("Plugins"), "omp.overlay.plugins");
 
 		// The sheet draws version, install state and scope as badges instead of bracketed label text.
 		const badgesByValue = new Map<string, NonNullable<TspPickerItem["badges"]>>();
@@ -44,12 +45,12 @@ export class PluginSelectorComponent extends OverlayPanel {
 			const id = scope ? `${plugin.name}@${marketplace}#${scope}` : `${plugin.name}@${marketplace}`;
 			const installed = installedIds.has(`${plugin.name}@${marketplace}`);
 			const version = plugin.version ? `@${plugin.version}` : "";
-			const status = installed ? " [installed]" : "";
-			const scopeTag = scope ? ` [${scope}]` : "";
+			const status = installed ? t(" [installed]") : "";
+			const scopeTag = scope ? ` [${scope === "user" ? t("user") : t("project")}]` : "";
 			badgesByValue.set(id, [
 				...(plugin.version ? [{ text: plugin.version }] : []),
-				...(installed ? [{ text: "installed", tone: "success" as const }] : []),
-				...(scope ? [{ text: scope, tone: "accent" as const }] : []),
+				...(installed ? [{ text: t("installed"), tone: "success" as const }] : []),
+				...(scope ? [{ text: scope === "user" ? t("user") : t("project"), tone: "accent" as const }] : []),
 			]);
 
 			return {
@@ -63,11 +64,11 @@ export class PluginSelectorComponent extends OverlayPanel {
 		if (items.length === 0) {
 			items.push({
 				value: "__empty__",
-				label: "No plugins available",
+				label: t("No plugins available"),
 				description:
 					marketplaceCount === 0
-						? "Add a marketplace first: /marketplace add <source>"
-						: "Configured marketplaces have no plugins",
+						? t("Add a marketplace first: /marketplace add <source>")
+						: t("Configured marketplaces have no plugins"),
 				disabled: true,
 			});
 		}
@@ -87,10 +88,10 @@ export class PluginSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: "Plugins",
+			title: t("Plugins"),
 			icon: "plus",
-			noun: "plugins",
-			confirm: "Install",
+			noun: t("plugins"),
+			confirm: t("Install"),
 			decorate: item => {
 				const [name] = splitPluginId(item.value);
 				if (!name) return undefined;

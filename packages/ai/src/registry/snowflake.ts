@@ -1,3 +1,4 @@
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { $env } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type { ProviderTransport } from "./build";
@@ -7,7 +8,7 @@ import type { ProviderTransport } from "./build";
 // unrewritten request fails before reaching any host.
 const SNOWFLAKE_ACCOUNT_ORIGIN_PLACEHOLDER = "https://snowflake-account.invalid";
 
-const INVALID_ACCOUNT_MESSAGE = "Paste your Snowflake account identifier (orgname-accountname) or account URL";
+const INVALID_ACCOUNT_MESSAGE = t("Paste your Snowflake account identifier (orgname-accountname) or account URL");
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 // AWS region IDs such as us-east-1 or us-gov-west-1; Azure/GCP region segments contain dots and already fail DNS_LABEL.
 const LEGACY_SNOWSIGHT_REGION = /^[a-z]{2}(?:-gov)?-[a-z]+-\d+$/;
@@ -21,13 +22,13 @@ export function normalizeSnowflakeAccountUrl(input: string): string {
 	const value = input.trim();
 	if (!value) {
 		throw new AIError.ConfigurationError(
-			"Snowflake account is required: run /login snowflake or set SNOWFLAKE_ACCOUNT",
+			t("Snowflake account is required: run /login snowflake or set SNOWFLAKE_ACCOUNT"),
 		);
 	}
 	// Only `<scheme>://` is a scheme; `host:443` is a schemeless authority.
 	const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value);
 	if (scheme && scheme[1].toLowerCase() !== "https") {
-		throw new AIError.ConfigurationError("Snowflake account URL must use https");
+		throw new AIError.ConfigurationError(t("Snowflake account URL must use https"));
 	}
 	if (value.includes("\\")) throw new AIError.ConfigurationError(INVALID_ACCOUNT_MESSAGE);
 
@@ -48,7 +49,7 @@ export function normalizeSnowflakeAccountUrl(input: string): string {
 			// Legacy links are /<cloud-region>/<locator>; their host mapping is region-specific.
 			if (LEGACY_SNOWSIGHT_REGION.test(org)) {
 				throw new AIError.ConfigurationError(
-					"Legacy Snowsight links don't identify the account host; paste your account identifier (orgname-accountname) or account URL",
+					t("Legacy Snowsight links don't identify the account host; paste your account identifier (orgname-accountname) or account URL"),
 				);
 			}
 			host = `${org}-${account}.snowflakecomputing.com`;
@@ -64,7 +65,7 @@ export function normalizeSnowflakeAccountUrl(input: string): string {
 
 	if (host.endsWith(".snowflakecomputing.cn")) {
 		throw new AIError.ConfigurationError(
-			"Snowflake Cortex REST API is not available in China-region accounts (.snowflakecomputing.cn)",
+			t("Snowflake Cortex REST API is not available in China-region accounts (.snowflakecomputing.cn)"),
 		);
 	}
 	const suffix = ".snowflakecomputing.com";
@@ -79,7 +80,7 @@ interface SnowflakeCredential {
 	accountUrl?: string;
 }
 
-const INVALID_CREDENTIAL_MESSAGE = "Invalid Snowflake credential; run /login snowflake again";
+const INVALID_CREDENTIAL_MESSAGE = t("Invalid Snowflake credential; run /login snowflake again");
 
 /** Decode the registry's structured OAuth key; malformed JSON must never become a bearer token. */
 function parseSnowflakeCredential(value: string): SnowflakeCredential | null {
@@ -112,7 +113,7 @@ function parseSnowflakeCredential(value: string): SnowflakeCredential | null {
 		// Keep the specific account reason (e.g. China-region) visible for stored credentials.
 		const reason = error instanceof Error ? error.message : String(error);
 		throw new AIError.ConfigurationError(
-			`Invalid Snowflake credential account: ${reason}; run /login snowflake again`,
+			t("Invalid Snowflake credential account: {0}; run /login snowflake again", `${reason}`),
 		);
 	}
 	return { token: credential.token.trim(), accountUrl };
@@ -138,7 +139,7 @@ export const snowflakeTransport: ProviderTransport = {
 				// Invalid endpoints cannot match a validated OAuth account.
 			}
 			if (origin !== credential.accountUrl) {
-				throw new AIError.ConfigurationError("Snowflake OAuth account does not match the model endpoint");
+				throw new AIError.ConfigurationError(t("Snowflake OAuth account does not match the model endpoint"));
 			}
 		}
 		return {

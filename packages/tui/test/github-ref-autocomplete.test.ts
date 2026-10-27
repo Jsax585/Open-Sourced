@@ -78,21 +78,18 @@ describe("github-ref autocomplete — suggestions", () => {
 		const result = getGithubRefSuggestions("#3164");
 		expect(result).not.toBeNull();
 		expect(result!.prefix).toBe("#3164");
-		expect(result!.items).toEqual([
-			{ value: "pr://3164", label: "PR #3164", description: "GitHub pull request" },
-			{ value: "issue://3164", label: "Issue #3164", description: "GitHub issue" },
-		]);
+		expect(result!.items.map(item => item.value)).toEqual(["pr://3164", "issue://3164"]);
 	});
 
 	it("offers only the PR candidate for a pr/pull qualifier", () => {
 		const result = getGithubRefSuggestions("pr #3164");
 		expect(result!.prefix).toBe("pr #3164");
-		expect(result!.items).toEqual([{ value: "pr://3164", label: "PR #3164", description: "GitHub pull request" }]);
+		expect(result!.items.map(item => item.value)).toEqual(["pr://3164"]);
 	});
 
 	it("offers only the Issue candidate for an issue qualifier", () => {
 		const result = getGithubRefSuggestions("issue #3164");
-		expect(result!.items).toEqual([{ value: "issue://3164", label: "Issue #3164", description: "GitHub issue" }]);
+		expect(result!.items.map(item => item.value)).toEqual(["issue://3164"]);
 	});
 
 	it("returns null for embedded or non-ref text", () => {
@@ -126,13 +123,8 @@ describe("github-ref autocomplete — provider integration", () => {
 
 		const suggestions = await provider.getSuggestions([line], 0, line.length);
 
-		expect(suggestions).toEqual({
-			prefix: "#123",
-			items: [
-				{ value: "pr://123", label: "PR #123", description: "GitHub pull request" },
-				{ value: "issue://123", label: "Issue #123", description: "GitHub issue" },
-			],
-		});
+		expect(suggestions?.prefix).toBe("#123");
+		expect(suggestions?.items.map(item => item.value)).toEqual(["pr://123", "issue://123"]);
 	});
 
 	it("constrains to the named type and consumes the qualifier on accept", async () => {

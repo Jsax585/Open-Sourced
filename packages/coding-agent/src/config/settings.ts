@@ -10,6 +10,7 @@
  *   const isolated = Settings.isolated({ "compaction.enabled": false });
  */
 
+import { t } from "@oh-my-pi/pi-utils/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -279,7 +280,7 @@ function assertKnownSettingPaths(layer: RawSettings, prefix = ""): void {
 		const id = prefix ? `${prefix}.${key}` : key;
 		if (lookupSetting(id)) continue;
 		const value = layer[key];
-		if (!isRecord(value)) throw new Error(`Unknown setting "${id}"`);
+		if (!isRecord(value)) throw new Error(t("Unknown setting \"{0}\"", `${id}`));
 		assertKnownSettingPaths(value, id);
 	}
 }
@@ -838,7 +839,7 @@ export class Settings {
 	 */
 	static get instance(): Settings {
 		if (!globalInstance) {
-			throw new Error("Settings not initialized. Call Settings.init() first.");
+			throw new Error(t("Settings not initialized. Call Settings.init() first."));
 		}
 		return globalInstance;
 	}
@@ -945,7 +946,7 @@ export class Settings {
 	 * @throws Error when `setting` is not a record or the entry fails the definition's `validate` check.
 	 */
 	writeEntry(setting: AnySetting, key: string, value: unknown): void {
-		if (setting.type !== "record") throw new Error(`Setting ${setting.id} is not a record`);
+		if (setting.type !== "record") throw new Error(t("Setting {0} is not a record", `${setting.id}`));
 		if (value !== undefined) setting.assertWritable({ [key]: value });
 		const record = getByPath(this.#global, setting.segments);
 		// An entry re-set to its persisted value stages nothing (no config.yml rewrite).
@@ -974,7 +975,7 @@ export class Settings {
 	 * @throws Error when `setting` is not a list or the resulting list fails its `items`/`validate` check.
 	 */
 	writeMember(setting: AnySetting, item: string, { member }: { member: boolean }): void {
-		if (setting.type !== "array") throw new Error(`Setting ${setting.id} is not a list`);
+		if (setting.type !== "array") throw new Error(t("Setting {0} is not a list", `${setting.id}`));
 		const list = getByPath(this.#global, setting.segments);
 		const base: readonly unknown[] = Array.isArray(list) ? list : (setting.default as readonly unknown[]);
 		const present = base.includes(item);
@@ -1595,12 +1596,12 @@ export class Settings {
 
 	/** Where the effective `shellPath` comes from, for error messages; an overlay defers to its parent. */
 	#shellPathSource(): string {
-		if (Object.hasOwn(this.#overrides, "shellPath")) return "the runtime settings override";
+		if (Object.hasOwn(this.#overrides, "shellPath")) return t("the runtime settings override");
 		if (Object.hasOwn(this.#configOverlay, "shellPath")) {
-			return this.#overlayShellPathSource ?? "the active config overlay";
+			return this.#overlayShellPathSource ?? t("the active config overlay");
 		}
 		if (Object.hasOwn(this.#project, "shellPath")) {
-			return this.#projectShellPathSource ?? "the active project configuration";
+			return this.#projectShellPathSource ?? t("the active project configuration");
 		}
 		if (this.#parent && !Object.hasOwn(this.#global, "shellPath")) return this.#parent.#shellPathSource();
 		return this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
@@ -2050,7 +2051,7 @@ export class Settings {
 		if (typeof parsed !== "object" || Array.isArray(parsed)) {
 			return {
 				kind: "invalid",
-				error: new Error("Settings YAML must contain a mapping at the document root"),
+				error: new Error(t("Settings YAML must contain a mapping at the document root")),
 				generation,
 			};
 		}
@@ -2090,7 +2091,7 @@ export class Settings {
 					// bounded behavior instead of hanging flush().
 					if (hops >= MAX_SYMLINK_HOPS) {
 						const cyclic = new Error(
-							`ELOOP: symlink chain for ${filePath} exceeds ${MAX_SYMLINK_HOPS} hops (possible cycle)`,
+							t("ELOOP: symlink chain for {0} exceeds {1} hops (possible cycle)", `${filePath}`, `${MAX_SYMLINK_HOPS}`),
 						) as Error & { code?: string };
 						cyclic.code = "ELOOP";
 						throw cyclic;
@@ -2154,7 +2155,7 @@ export class Settings {
 								// mislocates and falsely reports success while the logical
 								// config path stays unusable with ENOTDIR. Surface it.
 								const notDir = new Error(
-									`ENOTDIR: symlink target requires an unresolved component to be a directory for ${filePath}`,
+									t("ENOTDIR: symlink target requires an unresolved component to be a directory for {0}", `${filePath}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
@@ -2185,14 +2186,14 @@ export class Settings {
 								// the chain head — clobbering config.yml itself.
 								if (!isEnoent(error)) throw error;
 								const notDir = new Error(
-									`ENOTDIR: symlink target requires a directory but ${acc} is gone for ${filePath}`,
+									t("ENOTDIR: symlink target requires a directory but {1} is gone for {0}", `${filePath}`, `${acc}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
 							}
 							if (!accStat.isDirectory()) {
 								const notDir = new Error(
-									`ENOTDIR: symlink target requires a directory but ${acc} is not one for ${filePath}`,
+									t("ENOTDIR: symlink target requires a directory but {1} is not one for {0}", `${filePath}`, `${acc}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
@@ -2213,7 +2214,7 @@ export class Settings {
 								// reporting success. Surface the ENOTDIR the filesystem
 								// raises instead.
 								const notDir = new Error(
-									`ENOTDIR: cannot resolve '..' past an unresolved component in symlink target for ${filePath}`,
+									t("ENOTDIR: cannot resolve '..' past an unresolved component in symlink target for {0}", `${filePath}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
@@ -2243,14 +2244,14 @@ export class Settings {
 								// the chain head — clobbering config.yml itself.
 								if (!isEnoent(error)) throw error;
 								const notDir = new Error(
-									`ENOTDIR: symlink target requires a directory but ${acc} is gone for ${filePath}`,
+									t("ENOTDIR: symlink target requires a directory but {1} is gone for {0}", `${filePath}`, `${acc}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
 							}
 							if (!accStat.isDirectory()) {
 								const notDir = new Error(
-									`ENOTDIR: symlink target requires a directory but ${acc} is not one for ${filePath}`,
+									t("ENOTDIR: symlink target requires a directory but {1} is not one for {0}", `${filePath}`, `${acc}`),
 								) as Error & { code?: string };
 								notDir.code = "ENOTDIR";
 								throw notDir;
@@ -2318,7 +2319,7 @@ export class Settings {
 		const generation = yamlGenerationFromLoadResult(result);
 		if (result.kind === "missing" && rejectMissing) {
 			throw new Error(
-				`Settings config was invalid before locking and is now missing: ${filePath}; another process may have moved it aside`,
+				t("Settings config was invalid before locking and is now missing: {0}; another process may have moved it aside", `${filePath}`),
 			);
 		}
 		if (result.kind === "invalid") {
@@ -2340,7 +2341,7 @@ export class Settings {
 			await fs.promises.rename(filePath, backupPath);
 		} catch (error) {
 			throw new Error(
-				`Settings config is invalid and could not be moved aside: ${filePath}; refusing to overwrite it: ${String(error)}`,
+				t("Settings config is invalid and could not be moved aside: {0}; refusing to overwrite it: {1}", `${filePath}`, `${String(error)}`),
 			);
 		}
 		logger.warn("Settings: moved invalid config aside", {
@@ -2359,10 +2360,10 @@ export class Settings {
 				return result.settings;
 			case "invalid":
 				throw new Error(
-					`Settings config is invalid: ${filePath}${result.backupPath ? ` (moved to ${result.backupPath})` : ""}: ${String(result.error)}`,
+					t("Settings config is invalid: {0}{1}: {2}", `${filePath}`, `${result.backupPath ? t(" (moved to {0})", `${result.backupPath}`) : ""}`, `${String(result.error)}`),
 				);
 			case "unreadable":
-				throw new Error(`Failed to read settings config ${filePath}: ${String(result.error)}`);
+				throw new Error(t("Failed to read settings config {0}: {1}", `${filePath}`, `${String(result.error)}`));
 		}
 	}
 
@@ -2449,7 +2450,7 @@ export class Settings {
 			// remains authoritative for its model-role layer and must not be hidden.
 		}
 		if (rejectedWarnings) {
-			throw new Error(`Project settings failed to parse: ${rejectedWarnings.join("; ")}`);
+			throw new Error(t("Project settings failed to parse: {0}", `${rejectedWarnings.join("; ")}`));
 		}
 		// A native config this instance moved aside reads as missing until a save recreates it;
 		// keep its last good contents, as `#saveProjectNow` does.
@@ -2513,19 +2514,19 @@ export class Settings {
 		} catch (error) {
 			throw new Error(
 				isEnoent(error)
-					? `Config overlay not found: ${filePath}`
-					: `Failed to read config overlay ${filePath}: ${String(error)}`,
+					? t("Config overlay not found: {0}", `${filePath}`)
+					: t("Failed to read config overlay {0}: {1}", `${filePath}`, `${String(error)}`),
 			);
 		}
 		let parsed: unknown;
 		try {
 			parsed = YAML.parse(content);
 		} catch (error) {
-			throw new Error(`Failed to parse config overlay ${filePath}: ${String(error)}`);
+			throw new Error(t("Failed to parse config overlay {0}: {1}", `${filePath}`, `${String(error)}`));
 		}
 		if (parsed === null || parsed === undefined) return {};
 		if (typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error(`Config overlay must be a YAML mapping: ${filePath}`);
+			throw new Error(t("Config overlay must be a YAML mapping: {0}", `${filePath}`));
 		}
 		return this.#migrateRawSettings(parsed as RawSettings, captureLegacyChangelogVersion);
 	}
