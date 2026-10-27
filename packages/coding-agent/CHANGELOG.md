@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added remote skills: `omp skill remote add <owner/repo[@ref][#dir]>` registers every Agent Skill under a GitHub subdirectory, pins each to a resolved commit, and fetches `SKILL.md` and resources through `skill://` on first read from a read-through cache ([#16945](https://github.com/can1357/oh-my-pi/pull/16945) by [@freezed-corpse-143](https://github.com/freezed-corpse-143))
+
 ## [18.13.1] - 2026-10-27
 
 ### Added

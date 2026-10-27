@@ -20,6 +20,8 @@ import { allowsSkillTokens, SKILL_TOKEN_RE } from "@oh-my-pi/pi-tui/prompt/skill
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
+import { ensureRemoteSkillFileAt, ensureRemoteSkillTree } from "../skills/remote/store";
+import type { RemoteSkillSource } from "../skills/remote/types";
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
 
@@ -45,6 +47,8 @@ export interface Skill {
 	 * every `skill://` resource access must realpath-resolve within it.
 	 */
 	containRoot?: string;
+	/** GitHub source for a remote skill; resources are fetched at `commit` on demand. */
+	remote?: RemoteSkillSource;
 	/** Source metadata for display */
 	_source?: SourceMeta;
 }
@@ -104,6 +108,12 @@ interface AdmittedBody {
 	frontmatter: SkillFrontmatter | undefined;
 	namespace: string;
 	filePath: string;
+	/**
+	 * The body was read at admission. Remote skills carry a placeholder body
+	 * until their first read; comparing that placeholder would classify an
+	 * unrelated local skill with an empty body as identical and drop it.
+	 */
+	loaded: boolean;
 }
 
 interface CollisionResolution {
@@ -156,7 +166,13 @@ function resolveCollision(
 	const candidateCustom = candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	const bareCustom = bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	const identical = existingEntries
-		.filter(([_, e]) => e.body === candidateBody && Bun.deepEquals(e.frontmatter, candidateFrontmatter))
+		.filter(
+			([_, e]) =>
+				e.loaded &&
+				candidate.remote === undefined &&
+				e.body === candidateBody &&
+				Bun.deepEquals(e.frontmatter, candidateFrontmatter),
+		)
 		.map(([name]) => name);
 
 	if (bareSkill && ((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))) {
@@ -428,7 +444,14 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		const rawName = skill.name;
 		skill.name = name;
 		skillMap.set(name, skill);
-		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath });
+		admitted.set(name, {
+			rawName,
+			body,
+			frontmatter,
+			namespace,
+			filePath: skill.filePath,
+			loaded: skill.remote === undefined,
+		});
 		return name;
 	}
 
@@ -460,6 +483,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
 			source: `${capSkill._source.provider}:${capSkill.level}`,
 			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+			...(capSkill.remote !== undefined && { remote: capSkill.remote }),
 			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
 			_source: capSkill._source,
 		};
@@ -669,11 +693,19 @@ export type SkillInvocationKind = "user" | "autoload";
 export type SkillPromptInput = Pick<ParsedSkillInvocation, "args"> & Partial<Pick<ParsedSkillInvocation, "prompt">>;
 
 /** Read a skill's instruction body before rendering user-provided arguments. */
-export async function loadSkillPromptBody(skill: Pick<Skill, "filePath">): Promise<string> {
-	const content = await Bun.file(skill.filePath).text();
+export async function loadSkillPromptBody(skill: Pick<Skill, "filePath" | "baseDir" | "remote">): Promise<string> {
+	// A remote skill's cache file only exists after its first read; `/skill:<name>`,
+	// RPC, and autoload go straight to the path, so materialize it here.
+	const filePath = skill.remote
+		? await ensureRemoteSkillFileAt(skill.remote, skill.filePath, "SKILL.md")
+		: skill.filePath;
+	// The user invocation template resolves `scripts/…` against the skill directory and
+	// runs it with the terminal, so a remote skill needs its recorded files on disk.
+	if (skill.remote?.files?.length) await ensureRemoteSkillTree(skill.remote, skill.baseDir);
+	const content = await Bun.file(filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.
-	return parseFrontmatter(content, { source: skill.filePath, repair: false, level: "off" }).body.trim();
+	return parseFrontmatter(content, { source: filePath, repair: false, level: "off" }).body.trim();
 }
 
 /** Render a loaded skill with user arguments substituted by its static template. */
