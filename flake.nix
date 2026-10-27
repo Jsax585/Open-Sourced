@@ -20,6 +20,8 @@
     # platform on the final stable branch that still receives security fixes.
     nixpkgs-darwin-x64.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
 
+    crane.url = "github:ipetkov/crane";
+
     bun2nix = {
       url = "github:nix-community/bun2nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -49,6 +51,7 @@
       self,
       bun2nix,
       bun2nix-darwin-x64,
+      crane,
       nix-bun,
       nixpkgs,
       nixpkgs-darwin-x64,
@@ -77,7 +80,7 @@
 
       localPackagesFor = system: pkgs: {
         bun = (pkgsFor system).callPackage (nix-bun.outPath + "/package.nix") {
-          sourcesFile = nix-bun.outPath + "/versions/1.4.2.json";
+          sourcesFile = nix-bun.outPath + "/versions/1.4.4.json";
         };
         bun2nix = bun2nixFor system;
         # rust-overlay propagates its C compiler, so use the caller's SDK-compatible set.
@@ -91,12 +94,11 @@
             if system == "aarch64-darwin" then nixpkgs-apple.legacyPackages.${system} else pkgsFor system;
           localPkgs = localPackagesFor system pkgs;
         in
-        pkgs.callPackage ./nix/package.nix (
-          {
-            source = self.outPath;
-          }
-          // localPkgs
-        );
+        pkgs.callPackage ./nix/package.nix {
+          source = self.outPath;
+          inherit (localPkgs) bun bun2nix;
+          craneLib = (crane.mkLib pkgs).overrideToolchain localPkgs.rustToolchain;
+        };
     in
     {
       packages = forAllSystems (

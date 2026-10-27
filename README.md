@@ -624,7 +624,7 @@ bun setup
 bun dev
 ```
 
-Build and smoke-test the distributable Nix package with `nix build .#omp`. Wayland screencast support is off by default (linking libpipewire adds ~750 MB of runtime closure); enable it with `omp.override { withWaylandScreencast = true; }`. `nix/bun.nix` is generated only when `bun.lock` changes; releases regenerate it automatically. For dependency changes, run:
+Build and smoke-test the distributable Nix package with `nix build .#omp`. Wayland screencast support is off by default (linking libpipewire adds ~750 MB of runtime closure); enable it with `omp.override { withWaylandScreencast = true; }`. Release builds link `pi-natives` with fat LTO; `omp.override { withFatLto = false; }` uses thin LTO for much faster local rebuilds. Rust dependencies and the native addon build in separate derivations, so Rust edits reuse compiled dependencies and TypeScript edits reuse the addon. `nix/bun.nix` is generated only when `bun.lock` changes; releases regenerate it automatically. For dependency changes, run:
 
 ```sh
 bun run gen:nix
@@ -643,6 +643,9 @@ bun dev -- --version
 `nix build .#omp` supplies Swift 6.4 and SDK 27 without relying on host Xcode/CLT.
 The build rejects fallback to a host compiler. The compiler and SDK are build-only
 dependencies; a missing `apple-sdk_27` fails evaluation with an opt-out hint.
+The Swift/SDK inputs belong to the Crane native build in `nix/native.nix`.
+Its real-source stage enforces compiler selection before Cargo runs; the final
+`nix/package.nix` stage checks the embedded bridge after packaging.
 
 The `nixpkgs-apple` input tracks `nixpkgs-unstable` for an SDK-compatible stdenv,
 leaving Bun/Rust versions and Linux/Intel package sets unchanged. Remove it when

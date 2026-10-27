@@ -6,24 +6,18 @@
   bun,
   bun2nix,
   callPackage,
-  cmake,
   config,
+  craneLib,
   cudaPackages_13 ? null,
   darwin,
   lib,
   libpulseaudio,
   makeBinaryWrapper,
-  ninja,
   pipewire,
-  pkg-config,
   removeReferencesTo,
-  rustPlatform,
-  rustToolchain,
   source,
   stdenv,
-  stdenvNoCC,
   swiftToolchain ? callPackage ./swift-toolchain.nix { },
-  unzip,
   # onnxruntime-node (downloaded into the agent cache on first use) ships CUDA
   # execution providers that dlopen vendor libraries absent from the NixOS
   # loader path. Enabling this appends them to the inference workers'
@@ -39,32 +33,26 @@
   # Downstream callers can opt out of the Swift/SDK dependency. The official
   # Apple Silicon package must include the bridge by default.
   withAppleFm ? stdenv.hostPlatform.system == "aarch64-darwin",
+  # Release builds use fat LTO with one codegen unit, which is slow. Set this
+  # to false for faster local builds with thin LTO and 16 codegen units.
+  withFatLto ? true,
 }:
 let
   packageJson = lib.importJSON ../packages/coding-agent/package.json;
   rootPackageJson = lib.importJSON ../package.json;
-  platform =
-    {
-      aarch64-darwin = {
-        addon = "pi_natives.darwin-arm64.node";
-        nativeLibrary = "libpi_natives.dylib";
-      };
-      aarch64-linux = {
-        addon = "pi_natives.linux-arm64.node";
-        nativeLibrary = "libpi_natives.so";
-      };
-      x86_64-darwin = {
-        addon = "pi_natives.darwin-x64-baseline.node";
-        nativeLibrary = "libpi_natives.dylib";
-        rustFlags = "-C target-cpu=x86-64-v2";
-      };
-      x86_64-linux = {
-        addon = "pi_natives.linux-x64-baseline.node";
-        nativeLibrary = "libpi_natives.so";
-        rustFlags = "-C target-cpu=x86-64-v2";
-      };
-    }
-    .${stdenv.hostPlatform.system} or (throw "Unsupported OMP platform: ${stdenv.hostPlatform.system}");
+  nativeBuild = callPackage ./native.nix {
+    inherit
+      source
+      craneLib
+      withWaylandScreencast
+      withFatLto
+      withAppleFm
+      apple-sdk_27
+      swiftToolchain
+      ;
+  };
+  inherit (nativeBuild) platform;
+  bunRuntimeTemplate = callPackage ./bun-runtime.nix { inherit bun; };
   patchedDependencies = lib.mapAttrs (
     _: patch: source + "/${patch}"
   ) rootPackageJson.patchedDependencies;
@@ -100,22 +88,6 @@ let
       [ stdenv.cc.cc.lib ] ++ lib.optional (stdenv.cc.cc ? libgcc) stdenv.cc.cc.libgcc
     )
     ++ cudaRuntimeLibraries;
-  bunRuntimeTemplate = stdenvNoCC.mkDerivation {
-    pname = "omp-bun-runtime-template";
-    inherit (bun) version;
-    src = bun.src;
-
-    nativeBuildInputs = [ unzip ];
-    dontUnpack = true;
-    dontFixup = true;
-
-    installPhase = ''
-      runHook preInstall
-      unzip -q "$src"
-      install -Dm755 bun-*/bun "$out/libexec/bun"
-      runHook postInstall
-    '';
-  };
 in
 assert lib.assertMsg (
   withAppleFm -> apple-sdk_27 != null
@@ -125,7 +97,7 @@ stdenv.mkDerivation {
   inherit (packageJson) version;
   src = source;
 
-  cargoDeps = rustPlatform.importCargoLock { lockFile = ../Cargo.lock; };
+  passthru = { inherit nativeBuild; };
   bunDeps = bun2nix.fetchBunDeps {
     bunNix = ./bun.nix;
     overrides = patchOverrides;
@@ -134,13 +106,7 @@ stdenv.mkDerivation {
   nativeBuildInputs = [
     bun
     bun2nix.hook
-    cmake
-    ninja
-    pkg-config
     removeReferencesTo
-    rustPlatform.bindgenHook
-    rustPlatform.cargoSetupHook
-    rustToolchain
   ]
   ++ lib.optionals stdenv.hostPlatform.isLinux [
     autoPatchelfHook
@@ -151,8 +117,7 @@ stdenv.mkDerivation {
   # libgcc_s is resolved from the compiler's lib output during autoPatchelf.
   buildInputs =
     lib.optionals stdenv.hostPlatform.isLinux [ stdenv.cc.cc.lib ]
-    ++ lib.optionals withWaylandScreencast [ pipewire ]
-    ++ lib.optional withAppleFm apple-sdk_27;
+    ++ lib.optionals withWaylandScreencast [ pipewire ];
 
   strictDeps = true;
   # Nix builders cannot reliably hardlink cache files into node_modules
@@ -169,30 +134,15 @@ stdenv.mkDerivation {
   dontStrip = true;
 
   env = {
-    CMAKE_POLICY_VERSION_MINIMUM = "3.5";
-    PCRE2_SYS_STATIC = "1";
     SOURCE_DATE_EPOCH = "1";
   }
-  // lib.optionalAttrs (platform ? rustFlags) { RUSTFLAGS = platform.rustFlags; }
-  // lib.optionalAttrs stdenv.hostPlatform.isDarwin { BUN_NO_CODESIGN_MACHO_BINARY = "1"; }
-  // lib.optionalAttrs withAppleFm { OMP_APPLEFM_SWIFTC = "${swiftToolchain}/bin/swiftc"; };
-
-  # Reject both a missing compiler and fallback to a host Xcode/CLT compiler.
-  preBuild = lib.optionalString withAppleFm ''
-    toolchain="$(/bin/sh crates/pi-natives/src/applefm/build-bridge.sh detect)"
-    if [ -z "$toolchain" ] || [ "''${toolchain%%$'\t'*}" != "$OMP_APPLEFM_SWIFTC" ]; then
-      echo "OMP requires its Nix Swift 6.4+ compiler and the macOS 27 SDK; host toolchains are not supported" >&2
-      exit 1
-    fi
-    echo "Apple Foundation Models toolchain: $toolchain"
-  '';
+  // lib.optionalAttrs stdenv.hostPlatform.isDarwin { BUN_NO_CODESIGN_MACHO_BINARY = "1"; };
 
   buildPhase = ''
     runHook preBuild
 
-    echo "Building pi-natives"
-    cargo build --release -p pi-natives ${lib.optionalString withWaylandScreencast "--features wayland-pipewire"}
-    install -Dm755 "target/release/${platform.nativeLibrary}" \
+    echo "Preparing pi-natives"
+    install -Dm755 "${nativeBuild}/lib/${platform.nativeLibrary}" \
       "packages/natives/native/${platform.addon}"
     # The loader and embed-native.ts require the release version, which is
     # written into the addon after linking (build-bindings.ts does this for
