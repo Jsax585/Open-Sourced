@@ -5,6 +5,7 @@
 ### Fixed
 
 - `/annotate` preserves notes and unfinished edits across early exits, pasting into the prompt, and restarts, with session-local resume and discard actions.
+- Annotation feedback includes source line numbers so notes on blank lines remain identifiable.
 
 ## [18.13.2] - 2026-10-27
 
