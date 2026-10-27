@@ -1166,15 +1166,7 @@ export async function loadCliExtensionProviders(
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
 	const activeSources = extensionsResult.extensions.map(extension => extension.path);
 	modelRegistry.syncExtensionSources(activeSources);
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-	modelRegistry.clearSourceRegistrations(activeSources);
-||||||| Common ancestor
-	for (const sourceId of new Set(activeSources)) {
-		modelRegistry.clearSourceRegistrations(sourceId);
-	}
-=======
 	modelRegistry.clearSourceRegistrations(new Set(activeSources));
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 	for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
 		modelRegistry.registerProvider(name, config, sourceId);
 	}
@@ -2885,15 +2877,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (!restrictToolNames) {
 			const activeExtensionSources = extensionsResult.extensions.map(extension => extension.path);
 			modelRegistry.syncExtensionSources(activeExtensionSources);
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-			modelRegistry.clearSourceRegistrations(activeExtensionSources);
-||||||| Common ancestor
-			for (const sourceId of new Set(activeExtensionSources)) {
-				modelRegistry.clearSourceRegistrations(sourceId);
-			}
-=======
 			modelRegistry.clearSourceRegistrations(new Set(activeExtensionSources));
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 		}
 		if (extensionsResult.runtime.pendingProviderRegistrations.length > 0) {
 			for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {

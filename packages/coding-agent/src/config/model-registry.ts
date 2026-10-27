@@ -3416,17 +3416,10 @@ export class ModelRegistry {
 	}
 
 	/**
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-	 * Remove custom API/OAuth registrations, rebuilding the catalog once per batch.
-||||||| Common ancestor
-	 * Remove custom API/OAuth registrations for a specific extension source.
-=======
 	 * Remove custom API/OAuth registrations for one or more extension sources.
 	 * The model catalog is rebuilt once, however many sources are cleared.
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 	 */
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-	clearSourceRegistrations(sourceIds: string | readonly string[]): void {
+	clearSourceRegistrations(sourceIds: string | Iterable<string>): void {
 		let changed = false;
 		for (const sourceId of new Set(typeof sourceIds === "string" ? [sourceIds] : sourceIds)) {
 			unregisterCustomApis(sourceId);
@@ -3440,56 +3433,9 @@ export class ModelRegistry {
 				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) continue;
 				this.#runtimeProviderSourceByName.delete(providerName);
 				this.#clearRuntimeProviderState(providerName);
-||||||| Common ancestor
-	clearSourceRegistrations(sourceId: string): void {
-		unregisterCustomApis(sourceId);
-		unregisterOAuthProviders(sourceId);
-		const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
-		if (!sourceProviders || sourceProviders.size === 0) {
-			return;
-		}
-		this.#ensureFullSnapshot();
-		this.#runtimeProvidersBySource.delete(sourceId);
-		for (const providerName of sourceProviders) {
-			if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) {
-				continue;
-=======
-	clearSourceRegistrations(sourceIds: string | Iterable<string>): void {
-		let cleared = false;
-		for (const sourceId of typeof sourceIds === "string" ? [sourceIds] : sourceIds) {
-			unregisterCustomApis(sourceId);
-			unregisterOAuthProviders(sourceId);
-			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
-			if (!sourceProviders || sourceProviders.size === 0) {
-				continue;
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 			}
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-||||||| Common ancestor
-			this.#runtimeProviderSourceByName.delete(providerName);
-			this.#clearRuntimeProviderState(providerName);
-=======
-			this.#ensureFullSnapshot();
-			this.#runtimeProvidersBySource.delete(sourceId);
-			for (const providerName of sourceProviders) {
-				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) {
-					continue;
-				}
-				this.#runtimeProviderSourceByName.delete(providerName);
-				this.#clearRuntimeProviderState(providerName);
-			}
-			cleared = true;
 		}
-		if (cleared) {
-			this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
-		}
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
 		if (changed) this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
-||||||| Common ancestor
-		this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
-=======
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 	}
 
 	/**
@@ -3516,27 +3462,9 @@ export class ModelRegistry {
 	 */
 	syncExtensionSources(activeSourceIds: string[]): void {
 		const activeSources = new Set(activeSourceIds);
-<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
-		const removedSources: string[] = [];
-		for (const sourceId of this.#registeredProviderSources) {
-			if (activeSources.has(sourceId)) {
-				continue;
-			}
-			removedSources.push(sourceId);
-||||||| Common ancestor
-		for (const sourceId of this.#registeredProviderSources) {
-			if (activeSources.has(sourceId)) {
-				continue;
-			}
-			this.clearSourceRegistrations(sourceId);
-=======
 		const inactiveSources = [...this.#registeredProviderSources].filter(sourceId => !activeSources.has(sourceId));
 		this.clearSourceRegistrations(inactiveSources);
-		for (const sourceId of inactiveSources) {
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
-			this.#registeredProviderSources.delete(sourceId);
-		}
-		this.clearSourceRegistrations(removedSources);
+		for (const sourceId of inactiveSources) this.#registeredProviderSources.delete(sourceId);
 	}
 
 	/**
