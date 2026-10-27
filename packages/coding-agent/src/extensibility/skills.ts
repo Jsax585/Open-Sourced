@@ -715,7 +715,7 @@ export function renderSkillPromptMessage(
 		message = prompt
 			.render(autoloadTemplate, {
 				body,
-				filePath,
+				filePath: skill.filePath,
 				userArgs: trimmedArgs || undefined,
 			})
 			.trim();
@@ -724,7 +724,7 @@ export function renderSkillPromptMessage(
 		message,
 		details: {
 			name: skill.name,
-			path: filePath,
+			path: skill.filePath,
 			args: trimmedArgs || undefined,
 			prompt: input.prompt,
 			lineCount: body ? body.split("\n").length : 0,

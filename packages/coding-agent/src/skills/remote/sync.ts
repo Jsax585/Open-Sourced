@@ -125,8 +125,10 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		}
 		const violation = validateAgentSkillFrontmatter(frontmatter, expectedDirName(parsed.repository, directory));
 		if (violation !== null) throw new RemoteSkillError("INVALID_SKILL", `${file}: ${violation}`);
-		const name = frontmatter.name as string;
-		const existing = skills[name];
+		// Persist the identity the validator checked (trimmed, NFKC-normalized), not the
+		// raw scalar: `name: " pdf "` passes validation for directory `pdf`.
+		const name = String(frontmatter.name).trim().normalize("NFKC");
+		const existing = Object.hasOwn(skills, name) ? skills[name] : undefined;
 		if (existing && (existing.repository !== parsed.repository || existing.directory !== directory)) {
 			throw new RemoteSkillError(
 				"INVALID_SOURCE",
@@ -183,17 +185,32 @@ export async function syncRemoteSkills(options: {
 	if (targets.length === 0) throw new RemoteSkillError("NOT_FOUND", "no remote skill index found");
 
 	const selected = options.names && options.names.length > 0 ? new Set(options.names) : undefined;
+	const indexes = await Promise.all(targets.map(target => readRemoteSkillIndex(target.file)));
+	if (selected) {
+		const available = new Set(indexes.flatMap(index => Object.keys(index.skills)));
+		const missing = options.names!.filter(name => !available.has(name));
+		if (missing.length > 0) throw new RemoteSkillError("NOT_FOUND", `not registered: ${missing.join(", ")}`);
+	}
+	// One commit resolution per repository/ref: a collection shares both, and each
+	// lookup costs a GitHub quota unit.
+	const commits = new Map<string, Promise<string>>();
+	const resolveCommit = (repository: string, ref: string): Promise<string> => {
+		const key = `${repository}\u0000${ref}`;
+		let pending = commits.get(key);
+		if (!pending) {
+			pending = resolveRemoteCommit(repository, ref, { fetch: options.fetch, signal: options.signal });
+			commits.set(key, pending);
+		}
+		return pending;
+	};
 	const changes: RemoteSkillChange[] = [];
-	for (const target of targets) {
-		const index = await readRemoteSkillIndex(target.file);
+	for (const [targetIndex, target] of targets.entries()) {
+		const index = indexes[targetIndex]!;
 		const skills: Record<string, RemoteSkillDescriptor> = { ...index.skills };
 		let targetChanges = 0;
 		for (const [name, descriptor] of Object.entries(index.skills)) {
 			if (selected && !selected.has(name)) continue;
-			const commit = await resolveRemoteCommit(descriptor.repository, descriptor.ref, {
-				fetch: options.fetch,
-				signal: options.signal,
-			});
+			const commit = await resolveCommit(descriptor.repository, descriptor.ref);
 			if (commit === descriptor.commit) continue;
 			const bytes = await readRemoteFile(descriptor.repository, commit, repositorySkillPath(descriptor), {
 				fetch: options.fetch,

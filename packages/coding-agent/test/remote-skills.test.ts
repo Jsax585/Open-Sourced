@@ -10,6 +10,7 @@ import {
 	assertSkillRelativePath,
 	listRemoteSkillFiles,
 	parseRemoteSourceSpec,
+	readRemoteFile,
 	type FetchFn,
 } from "../src/skills/remote/source";
 import {
@@ -66,13 +67,27 @@ function text(value: string): Response {
 	return new Response(value);
 }
 
+const SUBTREE = "c".repeat(40);
+
+function rootListing(docs: Record<string, string>): unknown {
+	return { tree: Object.keys(docs).map(name => ({ path: `skills/${name}/SKILL.md`, type: "blob" })) };
+}
+
+function subtreeListing(docs: Record<string, string>): unknown {
+	return { tree: Object.keys(docs).map(name => ({ path: `${name}/SKILL.md`, type: "blob" })) };
+}
+
+/**
+ * Routes the source adapter's three listing calls: the root recursive tree, the
+ * non-recursive root used to resolve `skills/`, and that subtree's recursive tree.
+ * Longer prefixes are registered first, matching how `stubFetch` scans.
+ */
 function githubTreeStub(commit: string, docs: Record<string, string>, tree?: unknown): Stub {
-	const listing = tree ?? {
-		tree: Object.keys(docs).map(name => ({ path: `skills/${name}/SKILL.md`, type: "blob" })),
-	};
 	const routes: Record<string, () => Response | Promise<Response>> = {
+		[`/git/trees/${commit}?recursive=1`]: () => json(tree ?? rootListing(docs)),
+		[`/git/trees/${SUBTREE}?recursive=1`]: () => json(subtreeListing(docs)),
+		[`/git/trees/${commit}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
 		"/commits/": () => json({ sha: commit }),
-		"/git/trees/": () => json(listing),
 	};
 	for (const [name, body] of Object.entries(docs)) {
 		routes[`/skills/${name}/SKILL.md`] = () => text(body);
@@ -136,8 +151,18 @@ describe("remote skill sources", () => {
 		expect(() => assertSkillRelativePath("../../etc/passwd")).toThrow(RemoteSkillError);
 	});
 
-	test("lists only SKILL.md files under the requested directory", async () => {
-		const stub = stubFetch({ "/git/trees/": () => json(TREE) });
+	test("lists only SKILL.md files, resolving a subdirectory to its own tree", async () => {
+		const stub = stubFetch({
+			[`/git/trees/${COMMIT}?recursive=1`]: () => json(TREE),
+			[`/git/trees/${SUBTREE}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "pdf/SKILL.md", type: "blob" },
+						{ path: "writing/SKILL.md", type: "blob" },
+					],
+				}),
+			[`/git/trees/${COMMIT}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
+		});
 		expect(await listRemoteSkillFiles(REPO, COMMIT, "skills", { fetch: stub.fetch })).toEqual([
 			"skills/pdf/SKILL.md",
 			"skills/writing/SKILL.md",
@@ -146,6 +171,7 @@ describe("remote skill sources", () => {
 			"skills/pdf/SKILL.md",
 			"skills/writing/SKILL.md",
 		]);
+		expect(stub.calls.some(url => url.includes(`/git/trees/${SUBTREE}?recursive=1`))).toBe(true);
 	});
 
 	test("accepts a repository-root SKILL.md when no directory is given", async () => {
@@ -167,8 +193,9 @@ describe("remote skill sources", () => {
 
 	test("fails loudly on a truncated tree listing", async () => {
 		const stub = stubFetch({
+			[`/git/trees/${SUBTREE}?recursive=1`]: () => json({ tree: [], truncated: true }),
+			[`/git/trees/${COMMIT}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
 			"/commits/": () => json({ sha: COMMIT }),
-			"/git/trees/": () => json({ tree: [], truncated: true }),
 		});
 		await expect(addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch })).rejects.toMatchObject({
 			code: "RESOURCE_LIMIT_EXCEEDED",
@@ -464,6 +491,112 @@ describe("remote skill sources", () => {
 		const userRemoved = await removeRemoteSkills({ cwd, agentDir, names: ["pdf"], global: true });
 		expect(userRemoved.removed).toEqual(["pdf"]);
 		await expect(removeRemoteSkills({ cwd, agentDir, names: ["pdf"] })).rejects.toMatchObject({
+			code: "NOT_FOUND",
+		});
+	});
+
+	test("percent-encodes resource path segments", async () => {
+		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+
+		const fetches = stubFetch({
+			[`/${COMMIT}/skills/pdf/references/plan%23draft.md`]: () => text("# draft\n"),
+		});
+		const file = await ensureRemoteSkillResource(entries[0]!.descriptor, "references/plan#draft.md", {
+			fetch: fetches.fetch,
+			agentDir,
+		});
+		expect(await Bun.file(file).text()).toBe("# draft\n");
+		expect(fetches.calls[0]).toContain("plan%23draft.md");
+	});
+
+	test("classifies a rate-limited 403 before access denial", async () => {
+		const tree = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: tree.fetch });
+
+		const limited = stubFetch({
+			"/skills/pdf/SKILL.md": () =>
+				new Response("rate limit", { status: 403, headers: { "x-ratelimit-remaining": "0" } }),
+		});
+		await expect(readRemoteFile(REPO, COMMIT, "skills/pdf/SKILL.md", { fetch: limited.fetch })).rejects.toMatchObject(
+			{ code: "RATE_LIMITED" },
+		);
+
+		const denied = stubFetch({
+			"/skills/pdf/SKILL.md": () => new Response("forbidden", { status: 403 }),
+		});
+		await expect(readRemoteFile(REPO, COMMIT, "skills/pdf/SKILL.md", { fetch: denied.fetch })).rejects.toMatchObject({
+			code: "ACCESS_DENIED",
+		});
+	});
+
+	test("caps a streamed body that omits content-length", async () => {
+		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+
+		const chunked = stubFetch({
+			"/skills/pdf/big.bin": () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array(4096).fill(120));
+							controller.close();
+						},
+					}),
+				),
+		});
+		await expect(
+			ensureRemoteSkillResource(entries[0]!.descriptor, "big.bin", {
+				fetch: chunked.fetch,
+				agentDir,
+				maxBytes: 1024,
+			}),
+		).rejects.toMatchObject({ code: "RESOURCE_LIMIT_EXCEEDED" });
+	});
+
+	test("persists the validated skill name, not the raw frontmatter scalar", async () => {
+		const stub = githubTreeStub(COMMIT, {
+			pdf: '---\nname: " pdf "\ndescription: Padded name.\n---\n\n# pdf\n',
+		});
+		const result = await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		expect(result.added).toEqual(["pdf"]);
+		const index = await readRemoteSkillIndex(path.join(cwd, ".omp", "remote-skills.json"));
+		expect(Object.keys(index.skills)).toEqual(["pdf"]);
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries.map(entry => entry.descriptor.name)).toEqual(["pdf"]);
+	});
+
+	test("a skill named constructor does not collide with Object.prototype", async () => {
+		const stub = githubTreeStub(COMMIT, { constructor: skillDoc("constructor", "Named like a prototype key.") });
+		const result = await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		expect(result.added).toEqual(["constructor"]);
+		const index = await readRemoteSkillIndex(path.join(cwd, ".omp", "remote-skills.json"));
+		expect(Object.hasOwn(index.skills, "constructor")).toBe(true);
+	});
+
+	test("sync resolves one commit per repository and ref", async () => {
+		const first = githubTreeStub(COMMIT, {
+			pdf: skillDoc("pdf", "Old."),
+			writing: skillDoc("writing", "Old."),
+		});
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: first.fetch });
+
+		const moved = githubTreeStub(NEXT_COMMIT, {
+			pdf: skillDoc("pdf", "New."),
+			writing: skillDoc("writing", "New."),
+		});
+		const before = moved.calls.filter(url => url.includes("/commits/")).length;
+		const synced = await syncRemoteSkills({ cwd, agentDir, fetch: moved.fetch });
+		expect(synced.changes).toHaveLength(2);
+		expect(moved.calls.filter(url => url.includes("/commits/")).length - before).toBe(1);
+	});
+
+	test("sync rejects names that are not registered", async () => {
+		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		await expect(syncRemoteSkills({ cwd, agentDir, names: ["typo"], fetch: stub.fetch })).rejects.toMatchObject({
 			code: "NOT_FOUND",
 		});
 	});

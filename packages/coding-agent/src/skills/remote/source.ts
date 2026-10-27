@@ -6,6 +6,7 @@
  * injected `fetch`.
  */
 import { fetchWithRetry, isRecord } from "@oh-my-pi/pi-utils";
+import { readBodyCapped } from "../../web/response-body";
 import { RemoteSkillError } from "./types";
 
 export type FetchFn = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -120,7 +121,10 @@ export async function listRemoteSkillFiles(
 	directory: string,
 	options: { fetch?: FetchFn; signal?: AbortSignal } = {},
 ): Promise<string[]> {
-	const endpoint = `https://api.github.com/repos/${repository}/git/trees/${commit}?recursive=1`;
+	// List the requested subdirectory's own tree: a repository-wide recursive listing
+	// can be truncated, and narrowing the source could then never help.
+	const treeSha = directory === "" ? commit : await resolveSubtree(repository, commit, directory, options);
+	const endpoint = `https://api.github.com/repos/${repository}/git/trees/${treeSha}?recursive=1`;
 	const payload = await githubJson(endpoint, options);
 	if (!isRecord(payload) || !Array.isArray(payload.tree)) {
 		throw new RemoteSkillError("NETWORK", `tree API returned no tree for ${repository}@${commit}`);
@@ -128,18 +132,47 @@ export async function listRemoteSkillFiles(
 	if (payload.truncated === true) {
 		throw new RemoteSkillError(
 			"RESOURCE_LIMIT_EXCEEDED",
-			`${repository}@${commit} has a truncated tree listing; register a narrower source with #<directory>`,
+			`${repository}@${commit} has a truncated tree listing under "${directory}"; register a narrower source with #<directory>`,
 		);
 	}
-	const prefix = directory === "" ? "" : `${directory}/`;
 	const files: string[] = [];
 	for (const entry of payload.tree) {
 		if (!isRecord(entry) || typeof entry.path !== "string" || entry.type !== "blob") continue;
-		const isRootSkill = prefix === "" && entry.path === "SKILL.md";
-		if (!isRootSkill && (!entry.path.startsWith(prefix) || !entry.path.endsWith("/SKILL.md"))) continue;
-		files.push(entry.path);
+		const isRootSkill = directory === "" && entry.path === "SKILL.md";
+		if (!isRootSkill && !entry.path.endsWith("/SKILL.md")) continue;
+		files.push(directory === "" ? entry.path : `${directory}/${entry.path}`);
 	}
 	return files.sort();
+}
+
+/** Walk to a subdirectory's tree SHA, one non-recursive level per path segment. */
+async function resolveSubtree(
+	repository: string,
+	commit: string,
+	directory: string,
+	options: { fetch?: FetchFn; signal?: AbortSignal },
+): Promise<string> {
+	let sha = commit;
+	for (const segment of directory.split("/")) {
+		const endpoint = `https://api.github.com/repos/${repository}/git/trees/${sha}`;
+		const payload = await githubJson(endpoint, options);
+		const tree = isRecord(payload) && Array.isArray(payload.tree) ? payload.tree : undefined;
+		const entry = tree?.find(item => isRecord(item) && item.path === segment && item.type === "tree");
+		const next = isRecord(entry) && typeof entry.sha === "string" ? entry.sha : "";
+		if (!next) {
+			throw new RemoteSkillError(
+				"NOT_FOUND",
+				`${repository}@${commit}: "${directory}" does not exist in this revision`,
+			);
+		}
+		sha = next;
+	}
+	return sha;
+}
+
+/** Percent-encode each path segment, keeping `/` separators. */
+function encodePathSegments(file: string): string {
+	return file.split("/").map(encodeURIComponent).join("/");
 }
 
 /** Path of a skill's instruction file inside its repository. */
@@ -156,7 +189,7 @@ export async function readRemoteFile(
 ): Promise<Uint8Array | null> {
 	if (!isCommitId(commit)) throw new RemoteSkillError("INVALID_SOURCE", `not a commit id: ${commit}`);
 	const maxBytes = options.maxBytes ?? MAX_RESOURCE_BYTES;
-	const raw = `https://raw.githubusercontent.com/${repository}/${commit}/${file}`;
+	const raw = `https://raw.githubusercontent.com/${repository}/${commit}/${encodePathSegments(file)}`;
 	let response: Response;
 	try {
 		response = await requestWithRetry(raw, options.fetch ?? fetch, options.signal);
@@ -170,14 +203,17 @@ export async function readRemoteFile(
 	if (Number.isFinite(declared) && declared > maxBytes) {
 		throw new RemoteSkillError("RESOURCE_LIMIT_EXCEEDED", `${file} is ${declared} bytes; the limit is ${maxBytes}`);
 	}
-	const bytes = new Uint8Array(await response.arrayBuffer());
-	if (bytes.byteLength > maxBytes) {
+	const body = await readBodyCapped(response, maxBytes);
+	if (body === null) {
+		throw new RemoteSkillError("NETWORK", `${file}: response carries no readable body`);
+	}
+	if (body.truncated) {
 		throw new RemoteSkillError(
 			"RESOURCE_LIMIT_EXCEEDED",
-			`${file} is ${bytes.byteLength} bytes; the limit is ${maxBytes}`,
+			`${file} exceeds the ${maxBytes}-byte limit; the transfer was cancelled`,
 		);
 	}
-	return bytes;
+	return new Uint8Array(body.bytes);
 }
 
 // ─── HTTP plumbing ──────────────────────────────────────────────────────────
@@ -230,6 +266,11 @@ function assertStatus(response: Response, what: string): void {
 		throw new RemoteSkillError("AUTH_REQUIRED", `${what}: GitHub credentials are required`);
 	}
 	if (response.status === 403) {
+		const remaining = response.headers.get("x-ratelimit-remaining");
+		const retryAfter = response.headers.get("retry-after");
+		if (remaining === "0" || retryAfter !== null) {
+			throw new RemoteSkillError("RATE_LIMITED", `${what}: GitHub rate limit exhausted`);
+		}
 		throw new RemoteSkillError("ACCESS_DENIED", `${what}: GitHub denied access`);
 	}
 	if (response.status === 404) {
