@@ -40,6 +40,13 @@ export interface CustomCommandAPI {
 	pi: typeof PiCodingAgent;
 }
 
+export interface CustomCommandPrompt {
+	text: string;
+	onSubmitted(): void | Promise<void>;
+}
+
+export type CustomCommandResult = string | CustomCommandPrompt | undefined;
+
 /**
  * Custom command definition.
  *
@@ -106,7 +113,7 @@ export interface CustomCommand {
 		args: string[],
 		ctx: CustomCommandContext,
 		rawArgs?: string,
-	): Promise<string | undefined> | string | undefined;
+	): Promise<CustomCommandResult> | CustomCommandResult;
 }
 
 /**

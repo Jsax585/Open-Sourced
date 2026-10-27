@@ -58,7 +58,13 @@ function createContext(
 		// The materialized cwd is stale; the API must read the live session cwd.
 		cwd: "/stale",
 		isIdle: () => options.idle ?? true,
-		sessionManager: { getBranch: () => options.branch ?? [], getCwd: () => cwd, getSessionId: () => "session-1" },
+		sessionManager: {
+			getBranch: () => options.branch ?? [],
+			getCwd: () => cwd,
+			getSessionId: () => "session-1",
+			getArtifactsDir: () => null,
+			ensureOnDisk: async () => {},
+		},
 		ui: { supportsEditor: options.supportsEditor ?? true, pasteToEditor, notify: vi.fn() },
 	} as unknown as AnnotationContext;
 	return { api: createAnnotationsAPI(() => ctx, sendUserMessage), pasteToEditor, sendUserMessage };
@@ -278,11 +284,16 @@ ${DIFF}`;
 
 describe("annotations API: open", () => {
 	it("mounts the overlay on the supplied text, returns the operator's notes, and honors an edit", async () => {
-		const showText = spyOn(fullscreen, "showTextReviewOverlay").mockResolvedValue({
-			action: "paste",
-			annotations: [{ scope: "line", line: 1, quote: "rewritten", note: "better" }],
-			editedText: "rewritten\nkept",
-		});
+		const complete = vi.fn(async () => {});
+		const showText = spyOn(fullscreen, "showTextReviewOverlay").mockImplementation(async (_ctx, source) => ({
+			result: {
+				action: "paste",
+				annotations: [{ scope: "line", line: 1, quote: "rewritten", note: "better" }],
+				editedText: "rewritten\nkept",
+			},
+			source,
+			complete,
+		}));
 		const { api, pasteToEditor } = createContext();
 
 		const result = await api.open({ source: { kind: "text", text: "original\nkept" } });
@@ -293,6 +304,23 @@ describe("annotations API: open", () => {
 		expect(result?.text).toContain("rewritten\nkept");
 		expect(result?.delivered).toBe("paste");
 		expect(pasteToEditor).toHaveBeenCalledWith(result!.text!);
+		expect(complete).not.toHaveBeenCalled();
+	});
+	it("retains a draft when the API explicitly declines delivery", async () => {
+		const complete = vi.fn(async () => {});
+		spyOn(fullscreen, "showTextReviewOverlay").mockImplementation(async (_ctx, source) => ({
+			result: { action: "paste", annotations: [{ scope: "text", note: "kept" }] },
+			source,
+			complete,
+		}));
+		const { api, pasteToEditor, sendUserMessage } = createContext();
+
+		const result = await api.open({ source: { kind: "text", text: "source" }, deliver: "none" });
+
+		expect(result?.delivered).toBe("none");
+		expect(pasteToEditor).not.toHaveBeenCalled();
+		expect(sendUserMessage).not.toHaveBeenCalled();
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	it("returns undefined and delivers nothing when the operator dismisses the overlay", async () => {
@@ -305,10 +333,16 @@ describe("annotations API: open", () => {
 	});
 
 	it("sends the review request when the operator continues with the LLM review", async () => {
-		spyOn(fullscreen, "showCodeReviewOverlay").mockResolvedValue({
-			action: "review",
-			annotations: [{ scope: "file", path: "src/value.ts", occurrence: 1, note: "look closer" }],
-		});
+		const complete = vi.fn(async () => {});
+		spyOn(fullscreen, "showCodeReviewOverlay").mockImplementation(async (_ctx, target, focus) => ({
+			result: {
+				action: "review",
+				annotations: [{ scope: "file", path: "src/value.ts", occurrence: 1, note: "look closer" }],
+			},
+			target,
+			...(focus === undefined ? {} : { focus }),
+			complete,
+		}));
 		const { api, sendUserMessage } = createContext();
 
 		const result = await api.open({ source: { kind: "diff", diff: DIFF }, focus: "be strict" });
@@ -317,6 +351,7 @@ describe("annotations API: open", () => {
 		expect(result?.delivered).toBe("send");
 		expect(sendUserMessage).toHaveBeenCalledTimes(1);
 		expect(result?.text).toContain("be strict");
+		expect(complete).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects an oversized supplied patch before the operator can annotate it", async () => {

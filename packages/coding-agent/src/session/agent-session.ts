@@ -167,7 +167,7 @@ import { extensionEventFromSessionEvent } from "../extensibility/extensions/life
 import { ManagedTimers } from "../extensibility/extensions/managed-timers";
 import { createExtensionModelQuery } from "../extensibility/extensions/model-api";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
-import type { CustomCommandContext } from "../extensibility/custom-commands/types";
+import type { CustomCommandContext, CustomCommandPrompt } from "../extensibility/custom-commands/types";
 import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
 import {
 	type BuiltSkillPromptMessage,
@@ -8117,6 +8117,7 @@ export class AgentSession implements SettingsScope {
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
 		const typedText = text;
+		let customCommandSubmitted: CustomCommandPrompt["onSubmitted"] | undefined;
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
@@ -8131,7 +8132,12 @@ export class AgentSession implements SettingsScope {
 					if (customResult === "") {
 						return false;
 					}
-					text = customResult;
+					if (typeof customResult === "object") {
+						text = customResult.text;
+						customCommandSubmitted = customResult.onSubmitted;
+					} else {
+						text = customResult;
+					}
 				}
 			}
 
@@ -8171,6 +8177,16 @@ export class AgentSession implements SettingsScope {
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
+		let customCommandAcknowledged = false;
+		const acknowledgeCustomCommand = async () => {
+			if (!customCommandSubmitted || customCommandAcknowledged) return;
+			customCommandAcknowledged = true;
+			try {
+				await customCommandSubmitted();
+			} catch (error) {
+				logger.error("Custom command submission callback failed", { error });
+			}
+		};
 
 		// If streaming, queue via steer()/followUp()/aside based on option
 		if (this.isStreaming) {
@@ -8195,6 +8211,7 @@ export class AgentSession implements SettingsScope {
 				onPromptAdmitted: options?.onPromptAdmitted,
 				promptGeneration: queueGeneration,
 			});
+			if (queued) await acknowledgeCustomCommand();
 			outcome.sessionClaimed = queued;
 			if (!queued && this.#promptGeneration !== queueGeneration && !options?.synthetic) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
@@ -8262,7 +8279,7 @@ export class AgentSession implements SettingsScope {
 				outcome.sessionClaimed = this.agent.state.isStreaming;
 				throw new AgentBusyError();
 			}
-			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
+			const queued = await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, {
 				timestamp: submittedAt,
 				attribution: promptAttribution,
 				prependMessages: prependNotices,
@@ -8274,10 +8291,13 @@ export class AgentSession implements SettingsScope {
 				onPromptAdmitted: options?.onPromptAdmitted,
 				onPromptQueued: options?.onPromptQueued,
 			});
-			outcome.sessionClaimed = true;
+			if (queued) await acknowledgeCustomCommand();
+			if (!queued && this.#promptGeneration !== preflightGeneration && !options?.synthetic) {
+				this.#promptDropped?.({ text: typedText, images: options?.images });
+			}
 			return true;
-		}
 
+		}
 		if (externalThinkingToolChoice) {
 			this.#toolChoiceQueue.pushOnce(externalThinkingToolChoice, {
 				label: "external-thinking",
@@ -8337,6 +8357,7 @@ export class AgentSession implements SettingsScope {
 							]
 						: undefined,
 			});
+			if (dispatched) await acknowledgeCustomCommand();
 		} catch (error) {
 			turnError = error;
 			if (error instanceof AgentStartPolicyChangedError && message.role === "user") {
@@ -9111,10 +9132,9 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/**
-	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
-	 * If the command returns void, returns empty string to indicate it was handled.
+	 * Try a custom command. Empty string means handled without a prompt.
 	 */
-	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
+	async #tryExecuteCustomCommand(text: string): Promise<string | CustomCommandPrompt | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		// Parse command name and args
@@ -9138,8 +9158,6 @@ export class AgentSession implements SettingsScope {
 		try {
 			const args = parseCommandArgs(argsString);
 			const result = await loaded.command.execute(args, ctx, argsString);
-			// If result is a string, it's a prompt to send to LLM
-			// If void/undefined, command handled everything
 			return result ?? "";
 		} catch (err) {
 			// Emit error via extension runner

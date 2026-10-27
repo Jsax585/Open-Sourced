@@ -8,6 +8,8 @@ import type { TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-type
 
 export type AnnotationSourceKind = "code-review" | "last" | "session" | "file" | "prompt";
 
+export type AnnotationSourceChoice = AnnotationSourceKind | "resume-draft" | "discard-draft";
+
 export const ANNOTATION_SOURCE_CHOICES = [
 	{
 		kind: "code-review",
@@ -38,12 +40,13 @@ export const ANNOTATION_SOURCE_CHOICES = [
 
 export async function selectAnnotationSourceKind(
 	ui: Pick<CustomCommandContext["ui"], "select">,
-): Promise<AnnotationSourceKind | undefined> {
-	const selected = await ui.select(
-		"Select content to annotate",
-		ANNOTATION_SOURCE_CHOICES.map(choice => choice.label),
-	);
-	return ANNOTATION_SOURCE_CHOICES.find(choice => choice.label === selected)?.kind;
+	options?: { hasDrafts: boolean },
+): Promise<AnnotationSourceChoice | undefined> {
+	const choices = options?.hasDrafts
+		? [...ANNOTATION_SOURCE_CHOICES, { kind: "resume-draft" as const, label: "Resume draft" }, { kind: "discard-draft" as const, label: "Discard draft" }]
+		: ANNOTATION_SOURCE_CHOICES;
+	const selected = await ui.select("Select content to annotate", choices.map(choice => choice.label));
+	return choices.find(choice => choice.label === selected)?.kind;
 }
 
 /** Exact picked content plus the transcript entry/block it came from. */

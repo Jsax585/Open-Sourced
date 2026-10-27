@@ -2,10 +2,11 @@ import type {
 	CustomCommand,
 	CustomCommandAPI,
 	CustomCommandContext,
+	CustomCommandResult,
 } from "../../../../extensibility/custom-commands/types";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
-import type { CodeReviewOverlayResult, TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-types";
+import type { TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-types";
 import {
 	extractReviewPrRefFromArgs,
 	liveCommandCwd,
@@ -23,14 +24,24 @@ import {
 	type ReviewTargetUI,
 } from "../review/target";
 import { acquireFileTextReviewSource, createPromptTextReviewSource } from "./direct-source";
-import { showCodeReviewOverlay, showTextReviewOverlay } from "./fullscreen";
-import { selectAnnotationSourceKind, selectSessionTextReviewSource, type AnnotationSourceKind } from "./text-source";
+import {
+	AnnotationDraftStore,
+	type AnnotationDraftRecord,
+	type InvalidAnnotationDraft,
+} from "./draft-store";
+import { selectAnnotationSourceKind, selectSessionTextReviewSource, type AnnotationSourceChoice, type AnnotationSourceKind } from "./text-source";
 import {
 	buildTextReviewPrompt,
 	normalizeTextReviewContextSummary,
 	shouldSummarizeTextReviewSource,
 } from "./text-review";
 import { generateTextReviewContextSummary } from "./text-summary";
+import {
+	showCodeReviewOverlay,
+	showTextReviewOverlay,
+	type CodeAnnotationRun,
+	type TextAnnotationRun,
+} from "./fullscreen";
 
 interface CodeReviewDependencies {
 	resolveLocalReviewTarget(
@@ -43,10 +54,7 @@ interface CodeReviewDependencies {
 		ctx: CustomCommandContext,
 		ref: ReviewPrRef,
 	): Promise<ResolvedReviewTarget | undefined>;
-	showCodeReviewOverlay(
-		ctx: CustomCommandContext,
-		target: ResolvedReviewTarget,
-	): Promise<CodeReviewOverlayResult | undefined>;
+	showCodeReviewOverlay(ctx: CustomCommandContext, target: ResolvedReviewTarget, focus?: string, draft?: AnnotationDraftRecord): Promise<CodeAnnotationRun | undefined>;
 }
 
 interface TextAnnotationDependencies {
@@ -54,7 +62,7 @@ interface TextAnnotationDependencies {
 	selectSessionTextReviewSource: typeof selectSessionTextReviewSource;
 	acquireFileTextReviewSource: typeof acquireFileTextReviewSource;
 	createPromptTextReviewSource: typeof createPromptTextReviewSource;
-	showTextReviewOverlay: typeof showTextReviewOverlay;
+	showTextReviewOverlay: (ctx: CustomCommandContext, source: TextReviewSource, draft?: AnnotationDraftRecord) => Promise<TextAnnotationRun | undefined>;
 	generateTextReviewContextSummary: typeof generateTextReviewContextSummary;
 }
 
@@ -177,23 +185,76 @@ async function getAnnotateArgumentCompletions(
 	return items.length > 0 ? items : null;
 }
 
+function displaySafe(value: string, limit = 56): string {
+	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function draftLabel(draft: AnnotationDraftRecord): string {
+	const source = draft.source;
+	const kind = source.kind === "diff" ? "Diff" : source.source.kind;
+	const label = source.kind === "diff" ? source.target.mode : source.source.label;
+	const state = draft.state;
+	const noteCount = state.annotations.length;
+	const unfinished = !!state.editor?.text ? ", unfinished note" : "";
+	const edited = state.kind === "text" && state.editedText !== undefined ? ", edited source" : "";
+	return `${kind}: ${displaySafe(label)} — ${displaySafe(source.cwd, 40)} — ${new Date(draft.updatedAt).toLocaleString()} — ${noteCount} note${noteCount === 1 ? "" : "s"}${unfinished}${edited} (${draft.key.slice(0, 8)})`;
+}
+
+function invalidDraftLabel(draft: InvalidAnnotationDraft): string {
+	return `Unreadable draft — ${draft.filename} (${draft.key.slice(0, 8)})`;
+}
+
+async function selectDraft(
+	ctx: CustomCommandContext,
+	store: AnnotationDraftStore,
+	includeUnreadable: boolean,
+): Promise<AnnotationDraftRecord | InvalidAnnotationDraft | undefined> {
+	const options = [
+		...store.list().map(draft => ({ label: draftLabel(draft), draft })),
+		...(includeUnreadable ? store.listInvalid().map(draft => ({ label: invalidDraftLabel(draft), draft })) : []),
+	];
+	if (options.length === 0) return undefined;
+	const selected = await ctx.ui.select("Select an annotation draft", options.map(option => option.label));
+	return options.find(option => option.label === selected)?.draft;
+}
+
+async function manageDraftChoice(
+	ctx: CustomCommandContext,
+	choice: Extract<AnnotationSourceChoice, "resume-draft" | "discard-draft">,
+): Promise<AnnotationDraftRecord | undefined> {
+	const store = await AnnotationDraftStore.open(ctx.sessionManager.getArtifactsDir(), ctx.sessionManager.getSessionId());
+	try {
+		const selected = await selectDraft(ctx, store, choice === "discard-draft");
+		if (!selected) return undefined;
+		if (choice === "resume-draft") return selected as AnnotationDraftRecord;
+		const confirm = await ctx.ui.select("Discard this annotation draft?", ["Keep draft", "Discard draft"]);
+		if (confirm !== "Discard draft") return undefined;
+		await store.discard(selected.key);
+		ctx.ui.notify("Annotation draft discarded.", "info");
+		return undefined;
+	} finally {
+		await store.dispose();
+	}
+}
+
+
 async function finishCodeReview(
 	ctx: CustomCommandContext,
 	target: ResolvedReviewTarget,
 	focus: string | undefined,
 	showOverlay: CodeReviewDependencies["showCodeReviewOverlay"],
-): Promise<string | undefined> {
+	draft?: AnnotationDraftRecord,
+): Promise<CustomCommandResult> {
 	const issue = getReviewTargetIssue(target);
-	if (issue) {
-		ctx.ui.notify(issue, "warning");
-		return undefined;
+	if (issue) { ctx.ui.notify(issue, "warning"); return undefined; }
+	const run = await showOverlay(ctx, target, focus, draft);
+	if (!run) return undefined;
+	const review = run.result.action === "review";
+	const feedback = buildCodeReviewFeedback(run.target, run.result.annotations, review, run.focus);
+	if (review) return feedback ? { text: feedback, onSubmitted: run.complete } : undefined;
+	if (feedback) {
+		ctx.ui.pasteToEditor(feedback);
 	}
-	const result = await showOverlay(ctx, target);
-	if (!result) return undefined;
-	const review = result.action === "review";
-	const feedback = buildCodeReviewFeedback(target, result.annotations, review, focus);
-	if (review) return feedback;
-	if (feedback) ctx.ui.pasteToEditor(feedback);
 	return undefined;
 }
 
@@ -203,7 +264,7 @@ export async function runCodeReviewCommand(
 	args: string,
 	ctx: CustomCommandContext,
 	dependencies: Partial<CodeReviewDependencies> = {},
-): Promise<string | undefined> {
+): Promise<CustomCommandResult> {
 	if (!ctx.hasUI) {
 		return new ReviewCommand(api).execute(splitReviewArgs(args), ctx);
 	}
@@ -226,7 +287,7 @@ export async function runAnnotateCommand(
 	args: string,
 	ctx: CustomCommandContext,
 	dependencies: Partial<TextAnnotationDependencies & CodeReviewDependencies> = {},
-): Promise<string | undefined> {
+): Promise<CustomCommandResult> {
 	const codeReviewFocus = parseCodeReviewFocus(args);
 	if (codeReviewFocus !== undefined) {
 		return runCodeReviewCommand(api, codeReviewFocus, ctx, dependencies);
@@ -240,10 +301,30 @@ export async function runAnnotateCommand(
 	}
 	const textDependencies = { ...defaultTextAnnotationDependencies, ...dependencies };
 	const trimmed = args.trim();
-	let kind: AnnotationSourceKind | undefined;
+	let kind: AnnotationSourceChoice | undefined;
 	let source: TextReviewSource | undefined;
+	let draft: AnnotationDraftRecord | undefined;
 	if (trimmed.length === 0) {
-		kind = await textDependencies.selectAnnotationSourceKind(ctx.ui);
+		const listing = await AnnotationDraftStore.open(ctx.sessionManager.getArtifactsDir(), ctx.sessionManager.getSessionId());
+		const hasDrafts = listing.list().length > 0 || listing.listInvalid().length > 0;
+		await listing.dispose();
+		kind = await textDependencies.selectAnnotationSourceKind(ctx.ui, { hasDrafts });
+		if (kind === "resume-draft" || kind === "discard-draft") {
+			draft = await manageDraftChoice(ctx, kind);
+			if (!draft) return undefined;
+			if (draft.source.kind === "diff") {
+				ctx.ui.notify("Resuming a saved diff snapshot; it will not be rebased.", "info");
+				return finishCodeReview(
+					ctx,
+					draft.source.target,
+					draft.source.focus,
+					{ ...defaultCodeReviewDependencies, ...dependencies }.showCodeReviewOverlay,
+					draft,
+				);
+			}
+			ctx.ui.notify("Resuming a saved annotation snapshot.", "info");
+			source = draft.source.source;
+		}
 	} else {
 		const first = trimmed[0];
 		const isQuoted = (first === '"' || first === "'") && trimmed.length >= 2 && trimmed[trimmed.length - 1] === first;
@@ -254,7 +335,7 @@ export async function runAnnotateCommand(
 			if (!kind) source = await textDependencies.acquireFileTextReviewSource(ctx, trimmed);
 		}
 	}
-	if (kind) {
+	if (kind && kind !== "resume-draft" && kind !== "discard-draft") {
 		switch (kind) {
 			case "code-review":
 				return runCodeReviewCommand(api, "", ctx, dependencies);
@@ -277,9 +358,10 @@ export async function runAnnotateCommand(
 		}
 	}
 	if (!source) return undefined;
-	const result = await textDependencies.showTextReviewOverlay(ctx, source);
-	if (!result || result.annotations.length === 0) return undefined;
-	if (result.editedText !== undefined) source = { ...source, text: result.editedText };
+	const run = await textDependencies.showTextReviewOverlay(ctx, source, draft);
+	if (!run || run.result.annotations.length === 0) return undefined;
+	source = run.source;
+	if (run.result.editedText !== undefined) source = { ...source, text: run.result.editedText };
 	let contextSummary: string | undefined;
 	if (shouldSummarizeTextReviewSource(source)) {
 		ctx.ui.setStatus("annotate-summary", "Rephrasing annotation source with the session model…");
@@ -302,9 +384,10 @@ export async function runAnnotateCommand(
 			ctx.ui.setStatus("annotate-summary", undefined);
 		}
 	}
-	const prompt = buildTextReviewPrompt(source, result.annotations, contextSummary);
-	if (prompt) ctx.ui.pasteToEditor(prompt);
-	return undefined;
+	const prompt = buildTextReviewPrompt(source, run.result.annotations, contextSummary);
+	if (prompt) {
+		ctx.ui.pasteToEditor(prompt);
+	}
 }
 
 export class AnnotateCommand implements CustomCommand {
@@ -323,7 +406,7 @@ export class AnnotateCommand implements CustomCommand {
 		return getAnnotateArgumentCompletions(argumentPrefix, this.#fileCompletionProvider);
 	}
 
-	execute(args: string[], ctx: CustomCommandContext, rawArgs?: string): Promise<string | undefined> {
+	execute(args: string[], ctx: CustomCommandContext, rawArgs?: string): Promise<CustomCommandResult> {
 		return runAnnotateCommand(this.api, rawArgs ?? args.join(" "), ctx);
 	}
 }

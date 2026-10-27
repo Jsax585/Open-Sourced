@@ -220,15 +220,17 @@ export function createAnnotationsAPI(
 				throw new Error(`The annotation overlay needs the interactive TUI (mode "${ctx.mode}"); use submit.`);
 			}
 			if (isTextRequest(request)) {
-				let source = await resolveTextSource(ctx, request.source);
-				const result = await showTextReviewOverlay(ctx, source);
-				if (!result) return undefined;
-				if (result.editedText !== undefined) source = { ...source, text: result.editedText };
-				const text = buildTextReviewPrompt(source, result.annotations);
+				const run = await showTextReviewOverlay(ctx, await resolveTextSource(ctx, request.source));
+				if (!run) return undefined;
+				const { source, result } = run;
+				const effectiveSource = result.editedText === undefined ? source : { ...source, text: result.editedText };
+				const text = buildTextReviewPrompt(effectiveSource, result.annotations);
+				const delivered = deliver(ctx, sendUserMessage, text, false, request.deliver);
+				if (delivered === "send") await run.complete();
 				return {
 					kind: "text",
 					text,
-					delivered: deliver(ctx, sendUserMessage, text, false, request.deliver),
+					delivered,
 					review: false,
 					annotations: result.annotations,
 					...(result.editedText === undefined ? {} : { editedText: result.editedText }),
@@ -237,16 +239,18 @@ export function createAnnotationsAPI(
 			const target = await resolveDiffTarget(ctx, request.source);
 			// The overlay defaults to a review request; reject before the operator writes notes it would drop.
 			assertReviewablePatchSize(target);
-			const result = await showCodeReviewOverlay(ctx, target);
-			if (!result) return undefined;
-			const review = result.action === "review";
-			const text = buildCodeReviewFeedback(target, result.annotations, review, request.focus);
+			const run = await showCodeReviewOverlay(ctx, target, request.focus);
+			if (!run) return undefined;
+			const review = run.result.action === "review";
+			const text = buildCodeReviewFeedback(run.target, run.result.annotations, review, run.focus);
+			const delivered = deliver(ctx, sendUserMessage, text, review, request.deliver);
+			if (delivered === "send") await run.complete();
 			return {
 				kind: "diff",
 				text,
-				delivered: deliver(ctx, sendUserMessage, text, review, request.deliver),
+				delivered,
 				review,
-				annotations: result.annotations,
+				annotations: run.result.annotations,
 			};
 		},
 	};

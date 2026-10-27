@@ -22,7 +22,10 @@ import {
 	type AnnotationOverlayContext,
 	showCodeReviewOverlay,
 	showTextReviewOverlay,
+	type CodeAnnotationRun,
+	type TextAnnotationRun,
 } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate/fullscreen";
+import { AnnotationDraftStore, annotationDraftKey, type AnnotationDraftRecord } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/bundled/annotate/draft-store";
 import * as externalEditor from "@oh-my-pi/pi-coding-agent/utils/external-editor";
 import type {
 	CustomCommandAPI,
@@ -40,7 +43,10 @@ import type {
 	CodeReviewAnnotation,
 	TextReviewAnnotation,
 	TextReviewSource,
+	CodeReviewOverlayResult,
+	TextReviewOverlayResult,
 } from "@oh-my-pi/pi-tui/overlays/annotation-types";
+import type { AnnotationOverlay } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
 import * as gh from "@oh-my-pi/pi-coding-agent/tools/gh";
 import { github } from "@oh-my-pi/pi-coding-agent/utils/github";
 import { VirtualTerminal } from "../../../../tui/test/virtual-terminal";
@@ -68,6 +74,8 @@ interface ContextOptions {
 	customResult?: unknown;
 	inputResult?: string | undefined;
 	editorResult?: string | undefined;
+	sessionId?: string;
+	artifactsDir?: string | null;
 }
 
 function createContext(options: ContextOptions = {}) {
@@ -117,7 +125,9 @@ function createContext(options: ContextOptions = {}) {
 		sessionManager: {
 			getBranch: () => branch,
 			getCwd: () => options.cwd ?? "/workspace",
-			getSessionId: () => "session-1",
+			getSessionId: () => options.sessionId ?? "session-1",
+			getArtifactsDir: () => options.artifactsDir ?? null,
+			ensureOnDisk: async () => {},
 		},
 		ui: { select, input, editor, custom, pasteToEditor, notify, setStatus },
 	} as unknown as CustomCommandContext;
@@ -183,6 +193,18 @@ function localTarget(): ResolvedReviewTarget {
 	return createResolvedReviewTarget("uncommitted", "Uncommitted changes", SAMPLE_DIFF, "No uncommitted changes");
 }
 
+function textRun(source: TextReviewSource, result: TextReviewOverlayResult): TextAnnotationRun {
+	return { result, source, complete: async () => {} };
+}
+
+function codeRun(
+	target: ResolvedReviewTarget,
+	result: CodeReviewOverlayResult,
+	focus?: string,
+): CodeAnnotationRun {
+	return { result, target, ...(focus === undefined ? {} : { focus }), complete: async () => {} };
+}
+
 /**
  * Mounts a real annotation overlay with the external-editor key remapped to Ctrl+E, feeds
  * `keys`, and resolves with whatever it completed. After each key it yields one macrotask so
@@ -192,26 +214,33 @@ async function driveEditorOverlay<T>(
 	cwd: string,
 	keys: readonly string[],
 	show: (ctx: CustomCommandContext) => Promise<T | undefined>,
+	options: { artifactsDir?: string; onMounted?: (component: ExtensionUiComponent) => void; awaitCompletion?: boolean } = {},
 ): Promise<T | undefined> {
 	const previous = getKeybindings();
 	setKeybindings(KeybindingsManager.inMemory({ "app.editor.external": "ctrl+e" }));
-	const tui = { terminal: { rows: 40 }, requestRender() {}, stop() {}, start() {} } as unknown as TUI;
 	const ctx = {
 		cwd,
-		sessionManager: { getCwd: () => cwd },
+		sessionManager: { getCwd: () => cwd, getSessionId: () => "drive-session", getArtifactsDir: () => options.artifactsDir ?? null, ensureOnDisk: async () => {} },
 		ui: {
 			notify: vi.fn(),
 			custom: async (factory: Parameters<ExtensionUIContext["custom"]>[0]) => {
 				let result: unknown;
+				const completion = Promise.withResolvers<void>();
+				const terminal = new VirtualTerminal(120, 30);
+				const tui = new TUI(terminal);
 				const component = await factory(tui, theme, KeybindingsManager.inMemory(), value => {
 					result = value;
+					completion.resolve();
 				});
+				options.onMounted?.(component);
 				component.render(120);
 				for (const key of keys) {
 					component.handleInput?.(key);
 					await new Promise<void>(resolve => setImmediate(resolve));
 					component.render(120);
 				}
+				if (options.awaitCompletion) await completion.promise;
+				component.dispose?.();
 				return result;
 			},
 		},
@@ -245,6 +274,163 @@ afterEach(() => {
 });
 
 describe("/annotate contracts", () => {
+	it("resumes a selected saved snapshot without reacquiring its source", async () => {
+		await withTempDir(async artifactsDir => {
+			const source = {
+				kind: "text" as const,
+				cwd: "/saved",
+				source: {
+					id: "prompt",
+					kind: "prompt" as const,
+					label: "Literal prompt",
+					text: "saved prompt bytes",
+					provenance: { kind: "prompt" as const },
+					sessionId: "session-1",
+				},
+			};
+			const store = await AnnotationDraftStore.open(artifactsDir, "session-1");
+			const record: AnnotationDraftRecord = {
+				version: 1,
+				sessionId: "session-1",
+				key: annotationDraftKey(source),
+				createdAt: 1,
+				updatedAt: 2,
+				source,
+				state: {
+					kind: "text",
+					annotations: [{ sourceIndex: -1, annotation: { scope: "text", note: "saved note" } }],
+				},
+			};
+			await store.claim(record.key);
+			store.checkpoint(record);
+			await store.flush();
+			await store.dispose();
+
+			const label = `prompt: Literal prompt — /saved — ${new Date(record.updatedAt).toLocaleString()} — 1 note (${record.key.slice(0, 8)})`;
+			const { ctx, select } = createContext({ artifactsDir, selectResults: ["Resume draft", label] });
+			const showTextReviewOverlay = vi.fn(
+				async (_ctx: AnnotationOverlayContext, resumedSource: TextReviewSource, draft?: AnnotationDraftRecord) => {
+					expect(resumedSource).toEqual(source.source);
+					expect(draft).toEqual(record);
+					return textRun(resumedSource, { action: "paste", annotations: [] });
+				},
+			);
+
+			await runAnnotateCommand(API, "", ctx, { showTextReviewOverlay });
+
+			expect(select).toHaveBeenNthCalledWith(
+				1,
+				"Select content to annotate",
+				expect.arrayContaining(["Resume draft", "Discard draft"]),
+			);
+			expect(showTextReviewOverlay).toHaveBeenCalledTimes(1);
+		});
+	});
+	it("discards only the selected session draft after confirmation", async () => {
+		await withTempDir(async artifactsDir => {
+			const source = {
+				kind: "text" as const,
+				cwd: "/saved",
+				source: {
+					id: "prompt",
+					kind: "prompt" as const,
+					label: "Discard me",
+					text: "saved bytes",
+					provenance: { kind: "prompt" as const },
+					sessionId: "session-1",
+				},
+			};
+			const store = await AnnotationDraftStore.open(artifactsDir, "session-1");
+			const record: AnnotationDraftRecord = {
+				version: 1,
+				sessionId: "session-1",
+				key: annotationDraftKey(source),
+				createdAt: 1,
+				updatedAt: 2,
+				source,
+				state: {
+					kind: "text",
+					annotations: [{ sourceIndex: -1, annotation: { scope: "text", note: "keep other notes" } }],
+				},
+			};
+			const otherSource = { ...source, source: { ...source.source, text: "other bytes", label: "Keep me" } };
+			const otherRecord: AnnotationDraftRecord = {
+				...record,
+				key: annotationDraftKey(otherSource),
+				source: otherSource,
+			};
+			await store.claim(record.key);
+			await store.claim(otherRecord.key);
+			store.checkpoint(record);
+			store.checkpoint(otherRecord);
+			await store.flush();
+			await store.dispose();
+			const label = `prompt: Discard me — /saved — ${new Date(record.updatedAt).toLocaleString()} — 1 note (${record.key.slice(0, 8)})`;
+			const { ctx } = createContext({ artifactsDir, selectResults: ["Discard draft", label, "Discard draft"] });
+
+			await runAnnotateCommand(API, "", ctx);
+
+			const remaining = await AnnotationDraftStore.open(artifactsDir, "session-1");
+			expect(remaining.list().map(draft => draft.key)).toEqual([otherRecord.key]);
+			await remaining.dispose();
+		});
+	});
+	it("recovers an overlay checkpoint from disk in a fresh host", async () => {
+		await withTempDir(async artifactsDir => {
+			const source: TextReviewSource = {
+				id: "prompt",
+				kind: "prompt",
+				label: "Literal prompt",
+				text: "persistent source",
+				provenance: { kind: "prompt" },
+				sessionId: "drive-session",
+			};
+			await driveEditorOverlay("/workspace", ["a", "saved annotation", ENTER, "\x1b"], ctx =>
+				showTextReviewOverlay(ctx, source), { artifactsDir });
+
+			const store = await AnnotationDraftStore.open(artifactsDir, "drive-session");
+			expect(store.list()).toHaveLength(1);
+			await store.dispose();
+
+			let restored: unknown;
+			await driveEditorOverlay("/workspace", ["\x1b"], ctx => showTextReviewOverlay(ctx, source), {
+				artifactsDir,
+				onMounted: component => {
+					const overlay = component as AnnotationOverlay;
+					restored = overlay.getDraft();
+				},
+			});
+			expect(restored).toMatchObject({
+				kind: "text",
+				annotations: [{ annotation: { note: "saved annotation" } }],
+			});
+		});
+	});
+	it("keeps pasted annotations on disk and restores them when reopened", async () => {
+		await withTempDir(async artifactsDir => {
+			const { ctx, pasteToEditor } = createContext();
+			await runAnnotateCommand(API, '"recover pasted source"', ctx, {
+				showTextReviewOverlay: (_ctx, source) =>
+					driveEditorOverlay("/workspace", ["A", "recover pasted note", ENTER, "\t", "\x1b[B", ENTER],
+						editorCtx => showTextReviewOverlay(editorCtx, source), { artifactsDir, awaitCompletion: true }),
+			});
+			expect(pasteToEditor.mock.calls[0]?.[0]).toContain("recover pasted note");
+			const store = await AnnotationDraftStore.open(artifactsDir, "drive-session");
+			const record = store.list()[0]!;
+			expect(record.state.annotations).toMatchObject([{ annotation: { note: "recover pasted note" } }]);
+			await store.dispose();
+			if (record.source.kind !== "text") throw new Error("Expected text draft");
+			const savedSource = record.source.source;
+			let restored: unknown;
+			await driveEditorOverlay("/workspace", ["\x1b"], editorCtx =>
+				showTextReviewOverlay(editorCtx, savedSource), {
+				artifactsDir,
+				onMounted: component => { restored = (component as AnnotationOverlay).getDraft(); },
+			});
+			expect(restored).toMatchObject({ annotations: [{ annotation: { note: "recover pasted note" } }] });
+		});
+	});
+
 	it("resolves the selected local target in the live session cwd and pastes code notes without submitting", async () => {
 		const { ctx, select, pasteToEditor } = createContext({
 			selectResults: ["Code review", "2. Review uncommitted changes"],
@@ -264,10 +450,9 @@ describe("/annotate contracts", () => {
 			occurrence: 1,
 			note: "paste this code-review note",
 		};
-		const showCodeReviewOverlay = vi.fn(async () => ({
-			action: "paste" as const,
-			annotations: [annotation],
-		}));
+		const complete = vi.fn(async () => {});
+		const showCodeReviewOverlay = vi.fn(async (_ctx: CustomCommandContext, target: ResolvedReviewTarget, focus?: string) =>
+			({ ...codeRun(target, { action: "paste", annotations: [annotation] }, focus), complete }));
 
 		const result = await runAnnotateCommand(API, "", ctx, {
 			resolveLocalReviewTarget,
@@ -278,9 +463,10 @@ describe("/annotate contracts", () => {
 		expect(select).toHaveBeenCalledTimes(2);
 		expect(resolveLocalReviewTarget).toHaveBeenCalledTimes(1);
 		expect(showCodeReviewOverlay).toHaveBeenCalledTimes(1);
-		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target);
+		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target, undefined, undefined);
 		expect(pasteToEditor).toHaveBeenCalledTimes(1);
 		expect(pasteToEditor.mock.calls[0]?.[0]).toContain(annotation.note);
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	it("resolves a PR picked from the open pull request list in the live session repo", async () => {
@@ -294,10 +480,8 @@ describe("/annotate contracts", () => {
 		const resolvePrReviewTarget = vi.fn(
 			async (_cwd: string, _ctx: CustomCommandContext, _ref: ReviewPrRef) => target,
 		);
-		const showCodeReviewOverlay = vi.fn(async () => ({
-			action: "paste" as const,
-			annotations: [{ scope: "file" as const, path: "src/value.ts", occurrence: 1, note: "picked PR note" }],
-		}));
+		const showCodeReviewOverlay = vi.fn(async (_ctx: CustomCommandContext, target: ResolvedReviewTarget, focus?: string) =>
+			codeRun(target, { action: "paste", annotations: [{ scope: "file", path: "src/value.ts", occurrence: 1, note: "picked PR note" }] }, focus));
 
 		await runAnnotateCommand(API, "", ctx, { resolvePrReviewTarget, showCodeReviewOverlay });
 
@@ -305,7 +489,7 @@ describe("/annotate contracts", () => {
 		expect(resolvePrReviewTarget).toHaveBeenCalledTimes(1);
 		expect(resolvePrReviewTarget.mock.calls[0]?.[0]).toBe("/live-worktree");
 		expect(resolvePrReviewTarget.mock.calls[0]?.[2]).toMatchObject({ repo: "acme/project", number: 42 });
-		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target);
+		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target, undefined, undefined);
 		expect(pasteToEditor.mock.calls[0]?.[0]).toContain("picked PR note");
 	});
 
@@ -335,26 +519,59 @@ describe("/annotate contracts", () => {
 			expect(ref.number).toBe(42);
 			return target;
 		});
-		const showCodeReviewOverlay = vi.fn(async () => ({
-			action: "review" as const,
-			annotations: [annotation],
-		}));
+		const complete = vi.fn(async () => {});
+		const showCodeReviewOverlay = vi.fn(async (_ctx: CustomCommandContext, target: ResolvedReviewTarget, focus?: string) =>
+			({ ...codeRun(target, { action: "review", annotations: [annotation] }, focus), complete }));
 
 		const prompt = await runAnnotateCommand(API, `code-review ${prUrl} focus on this line`, ctx, {
 			resolvePrReviewTarget,
 			showCodeReviewOverlay,
 		});
 
+		if (!prompt || typeof prompt === "string") throw new Error("Expected structured review prompt");
 		expect(prompt).toBeDefined();
 		expect(resolvePrReviewTarget).toHaveBeenCalledTimes(1);
 		expect(showCodeReviewOverlay).toHaveBeenCalledTimes(1);
-		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target);
-		expect(prompt).toContain(contextInstruction);
-		expect(prompt).not.toContain("MAY read full file context as needed via `read`");
-		expect(countOccurrences(prompt!, "focus on this line")).toBe(1);
-		expect(countOccurrences(prompt!, exactNote)).toBe(1);
-		expect(prompt).toContain(SAMPLE_DIFF.trim());
+		expect(showCodeReviewOverlay).toHaveBeenCalledWith(ctx, target, "focus on this line", undefined);
+		expect(prompt.text).toContain(contextInstruction);
+		expect(prompt.text).not.toContain("MAY read full file context as needed via `read`");
+		expect(countOccurrences(prompt.text, "focus on this line")).toBe(1);
+		expect(countOccurrences(prompt.text, exactNote)).toBe(1);
+		expect(prompt.text).toContain(SAMPLE_DIFF.trim());
 		expect(pasteToEditor).not.toHaveBeenCalled();
+		expect(complete).not.toHaveBeenCalled();
+		await prompt.onSubmitted();
+		expect(complete).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains the draft when handing feedback to the editor throws", async () => {
+		const { ctx, pasteToEditor } = createContext();
+		pasteToEditor.mockImplementation(() => { throw new Error("editor unavailable"); });
+		const complete = vi.fn(async () => {});
+		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => ({
+			result: { action: "paste" as const, annotations: [{ scope: "text" as const, note: "keep me" }] },
+			source,
+			complete,
+		}));
+
+		await expect(runAnnotateCommand(API, '"source"', ctx, { showTextReviewOverlay })).rejects.toThrow("editor unavailable");
+
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	it("does not complete a source-only annotation run with no notes", async () => {
+		const { ctx, pasteToEditor } = createContext();
+		const complete = vi.fn(async () => {});
+		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => ({
+			result: { action: "paste" as const, annotations: [] },
+			source,
+			complete,
+		}));
+
+		await runAnnotateCommand(API, '"source"', ctx, { showTextReviewOverlay });
+
+		expect(pasteToEditor).not.toHaveBeenCalled();
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	it("pastes the latest reply as a text annotation and never auto-submits it", async () => {
@@ -363,10 +580,8 @@ describe("/annotate contracts", () => {
 			branch: [makeAssistantEntry("latest", latestText)],
 		});
 		const note = "text note for the editor";
-		const showTextReviewOverlay = vi.fn(async () => ({
-			action: "paste" as const,
-			annotations: [{ scope: "text" as const, note }],
-		}));
+		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) =>
+			textRun(source, { action: "paste", annotations: [{ scope: "text", note }] }));
 
 		const result = await runAnnotateCommand(API, "last", ctx, { showTextReviewOverlay });
 
@@ -387,7 +602,7 @@ describe("/annotate contracts", () => {
 		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => {
 			expect(source.kind).toBe("message");
 			expect(source.text).toBe(wholeText);
-			return { action: "paste" as const, annotations: [{ scope: "text" as const, note }] };
+			return textRun(source, { action: "paste", annotations: [{ scope: "text", note }] });
 		});
 
 		const result = await runAnnotateCommand(API, "session", ctx, { showTextReviewOverlay });
@@ -414,7 +629,7 @@ describe("/annotate contracts", () => {
 		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => {
 			expect(source.kind).toBe("code");
 			expect(source.text).toBe(code);
-			return { action: "paste" as const, annotations: [{ scope: "text" as const, note }] };
+			return textRun(source, { action: "paste", annotations: [{ scope: "text", note }] });
 		});
 
 		const result = await runAnnotateCommand(API, "session", ctx, {
@@ -443,7 +658,7 @@ describe("/annotate contracts", () => {
 		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => {
 			expect(source.kind).toBe("command");
 			expect(source.text).toBe(longCommand);
-			return { action: "paste" as const, annotations: [{ scope: "text" as const, note }] };
+			return textRun(source, { action: "paste", annotations: [{ scope: "text", note }] });
 		});
 
 		const result = await runAnnotateCommand(API, "session", ctx, {
@@ -479,7 +694,8 @@ describe("/annotate contracts", () => {
 		const summary = "s".repeat(999);
 		const generateTextReviewContextSummary = vi.fn(async () => summary);
 		const annotations: TextReviewAnnotation[] = [{ scope: "line", line: 3, quote: exactQuote, note: exactNote }];
-		const showTextReviewOverlay = vi.fn(async () => ({ action: "paste" as const, annotations }));
+		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) =>
+			textRun(source, { action: "paste", annotations }));
 
 		const result = await runAnnotateCommand(API, "session", ctx, {
 			showTextReviewOverlay,
@@ -617,10 +833,7 @@ describe("/annotate contracts", () => {
 			const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => {
 				expect(source.kind).toBe("file");
 				expect(source.text).toBe(fileText);
-				return {
-					action: "paste" as const,
-					annotations: [{ scope: "text" as const, note: "menu file note" }],
-				};
+				return textRun(source, { action: "paste", annotations: [{ scope: "text", note: "menu file note" }] });
 			});
 
 			const result = await runAnnotateCommand(api, "", ctx, {
@@ -646,10 +859,7 @@ describe("/annotate contracts", () => {
 		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => {
 			expect(source.kind).toBe("prompt");
 			expect(source.text).toBe(exactPrompt);
-			return {
-				action: "paste" as const,
-				annotations: [{ scope: "text" as const, note: "menu prompt note" }],
-			};
+			return textRun(source, { action: "paste", annotations: [{ scope: "text", note: "menu prompt note" }] });
 		});
 
 		const result = await runAnnotateCommand(API, "", ctx, {
@@ -716,10 +926,8 @@ describe("/annotate contracts", () => {
 		const generateTextReviewContextSummary = vi.fn(async () => {
 			throw new Error("summary provider failed");
 		});
-		const showTextReviewOverlay = vi.fn(async () => ({
-			action: "paste" as const,
-			annotations: [{ scope: "line" as const, line: 4, quote: exactQuote, note: exactNote }],
-		}));
+		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) =>
+			textRun(source, { action: "paste", annotations: [{ scope: "line", line: 4, quote: exactQuote, note: exactNote }] }));
 
 		const result = await runAnnotateCommand(API, "session", ctx, {
 			showTextReviewOverlay,
@@ -745,7 +953,7 @@ describe("/annotate contracts", () => {
 
 		await runAnnotateCommand(API, '"original\nkept"', ctx, {
 			showTextReviewOverlay: (_ctx, source) =>
-				driveEditorOverlay("/tmp", [CTRL_E, "A", "whole note", ENTER, "\t", ENTER], editorCtx =>
+				driveEditorOverlay("/tmp", [CTRL_E, "A", "whole note", ENTER, "\t", "\x1b[B", ENTER], editorCtx =>
 					showTextReviewOverlay(editorCtx, source),
 				),
 		});
