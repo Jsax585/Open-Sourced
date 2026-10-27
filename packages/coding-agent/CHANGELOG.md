@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `display.autoCollapseOnTurnEnd`: when the agent settles, the finished turn's tool output and thinking blocks collapse so the final answer stays visible, while activity stays expanded during the turn; extensions also gain `ctx.ui.getThinkingExpanded()` / `setThinkingExpanded()` as the thinking counterpart of the tool-expansion pair ([#7574](https://github.com/can1357/oh-my-pi/issues/7574)) ([#17222](https://github.com/can1357/oh-my-pi/pull/17222) by [@2001Y](https://github.com/2001Y))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

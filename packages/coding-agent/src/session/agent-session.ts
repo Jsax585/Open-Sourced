@@ -704,6 +704,8 @@ const noOpUIContext: ExtensionUIContext = {
 	getEditorComponent: () => undefined,
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
+	getThinkingExpanded: () => false,
+	setThinkingExpanded: () => {},
 };
 
 // ============================================================================

@@ -265,6 +265,15 @@ export interface InteractiveModeContext {
 	noteDisplayableThinkingContent(message: AgentMessage): boolean;
 	proseOnlyThinking: boolean;
 	expandThinkingBlocks: boolean;
+	/**
+	 * Session-scoped override recorded by `setThinkingExpanded`: the state it
+	 * forced onto the assistant blocks live at call time, read back by
+	 * `getThinkingExpanded`. Deliberately separate from `expandThinkingBlocks`
+	 * above — that field mirrors the persisted setting and seeds every newly
+	 * created block, so an extension folding a finished turn must not rewrite
+	 * it. `undefined` until a call records an override.
+	 */
+	thinkingExpandedOverride: boolean | undefined;
 	compactionQueuedMessages: CompactionQueuedMessage[];
 	/** Settled user/assistant components reusable across post-compaction transcript rebuilds. */
 	transcriptMessageComponents: WeakMap<AgentMessage, Component>;
@@ -624,6 +633,7 @@ export interface InteractiveModeContext {
 	cycleRoleModel(direction?: "forward" | "backward"): Promise<void>;
 	toggleToolOutputExpansion(): void;
 	setToolsExpanded(expanded: boolean): void;
+	setThinkingExpanded(expanded: boolean): void;
 	toggleThinkingBlockVisibility(): void;
 	handlePlanModeCommand(
 		initialPrompt?: string,

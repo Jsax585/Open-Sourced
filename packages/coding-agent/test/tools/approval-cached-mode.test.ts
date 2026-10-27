@@ -357,6 +357,8 @@ describe("always-ask-cached wrapper cycle", () => {
 				setTheme: async () => ({ success: false, error: "not implemented" }),
 				getToolsExpanded: () => false,
 				setToolsExpanded: () => {},
+				getThinkingExpanded: () => false,
+				setThinkingExpanded: () => {},
 			} satisfies ExtensionUIContext,
 		);
 		return runner;

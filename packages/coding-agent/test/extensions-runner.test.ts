@@ -2597,6 +2597,8 @@ describe("ExtensionRunner", () => {
 					setTheme: async () => ({ success: false, error: "not implemented" }),
 					getToolsExpanded: () => false,
 					setToolsExpanded: () => {},
+					getThinkingExpanded: () => false,
+					setThinkingExpanded: () => {},
 				},
 			);
 		};

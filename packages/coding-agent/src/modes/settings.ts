@@ -671,6 +671,19 @@ export const cfgDisplayHideToolActivity = register({
 	},
 });
 
+export const cfgDisplayAutoCollapseOnTurnEnd = register({
+	id: "display.autoCollapseOnTurnEnd",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Auto-Collapse on Turn End",
+		description:
+			"Collapse the finished turn's tool output and thinking blocks when the agent settles, so the final answer stays visible. Activity stays expanded while the turn runs, and the expansion preferences for the next turn are unchanged",
+	},
+});
+
 export const cfgDisplayShowTokenUsage = register({
 	id: "display.showTokenUsage",
 	type: "boolean",

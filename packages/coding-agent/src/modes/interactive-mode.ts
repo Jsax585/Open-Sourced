@@ -1456,6 +1456,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	proseOnlyThinking = true;
 	expandThinkingBlocks = false;
+	thinkingExpandedOverride: boolean | undefined = undefined;
 	compactionQueuedMessages: CompactionQueuedMessage[] = [];
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	transcriptMessageComponents = new WeakMap<AgentMessage, Component>();
@@ -9178,6 +9179,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	setToolsExpanded(expanded: boolean): void {
 		this.#inputController.setToolsExpanded(expanded);
+	}
+
+	setThinkingExpanded(expanded: boolean): void {
+		this.#inputController.setThinkingExpanded(expanded);
 	}
 
 	toggleThinkingBlockVisibility(): void {

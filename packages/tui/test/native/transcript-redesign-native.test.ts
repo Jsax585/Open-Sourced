@@ -143,6 +143,73 @@ describe("native transcript redesign", () => {
 		expect(harness.errors).toEqual([]);
 	});
 
+	it("collapseThinkingSections folds a settled thought kept open by expandThinkingBlocks, and a toggle reopens it", async () => {
+		const message: AssistantMessage = {
+			...failed(""),
+			stopReason: "stop",
+			errorMessage: undefined,
+			content: [{ type: "thinking", thinking: "Weighing it carefully" }],
+		};
+		const component = new AssistantMessageComponent(message, false, undefined, [], undefined, true, undefined, true);
+		harness = await TspHarness.start();
+		harness.tui.addChild(component);
+		const thought = () => harness!.find(node => node.k === "section" && node.p?.role === "omp.thinking");
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+
+		// Turn-end auto-collapse: the per-section state wins over the
+		// keep-expanded preference, so the thought folds behind its head.
+		component.collapseThinkingSections();
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: true });
+		expect(texts(thought())).toStartWith("Thought");
+
+		// The reader can still reopen the folded thought from the terminal.
+		component.handleNativeEvent({ type: "toggle", key: "k0", collapsed: false });
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+		expect(harness.errors).toEqual([]);
+	});
+
+	it("setThinkingSectionsExpanded force-applies both directions over hand toggles", async () => {
+		const message: AssistantMessage = {
+			...failed(""),
+			stopReason: "stop",
+			errorMessage: undefined,
+			content: [{ type: "thinking", thinking: "Weighing it carefully" }],
+		};
+		// Created with the keep-expanded preference, like a session whose user
+		// configured `expandThinkingBlocks` on.
+		const component = new AssistantMessageComponent(message, false, undefined, [], undefined, true, undefined, true);
+		harness = await TspHarness.start();
+		harness.tui.addChild(component);
+		const thought = () => harness!.find(node => node.k === "section" && node.p?.role === "omp.thinking");
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+
+		// The session override folds it even though the creation preference
+		// keeps thoughts open — where setExpandThinkingBlocks alone could not,
+		// because per-section choices win over the component default.
+		component.setThinkingSectionsExpanded(false);
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: true });
+
+		// A hand toggle reopens it; applying the override again still wins
+		// over that recorded manual choice.
+		component.handleNativeEvent({ type: "toggle", key: "k0", collapsed: false });
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+		component.setThinkingSectionsExpanded(false);
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: true });
+
+		// And the reverse direction: the override reopens what was folded.
+		component.setThinkingSectionsExpanded(true);
+		await harness.render();
+		expect(thought()?.p).toMatchObject({ collapsed: false });
+		expect(harness.errors).toEqual([]);
+	});
+
 	it("shows hidden thinking only while it streams, and nothing once it settles", async () => {
 		const component = new AssistantMessageComponent(undefined, true);
 		harness = await TspHarness.start();

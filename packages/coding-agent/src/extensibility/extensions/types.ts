@@ -441,6 +441,24 @@ export interface ExtensionUIContext {
 
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
+
+	/**
+	 * Get whether finished thinking blocks are kept expanded (native
+	 * rendering): the override recorded by {@link setThinkingExpanded} when
+	 * one exists, otherwise the state new blocks are created with.
+	 */
+	getThinkingExpanded(): boolean;
+
+	/**
+	 * Force the thinking blocks already on screen open or folded (native
+	 * rendering), including sections the user toggled by hand. Session-scoped
+	 * like {@link setToolsExpanded}: it does not rewrite the persisted
+	 * `expandThinkingBlocks` setting, and blocks created afterwards still
+	 * start from that configured preference — the override applies to live
+	 * blocks only. Pair with `setToolsExpanded` from an `agent_end` handler
+	 * to collapse a finished turn's activity.
+	 */
+	setThinkingExpanded(expanded: boolean): void;
 }
 
 // ============================================================================

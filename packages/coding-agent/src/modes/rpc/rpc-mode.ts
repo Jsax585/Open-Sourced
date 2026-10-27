@@ -1691,6 +1691,15 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// Tool expansion not supported in RPC mode - no TUI
 		}
 
+		getThinkingExpanded() {
+			// Thinking expansion not supported in RPC mode - no TUI
+			return false;
+		}
+
+		setThinkingExpanded(_expanded: boolean) {
+			// Thinking expansion not supported in RPC mode - no TUI
+		}
+
 		setEditorComponent(): void {
 			// Custom editor components not supported in RPC mode
 		}

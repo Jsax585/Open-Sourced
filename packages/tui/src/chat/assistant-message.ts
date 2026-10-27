@@ -652,6 +652,47 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
+	/**
+	 * Fold every thinking section of this message to its "Thought for …" head,
+	 * even when {@link setExpandThinkingBlocks} keeps finished sections open.
+	 * Used when a turn ends and its activity collapses behind the final answer.
+	 * A later terminal toggle records a fresh per-section choice and reopens it.
+	 */
+	collapseThinkingSections(): void {
+		const message = this.#displayedMessage;
+		if (!message) return;
+		let changed = false;
+		for (let index = 0; index < message.content.length; index++) {
+			if (message.content[index]?.type !== "thinking") continue;
+			if (this.#thinkingCollapsed.get(index) === true) continue;
+			this.#thinkingCollapsed.set(index, true);
+			changed = true;
+		}
+		if (changed) this.#nativeViewVersion++;
+	}
+
+	/**
+	 * Force every thinking section of this message open or folded by recording
+	 * a per-section choice for each one — including sections the user toggled
+	 * by hand, whose recorded choice otherwise wins over the component default
+	 * from {@link setExpandThinkingBlocks}. Backs the session-scoped
+	 * `setThinkingExpanded` override: it rewrites the sections already on
+	 * screen, never the default later blocks are created with. Sections added
+	 * afterwards have no recorded choice and still follow that default.
+	 */
+	setThinkingSectionsExpanded(expanded: boolean): void {
+		const message = this.#displayedMessage;
+		if (!message) return;
+		let changed = false;
+		for (let index = 0; index < message.content.length; index++) {
+			if (message.content[index]?.type !== "thinking") continue;
+			if (this.#thinkingCollapsed.get(index) === !expanded) continue;
+			this.#thinkingCollapsed.set(index, !expanded);
+			changed = true;
+		}
+		if (changed) this.#nativeViewVersion++;
+	}
+
 	override dispose(): void {
 		this.#stopThinkingAnimation();
 		super.dispose();

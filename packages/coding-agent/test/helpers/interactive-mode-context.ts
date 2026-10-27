@@ -257,6 +257,8 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		hasDisplayableThinkingContent: false,
 		noteDisplayableThinkingContent: vi.fn(() => false),
 		proseOnlyThinking: true,
+		expandThinkingBlocks: false,
+		thinkingExpandedOverride: undefined,
 		transcriptMessageComponents: new WeakMap(),
 		pendingTools: new Map(),
 		pendingBashComponents: [],

@@ -903,7 +903,7 @@ Supported:
 - terminal title and working message (`setTitle`, `setWorkingMessage`)
 - notifications/status/editor text/terminal input/custom overlays
 - theme listing/loading by name (`setTheme` supports string names)
-- tools expanded toggle
+- tools expanded toggle, and its thinking counterpart (`getThinkingExpanded` / `setThinkingExpanded`; native rendering only, session-scoped like the tool toggle)
 
 Current no-op methods in this controller:
 

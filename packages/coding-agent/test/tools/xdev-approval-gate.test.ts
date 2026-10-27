@@ -92,6 +92,8 @@ function runnerWith(sessionManager: SessionManager, select: ExtensionUIContext["
 			setTheme: async () => ({ success: false, error: "not implemented" }),
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},
+			getThinkingExpanded: () => false,
+			setThinkingExpanded: () => {},
 		} satisfies ExtensionUIContext,
 	);
 	return runner;

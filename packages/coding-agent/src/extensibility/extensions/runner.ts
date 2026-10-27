@@ -486,6 +486,8 @@ const noOpUIContext: ExtensionUIContext = {
 	setTheme: (_theme: string | Theme) => Promise.resolve({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
+	getThinkingExpanded: () => false,
+	setThinkingExpanded: () => {},
 };
 
 interface ToolRegistrationScope {
