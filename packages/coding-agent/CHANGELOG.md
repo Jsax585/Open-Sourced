@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in `gc.autoCompress` (default off): interactive launches start a detached, low-priority `omp gc --compress --apply` at most once a day, so idle sessions are stored compressed without running the command; volumes where compression does not shrink a probe file (e.g. macOS 27) are skipped, and the latest run's output or skip reason is in `gc-auto-compress.log` in the agent dir ([#17189](https://github.com/can1357/oh-my-pi/pull/17189) by [@wolfiesch](https://github.com/wolfiesch))
+
 ### Fixed
 
+- Fixed composer predictions offering notes relayed in from other agents or sessions (for example an orchestrator's pasted status note) as the user's next message; predictions now cover only what the person at the keyboard would type ([#17185](https://github.com/can1357/oh-my-pi/pull/17185) by [@wolfiesch](https://github.com/wolfiesch))
 - Fixed `grep` showing a match that spans several lines (a pattern containing `\n`) with only its first line numbered and a false `...` gap after it; every line of the match that `grep` prints is now numbered, so `edit` accepts anchors on those lines without a retry, and lines outside a `path:N-M` selector are no longer shown. Lines cut off by `grep`'s output size limit no longer count as displayed, so `edit` rejects anchors on them ([#16563](https://github.com/can1357/oh-my-pi/pull/16563) by [@mottopanikeiku](https://github.com/mottopanikeiku))
 
 ## [18.13.1] - 2026-10-27
