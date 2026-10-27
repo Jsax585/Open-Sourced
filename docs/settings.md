@@ -371,6 +371,15 @@ The default is an empty array (nothing disabled). For the two subsystems' provid
 
 Native project `modelRoles` are also read directly from `.omp/config.yml`; disabling the `native` discovery provider does not suppress that model-role layer.
 
+## Resume picker scope
+
+By default, `omp --resume` and `/resume` include sessions from other worktrees of
+this repository in the current-folder list. To keep long-lived workspaces
+separate, run `omp config set session.worktreeScope directory` (or choose
+**Resume Worktree Scope** in `/settings`). Set it to `repo` to restore the default.
+The all-projects tab still shows sessions across every directory, including
+sessions in deleted worktrees; this setting only narrows the current-folder list.
+
 ## Settings catalog
 
 The catalog below highlights common settings; it is not the complete schema. `omp config list` is the authoritative reference for every key, current value, type, and description. Defaults and enum values shown here come from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
@@ -588,7 +597,7 @@ When the active chat model keeps failing (429s, quota walls, provider outages) a
 
 A spawned subagent whose declared model cannot serve when it starts — the model is absent from the catalog, or its provider has no working credentials — is resolved through that model's own chain before it runs, while `retry.modelFallback` is on: an exact `provider/model-id` key, else the most specific `provider/*` or prefixed wildcard key. The first usable candidate replaces the model; a chain that is `[]`, or has no usable candidate, refuses the spawn with an error naming the agent and the model. For a declared model selector (`provider/id`, or a bare or fuzzy model id), role and `default` chains do not decide this: with no key of the model's own, a model without credentials falls back to the parent session's model, as before. A declared model that names a role (`model: task` with `modelRoles.task` set) keeps its role expansion, where the role's chains can still choose at startup. Any replacement, the parent's model included, is recorded as a fallback (`resolvedModelIsFallback: true`), and the task result names the model that served and why.
 
-A prefixed wildcard such as `openrouter/google/*` can be used as a chain key or entry: it matches ids under that prefix or prepends the prefix to the failing model's bare id when changing providers. Bare fallback entries inherit the failing turn's thinking level; an explicit suffix can replace it. When a chain is exhausted, recovery can consult the current fallback model's own chain as well, and each hop still consumes a retry attempt. See [Retry policy](./non-compaction-retry-policy.md) for recovery ordering and quota behavior.
+A prefixed wildcard such as `openrouter/google/*` can be used as a chain key or entry: it matches ids under that prefix or prepends the prefix to the failing model's bare id when changing providers. Bare fallback entries inherit the failing turn's thinking level (including `auto`); an explicit suffix, `:auto` included, replaces it. When a chain is exhausted, recovery can consult the current fallback model's own chain as well, and each hop still consumes a retry attempt. See [Retry policy](./non-compaction-retry-policy.md) for recovery ordering and quota behavior.
 
 Retry model fallback is not context promotion. `contextPromotion.enabled: false` only disables [context promotion](./models.md#context-promotion) to a model's `contextPromotionTarget`; set `retry.modelFallback: false` to stop `retry.fallbackChains` from switching the active model after provider errors. Same-model retries and compaction remain available.
 
@@ -901,7 +910,7 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `followUpMode`         | enum    | `one-at-a-time` | `all`, `one-at-a-time`.                                                                                 |
 | `interruptMode`        | enum    | `immediate`     | `immediate`, `wait`.                                                                                    |
 | `doubleEscapeAction`   | enum    | `rewind`          | `rewind`, `tree`, `none`: open the rewind selector, open the session tree, or do nothing. |
-| `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd.                                                         |
+| `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd. If its saved model cannot be restored without forbidden fallback, implicit interactive startup warns and starts a new session without the old history; explicit resume and headless behavior are unchanged. |
 | `plan.enabled`         | boolean | `true`          | Enable plan mode.                                                                                       |
 | `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
 | `ask.timeout`          | number  | `0`             | Auto-select the recommended ask option after this many seconds; `0` disables automatic selection. Also bounds `cfg://` approval prompts; an unanswered approval denies the write instead of auto-selecting. |
