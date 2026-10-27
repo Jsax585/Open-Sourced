@@ -81,6 +81,8 @@ Settled response (`async.enabled=false`, no job manager, every item's agent `blo
 - `content`: summary rendered from `packages/coding-agent/src/prompts/tools/task-summary.md`; output up to 11500 chars is inline whole, longer output shows a 5000-char preview and `agent://<id>` holds the full output. A sync batch concatenates the per-spawn summaries.
 - `details.results`: one `SingleResult` per spawn; `usage`, `outputPaths` populated (aggregated across spawns for a sync batch).
 
+ACP `tool_call_update` frames preserve these snapshots in `rawOutput.details`. For the native `task` tool with a `details.results` array, `update._meta.omp.taskLifecycle` is `"progress"` on `tool_execution_update` and `"completed"` on `tool_execution_end`; tool starts and unrelated or malformed outputs have no marker. This names completion of the spawning call, not its background agents. Native ACP statuses remain unchanged: an async progress snapshot can already have `status: "completed"` while a blocking sibling still keeps the spawning call open. Consumers tracking spawning-call ownership must use the explicit `"completed"` marker with a terminal ACP status, never async snapshot status alone; later background progress remains `"progress"` even when its async state is terminal.
+
 `SingleResult` includes:
 - identity: `index`, `id`, `agent`, `agentSource`, `task`, `description`, optional `assignment` (internal payload names; the wire fields are `name`/`agent`/`task`)
 - status: `exitCode`, optional `error`, optional `aborted`, optional `abortReason`, optional `retryFailure`

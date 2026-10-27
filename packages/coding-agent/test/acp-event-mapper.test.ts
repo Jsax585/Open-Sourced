@@ -516,6 +516,106 @@ describe("ACP event mapper", () => {
 		expect(status("cancelled")).toBe("failed");
 	});
 
+	it("distinguishes spawning task completion from terminal async progress in mixed batches", () => {
+		const snapshot = (blockingStatus: string) => ({
+			content: [{ type: "text" as const, text: "Task snapshot" }],
+			details: {
+				projectAgentsDir: null,
+				results: [],
+				totalDurationMs: 10,
+				progress: [
+					{ id: "background", status: "completed" },
+					{ id: "blocking", status: blockingStatus },
+				],
+				async: { type: "task", state: "completed", jobId: "background" },
+			},
+		});
+		const backgroundSettled = snapshot("running");
+		const launchReturned = snapshot("completed");
+		const events = [
+			{ type: "tool_execution_start", toolCallId: "tc-task", toolName: "task", args: {} },
+			{
+				type: "tool_execution_update",
+				toolCallId: "tc-task",
+				toolName: "task",
+				args: {},
+				partialResult: backgroundSettled,
+			},
+			{
+				type: "tool_execution_end",
+				toolCallId: "tc-task",
+				toolName: "task",
+				isError: false,
+				result: launchReturned,
+			},
+			{
+				type: "tool_execution_update",
+				toolCallId: "tc-task",
+				toolName: "task",
+				args: {},
+				partialResult: launchReturned,
+			},
+		] satisfies AgentSessionEvent[];
+		const notifications = events.flatMap(event => mapAgentSessionEventToAcpSessionUpdates(event, "session-1"));
+		expectAcpNotifications(notifications);
+		expect(notifications.map(({ update }) => update._meta)).toEqual([
+			undefined,
+			{ omp: { taskLifecycle: "progress" } },
+			{ omp: { taskLifecycle: "completed" } },
+			{ omp: { taskLifecycle: "progress" } },
+		]);
+		const updates = notifications.map(({ update }) => {
+			if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+				throw new Error("Expected task tool lifecycle update");
+			}
+			return update;
+		});
+		// Native ACP status still describes async state, not spawning-call ownership.
+		expect(updates.map(update => update.status)).toEqual(["pending", "completed", "completed", "completed"]);
+		expect(updates[1]!.rawOutput).toBe(backgroundSettled);
+		expect(updates[2]!.rawOutput).toBe(launchReturned);
+	});
+
+	it("does not grant task lifecycle provenance to malformed snapshots or unrelated tools", () => {
+		const cases = [
+			{ toolName: "task", result: null },
+			{ toolName: "task", result: { details: "not task details" } },
+			{ toolName: "task", result: { details: [] } },
+			{ toolName: "task", result: { details: { async: { type: "task", state: "completed" } } } },
+			{ toolName: "task", result: { details: { results: "not results" } } },
+			{ toolName: "bash", result: { details: { results: [], async: { type: "bash", state: "completed" } } } },
+			{ toolName: "other", result: { details: { results: [], async: { type: "task", state: "completed" } } } },
+		];
+		for (const { toolName, result } of cases) {
+			const events = [
+				{ type: "tool_execution_update", toolCallId: "tc-untrusted", toolName, args: {}, partialResult: result },
+				{ type: "tool_execution_end", toolCallId: "tc-untrusted", toolName, isError: false, result },
+			] as AgentSessionEvent[];
+			for (const event of events) {
+				const notifications = mapAgentSessionEventToAcpSessionUpdates(event, "session-1");
+				expectAcpNotifications(notifications);
+				expect(notifications[0]!.update._meta).toBeUndefined();
+			}
+		}
+	});
+
+	it("marks failed foreground task execution end without requiring async job details", () => {
+		const result = {
+			content: [{ type: "text" as const, text: "Task failed" }],
+			details: { projectAgentsDir: null, results: [], totalDurationMs: 10 },
+		};
+		const notifications = mapAgentSessionEventToAcpSessionUpdates(
+			{ type: "tool_execution_end", toolCallId: "tc-failed-task", toolName: "task", isError: true, result },
+			"session-1",
+		);
+		expectAcpNotifications(notifications);
+		const update = notifications[0]!.update;
+		if (update.sessionUpdate !== "tool_call_update") throw new Error("Expected task completion update");
+		expect(update.status).toBe("failed");
+		expect(update._meta).toEqual({ omp: { taskLifecycle: "completed" } });
+		expect(update.rawOutput).toBe(result);
+	});
+
 	it("emits locations on tool_execution_update from args", () => {
 		const updates = mapAgentSessionEventToAcpSessionUpdates(
 			{

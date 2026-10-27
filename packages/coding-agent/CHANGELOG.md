@@ -6,6 +6,7 @@
 
 - Fixed ACP clients losing background subagent progress and completion after the parent prompt returns or `/fresh` rotates the provider session ID, retaining task ownership and close cleanup under the original ACP registration while preserving single model/thinking config notifications before and after bootstrap ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
 - Fixed stalled or continuing background task notifications holding ACP prompts and queued commands open, while preserving pending turn notification ordering and preventing cancelled deliveries or completed local commands with nested agent turns from settling successor prompts ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
+- Fixed ACP clients confusing completed background task snapshots with the end of a mixed blocking/background task call, exposing distinct spawning-call lifecycle metadata without changing native tool statuses ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
 
 ## [18.13.1] - 2026-10-27
 
