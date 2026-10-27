@@ -27,7 +27,7 @@ import {
 import { isTaskToolDetails, type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { moveFileAcrossDevices } from "../utils/atomic-file";
-import { hasAnnotationDrafts } from "../extensibility/custom-commands/bundled/annotate/draft-store";
+import { hasAnnotationDrafts, hasAnnotationDraftsSync } from "../extensibility/custom-commands/bundled/annotate/draft-store";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, lazyImageDataSync } from "./blob-store";
 import type { CompactionMethod } from "./compaction-methods";
@@ -2747,7 +2747,8 @@ export class SessionManager {
 	async ensureOnDisk(): Promise<void> {
 		if (!this.#persist || !this.#sessionFile) return;
 		this.#forceFileCreation = true;
-		if (this.#fileIsCurrent && !this.#rewriteRequired) return;
+		if (this.#fileIsCurrent && !this.#rewriteRequired && this.#storage.existsSync(this.#sessionFile)) return;
+		this.#rewriteRequired = true;
 		await this.#rewriteAtomically();
 	}
 
@@ -2936,6 +2937,7 @@ export class SessionManager {
 		if (!this.#storage.deleteSessionWithArtifactsIf) return;
 		try {
 			const deleted = await this.#storage.deleteSessionWithArtifactsIf(sessionFile, content => {
+				if (artifactsDir && hasAnnotationDraftsSync(artifactsDir, this.#header.id)) return false;
 				const onDisk = parseSessionContent(content);
 				return (
 					!onDisk.invalidHeader &&

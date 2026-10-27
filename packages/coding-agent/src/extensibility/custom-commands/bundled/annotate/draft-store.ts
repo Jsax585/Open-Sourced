@@ -1,5 +1,6 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 import type {
 	AnnotationOverlayDraft,
@@ -10,6 +11,7 @@ import type {
 	TextReviewSource,
 } from "@oh-my-pi/pi-tui/overlays/annotation-types";
 import { acquireFileLock, type FileLockHandle, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
+import { acquireSessionArtifactGate } from "../../../../session/session-storage";
 import { writeFileAtomically } from "../../../../utils/atomic-file";
 import type { ResolvedReviewTarget } from "../review/target";
 
@@ -302,6 +304,7 @@ export class AnnotationDraftStore {
 	readonly #sessionId: string;
 	readonly #records = new Map<string, AnnotationDraftRecord>();
 	readonly #revisions = new Map<string, string>();
+	#artifactGate: FileLockHandle | undefined;
 	readonly #leases = new Map<string, FileLockHandle>();
 	readonly #invalid = new Map<string, InvalidAnnotationDraft>();
 	readonly #sealed = new Set<string>();
@@ -395,11 +398,12 @@ export class AnnotationDraftStore {
 			}
 			return;
 		}
-		if (this.#leases.has(key)) throw new Error("This annotation draft is already open");
-		const directory = await ensurePrivateDirectory(this.#artifactsDir, this.#sessionId);
-		const filePath = path.join(directory, `draft-${key}.json`);
-		const lock = await acquireFileLock(filePath, { retries: 1 });
+		if (!this.#artifactGate) this.#artifactGate = await acquireSessionArtifactGate(this.#sessionId);
+		let lock: FileLockHandle | undefined;
 		try {
+			const directory = await ensurePrivateDirectory(this.#artifactsDir, this.#sessionId);
+			const filePath = path.join(directory, `draft-${key}.json`);
+			lock = await acquireFileLock(filePath, { retries: 1 });
 			const invalid = this.#invalid.get(key);
 			if (invalid) throw new Error(`Unreadable annotation draft ${invalid.filename} must be explicitly discarded`);
 			const loaded = await readRecord(filePath, this.#sessionId, key);
@@ -412,7 +416,11 @@ export class AnnotationDraftStore {
 			}
 			this.#leases.set(key, lock);
 		} catch (error) {
-			lock.release();
+			lock?.release();
+			if (this.#leases.size === 0) {
+				this.#artifactGate?.release();
+				this.#artifactGate = undefined;
+			}
 			throw error;
 		}
 	}
@@ -600,6 +608,8 @@ export class AnnotationDraftStore {
 		finally {
 			this.#disposed = true;
 			for (const lease of this.#leases.values()) lease.release();
+			this.#artifactGate?.release();
+			this.#artifactGate = undefined;
 			this.#leases.clear();
 			const claims = MEMORY_CLAIMS.get(this.#sessionId);
 			for (const key of this.#memoryClaims) if (claims?.get(key) === this) claims.delete(key);
@@ -614,6 +624,16 @@ export async function hasAnnotationDrafts(artifactsDir: string, sessionId: strin
 	try {
 		const entries = await fs.readdir(recordDirectory(artifactsDir, sessionId), { withFileTypes: true });
 		return entries.some(entry => FILE_PATTERN.test(entry.name) && entry.isFile());
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+}
+
+export function hasAnnotationDraftsSync(artifactsDir: string, sessionId: string): boolean {
+	try {
+		return fsSync.readdirSync(recordDirectory(artifactsDir, sessionId), { withFileTypes: true })
+			.some(entry => FILE_PATTERN.test(entry.name) && entry.isFile());
 	} catch (error) {
 		if (isEnoent(error)) return false;
 		throw error;

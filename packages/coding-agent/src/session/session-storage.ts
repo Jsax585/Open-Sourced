@@ -244,6 +244,7 @@ export interface SessionStorage {
 	 * cross-process conditional-delete primitive must skip opportunistic GC.
 	 */
 	deleteSessionWithArtifactsIf?(sessionPath: string, shouldDelete: (content: string) => boolean): Promise<boolean>;
+
 	openWriter(path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter;
 	/**
 	 * Wait for every backing write scheduled by this storage to become durably
@@ -255,6 +256,49 @@ export interface SessionStorage {
 	 */
 	drain(): Promise<void>;
 }
+
+function annotationArtifactGatePath(sessionId: string): string {
+	const hash = new Bun.CryptoHasher("sha256").update(sessionId).digest("hex");
+	return path.join(sessionOwnersDir(), `annotation-${hash}`);
+}
+
+const activeAnnotationArtifactGates = new Map<string, { lock: FileLockHandle; holders: number }>();
+
+/** Held while annotation drafts are active so close-time GC cannot remove their owner. */
+export function acquireSessionArtifactGate(sessionId: string): Promise<FileLockHandle> {
+	const active = activeAnnotationArtifactGates.get(sessionId);
+	if (active) {
+		active.holders++;
+		return Promise.resolve(sharedAnnotationArtifactGate(sessionId, active));
+	}
+	const lockPath = annotationArtifactGatePath(sessionId);
+	if (process.platform !== "linux" && process.platform !== "win32") fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+	const lock = tryAcquireFileLock(lockPath);
+	if (!lock) return Promise.reject(new Error("Another annotation session is active for this session"));
+	const gate = { lock, holders: 1 };
+	activeAnnotationArtifactGates.set(sessionId, gate);
+	return Promise.resolve(sharedAnnotationArtifactGate(sessionId, gate));
+}
+
+function sharedAnnotationArtifactGate(sessionId: string, gate: { lock: FileLockHandle; holders: number }): FileLockHandle {
+	let released = false;
+	return {
+		release() {
+			if (released) return;
+			released = true;
+			if (--gate.holders > 0) return;
+			activeAnnotationArtifactGates.delete(sessionId);
+			gate.lock.release();
+		},
+	};
+}
+
+function tryAcquireSessionArtifactGate(sessionId: string): FileLockHandle | null {
+	const lockPath = annotationArtifactGatePath(sessionId);
+	if (process.platform !== "linux" && process.platform !== "win32") fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+	return tryAcquireFileLock(lockPath);
+}
+
 
 // FinalizationRegistry to clean up leaked file descriptors
 const writerRegistry = new FinalizationRegistry<number>(fd => {
@@ -1333,20 +1377,27 @@ export class FileSessionStorage implements SessionStorage {
 	deleteSessionWithArtifactsIf(sessionPath: string, shouldDelete: (content: string) => boolean): Promise<boolean> {
 		const deleted = this.withSessionFileLockSync(sessionPath, () => {
 			const content = fs.readFileSync(sessionPath, "utf-8");
-			if (!shouldDelete(content)) return false;
-
-			fs.unlinkSync(sessionPath);
-			const artifactsDir = sessionPath.slice(0, -6);
+			const sessionId = readSessionHeaderIdSync(sessionPath);
+			if (!sessionId) return false;
+			const artifactGate = tryAcquireSessionArtifactGate(sessionId);
+			if (!artifactGate) return false;
 			try {
-				fs.rmSync(artifactsDir, { recursive: true, force: true });
-			} catch (err) {
-				const error = toError(err);
-				throw new Error(
-					`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
-					{ cause: error },
-				);
+				if (!shouldDelete(content)) return false;
+				fs.unlinkSync(sessionPath);
+				const artifactsDir = sessionPath.slice(0, -6);
+				try {
+					fs.rmSync(artifactsDir, { recursive: true, force: true });
+				} catch (err) {
+					const error = toError(err);
+					throw new Error(
+						`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
+						{ cause: error },
+					);
+				}
+				return true;
+			} finally {
+				artifactGate.release();
 			}
-			return true;
 		});
 		return Promise.resolve(deleted);
 	}
