@@ -5,6 +5,8 @@
 ### Changed
 
 - OpenAI prompt-cache breakpoints now cover stable assistant, tool, and function-output boundaries, with nested gateway markers rejected ([#12880](https://github.com/can1357/oh-my-pi/pull/12880) by [@ZenAlexa](https://github.com/ZenAlexa)).
+## [18.13.1] - 2026-10-27
+
 ### Fixed
 
 - Codex accounts whose spend cap is used up are no longer picked through credit overage or from usage cached before the upgrade ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))
