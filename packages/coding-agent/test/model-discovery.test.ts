@@ -9,7 +9,12 @@ import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-comple
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { getBundledModelReferenceIndex, resolveModelReference } from "@oh-my-pi/pi-catalog/identity";
+import {
+	buildModelReferenceIndex,
+	getBundledModelReferenceIndex,
+	resolveModelReference,
+} from "@oh-my-pi/pi-catalog/identity";
+import * as bundledModelReferences from "@oh-my-pi/pi-catalog/identity/bundled";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
 import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
@@ -3596,6 +3601,46 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(routed?.compat).toMatchObject({ supportsReasoningEffort: false });
 		const unknownRelease = models.find(model => model.id === unknownIds[0]);
 		expect(unknownRelease?.compat).toMatchObject({ stripImageInput: true });
+	});
+
+	test("custom OpenRouter transport borrows effort controls without rewriting a namespaced model id", () => {
+		const reference = buildModel({
+			id: "catalog-effort-fixture",
+			name: "Catalog effort fixture",
+			api: "openai-completions",
+			provider: "catalog-fixture",
+			baseUrl: "https://catalog.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 32_768,
+		});
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		let model: Model;
+		try {
+			model = finalizeCustomModel(
+				{
+					id: "group/catalog-effort-fixture",
+					provider: "custom-router",
+					api: "openrouter",
+					baseUrl: "https://router.example/v1",
+				},
+				{ useDefaults: true },
+			);
+		} finally {
+			referenceLookup.mockRestore();
+		}
+		expect(model).toMatchObject({
+			id: "group/catalog-effort-fixture",
+			provider: "custom-router",
+			api: "openrouter",
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+		});
+		expect(model.requestModelId).toBeUndefined();
 	});
 
 	test("custom model recovery keeps borrowed efforts below target policy and authored thinking", () => {

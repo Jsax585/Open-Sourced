@@ -195,6 +195,7 @@ export function getReferenceThinkingEfforts(
 	const thinking = reference.thinking;
 	if (
 		targetApi !== "openai-completions" &&
+		targetApi !== "openrouter" &&
 		targetApi !== "openai-responses" &&
 		targetApi !== "openai-codex-responses" &&
 		targetApi !== "azure-openai-responses"
