@@ -35,7 +35,7 @@ export interface InvalidAnnotationDraft {
 
 const FILE_PATTERN = /^draft-([0-9a-f]{64})\.json$/;
 const MEMORY_RECORDS = new Map<string, Map<string, AnnotationDraftRecord>>();
-const MEMORY_CLAIMS = new Map<string, Set<string>>();
+const MEMORY_CLAIMS = new Map<string, Map<string, AnnotationDraftStore>>();
 let warnedMemoryOnly = false;
 
 function hash(value: string): string {
@@ -213,7 +213,7 @@ function validateRecord(value: unknown, sessionId: string, filenameKey: string):
 		if (value.state.editedText !== undefined && typeof value.state.editedText !== "string") throw new Error("Invalid edited annotation source");
 		const state = value.state as Extract<AnnotationOverlayDraft, { kind: "text" }>;
 		const effectiveText = state.editedText ?? source.source.text;
-		const lines = effectiveText.split("\n");
+		const lines = effectiveText.split(/\r\n|\n|\r/);
 		for (const entry of state.annotations) {
 			if (!isObject(entry) || !hasOnlyKeys(entry, ["sourceIndex", "annotation"]) || !integer(entry.sourceIndex) || !validTextAnnotation(entry.annotation)) throw new Error("Invalid text annotation entry");
 			if (entry.annotation.scope === "text") {
@@ -383,10 +383,10 @@ export class AnnotationDraftStore {
 	async #claim(key: string): Promise<void> {
 		if (!/^[0-9a-f]{64}$/.test(key)) throw new Error("Invalid annotation draft key");
 		if (this.#artifactsDir === null) {
-			const claims = MEMORY_CLAIMS.get(this.#sessionId) ?? new Set<string>();
+			const claims = MEMORY_CLAIMS.get(this.#sessionId) ?? new Map<string, AnnotationDraftStore>();
 			MEMORY_CLAIMS.set(this.#sessionId, claims);
 			if (claims.has(key)) throw new Error("This annotation draft is already open");
-			claims.add(key);
+			claims.set(key, this);
 			this.#memoryClaims.add(key);
 			const record = MEMORY_RECORDS.get(this.#sessionId)?.get(key);
 			if (record) {
@@ -472,7 +472,7 @@ export class AnnotationDraftStore {
 			}
 			this.#writeError ??= toError(error);
 		});
-		await write;
+		await this.#pending;
 	}
 
 	async remove(key: string, expectedRevision: string): Promise<boolean> {
@@ -499,9 +499,15 @@ export class AnnotationDraftStore {
 					return false;
 				}
 				await fs.unlink(filePath);
-			} else if (this.#revisions.get(key) !== expectedRevision) {
-				this.#sealed.delete(key);
-				return false;
+			} else {
+				const claims = MEMORY_CLAIMS.get(this.#sessionId);
+				if (claims?.get(key) !== this) throw new Error("This annotation draft is not claimed by this store");
+				const current = MEMORY_RECORDS.get(this.#sessionId)?.get(key);
+				const revision = current ? hash(`${JSON.stringify(current)}\n`) : undefined;
+				if (revision !== expectedRevision) {
+					this.#sealed.delete(key);
+					return false;
+				}
 			}
 			this.#forget(key);
 			return true;
@@ -529,7 +535,11 @@ export class AnnotationDraftStore {
 			await this.#pending;
 			lock = await this.#lockFor(key);
 			if (this.#artifactsDir !== null) await fs.rm(recordPath(this.#artifactsDir, this.#sessionId, key), { force: true });
-			else MEMORY_RECORDS.get(this.#sessionId)?.delete(key);
+			else {
+				const claims = MEMORY_CLAIMS.get(this.#sessionId);
+				if (claims?.get(key) !== this) throw new Error("This annotation draft is not claimed by this store");
+				MEMORY_RECORDS.get(this.#sessionId)?.delete(key);
+			}
 			this.#invalid.delete(key);
 			this.#forget(key);
 		} catch (error) {
@@ -549,20 +559,32 @@ export class AnnotationDraftStore {
 	async #lockFor(key: string): Promise<FileLockHandle | undefined> {
 		const held = this.#leases.get(key);
 		if (held) return undefined;
-		if (this.#artifactsDir === null) return undefined;
+		if (this.#artifactsDir === null) {
+			const claims = MEMORY_CLAIMS.get(this.#sessionId) ?? new Map<string, AnnotationDraftStore>();
+			const owner = claims.get(key);
+			if (owner && owner !== this) throw new Error("This annotation draft is already open");
+			claims.set(key, this);
+			MEMORY_CLAIMS.set(this.#sessionId, claims);
+			this.#memoryClaims.add(key);
+			return undefined;
+		}
 		const directory = await ensurePrivateDirectory(this.#artifactsDir, this.#sessionId);
 		return acquireFileLock(path.join(directory, `draft-${key}.json`), { retries: 1 });
 	}
 
 	#releaseTemporary(key: string, temporary: FileLockHandle | undefined): void {
-
-		if (temporary) temporary.release();
-		else {
-			this.#leases.get(key)?.release();
-			this.#leases.delete(key);
+		if (temporary) {
+			temporary.release();
+			return;
 		}
-		if (this.#artifactsDir === null) MEMORY_CLAIMS.get(this.#sessionId)?.delete(key);
-		this.#memoryClaims.delete(key);
+		this.#leases.get(key)?.release();
+		this.#leases.delete(key);
+		if (this.#artifactsDir === null) {
+			const claims = MEMORY_CLAIMS.get(this.#sessionId);
+			if (claims?.get(key) === this) claims.delete(key);
+			if (claims?.size === 0) MEMORY_CLAIMS.delete(this.#sessionId);
+			this.#memoryClaims.delete(key);
+		}
 	}
 
 	#forget(key: string): void {
@@ -579,7 +601,9 @@ export class AnnotationDraftStore {
 			this.#disposed = true;
 			for (const lease of this.#leases.values()) lease.release();
 			this.#leases.clear();
-			for (const key of this.#memoryClaims) MEMORY_CLAIMS.get(this.#sessionId)?.delete(key);
+			const claims = MEMORY_CLAIMS.get(this.#sessionId);
+			for (const key of this.#memoryClaims) if (claims?.get(key) === this) claims.delete(key);
+			if (claims?.size === 0) MEMORY_CLAIMS.delete(this.#sessionId);
 			this.#memoryClaims.clear();
 		}
 		if (failure) throw failure;

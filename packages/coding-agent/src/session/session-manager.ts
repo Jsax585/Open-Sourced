@@ -2911,7 +2911,19 @@ export class SessionManager {
 		const draftPath = this.#draftPath();
 		if (draftPath && this.#storage.existsSync(draftPath)) return;
 		const artifactsDir = this.getArtifactsDir();
-		if (artifactsDir && (await hasAnnotationDrafts(artifactsDir, this.#header.id))) return;
+		if (artifactsDir) {
+			try {
+				if (await hasAnnotationDrafts(artifactsDir, this.#header.id)) return;
+			} catch (err) {
+				if (!isEnoent(err)) {
+					logger.warn("Failed to inspect annotation drafts before dropping empty session", {
+						sessionFile,
+						error: String(err),
+					});
+					return;
+				}
+			}
+		}
 		if (!this.#entries.every(isDraftOnlyMetadataEntry)) {
 			await this.#clearDraftOnlySessionMarker();
 			this.#draftOnlySessionCleanupArmed = false;

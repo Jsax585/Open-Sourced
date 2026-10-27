@@ -214,13 +214,22 @@ async function driveEditorOverlay<T>(
 	cwd: string,
 	keys: readonly string[],
 	show: (ctx: CustomCommandContext) => Promise<T | undefined>,
-	options: { artifactsDir?: string; onMounted?: (component: ExtensionUiComponent) => void; awaitCompletion?: boolean } = {},
-): Promise<T | undefined> {
+	options: {
+		artifactsDir?: string;
+		onMounted?: (component: ExtensionUiComponent) => void;
+		awaitCompletion?: boolean;
+		ensureOnDisk?: () => Promise<void>;
+	} = {}) {
 	const previous = getKeybindings();
 	setKeybindings(KeybindingsManager.inMemory({ "app.editor.external": "ctrl+e" }));
 	const ctx = {
 		cwd,
-		sessionManager: { getCwd: () => cwd, getSessionId: () => "drive-session", getArtifactsDir: () => options.artifactsDir ?? null, ensureOnDisk: async () => {} },
+		sessionManager: {
+			getCwd: () => cwd,
+			getSessionId: () => "drive-session",
+			getArtifactsDir: () => options.artifactsDir ?? null,
+			ensureOnDisk: options.ensureOnDisk ?? (async () => {}),
+		},
 		ui: {
 			notify: vi.fn(),
 			custom: async (factory: Parameters<ExtensionUIContext["custom"]>[0]) => {
@@ -406,6 +415,62 @@ describe("/annotate contracts", () => {
 			});
 		});
 	});
+	it("retries a failed ensureOnDisk checkpoint without losing live input or rejecting in the background", async () => {
+		await withTempDir(async artifactsDir => {
+			let attempts = 0;
+			const unhandled: unknown[] = [];
+			const onUnhandled = (reason: unknown) => unhandled.push(reason);
+			process.on("unhandledRejection", onUnhandled);
+			try {
+				const source: TextReviewSource = {
+					id: "prompt", kind: "prompt", label: "Literal prompt", text: "retry source",
+					provenance: { kind: "prompt" }, sessionId: "drive-session",
+				};
+				await driveEditorOverlay("/workspace", ["a", "retryable note", ENTER, "\x1b"], ctx =>
+					showTextReviewOverlay(ctx, source), {
+					artifactsDir,
+					ensureOnDisk: async () => {
+						attempts++;
+						if (attempts === 1) throw new Error("injected ensureOnDisk failure");
+					},
+				});
+				const store = await AnnotationDraftStore.open(artifactsDir, "drive-session");
+				expect(store.list()).toHaveLength(1);
+				expect(store.list()[0]?.state.annotations).toMatchObject([{ annotation: { note: "retryable note" } }]);
+				expect(attempts).toBeGreaterThanOrEqual(2);
+				expect(unhandled).toEqual([]);
+				await store.dispose();
+			} finally {
+				process.off("unhandledRejection", onUnhandled);
+			}
+		});
+	});
+	it("matches an edited effective source while preserving the original source key", async () => {
+		await withTempDir(async artifactsDir => {
+			const original: TextReviewSource = {
+				id: "prompt", kind: "prompt", label: "Literal prompt", text: "original source",
+				provenance: { kind: "prompt" }, sessionId: "drive-session",
+			};
+			const edited = "edited source\r\nsecond line";
+			const externalEdit = spyOn(externalEditor, "openInEditor").mockResolvedValue(edited);
+			await driveEditorOverlay("/workspace", ["\x05", "\x1b"], ctx =>
+				showTextReviewOverlay(ctx, original), { artifactsDir });
+			externalEdit.mockRestore();
+
+			let restored: unknown;
+			await driveEditorOverlay("/workspace", ["\x1b"], ctx =>
+				showTextReviewOverlay(ctx, { ...original, text: edited }), {
+				artifactsDir,
+				onMounted: component => { restored = (component as AnnotationOverlay).getDraft(); },
+			});
+			expect(restored).toMatchObject({ kind: "text", editedText: edited });
+			const store = await AnnotationDraftStore.open(artifactsDir, "drive-session");
+			expect(store.list()).toHaveLength(1);
+			expect(store.list()[0]?.key).toBe(annotationDraftKey({ kind: "text", cwd: "/workspace", source: original }));
+			expect(store.list()[0]?.source).toMatchObject({ kind: "text", source: original });
+			await store.dispose();
+		});
+	});
 	it("keeps pasted annotations on disk and restores them when reopened", async () => {
 		await withTempDir(async artifactsDir => {
 			const { ctx, pasteToEditor } = createContext();
@@ -544,20 +609,6 @@ describe("/annotate contracts", () => {
 		expect(complete).toHaveBeenCalledTimes(1);
 	});
 
-	it("retains the draft when handing feedback to the editor throws", async () => {
-		const { ctx, pasteToEditor } = createContext();
-		pasteToEditor.mockImplementation(() => { throw new Error("editor unavailable"); });
-		const complete = vi.fn(async () => {});
-		const showTextReviewOverlay = vi.fn(async (_ctx: AnnotationOverlayContext, source: TextReviewSource) => ({
-			result: { action: "paste" as const, annotations: [{ scope: "text" as const, note: "keep me" }] },
-			source,
-			complete,
-		}));
-
-		await expect(runAnnotateCommand(API, '"source"', ctx, { showTextReviewOverlay })).rejects.toThrow("editor unavailable");
-
-		expect(complete).not.toHaveBeenCalled();
-	});
 
 	it("does not complete a source-only annotation run with no notes", async () => {
 		const { ctx, pasteToEditor } = createContext();

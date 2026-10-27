@@ -147,11 +147,18 @@ async function runOverlayHost(
 				store.checkpoint(snapshot);
 				if (pendingRecord === snapshot) pendingRecord = undefined;
 			}
-		})().finally(() => { persistence = undefined; });
+		})().catch(error => {
+			ctx.ui.notify(`Could not save annotation draft: ${String(error)}`, "warning");
+		}).finally(() => { persistence = undefined; });
 	};
 	const flush = async () => {
 		queueCheckpoint();
 		await persistence;
+		if (pendingRecord) {
+			queueCheckpoint();
+			await persistence;
+			if (pendingRecord) throw new Error("Annotation draft checkpoint is still pending.");
+		}
 		if (hasCheckpoint) { await store.flush(); finalRevision = store.revision(key); }
 	};
 	try { await store.claim(key); }
@@ -164,8 +171,12 @@ async function runOverlayHost(
 		const result = await ctx.ui.custom<CodeReviewOverlayResult | TextReviewOverlayResult | undefined>((tui, theme, keybindings, done) => {
 			const callbacks: HostCallbacks = {
 				onComplete: async value => {
-					try { await flush(); done(value); }
-					catch (error) { ctx.ui.notify(`Could not save annotation draft: ${String(error)}`, "warning"); }
+					try { await flush(); }
+					catch (error) {
+						ctx.ui.notify(`Could not save annotation draft: ${String(error)}`, "warning");
+						throw error;
+					}
+					done(value);
 				},
 				onDraftChange: state => {
 					const worked = state.kind === "diff"
@@ -174,7 +185,7 @@ async function runOverlayHost(
 					if (!worked && !record) return;
 					record = {
 						version: 1, sessionId, key, createdAt: record?.createdAt ?? Date.now(), updatedAt: Date.now(),
-						source: frozenSource, state,
+						source: record?.source ?? resumed?.source ?? frozenSource, state,
 					};
 					hasCheckpoint = true;
 					pendingRecord = record;

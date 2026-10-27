@@ -158,6 +158,39 @@ describe("AnnotationOverlay fullscreen hardware cursor", () => {
 		}
 	});
 
+	it("positions the hardware cursor after a wide glyph at the editor width boundary", async () => {
+		const terminal = new RecordingTerminal(WIDTH, 20);
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(terminal, true, { renderScheduler: scheduler });
+		const source: TextReviewSource = {
+			id: "wide-cursor-boundary",
+			kind: "message",
+			label: "source",
+			text: "source text",
+		};
+		const overlay = new AnnotationOverlay(tui, darkTheme!, getKeybindings() as KeybindingsManager, source, {
+			onComplete() {
+				tui.hideOverlay();
+			},
+		});
+
+		tui.start();
+		try {
+			await scheduler.settle(terminal);
+			tui.showOverlay(overlay, { fullscreen: true, width: "100%", maxHeight: "100%" });
+			terminal.sendInput("A");
+			sendText(terminal, `${"Q".repeat(INPUT_CAPACITY - 2)}界`);
+			await scheduler.settle(terminal);
+
+			expect(renderedInputRows(terminal)).toEqual([`${"Q".repeat(INPUT_CAPACITY - 2)}界`]);
+			const sourceRow = terminal.getViewport().findIndex(row => row.includes("Q"));
+			expect(terminal.getCursor()).toEqual({ row: sourceRow, col: WIDTH - 2 });
+			expect(terminal.cursorVisible).toBe(true);
+		} finally {
+			tui.stop();
+		}
+	});
+
 	it("switches a mounted editor to software fallback without showing two cursors", async () => {
 		const terminal = new RecordingTerminal(WIDTH, 20);
 		const scheduler = new VirtualRenderScheduler();

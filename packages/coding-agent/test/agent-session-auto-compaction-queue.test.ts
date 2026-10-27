@@ -867,6 +867,121 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(prompted[0]?.map(message => message.role)).toContain("user");
 		expect(prompted[0]?.some(message => message.synthetic === true)).toBe(false);
 	});
+	it("does not resume after a parked prompt queues behind a streaming turn during preflight", async () => {
+
+		// The real mock-model stream uses Bun.sleep(0), so drive this race on real timers.
+		vi.useRealTimers();
+		cfgCompactionKeepRecentTokens.set(session.settings, 1);
+		cfgCompactionAutoContinue.override(session.settings, true);
+		sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "previous answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			stopReason: "stop",
+			usage: {
+				input: 1_000,
+				output: 100,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 1_100,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		});
+		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
+
+		const firstTurnStarted = Promise.withResolvers<void>();
+		const releaseFirstTurn = Promise.withResolvers<void>();
+		let requests = 0;
+		const mock = createMockModel({
+			responses: [
+				async () => {
+					firstTurnStarted.resolve();
+					await releaseFirstTurn.promise;
+					return { content: ["winner done"] };
+				},
+				{ content: ["queued done"] },
+				{ content: ["unexpected resume"] },
+			],
+		});
+		const requestMessages: Array<{ role: string; synthetic?: boolean; text: string }> = [];
+		session.agent.getApiKey = () => "test-key";
+		session.agent.streamFn = (model, context, options) => {
+			requests++;
+			const message = context.messages.findLast(candidate => candidate.role === "user" || candidate.role === "developer");
+			requestMessages.push({
+				role: message?.role ?? "missing",
+				synthetic: message?.role === "developer" ? message.synthetic : undefined,
+				text: typeof message?.content === "string"
+					? message.content
+					: (message?.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n") ?? ""),
+			});
+			return mock.stream(model, context, options);
+		};
+
+		const normalizationStarted = Promise.withResolvers<void>();
+		const releaseNormalization = Promise.withResolvers<void>();
+		vi.spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (images?.length) {
+				normalizationStarted.resolve();
+				await releaseNormalization.promise;
+			}
+			return images;
+		});
+
+		const compactGate = Promise.withResolvers<void>();
+		(globalThis as typeof globalThis & { __ompManualCompactGate?: Promise<void> }).__ompManualCompactGate =
+			compactGate.promise;
+		const compacted = session.compact();
+		let queued: Promise<boolean> | undefined;
+		let winner: Promise<boolean> | undefined;
+		try {
+
+			await until(() => getRuntimeSignals().includes("before_compact:enter"), "manual compaction hook");
+			queued = session.prompt("queued after maintenance", {
+				streamingBehavior: "followUp",
+				images: [
+					{
+						type: "image",
+						mimeType: "image/png",
+						data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+					},
+				],
+			});
+			compactGate.resolve();
+			await withTimeout(compacted, 5_000, "Manual compaction did not finish");
+			await withTimeout(normalizationStarted.promise, 5_000, "Parked prompt did not enter image normalization");
+
+			// The real competing turn starts while the admitted prompt is still
+			// in image preflight. The parked prompt must queue behind this winner.
+			winner = session.prompt("streaming winner");
+			await withTimeout(firstTurnStarted.promise, 5_000, "Competing turn did not start streaming");
+			releaseNormalization.resolve();
+			expect(await withTimeout(queued, 5_000, "Parked prompt did not queue")).toBe(true);
+			releaseFirstTurn.resolve();
+			await withTimeout(winner, 5_000, "Competing turn did not finish");
+			await withTimeout(session.waitForIdle(), 5_000, "Follow-up queue did not drain");
+		} finally {
+			compactGate.resolve();
+			releaseNormalization.resolve();
+			releaseFirstTurn.resolve();
+			await withTimeout(
+				Promise.all([compacted.catch(() => {}), queued?.catch(() => false), winner?.catch(() => {})]),
+				5_000,
+				"Queue-claim race cleanup did not settle",
+			).catch(() => {});
+			vi.useFakeTimers();
+
+		}
+
+		expect(requests).toBe(2);
+		expect(requestMessages.map(message => message.text)).toEqual(["streaming winner", "queued after maintenance"]);
+		expect(requestMessages.some(message => message.synthetic)).toBe(false);
+	});
+
+
 	it("keeps the resume when a parked prompt is refused only because another prompt is in setup", async () => {
 		// Two prompts park during the compaction. The first enters turn setup
 		// (in-flight, agent owns no turn) and the second is refused with

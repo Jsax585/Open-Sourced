@@ -600,10 +600,10 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#escape(): void {
-		if (this.#annotationChooser) this.#annotationChooser = undefined;
+		if (this.#confirmation) this.#confirmation = undefined;
+		else if (this.#annotationChooser) this.#annotationChooser = undefined;
 		else void this.#finish(undefined);
 	}
-
 	#handleConfirmation(data: string): void {
 		if (this.#keybindings.matches(data, "tui.select.cancel")) {
 			this.#confirmation = undefined;
@@ -775,7 +775,7 @@ export class AnnotationOverlay implements Focusable {
 
 	#actionDisabled(index: number): boolean {
 		const hasAnnotations = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		return (index === 1 && !hasAnnotations) || (index === 2 && this.#textSource !== undefined);
+		return index === 1 && !hasAnnotations;
 	}
 
 	#confirmAction(): void {
@@ -1397,7 +1397,7 @@ export class AnnotationOverlay implements Focusable {
 			const hints = [
 				`${editorKey("tui.input.submit")} save`,
 				`${editorKey("tui.input.newLine")} newline`,
-				`${this.#key("tui.select.cancel")} cancel`,
+				`${this.#key("tui.select.cancel")} save and close`,
 			];
 			hints.push(`${formatKeyHint(appExternalEditorKey())} editor`);
 			return [caption, ...this.#editor.render(width), this.#theme.fg("dim", hints.join(" · "))];
@@ -1601,6 +1601,7 @@ export class AnnotationOverlay implements Focusable {
 			this.#bodyHeight,
 			this.#annotating ? `annotating:${this.#annotationScope}:${this.#editingAnnotationIndex}` : "",
 			chooser ? `chooser:${chooser.selected}:${chooser.entries.join()}` : "",
+			this.#confirmation ?? "",
 		].join("|");
 		if (this.#nativeRoot && sig === this.#nativeSig && body === this.#nativeRootBody) return this.#nativeRoot;
 
@@ -2033,7 +2034,7 @@ export class AnnotationOverlay implements Focusable {
 			return [
 				this.#hint("tui.input.submit", "save"),
 				this.#hint("tui.input.newLine", "new line"),
-				this.#hint("tui.select.cancel", "discard"),
+				this.#hint("tui.select.cancel", "save and close"),
 				this.#callbacks.onAnnotationExternalEditor ? key(appExternalEditorKey(), "editor") : undefined,
 			];
 		}

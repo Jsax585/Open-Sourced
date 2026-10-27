@@ -6,6 +6,7 @@
 
 - `/annotate` preserves notes and unfinished edits across early exits, pasting into the prompt, and restarts, with session-local resume and discard actions.
 - Annotation feedback includes source line numbers so notes on blank lines remain identifiable.
+- Annotation drafts handle Windows line endings and edited-source recovery, remain retryable after save failures, and keep native confirmation actions in sync.
 
 ## [18.13.2] - 2026-10-27
 

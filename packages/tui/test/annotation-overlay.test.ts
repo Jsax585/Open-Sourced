@@ -718,6 +718,12 @@ describe("AnnotationOverlay", () => {
 		expect(completed).toBe(false);
 		expect(overlay.getTextAnnotations()).toEqual([]);
 	});
+
+	it("describes Escape as saving and closing while a note is active", () => {
+		const overlay = makeTextOverlay({ id: "escape-hint", kind: "prompt", label: "Prompt", text: "source" });
+		overlay.handleInput("A");
+		expect(render(overlay)).toContain("save and close");
+	});
 	it("returns undefined on cancel without a review result", () => {
 		const completed: Array<CodeReviewOverlayResult | undefined> = [];
 		const overlay = makeDiffOverlay(oneLineFiles, {

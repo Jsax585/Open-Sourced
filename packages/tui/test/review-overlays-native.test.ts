@@ -29,8 +29,18 @@ function findKeyed(root: NativeNode, key: string, path = ""): { node: NativeNode
 }
 
 function list(root: NativeNode, key: string): { path: string; items: NativeNode[]; selected: unknown } {
-	const found = findKeyed(root, key);
-	if (!found || found.node.k !== "list") throw new Error(`no list ${key}`);
+	const findList = (parent: NativeNode, path = ""): { node: NativeNode; path: string } | undefined => {
+		for (const [index, child] of (parent.c ?? []).entries()) {
+			if (!isNode(child)) continue;
+			const childPath = path ? `${path}/${child.key ?? index}` : `${child.key ?? index}`;
+			if (child.key === key && child.k === "list") return { node: child, path: childPath };
+			const found = findList(child, childPath);
+			if (found) return found;
+		}
+		return undefined;
+	};
+	const found = findList(root);
+	if (!found) throw new Error(`no list ${key}`);
 	return {
 		path: found.path,
 		items: (found.node.c ?? []).filter(isNode),
@@ -216,5 +226,60 @@ describe("review overlays under a native surface", () => {
 		overlay.describe();
 		overlay.handleNativeEvent({ type: "action", key: "actions/paste", act: "paste", mods: [] });
 		expect(onComplete).not.toHaveBeenCalled();
+	});
+
+	it("native text save-close stays enabled after cancelling discard confirmation", () => {
+		const onComplete = vi.fn();
+		const overlay = new AnnotationOverlay(
+			{ terminal: { rows: 40 }, requestRender() {} } as unknown as TUI,
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "native-text", kind: "prompt", label: "Prompt", text: "source" },
+			{ onComplete },
+		);
+		const initial = overlay.describe();
+		expect(list(initial, "actions").items[2]?.p?.disabled).toBe(false);
+
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: "a3" });
+		const confirmation = overlay.describe();
+		expect(confirmation).not.toBe(initial);
+		expect(list(confirmation, "actions").items.map(itemLabel)).toEqual(["Keep draft", "Discard draft"]);
+
+		overlay.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
+		const restored = overlay.describe();
+		expect(restored).not.toBe(confirmation);
+		expect(list(restored, "actions").items.map(itemLabel)).toEqual([
+			"Continue annotating",
+			"Paste annotations into prompt",
+			"Save draft and close",
+			"Discard draft",
+		]);
+		expect(list(restored, "actions").items[2]?.p?.disabled).toBe(false);
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: "a2" });
+		expect(onComplete).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows native blank-edit deletion confirmation and preserves the note on Escape", () => {
+		const overlay = new AnnotationOverlay(
+			{ terminal: { rows: 40 }, requestRender() {} } as unknown as TUI,
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "native-delete", kind: "prompt", label: "Prompt", text: "source" },
+			{ onComplete: vi.fn() },
+		);
+		overlay.handleInput("A");
+		overlay.handleInput("keep");
+		overlay.handleInput(ENTER);
+		overlay.handleInput("e");
+		overlay.handleInput(ENTER);
+		overlay.handleInput("\x15");
+		overlay.handleInput(ENTER);
+		const confirmation = overlay.describe();
+		expect(list(confirmation, "actions").items.map(itemLabel)).toEqual(["Keep editing", "Delete annotation"]);
+		expect(list(confirmation, "actions").items[1]?.p?.disabled).toBe(false);
+		overlay.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
+		expect(list(overlay.describe(), "actions").items.map(itemLabel)).toContain("Save draft and close");
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "keep" }]);
+		expect(overlay.getDraft()).toMatchObject({ editor: { editingAnnotationIndex: 0, text: "" } });
 	});
 });

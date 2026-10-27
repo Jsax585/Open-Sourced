@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Annotation overlays preserve unfinished notes on close and require explicit completion or discard, with consistent native confirmation actions.
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

@@ -118,6 +118,73 @@ describe("AnnotationDraftStore", () => {
 		expect(await hasAnnotationDrafts(tempDir.path(), "session-a")).toBe(false);
 		await store.dispose();
 	});
+	it("validates CRLF and bare-CR line anchors using overlay line splitting", async () => {
+		using tempDir = TempDir.createSync("@pi-annotation-draft-newlines-");
+		const source = textSource("first\r\nsecond\rthird");
+		const saved = record("session-a", source, {
+			kind: "text",
+			annotations: [
+				{ sourceIndex: 1, annotation: { scope: "line", line: 2, quote: "second", note: "CRLF" } },
+				{ sourceIndex: 2, annotation: { scope: "line", line: 3, quote: "third", note: "bare CR" } },
+			],
+		});
+		const store = await AnnotationDraftStore.open(tempDir.path(), "session-a");
+		await store.claim(saved.key);
+		store.checkpoint(saved);
+		await store.flush();
+		await store.dispose();
+		const reopened = await AnnotationDraftStore.open(tempDir.path(), "session-a");
+		expect(reopened.list()).toHaveLength(1);
+		expect(reopened.listInvalid()).toHaveLength(0);
+		await reopened.dispose();
+	});
+
+	it("reports failed atomic writes from flush and retries the retained snapshot", async () => {
+		using tempDir = TempDir.createSync("@pi-annotation-draft-write-retry-");
+		const saved = record("session-a", textSource("retry"));
+		const directory = path.join(tempDir.path(), "annotation-drafts", "sessions", "session-a");
+		await fs.mkdir(directory, { recursive: true });
+		const target = path.join(directory, `draft-${saved.key}.json`);
+		const store = await AnnotationDraftStore.open(tempDir.path(), "session-a");
+		await store.claim(saved.key);
+		await fs.mkdir(target);
+		store.checkpoint(saved);
+		await expect(store.flush()).rejects.toThrow();
+		await fs.rmdir(target);
+		await store.flush();
+		await store.dispose();
+		const reopened = await AnnotationDraftStore.open(tempDir.path(), "session-a");
+		expect(reopened.list()).toHaveLength(1);
+		expect(reopened.list()[0]?.state).toEqual(saved.state);
+		await reopened.dispose();
+	});
+
+	it("prevents a stale memory store from removing a newer claim", async () => {
+		const source = textSource("memory revision");
+		const saved = record("memory-owner", source);
+		const oldStore = await AnnotationDraftStore.open(null, "memory-owner");
+		await oldStore.claim(saved.key);
+		oldStore.checkpoint(saved);
+		const oldRevision = oldStore.revision(saved.key)!;
+		await oldStore.dispose();
+
+		const currentStore = await AnnotationDraftStore.open(null, "memory-owner");
+		await currentStore.claim(saved.key);
+		const newer = { ...saved, updatedAt: saved.updatedAt + 1 };
+		currentStore.checkpoint(newer);
+		await expect(oldStore.remove(saved.key, oldRevision)).rejects.toThrow("already open");
+		const contender = await AnnotationDraftStore.open(null, "memory-owner");
+		await expect(contender.claim(saved.key)).rejects.toThrow("already open");
+		await contender.dispose();
+		expect(currentStore.find(source)).toEqual(newer);
+		await currentStore.dispose();
+		expect(await oldStore.remove(saved.key, oldRevision)).toBe(false);
+		const latest = await AnnotationDraftStore.open(null, "memory-owner");
+		expect(latest.find(source)).toEqual(newer);
+		expect(await latest.remove(saved.key, latest.revision(saved.key)!)).toBe(true);
+		expect(latest.find(source)).toBeUndefined();
+		await latest.dispose();
+	});
 
 	it("keeps null-artifacts sessions in process memory only", async () => {
 		const source = textSource("memory only");
@@ -128,7 +195,7 @@ describe("AnnotationDraftStore", () => {
 		await first.dispose();
 		const reopened = await AnnotationDraftStore.open(null, "ephemeral");
 		expect(reopened.find(source)).toEqual(saved);
-		await reopened.claim(saved.key);
+		// Management discard acquires its own lease without mounting an overlay.
 		await reopened.discard(saved.key);
 		await reopened.dispose();
 	});

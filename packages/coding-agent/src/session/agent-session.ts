@@ -8292,12 +8292,13 @@ export class AgentSession implements SettingsScope {
 				onPromptQueued: options?.onPromptQueued,
 			});
 			if (queued) await acknowledgeCustomCommand();
+			outcome.sessionClaimed = queued;
 			if (!queued && this.#promptGeneration !== preflightGeneration && !options?.synthetic) {
 				this.#promptDropped?.({ text: typedText, images: options?.images });
 			}
 			return true;
-
 		}
+
 		if (externalThinkingToolChoice) {
 			this.#toolChoiceQueue.pushOnce(externalThinkingToolChoice, {
 				label: "external-thinking",

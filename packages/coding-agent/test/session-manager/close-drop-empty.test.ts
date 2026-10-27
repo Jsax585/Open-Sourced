@@ -32,6 +32,16 @@ class SignalingDeleteStorage extends FileSessionStorage {
 	}
 }
 
+class DrainSignalingStorage extends FileSessionStorage {
+	drainCount = 0;
+
+	override async drain(): Promise<void> {
+		this.drainCount++;
+		await super.drain();
+	}
+}
+
+
 describe("SessionManager close() drops empty metadata-only sessions", () => {
 	// Repro of issue #4571: saveDraft(text) materializes the JSONL so the
 	// draft sidecar has a parent. A subsequent saveDraft("") only unlinks
@@ -230,6 +240,27 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 		expect(await fileExists(sessionFile)).toBe(true);
 		expect(await fileExists(annotationDraft)).toBe(true);
+	});
+
+	it("retains and drains a session when the annotation draft probe fails with ENOTDIR", async () => {
+		using tempDir = TempDir.createSync("@pi-session-close-annotation-probe-error-");
+		const storage = new DrainSignalingStorage();
+		const session = SessionManager.create(tempDir.path(), tempDir.path(), storage);
+		session.appendModelChange("hai-proxy/anthropic--claude-4.6-opus");
+		await session.saveDraft("materialize session");
+		await session.saveDraft("");
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persistent session file");
+		const artifactsDir = session.getArtifactsDir();
+		if (!artifactsDir) throw new Error("Expected persistent artifacts directory");
+		fs.writeFileSync(path.join(artifactsDir, "annotation-drafts"), "not a directory");
+
+		await session.close();
+
+		expect(storage.drainCount).toBeGreaterThan(0);
+		expect(await fileExists(sessionFile)).toBe(true);
+		expect(await Bun.file(sessionFile).text()).toContain('"type":"model_change"');
 	});
 
 	// Real conversations must survive close() unconditionally.
