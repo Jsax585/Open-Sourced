@@ -43,6 +43,8 @@ export interface RemoteSkillSource {
 	 * materialize a complete directory before an invocation that runs scripts.
 	 */
 	readonly files?: readonly string[];
+	/** Skill-relative files Git marks executable (`100755`), a subset of `files`. */
+	readonly executables?: readonly string[];
 }
 
 /** Index entry: discovery metadata plus the pinned source. */

@@ -68,6 +68,7 @@ function text(value: string): Response {
 }
 
 const SUBTREE = "c".repeat(40);
+const SUBTREE_PDF = "e".repeat(40);
 
 function rootListing(docs: Record<string, string>): unknown {
 	return { tree: Object.keys(docs).map(name => ({ path: `skills/${name}/SKILL.md`, type: "blob" })) };
@@ -85,7 +86,10 @@ function subtreeListing(docs: Record<string, string>): unknown {
 function githubTreeStub(commit: string, docs: Record<string, string>, tree?: unknown): Stub {
 	const routes: Record<string, () => Response | Promise<Response>> = {
 		[`/git/trees/${commit}?recursive=1`]: () => json(tree ?? rootListing(docs)),
+		[`/git/trees/${SUBTREE_PDF}?recursive=1`]: () => json({ tree: [{ path: "SKILL.md", type: "blob" }] }),
 		[`/git/trees/${SUBTREE}?recursive=1`]: () => json(subtreeListing(docs)),
+		[`/git/trees/${SUBTREE}`]: () =>
+			json({ tree: Object.keys(docs).map(name => ({ path: name, type: "tree", sha: SUBTREE_PDF })) }),
 		[`/git/trees/${commit}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
 		"/commits/": () => json({ sha: commit }),
 	};
@@ -711,6 +715,82 @@ describe("remote skill sources", () => {
 		const { entries, warnings } = await loadRemoteSkillDescriptors(cwd, agentDir);
 		expect(warnings.join("\n")).not.toContain("does not match");
 		expect(entries.map(entry => entry.descriptor.name)).toEqual(["caf\u00e9"]);
+	});
+
+	test("repinning refreshes the file manifest from the new commit", async () => {
+		const first = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Old tree.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: first.fetch });
+		let { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries[0]!.descriptor.files).toEqual(["SKILL.md"]);
+
+		const moved = stubFetch({
+			[`/git/trees/${NEXT_COMMIT}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "skills/pdf/SKILL.md", type: "blob" },
+						{ path: "skills/pdf/scripts/new.py", type: "blob" },
+					],
+				}),
+			[`/git/trees/${SUBTREE_PDF}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "SKILL.md", type: "blob" },
+						{ path: "scripts/new.py", type: "blob" },
+					],
+				}),
+			[`/git/trees/${SUBTREE}`]: () => json({ tree: [{ path: "pdf", type: "tree", sha: SUBTREE_PDF }] }),
+			[`/git/trees/${NEXT_COMMIT}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
+			"/commits/": () => json({ sha: NEXT_COMMIT }),
+			[`/${NEXT_COMMIT}/skills/pdf/SKILL.md`]: () => text(skillDoc("pdf", "Moved ref.")),
+		});
+		await syncRemoteSkills({ cwd, agentDir, fetch: moved.fetch });
+		({ entries } = await loadRemoteSkillDescriptors(cwd, agentDir));
+		expect(entries[0]!.descriptor.files).toEqual(["SKILL.md", "scripts/new.py"]);
+	});
+
+	test("a project-scoped add lands at the active project root", async () => {
+		const repo = path.join(root, "repo");
+		const subdir = path.join(repo, "packages", "foo");
+		fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+		fs.mkdirSync(subdir, { recursive: true });
+		const stub = githubTreeStub(COMMIT, { pdf: skillDoc("pdf", "Use for PDF work.") });
+		await addRemoteSkills(`${REPO}#skills`, { cwd: subdir, global: false, fetch: stub.fetch });
+		expect(await Bun.file(path.join(repo, ".omp", "remote-skills.json")).exists()).toBe(true);
+		expect(await Bun.file(path.join(subdir, ".omp", "remote-skills.json")).exists()).toBe(false);
+	});
+
+	test("records and applies the executable bit", async () => {
+		const stub = stubFetch({
+			[`/git/trees/${COMMIT}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "skills/pdf/SKILL.md", type: "blob" },
+						{ path: "skills/pdf/scripts/run.sh", type: "blob", mode: "100755" },
+					],
+				}),
+			[`/git/trees/${SUBTREE}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "pdf/SKILL.md", type: "blob" },
+						{ path: "pdf/scripts/run.sh", type: "blob", mode: "100755" },
+					],
+				}),
+			[`/git/trees/${COMMIT}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
+			"/commits/": () => json({ sha: COMMIT }),
+			"/skills/pdf/SKILL.md": () => text(skillDoc("pdf", "Run the script.")),
+			[`/${COMMIT}/skills/pdf/scripts/run.sh`]: () => text("#!/bin/sh\necho ok\n"),
+		});
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries[0]!.descriptor.executables).toEqual(["scripts/run.sh"]);
+
+		const skill = remoteSkillFixture(entries[0]!.descriptor, agentDir);
+		__setRemoteSkillFetchForTests(stub.fetch);
+		await buildSkillPromptMessage(skill, { args: "" }, "user");
+		if (process.platform !== "win32") {
+			const mode = (await fs.promises.stat(path.join(skill.baseDir, "scripts", "run.sh"))).mode;
+			expect(mode & 0o111).not.toBe(0);
+		}
 	});
 
 	test("project descriptors shadow a same-named user descriptor", async () => {

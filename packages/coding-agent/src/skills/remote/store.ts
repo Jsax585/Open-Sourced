@@ -8,6 +8,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
+import { resolveOrDefaultProjectRegistryPath } from "../../discovery/helpers";
+import { writeFileAtomically } from "../../utils/atomic-file";
 import {
 	assertSkillRelativePath,
 	isValidRepositoryName,
@@ -60,9 +62,21 @@ export function userRemoteSkillIndexPath(agentDir: string = getAgentDir()): stri
 	return path.join(agentDir, REMOTE_SKILL_INDEX_FILE);
 }
 
-/** Project index path used when creating one (`<cwd>/.omp/remote-skills.json`). */
-export function projectRemoteSkillIndexPath(cwd: string): string {
-	return path.join(path.resolve(cwd), ".omp", REMOTE_SKILL_INDEX_FILE);
+/**
+ * Project index path used when creating one, anchored at the active project root
+ * (nearest `.omp/`, else the git root) so a registration from a subdirectory is
+ * found by a session started at the repository root.
+ */
+export async function projectRemoteSkillIndexPath(cwd: string): Promise<string> {
+	const registry = await resolveOrDefaultProjectRegistryPath(cwd);
+	if (!registry) {
+		throw new RemoteSkillError(
+			"INVALID_SOURCE",
+			"this directory is not a project root; pass -g to register the skill for your user",
+		);
+	}
+	// `<root>/.omp/plugins/installed_plugins.json` → `<root>/.omp`
+	return path.join(path.dirname(path.dirname(registry)), REMOTE_SKILL_INDEX_FILE);
 }
 
 export async function fileExists(file: string): Promise<boolean> {
@@ -123,6 +137,21 @@ function validateDescriptor(name: string, value: unknown, file: string): RemoteS
 			}
 		}
 	}
+	let executables: string[] | undefined;
+	if (value.executables !== undefined) {
+		if (!Array.isArray(value.executables) || value.executables.length > MAX_SKILL_FILES) {
+			return fail(`has an invalid executable list (limit ${MAX_SKILL_FILES})`);
+		}
+		executables = [];
+		for (const entry of value.executables) {
+			if (typeof entry !== "string") return fail("has a non-string executable entry");
+			try {
+				executables.push(assertSkillRelativePath(entry));
+			} catch {
+				return fail(`has an unsafe executable entry "${entry}"`);
+			}
+		}
+	}
 	const descriptor: RemoteSkillDescriptor = {
 		name,
 		origin: "github",
@@ -132,7 +161,13 @@ function validateDescriptor(name: string, value: unknown, file: string): RemoteS
 		ref,
 		description,
 		...(manifest ? { files: manifest.sort() } : {}),
+		...(executables && executables.length > 0 ? { executables: executables.sort() } : {}),
 	};
+	for (const executable of descriptor.executables ?? []) {
+		if (!descriptor.files?.includes(executable)) {
+			return fail(`lists executable "${executable}" outside its file manifest`);
+		}
+	}
 	const normalized = name.normalize("NFKC");
 	if (normalized !== name) return fail("is not NFKC-normalized");
 	if (
@@ -215,18 +250,28 @@ export async function writeRemoteSkillIndex(file: string, index: RemoteSkillInde
 	const skills: Record<string, RemoteSkillDescriptor> = {};
 	for (const name of Object.keys(index.skills).sort()) skills[name] = index.skills[name]!;
 	const body = `${JSON.stringify({ version: REMOTE_SKILL_INDEX_VERSION, skills }, null, "\t")}\n`;
-	await writeFileAtomic(file, body);
+	await fs.mkdir(path.dirname(file), { recursive: true });
+	// Shared helper: private temp name and Windows replacement retries.
+	await writeFileAtomically(file, body, 0o644);
 }
 
-async function writeFileAtomic(file: string, body: string | Uint8Array): Promise<void> {
+/** Bytes are not `string`; stage through a private temp name and publish by rename. */
+async function writeBytesAtomically(file: string, body: Uint8Array): Promise<void> {
 	await fs.mkdir(path.dirname(file), { recursive: true });
-	const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+	const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
 	try {
 		await Bun.write(tmp, body);
 		await fs.rename(tmp, file);
 	} catch (error) {
-		await fs.rm(tmp, { force: true }).catch(() => {});
-		throw error;
+		// Windows refuses a rename onto an existing file in some AV/indexer states.
+		const code = (error as { code?: string }).code;
+		if (code === "EPERM" || code === "EEXIST") {
+			await fs.rm(file, { force: true });
+			await fs.rename(tmp, file);
+		} else {
+			await fs.rm(tmp, { force: true }).catch(() => {});
+			throw error;
+		}
 	}
 }
 
@@ -326,6 +371,7 @@ export function ensureRemoteSkillFileAt(
 						`cached ${relativePath} is ${size} bytes; the limit is ${maxBytes}`,
 					);
 				}
+				if (source.executables?.includes(relativePath)) await fs.chmod(target, 0o755);
 				return target;
 			}
 			const repositoryPath = source.directory === "" ? relativePath : `${source.directory}/${relativePath}`;
@@ -348,7 +394,8 @@ export function ensureRemoteSkillFileAt(
 			if (bytes === null) {
 				throw new RemoteSkillError("NOT_FOUND", `${source.repository}@${source.commit}:${repositoryPath}`);
 			}
-			await writeFileAtomic(target, bytes);
+			await writeBytesAtomically(target, bytes);
+			if (source.executables?.includes(relativePath)) await fs.chmod(target, 0o755);
 			return target;
 		})().finally(() => {
 			if (inFlight.get(target) === shared) inFlight.delete(target);

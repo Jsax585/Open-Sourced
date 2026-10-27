@@ -130,6 +130,14 @@ export async function listRemoteSkillFiles(
 		.sort();
 }
 
+/** One blob from a tree listing. */
+export interface RemoteTreeEntry {
+	/** Repository-relative path. */
+	readonly path: string;
+	/** Git mode carries the executable bit (`100755`). */
+	readonly executable: boolean;
+}
+
 /** Every blob under `directory` (repository-relative), used to record a skill's manifest. */
 export async function listRemoteTree(
 	repository: string,
@@ -137,6 +145,16 @@ export async function listRemoteTree(
 	directory: string,
 	options: { fetch?: FetchFn; signal?: AbortSignal } = {},
 ): Promise<string[]> {
+	return (await listRemoteTreeEntries(repository, commit, directory, options)).map(entry => entry.path);
+}
+
+/** Tree entries with the executable bit preserved. */
+export async function listRemoteTreeEntries(
+	repository: string,
+	commit: string,
+	directory: string,
+	options: { fetch?: FetchFn; signal?: AbortSignal } = {},
+): Promise<RemoteTreeEntry[]> {
 	// List the requested subdirectory's own tree: a repository-wide recursive listing
 	// can be truncated, and narrowing the source could then never help.
 	const treeSha = directory === "" ? commit : await resolveSubtree(repository, commit, directory, options);
@@ -151,12 +169,15 @@ export async function listRemoteTree(
 			`${repository}@${commit} has a truncated tree listing under "${directory}"; register a narrower source with #<directory>`,
 		);
 	}
-	const files: string[] = [];
+	const files: RemoteTreeEntry[] = [];
 	for (const entry of payload.tree) {
 		if (!isRecord(entry) || typeof entry.path !== "string" || entry.type !== "blob") continue;
-		files.push(directory === "" ? entry.path : `${directory}/${entry.path}`);
+		files.push({
+			path: directory === "" ? entry.path : `${directory}/${entry.path}`,
+			executable: entry.mode === "100755",
+		});
 	}
-	return files.sort();
+	return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /** Walk to a subdirectory's tree SHA, one non-recursive level per path segment. */

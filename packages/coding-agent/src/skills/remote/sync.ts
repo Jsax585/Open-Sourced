@@ -10,12 +10,13 @@ import { validateAgentSkillFrontmatter } from "../../discovery/agent-plugin-form
 import {
 	MAX_SKILL_DOCUMENT_BYTES,
 	MAX_SKILL_FILES,
-	listRemoteTree,
+	listRemoteTreeEntries,
 	parseRemoteSourceSpec,
 	readRemoteFile,
 	repositorySkillPath,
 	resolveRemoteCommit,
 	type FetchFn,
+	type RemoteTreeEntry,
 } from "./source";
 import {
 	fileExists,
@@ -44,7 +45,7 @@ export async function resolveRemoteIndexTarget(options: {
 }): Promise<RemoteIndexTarget> {
 	if (options.global) return { file: userRemoteSkillIndexPath(options.agentDir), level: "user" };
 	return {
-		file: (await findProjectRemoteSkillIndex(options.cwd)) ?? projectRemoteSkillIndexPath(options.cwd),
+		file: (await findProjectRemoteSkillIndex(options.cwd)) ?? (await projectRemoteSkillIndexPath(options.cwd)),
 		level: "project",
 	};
 }
@@ -63,6 +64,30 @@ export interface RemoteAddResult {
 	updated: string[];
 	/** Commit that every added/updated skill was pinned to. */
 	commit: string;
+}
+
+/** Skill-relative files and executables under one skill directory, bounded by the manifest cap. */
+function skillManifest(
+	tree: readonly RemoteTreeEntry[],
+	directory: string,
+	source: string,
+): { files: string[]; executables: string[] } {
+	const prefix = directory === "" ? "" : `${directory}/`;
+	const files: string[] = [];
+	const executables: string[] = [];
+	for (const entry of tree) {
+		if (!entry.path.startsWith(prefix)) continue;
+		const relative = entry.path.slice(prefix.length);
+		files.push(relative);
+		if (entry.executable) executables.push(relative);
+	}
+	if (files.length > MAX_SKILL_FILES) {
+		throw new RemoteSkillError(
+			"RESOURCE_LIMIT_EXCEEDED",
+			`${source}: ${files.length} files exceed the ${MAX_SKILL_FILES}-file manifest limit`,
+		);
+	}
+	return { files: files.sort(), executables: executables.sort() };
 }
 
 /** Directory the spec compares a skill's `name` against: its own dir, or the repository at the root. */
@@ -89,11 +114,11 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		fetch: options.fetch,
 		signal: options.signal,
 	});
-	const tree = await listRemoteTree(parsed.repository, commit, parsed.directory, {
+	const tree = await listRemoteTreeEntries(parsed.repository, commit, parsed.directory, {
 		fetch: options.fetch,
 		signal: options.signal,
 	});
-	const files = tree.filter(file => file === "SKILL.md" || file.endsWith("/SKILL.md"));
+	const files = tree.filter(entry => entry.path === "SKILL.md" || entry.path.endsWith("/SKILL.md"));
 	if (files.length === 0) {
 		const where = parsed.directory === "" ? "the repository root" : `"${parsed.directory}"`;
 		throw new RemoteSkillError("INVALID_SOURCE", `no SKILL.md under ${where} of ${parsed.repository}@${commit}`);
@@ -103,7 +128,8 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 	const skills: Record<string, RemoteSkillDescriptor> = { ...index.skills };
 	const added: string[] = [];
 	const updated: string[] = [];
-	for (const file of files) {
+	for (const doc of files) {
+		const file = doc.path;
 		const directory = skillDirectory(file);
 		const bytes = await readRemoteFile(parsed.repository, commit, file, {
 			fetch: options.fetch,
@@ -130,14 +156,7 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		// Persist the identity the validator checked (trimmed, NFKC-normalized), not the
 		// raw scalar: `name: " pdf "` passes validation for directory `pdf`.
 		const name = String(frontmatter.name).trim().normalize("NFKC");
-		const prefix = directory === "" ? "" : `${directory}/`;
-		const manifest = tree.filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length));
-		if (manifest.length > MAX_SKILL_FILES) {
-			throw new RemoteSkillError(
-				"RESOURCE_LIMIT_EXCEEDED",
-				`${file}: ${manifest.length} files exceed the ${MAX_SKILL_FILES}-file manifest limit`,
-			);
-		}
+		const manifest = skillManifest(tree, directory, file);
 		const existing = Object.hasOwn(skills, name) ? skills[name] : undefined;
 		if (existing && (existing.repository !== parsed.repository || existing.directory !== directory)) {
 			throw new RemoteSkillError(
@@ -153,7 +172,8 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 			directory,
 			ref: parsed.ref,
 			commit,
-			files: manifest.sort(),
+			files: manifest.files,
+			...(manifest.executables.length > 0 ? { executables: manifest.executables } : {}),
 		};
 		(existing ? updated : added).push(name);
 	}
@@ -245,10 +265,19 @@ export async function syncRemoteSkills(options: {
 				expectedDirName(descriptor.repository, descriptor.directory),
 			);
 			if (violation !== null) throw new RemoteSkillError("INVALID_SKILL", `${name}: ${violation}`);
+			// The new commit may add, rename, or delete resources; the invocation path
+			// materializes this manifest, so it must describe the pinned tree.
+			const tree = await listRemoteTreeEntries(descriptor.repository, commit, descriptor.directory, {
+				fetch: options.fetch,
+				signal: options.signal,
+			});
+			const manifest = skillManifest(tree, descriptor.directory, name);
 			skills[name] = {
 				...descriptor,
 				commit,
 				description: (frontmatter.description as string).trim(),
+				files: manifest.files,
+				...(manifest.executables.length > 0 ? { executables: manifest.executables } : {}),
 			};
 			changes.push({ name, from: descriptor.commit, to: commit });
 			targetChanges++;
