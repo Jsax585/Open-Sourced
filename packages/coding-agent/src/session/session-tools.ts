@@ -28,7 +28,13 @@ import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md"
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
-import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
+import {
+	approvalRestrictions,
+	denyError,
+	resolveApproval,
+	resolveApprovalFromContext,
+	restrictedFolderReason,
+} from "../tools/approval";
 import { getApprovalGrants } from "../tools/approval-cache";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
@@ -56,6 +62,7 @@ import type { ClientBridge, ClientBridgePermissionOutcome } from "./client-bridg
 import { toolReadsSkillUris } from "../system-prompt";
 
 import type { CustomMessage } from "./messages";
+import { SESSION_AGENT_NOTICE_TYPE } from "./queued-messages";
 import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
@@ -77,6 +84,36 @@ export interface SessionToolsHost {
 	agentKind(): "main" | "sub";
 	isDisposed(): boolean;
 	isStreaming(): boolean;
+	/**
+	 * Aborts once per user steering-message arrival; the ACP permission gate
+	 * races it against its elicit so a steer supersedes an open dialog.
+	 */
+	steeringArrivalSignal(): AbortSignal;
+	/**
+	 * Monotonic count of steering arrivals fired so far. The permission gate
+	 * snapshots it when it parks, so its read of
+	 * {@link steeringArrivalAdmitted} covers exactly the arrivals inside its
+	 * own wait window — never a group that fired before the dialog opened.
+	 */
+	steeringArrivalSeq(): number;
+	/**
+	 * The user-message groups admitted by the steering arrivals after `since`
+	 * (a snapshot from {@link steeringArrivalSeq}), flattened in admission
+	 * order — first post-park arrival first — or `undefined` when none. The
+	 * permission gate promotes exactly these messages: an agent-authored
+	 * steer enqueued in the same window never fired the signal and must not
+	 * ride the promotion ahead of the user's superseding message, and an
+	 * earlier pre-dialog steer must not be re-promoted by a later dialog.
+	 */
+	steeringArrivalAdmitted(since?: number): readonly AgentMessage[] | undefined;
+	/**
+	 * Release a park snapshot taken by {@link steeringArrivalSeq} once its
+	 * dialog ends without superseding (the read in
+	 * {@link steeringArrivalAdmitted} releases it on the supersede path).
+	 * Without this, sessions that steer often but rarely supersede a dialog
+	 * would pin every arrival group since that stale snapshot forever.
+	 */
+	steeringArrivalRelease(seq: number): void;
 	queuedMessageCount(): number;
 	planModeEnabled(): boolean;
 	model(): Model | undefined;
@@ -224,7 +261,6 @@ export function projectMountedMCPXdevGuidance(routes: Iterable<MountedMCPToolRou
 const TOOL_ROSTER_NOTICE_MESSAGE_TYPE = "tool-roster-notice";
 const XDEV_MOUNT_NOTICE_MESSAGE_TYPE = "xdev-mount-notice";
 const EVAL_PRELUDE_NOTICE_MESSAGE_TYPE = "eval-prelude-notice";
-const SESSION_AGENT_NOTICE_MESSAGE_TYPE = "session-agent-notice";
 
 /** Custom entry holding the digest of the base prompt the branch's primary model calls are built from. */
 const SYSTEM_PROMPT_DIGEST_CUSTOM_TYPE = "system-prompt-digest";
@@ -265,7 +301,7 @@ interface EvalPreludeNoticeDetails {
 	removed: string[];
 }
 
-/** Agent pseudonyms added/removed by one hidden {@link SESSION_AGENT_NOTICE_MESSAGE_TYPE} message. */
+/** Agent pseudonyms added/removed by one hidden {@link SESSION_AGENT_NOTICE_TYPE} message. */
 interface SessionAgentNoticeDetails {
 	added: string[];
 	removed: string[];
@@ -386,6 +422,8 @@ export class SessionTools {
 	#promptSurfaceScope = new AsyncLocalStorage<PromptSurface>();
 	#toolRegistryMutationTail: Promise<void> = Promise.resolve();
 	#promptModelKey: string | undefined;
+	/** Inline-descriptor decision of the model the base prompt was rendered for. */
+	#promptInlineDescriptors: boolean | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
 	/**
@@ -488,6 +526,7 @@ export class SessionTools {
 		for (const tool of host.agent.state.tools) this.#enabledToolNames.add(tool.name);
 		for (const name of this.#xdev?.mountedNames ?? []) this.#enabledToolNames.add(name);
 		this.#promptModelKey = this.#currentPromptModelKey();
+		this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 	}
 
 	/** Mutable registry shared with controller hosts that inspect available tools. */
@@ -847,22 +886,40 @@ export class SessionTools {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
+	/** Whether the active model inlines tool descriptors into the prompt and prunes them from the provider schemas. */
+	#currentInlineDescriptors(): boolean | undefined {
+		const activeModel = this.#host.model();
+		if (!activeModel) return undefined;
+		return shouldInlineToolDescriptors(cfgInlineToolDescriptors.get(this.#host.settings), activeModel.id);
+	}
+
 	#currentPromptModelKey(): string | undefined {
 		const activeModel = this.#host.model();
 		if (!activeModel) return undefined;
 		if (cfgIncludeModelInPrompt.get(this.#host.settings)) return formatModelString(activeModel);
 		// The inline-descriptor decision is per model and selects both the prompt's
 		// tool catalog and provider-side description pruning (see `sdk.ts`).
-		const inlineDescriptors = shouldInlineToolDescriptors(
-			cfgInlineToolDescriptors.get(this.#host.settings),
-			activeModel.id,
-		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${this.#currentInlineDescriptors()}`;
 	}
 
-	/** Rebuilds model-dependent tool prompts after a model change. */
-	async syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
+	/**
+	 * Rebuilds model-dependent tool prompts after a model change.
+	 *
+	 * `retryFallback` marks a hop down the retry fallback chain. It keeps the Model line and the
+	 * Delegation wording the prompt was rendered with: re-rendering them changed the prompt's bytes,
+	 * and the provider then wrote the whole cached conversation again on every hop. It still rebuilds
+	 * when the hop changes what the request must carry for the new model: the edit-mode policy
+	 * (#11983), or the inline-descriptor decision, which also turns provider-side description pruning
+	 * on or off (#14200). The kept key makes a later switch back to the rendered model a no-op, and a
+	 * deliberate switch (`/model`, `setModel`) compares against the model the prompt describes.
+	 */
+	async syncAfterModelChange(previousEditMode: EditMode, options?: { retryFallback?: boolean }): Promise<void> {
 		const currentEditMode = this.resolveActiveEditMode();
+		if (options?.retryFallback) {
+			const inlineDescriptorsChanged = this.#currentInlineDescriptors() !== this.#promptInlineDescriptors;
+			if (previousEditMode !== currentEditMode || inlineDescriptorsChanged) await this.refreshBaseSystemPrompt();
+			return;
+		}
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
 		// The system prompt selects model-specific policy even when it does not display the model id.
 		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
@@ -910,7 +967,9 @@ export class SessionTools {
 					onUpdate: never,
 					ctx: AgentToolContext | undefined,
 				) => {
-					let cacheable = true;
+					const restrictions = approvalRestrictions(this.#host.settings, this.#host.sessionManager.getCwd());
+					// A restricted call is approved per call: a remembered ACP answer never covers it.
+					let cacheable = restrictedFolderReason(target, args, restrictions) === undefined;
 					if (target.name === "bash") {
 						const explicitAutoApprove = this.#isExplicitAutoApproveMode();
 						const { approvalMode, userPolicies } = resolveApprovalFromContext({
@@ -924,6 +983,7 @@ export class SessionTools {
 							mode,
 							userPolicies,
 							getApprovalGrants(this.#host.settings.getAgentDir(), this.#host.sessionManager.getSessionId()),
+							restrictions,
 						);
 						if (resolved.policy === "deny") throw denyError(resolved, target.name);
 						if (resolved.policy === "allow") {
@@ -960,10 +1020,99 @@ export class SessionTools {
 					}
 					type PermissionRaceResult =
 						| { kind: "permission"; outcome: ClientBridgePermissionOutcome }
-						| { kind: "aborted" };
+						| { kind: "aborted" }
+						| { kind: "steered" };
 					const { promise: abortPromise, resolve: resolveAbort } = Promise.withResolvers<PermissionRaceResult>();
 					const onAbort = () => resolveAbort({ kind: "aborted" });
 					signal?.addEventListener("abort", onAbort, { once: true });
+					// The tool call's loop-owned steer signal: aborted when a
+					// queued steer is detected while this batch runs, gated on
+					// `interruptMode` ("wait" spares side-effecting work — the
+					// dialog then simply waits, and the message injects at the
+					// next boundary). Racing it instead of a session-level third
+					// signal keeps the gate on the loop's own policy. Direct
+					// executors without a loop context (e.g. the Cursor bridge)
+					// fall back to the session's steering-arrival signal.
+					const steeringSignal = ctx?.toolCall?.steeringSignal ?? this.#host.steeringArrivalSignal();
+					// Park marker: only arrivals fired after this snapshot
+					// belong to this dialog's supersede window — a steer
+					// that fired before the dialog opened must keep its
+					// natural queue position, not ride this promotion.
+					const arrivalParkSeq = this.#host.steeringArrivalSeq();
+					// The message that supersedes this dialog delivers at the
+					// next batch boundary ahead of older queued steers, so the
+					// agent reads the question that stopped the call first —
+					// the same "denying steer first" semantics as the TUI
+					// approval dialog (agent.prioritizeSteering, #15642).
+					// Promote exactly the group whose admission fired the
+					// session arrival signal — never whatever else appeared on
+					// the queue in the same window: an agent-authored steer
+					// enqueued after the dialog opened does not fire it, and
+					// promoting it along would deliver it first under the
+					// one-at-a-time boundary, making the user's superseding
+					// message wait another boundary. Identity-based promotion:
+					// text matching could hit an older equal-looking steer.
+					const { promise: steerPromise, resolve: resolveSteer } = Promise.withResolvers<PermissionRaceResult>();
+					// Only user steering may supersede the dialog. The
+					// loop-owned signal aborts — once per run — for ANY queued
+					// steering source (agent-authored asides, IRC interrupts
+					// included), none of which the user asked to preempt
+					// their own dialog, so re-check the arrival channel at
+					// the loop abort and only then classify the dialog as
+					// superseded. The loop's own interruptMode policy is
+					// untouched: a queued non-user steer still injects at
+					// the next batch boundary once the call this dialog
+					// guards finishes normally.
+					const userSteering = new AbortController();
+					let superseded = false;
+					const finishSteer = (arrived: readonly AgentMessage[]): void => {
+						const queued = new Set(this.#host.agent.peekSteeringQueue());
+						const promotable = arrived.filter(message => queued.has(message));
+						if (promotable.length > 0) {
+							this.#host.agent.prioritizeSteering(promotable);
+						}
+						userSteering.abort();
+						resolveSteer({ kind: "steered" });
+						superseded = true;
+					};
+					const onLoopSteer = () => {
+						if (superseded) return;
+						const arrived = this.#host.steeringArrivalAdmitted(arrivalParkSeq) ?? [];
+						// Empty window: agent-authored or IRC steering. Keep
+						// waiting — the arrival listener below still catches a
+						// user steer admitted later.
+						if (arrived.length === 0) {
+							return;
+						}
+						finishSteer(arrived);
+					};
+					// The arrival channel re-arms on every user-steering
+					// admission, so it also covers the case where an
+					// agent-authored steer already spent the loop's single
+					// soft abort: the loop signal being aborted is the proof
+					// the interruptMode policy allowed an interrupt this
+					// batch, so a user steer admitted afterwards still
+					// supersedes. In "wait" mode the loop signal never
+					// aborts and this listener stays inert, preserving the
+					// policy.
+					const arrivalSignal = this.#host.steeringArrivalSignal();
+					const onArrival = () => {
+						if (superseded) return;
+						if (!steeringSignal.aborted) return;
+						const arrived = this.#host.steeringArrivalAdmitted(arrivalParkSeq) ?? [];
+						if (arrived.length === 0) return;
+						finishSteer(arrived);
+					};
+					if (steeringSignal.aborted) {
+						onLoopSteer();
+					} else {
+						steeringSignal.addEventListener("abort", onLoopSteer);
+					}
+					if (arrivalSignal.aborted) {
+						onArrival();
+					} else {
+						arrivalSignal.addEventListener("abort", onArrival);
+					}
 					let raced: PermissionRaceResult;
 					try {
 						raced = await this.#host.waitForUser(() => {
@@ -984,11 +1133,27 @@ export class SessionTools {
 								},
 								PERMISSION_OPTIONS,
 								signal,
+								// The bridge cancels its pending wire dialog when the
+								// steer wins; the gate's own race above classifies the
+								// outcome either way. The derived signal keeps the wire
+								// cancel on user steering only — an agent-authored or
+								// IRC steer that aborted the loop signal leaves the
+								// client's dialog open.
+								userSteering.signal,
 							).then(outcome => ({ kind: "permission" as const, outcome }));
-							return Promise.race([permissionPromise, abortPromise]);
+							return Promise.race([permissionPromise, abortPromise, steerPromise]);
 						});
 					} finally {
 						signal?.removeEventListener("abort", onAbort);
+						steeringSignal.removeEventListener("abort", onLoopSteer);
+						arrivalSignal.removeEventListener("abort", onArrival);
+						// The dialog is over; its park window can no longer
+						// read. Idempotent when a supersede's drain already
+						// released it.
+						this.#host.steeringArrivalRelease(arrivalParkSeq);
+					}
+					if (raced.kind === "steered") {
+						throw new ToolAbortError("Permission request superseded by user steering");
 					}
 					if (raced.kind === "aborted" || signal?.aborted) {
 						throw new ToolAbortError("Permission request cancelled");
@@ -1243,6 +1408,7 @@ export class SessionTools {
 				invalidateToolSchemaMetadata(this.#host.agent.state.tools);
 				this.#lastAppliedToolSignature = rebuiltSignature;
 				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
@@ -1621,7 +1787,7 @@ export class SessionTools {
 	takeSessionAgentNotice(): CustomMessage<SessionAgentNoticeDetails> | undefined {
 		const known = new Set(this.#promptSurface.sessionAgents.map(agent => agent.name));
 		for (const message of this.#host.agent.state.messages) {
-			if (message.role !== "custom" || message.customType !== SESSION_AGENT_NOTICE_MESSAGE_TYPE) continue;
+			if (message.role !== "custom" || message.customType !== SESSION_AGENT_NOTICE_TYPE) continue;
 			const details = message.details;
 			if (!isRecord(details) || !Array.isArray(details.added) || !Array.isArray(details.removed)) continue;
 			for (const name of details.added) if (typeof name === "string") known.add(name);
@@ -1634,7 +1800,7 @@ export class SessionTools {
 		if (added.length === 0 && removed.length === 0) return undefined;
 		return {
 			role: "custom",
-			customType: SESSION_AGENT_NOTICE_MESSAGE_TYPE,
+			customType: SESSION_AGENT_NOTICE_TYPE,
 			content: prompt.render(sessionAgentNoticePrompt, {
 				added: added.map(agent => ({ name: agent.name, description: agent.description })),
 				removed,
@@ -1789,26 +1955,28 @@ export class SessionTools {
 	}
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
-	async refreshSkills(): Promise<void> {
-		resetCapabilities();
-		if (this.#skillsReloadable) {
-			const skillsSettings = cfgSkills.get(this.#host.settings);
-			const discovered = await loadSkills({
-				...skillsSettings,
-				cwd: this.#host.sessionManager.getCwd(),
-				disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
-				extensionRoots: this.#host.effectiveExtensionRoots(),
-			});
-			this.#skills = discovered.skills;
-			this.#skillWarnings = discovered.warnings;
-			this.#skillsSettings = skillsSettings;
+	refreshSkills(): Promise<void> {
+		return this.runToolRegistryMutation(async () => {
+			resetCapabilities();
+			if (this.#skillsReloadable) {
+				const skillsSettings = cfgSkills.get(this.#host.settings);
+				const discovered = await loadSkills({
+					...skillsSettings,
+					cwd: this.#host.sessionManager.getCwd(),
+					disabledExtensions: cfgDisabledExtensions.get(this.#host.settings),
+					extensionRoots: this.#host.effectiveExtensionRoots(),
+				});
+				this.#skills = discovered.skills;
+				this.#skillWarnings = discovered.warnings;
+				this.#skillsSettings = skillsSettings;
 
-			if (this.#host.agentKind() === "main") {
-				setActiveSkills(this.#skills);
+				if (this.#host.agentKind() === "main") {
+					setActiveSkills(this.#skills);
+				}
 			}
-		}
-		await this.refreshBaseSystemPrompt();
-		this.#host.notifyCommandMetadataChanged();
+			await this.refreshBaseSystemPrompt();
+			this.#host.notifyCommandMetadataChanged();
+		});
 	}
 
 	/** Selects enabled tools, ignoring names absent from the registry. */
@@ -1862,14 +2030,25 @@ export class SessionTools {
 		}, signal);
 	}
 
-	/** Restores a non-MCP presentation snapshot while retaining the current MCP selection. */
-	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void> {
+	/** Restores a non-MCP presentation snapshot plus the MCP selection and non-built-in tools registered after it. */
+	restoreNonMCPToolPresentation(
+		nonMCPToolNames: string[],
+		nonMCPMountedToolNames: string[],
+		registeredToolNames: readonly string[],
+	): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
+			const registered = new Set(registeredToolNames);
+			const isLateNonBuiltIn = (name: string) =>
+				!isMCPToolName(name) && !this.hasBuiltInTool(name) && !registered.has(name);
 			const currentMCPToolNames = this.getSelectedMCPToolNames();
 			const currentMountedMCPToolNames = this.getMountedXdevToolNames().filter(isMCPToolName);
 			await this.setActiveToolPresentation(
-				[...nonMCPToolNames, ...currentMCPToolNames],
-				[...nonMCPMountedToolNames, ...currentMountedMCPToolNames],
+				[...nonMCPToolNames, ...currentMCPToolNames, ...this.getEnabledToolNames().filter(isLateNonBuiltIn)],
+				[
+					...nonMCPMountedToolNames,
+					...currentMountedMCPToolNames,
+					...this.getMountedXdevToolNames().filter(isLateNonBuiltIn),
+				],
 			);
 		});
 	}
@@ -2070,6 +2249,7 @@ export class SessionTools {
 				this.#basePromptReflectsRosterDelta = true;
 				this.#pendingToolRosterDeltaAfterBase = undefined;
 				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 				this.#lastAppliedToolSignature = signature;
 				return true;
 			},
