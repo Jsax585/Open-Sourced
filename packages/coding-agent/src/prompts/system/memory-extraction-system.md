@@ -14,5 +14,6 @@ morning. the dashboard repo uses yarn, never npm. staging postgres lives at pg-s
 Example output:
 The dashboard repo uses yarn, never npm
 Staging postgres is at pg-staging.internal:5433
-The user's name is Olga; the team lead is Marco
+The user's name is Olga
+The team lead is Marco
 Code freeze starts 2026-12-18
