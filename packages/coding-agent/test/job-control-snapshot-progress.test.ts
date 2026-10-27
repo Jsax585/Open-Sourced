@@ -42,14 +42,15 @@ it("snapshots keep live task progress for a running task job and drop malformed 
 			contextWindow: 1000,
 		});
 		job.resultText = "final body";
-		job.latestDetails.meta = { route: "worker" };
+		const meta = { source: { type: "internal" as const, value: "worker-output" } };
+		job.latestDetails.meta = meta;
 		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.resultText).toBeUndefined();
-		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.meta).toEqual({ route: "worker" });
+		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.meta).toEqual(meta);
 		job.status = "completed";
 		manager.consumeJobResults([id]);
 		expect(snapshotJobs(session, [job])[0]?.resultText).toBeUndefined();
 		expect(snapshotJobs(session, [job])[0]?.meta).toBeUndefined();
-		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.meta).toEqual({ route: "worker" });
+		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.meta).toEqual(meta);
 
 		// Negative control: a non-task job never carries progress.
 		const bashId = manager.register("bash", "sleep", async () => gate.promise, { id: "Shell" });
