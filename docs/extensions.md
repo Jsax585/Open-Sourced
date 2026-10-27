@@ -590,11 +590,24 @@ and `/new`. Commands retain their explicit prefill and session-transition action
 ### Tool lifecycle
 
 - `tool_call` (pre-exec, may block, revise the tool's execution `input`, or return passive `additionalContext`; for model-issued calls it fires at arg-prep time in the agent loop, so a revision is revalidated and seen by concurrency scheduling, execution events, the persisted assistant message, and the approval gate alike; passive context from non-blocking handlers is delivered after the batch's tool results in assistant call order, before the next provider request)
+- `tool_authorization` (final pre-exec gate, after all `tool_call` rewrites; returns `allow`, `ask`, or `deny`)
 - `tool_result` (post-exec, may patch content/details/isError or return passive `additionalContext`; result context is delivered outside the tool output even when `event.isError` is true, so a failure-specific handler can guide the next model step)
 - `tool_execution_start` / `tool_execution_update` / `tool_execution_end` (observability)
 - `tool_approval_requested` / `tool_approval_resolved` (observability; emitted by `wrapper.ts` only when a tool requires approval and an approval handler is registered)
 
 `tool_result` is middleware-style: handlers run in extension order and each sees prior modifications. Distinct non-blank `additionalContext` from every handler is preserved in registration order (repeats, compared ignoring surrounding whitespace, are dropped) and delivered before that call's `tool_call` context.
+
+#### Final tool authorization
+
+Use `pi.on("tool_authorization", handler)` to review what will actually execute, including rewrites from extensions registered after yours. The event carries `sessionId`, `toolCallId`, `toolName`, a normalized inspection view of the final execution `input`, `approvalMode`, `nativeDecision: "allow" | "ask"`, `manualApprovalRequired`, and an optional native `reason`. `ctx.agent` identifies the executing agent, including advisor calls sharing the main session's runner.
+
+Return `{ decision: "allow" | "ask" | "deny", reason?: string }`, or `undefined` to abstain. Decisions combine strictest-wins: **deny > ask > allow**. Denial stops execution; a handler error, timeout, or invalid decision fails closed. Distinct non-blank ask reasons are retained in registration order alongside the native reason; the extension-supplied portion is sanitized and bounded for the approval prompt. The handler uses the `extensionHandlers.toolCallTimeoutMs` budget, paused during extension UI waits. In the interactive TUI, authorizer dialogs wait for the final rewritten call preview; automatic decisions do not wait for a renderer.
+
+`allow` overrides `tools.approvalMode` for that call: a mode-only prompt from `always-ask`, `always-ask-cached`, or `write` can be skipped. It cannot waive tool-owned or explicit `tools.approval` prompts, restricted-folder prompts, or provider safety checks. `ask` uses the existing native approval UI for this call and denies execution if no interactive UI is available; ACP permission dialogs are not a fallback for extension asks. Native denials may stop the call before this event fires.
+
+The execution input is snapshotted before awaiting authorizers, and each handler receives its own detached inspection view, normalized like `tool_call` and `tool_result`: hashline edits expose derived `path`/`paths`, and provider-native computer calls expose `actions` and `pendingSafetyChecks`. Normalization does not alter the execution snapshot. Mutating the view or a retained `tool_call` rewrite cannot change what executes; return rewrites from `tool_call`, not from `tool_authorization`.
+
+This is an execution gate, not a disclosure boundary: tool previews and ACP input notifications may already have been shown. ACP's existing wrapping order and permission behavior are unchanged.
 
 ### Plan review lifecycle
 

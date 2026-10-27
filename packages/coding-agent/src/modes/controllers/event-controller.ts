@@ -218,6 +218,7 @@ export class EventController {
 	#approvalPreviewGates = new Map<string, ApprovalPreviewGate>();
 	#pendingStreamPreviews = new Map<string, unknown>();
 	#detachToolApprovalPreviewWaiter: (() => void) | undefined;
+	#detachToolApprovalStateListener: (() => void) | undefined;
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#toolTimelineComponents = new Map<string, Component>();
@@ -354,6 +355,9 @@ export class EventController {
 		this.#detachToolApprovalPreviewWaiter = session?.extensionRunner?.setToolApprovalPreviewWaiter(toolCallId =>
 			this.#waitForToolApprovalPreview(toolCallId),
 		);
+		this.#detachToolApprovalStateListener = session?.extensionRunner?.setToolApprovalStateListener?.(
+			(toolCallId, required) => this.#updateToolApprovalState(toolCallId, required),
+		);
 		vocalizer.setEnhancer(
 			session?.modelRegistry && session.agent && session.settings
 				? new SpeechEnhancer({
@@ -476,6 +480,8 @@ export class EventController {
 	dispose(): void {
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
+		this.#detachToolApprovalStateListener?.();
+		this.#detachToolApprovalStateListener = undefined;
 		this.#clearApprovalPreviewGates();
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
@@ -2010,6 +2016,17 @@ export class EventController {
 			}
 		}
 		this.#startToolApprovalPreview(event.toolCallId);
+	}
+
+	#updateToolApprovalState(toolCallId: string, required: boolean): void {
+		const previous = this.#blockingPrompts.get(toolCallId);
+		if (previous?.state === "blocked" && previous.kind === "question") return;
+		if (required) {
+			this.#blockingPrompts.set(toolCallId, { state: "blocked", kind: "permission" });
+		} else if (previous?.state === "blocked" && previous.kind === "permission") {
+			this.#blockingPrompts.delete(toolCallId);
+		}
+		setRunStatus(this.#blockingPrompts.values().next().value ?? { state: "working" });
 	}
 
 	/**

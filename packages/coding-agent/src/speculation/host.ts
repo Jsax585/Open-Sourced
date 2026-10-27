@@ -76,6 +76,7 @@ function operationGrant(context: SpeculativeOperationContext): CodingAgentSpecul
 function hasLifecycleHandlers(runner: SpeculationLifecycle): boolean {
 	return (
 		runner.hasHandlers("tool_call") ||
+		runner.hasHandlers("tool_authorization") ||
 		runner.hasHandlers("tool_result") ||
 		runner.hasHandlers("tool_approval_requested") ||
 		runner.hasHandlers("tool_approval_resolved")

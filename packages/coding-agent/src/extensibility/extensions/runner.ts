@@ -26,7 +26,7 @@ import {
 	setContextHistoryIndex,
 } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import type { KeyId } from "@oh-my-pi/pi-tui";
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, untilAborted } from "@oh-my-pi/pi-utils";
 import { refreshShellConfigCache } from "@oh-my-pi/pi-utils/procmgr";
 import { MAIN_AGENT_RULE_NAME } from "../../capability/rule";
 import type { ModelRegistry } from "../../config/model-registry";
@@ -97,6 +97,8 @@ import type {
 	SessionCompactingResult,
 	SessionStopEvent,
 	SessionStopEventResult,
+	ToolAuthorizationEvent,
+	ToolAuthorizationEventResult,
 	ToolCallEvent,
 	ToolCallEventResult,
 	ToolRegistrationListener,
@@ -199,33 +201,54 @@ function createHandlerUIContext(
 	ui: ExtensionUIContext,
 	handlerSignal: AbortSignal,
 	timeoutBudget?: HandlerTimeoutBudget,
+	beforeDialog?: () => Promise<void>,
 ): ExtensionUIContext {
 	const askDialog = ui.askDialog;
 	const approve = ui.approve;
-	const runDialog = async <T>(dialog: () => Promise<T>): Promise<T> => {
+	const runDialog = async <T>(
+		dialogOptions: ExtensionUIDialogOptions | undefined,
+		dialog: (options: ExtensionUIDialogOptions) => Promise<T>,
+	): Promise<T> => {
+		const options = attachHandlerSignal(dialogOptions, handlerSignal);
 		timeoutBudget?.pause();
 		try {
-			return await dialog();
+			if (beforeDialog) {
+				try {
+					await untilAborted(options.signal, beforeDialog);
+				} catch (error) {
+					if (handlerSignal.aborted || !options.signal?.aborted) throw error;
+					// Let the host settle a caller-cancelled dialog with its normal cancelled
+					// value, without opening it; custom dialogs instead reject below.
+				}
+			}
+			return await dialog(options);
 		} finally {
 			timeoutBudget?.resume();
 		}
 	};
 	const dialogMethods = {
-		select: (title, options, dialogOptions) =>
-			runDialog(() => ui.select(title, options, attachHandlerSignal(dialogOptions, handlerSignal))),
+		select: (title, options, dialogOptions) => runDialog(dialogOptions, scoped => ui.select(title, options, scoped)),
 		confirm: (title, message, dialogOptions) =>
-			runDialog(() => ui.confirm(title, message, attachHandlerSignal(dialogOptions, handlerSignal))),
+			runDialog(dialogOptions, scoped => ui.confirm(title, message, scoped)),
 		input: (title, placeholder, dialogOptions) =>
-			runDialog(() => ui.input(title, placeholder, attachHandlerSignal(dialogOptions, handlerSignal))),
+			runDialog(dialogOptions, scoped => ui.input(title, placeholder, scoped)),
 		askDialog: askDialog
-			? (questions, dialogOptions) =>
-					runDialog(() => askDialog.call(ui, questions, attachHandlerSignal(dialogOptions, handlerSignal)))
+			? (questions, dialogOptions) => runDialog(dialogOptions, scoped => askDialog.call(ui, questions, scoped))
 			: undefined,
 		approve: approve
-			? (prompt, dialogOptions) =>
-					runDialog(() => approve.call(ui, prompt, attachHandlerSignal(dialogOptions, handlerSignal)))
+			? (prompt, dialogOptions) => runDialog(dialogOptions, scoped => approve.call(ui, prompt, scoped))
 			: undefined,
 		custom: async (factory, options) => {
+			const signal = options?.signal ? AbortSignal.any([options.signal, handlerSignal]) : handlerSignal;
+			// Gate the modal itself, but retain the computation budget for its factory.
+			if (beforeDialog) {
+				timeoutBudget?.pause();
+				try {
+					await untilAborted(signal, beforeDialog);
+				} finally {
+					timeoutBudget?.resume();
+				}
+			}
 			let customSettled = false;
 			let componentReady = false;
 			try {
@@ -240,7 +263,7 @@ function createHandlerUIContext(
 					},
 					{
 						...options,
-						signal: options?.signal ? AbortSignal.any([options.signal, handlerSignal]) : handlerSignal,
+						signal,
 					},
 				);
 			} finally {
@@ -249,7 +272,7 @@ function createHandlerUIContext(
 			}
 		},
 		editor: (title, prefill, dialogOptions, editorOptions) =>
-			runDialog(() => ui.editor(title, prefill, attachHandlerSignal(dialogOptions, handlerSignal), editorOptions)),
+			runDialog(dialogOptions, scoped => ui.editor(title, prefill, scoped, editorOptions)),
 	} satisfies Pick<ExtensionUIContext, "select" | "confirm" | "input" | "askDialog" | "approve" | "custom" | "editor">;
 	const delegatedMethods = new Map<PropertyKey, unknown>();
 
@@ -279,10 +302,11 @@ function createHandlerContext(
 	ctx: ExtensionContext,
 	handlerSignal: AbortSignal,
 	timeoutBudget?: HandlerTimeoutBudget,
+	beforeDialog?: () => Promise<void>,
 ): ExtensionContext {
 	const scoped: ExtensionContext = Object.create(ctx);
 	Object.defineProperty(scoped, "ui", {
-		value: createHandlerUIContext(ctx.ui, handlerSignal, timeoutBudget),
+		value: createHandlerUIContext(ctx.ui, handlerSignal, timeoutBudget, beforeDialog),
 		enumerable: true,
 		configurable: true,
 	});
@@ -394,6 +418,7 @@ const MAX_PENDING_MCP_NOTIFICATIONS = 100;
  */
 type RunnerEmitEvent = Exclude<
 	ExtensionEvent,
+	| ToolAuthorizationEvent
 	| ToolCallEvent
 	| ToolResultEvent
 	| UserBashEvent
@@ -519,6 +544,7 @@ export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
+	#toolApprovalStateListener?: (toolCallId: string, required: boolean) => void;
 	/** Grant keys (see `sessionApprovalScope`) approved "for this session", each prefixed by the session it covers. */
 	#sessionApprovals = new Set<string>();
 	#trackUserWait?: UserWaitTracker;
@@ -1011,6 +1037,18 @@ export class ExtensionRunner {
 		return () => {
 			if (this.#toolApprovalPreviewWaiter === waiter) this.#toolApprovalPreviewWaiter = undefined;
 		};
+	}
+
+	/** Registers updates when final authorization changes a scheduled call's native approval decision. */
+	setToolApprovalStateListener(listener: (toolCallId: string, required: boolean) => void): () => void {
+		this.#toolApprovalStateListener = listener;
+		return () => {
+			if (this.#toolApprovalStateListener === listener) this.#toolApprovalStateListener = undefined;
+		};
+	}
+
+	reportToolApprovalState(toolCallId: string, required: boolean): void {
+		this.#toolApprovalStateListener?.(toolCallId, required);
 	}
 
 	/**
@@ -1739,6 +1777,7 @@ export class ExtensionRunner {
 		timeoutMs: number,
 		onFailure?: (kind: "timeout" | "error", message: string) => R,
 		outerSignal?: AbortSignal,
+		beforeDialog?: () => Promise<void>,
 	): Promise<R | undefined> {
 		// `session_stop` carries its own signal on the event; `tool_call` receives
 		// the outer dispatch signal (loop request or wrapper execute) so an abort
@@ -1764,7 +1803,8 @@ export class ExtensionRunner {
 							const handlerContext = createHandlerContext(
 								ctx,
 								handlerSignal,
-								event.type === "tool_call" ? budget : undefined,
+								event.type === "tool_call" || event.type === "tool_authorization" ? budget : undefined,
+								beforeDialog,
 							);
 							result = await this.#toolRegistrationScope.run(registrationScope, () =>
 								handler(event, handlerContext),
@@ -2123,6 +2163,61 @@ export class ExtensionRunner {
 			return { block: true, reason: `Tool execution was cancelled while an extension handler was pending` };
 		}
 		return buildAggregatedToolCallResult(result, aggregated);
+	}
+
+	/** Authorize final input, failing closed on handler errors and combining strictest-first. */
+	async emitToolAuthorization(
+		event: ToolAuthorizationEvent,
+		signal?: AbortSignal,
+		agent?: ExtensionAgentIdentity,
+		beforeDialog?: () => Promise<void>,
+	): Promise<ToolAuthorizationEventResult | undefined> {
+		const ctx = this.createContext(undefined, undefined, agent);
+		const timeoutMs = normalizeHandlerTimeout(
+			(this.settings ? cfgExtensionHandlersToolCallTimeoutMs.get(this.settings) : undefined) ??
+				extensionHandlerTimeoutMs,
+		);
+		let result: ToolAuthorizationEventResult | undefined;
+		let askReasons: Set<string> | undefined;
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("tool_authorization");
+			if (!handlers) continue;
+			for (const handler of handlers) {
+				const handlerResult = (await this.#runHandlerWithTimeout(
+					handler,
+					{ ...event, input: structuredClone(event.input) },
+					ctx,
+					ext,
+					timeoutMs,
+					(kind, message) => ({
+						decision: "deny",
+						reason:
+							kind === "timeout"
+								? `Extension ${ext.path} timed out after ${timeoutMs}ms`
+								: `Extension ${ext.path} failed: ${message}`,
+					}),
+					signal,
+					beforeDialog,
+				)) as ToolAuthorizationEventResult | undefined;
+				if (handlerResult === undefined) continue;
+				if (!handlerResult || !["allow", "ask", "deny"].includes(handlerResult.decision)) {
+					return { decision: "deny", reason: `Extension ${ext.path} returned an invalid authorization decision` };
+				}
+				if (handlerResult.decision === "deny") return { ...handlerResult };
+				if (handlerResult.decision === "ask") {
+					const reason = typeof handlerResult.reason === "string" ? handlerResult.reason.trim() : undefined;
+					if (reason) (askReasons ??= new Set()).add(reason);
+					if (result?.decision !== "ask") result = { decision: "ask" };
+				} else if (result === undefined) {
+					result = { ...handlerResult };
+				}
+			}
+		}
+		if (signal?.aborted) {
+			return { decision: "deny", reason: "Tool authorization was cancelled" };
+		}
+		if (result?.decision === "ask" && askReasons) result.reason = [...askReasons].join("; ");
+		return result;
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {

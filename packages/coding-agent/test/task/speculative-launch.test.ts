@@ -11,11 +11,16 @@
  *    extension lifecycle handlers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AgentToolCall, SpeculativeOperationSink } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolCall, SpeculativeOperationSink } from "@oh-my-pi/pi-agent-core";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createSpeculativeToolExecutionConfig } from "@oh-my-pi/pi-coding-agent/speculation/host";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
@@ -24,6 +29,8 @@ import { BatchArgsScanner, type TaskLaunchSession } from "@oh-my-pi/pi-coding-ag
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const taskAgent: AgentDefinition = {
 	name: "task",
@@ -166,6 +173,64 @@ describe("task speculative launch", () => {
 		for (const manager of managers.splice(0)) await manager.dispose({ timeoutMs: 1000 });
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("never starts streamed subagents before final authorization can deny their dispatch", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		managers.push(manager);
+		const toolSession = createSession(manager);
+		const runtime = new ExtensionRuntime();
+		const authorize = vi.fn(() => ({ decision: "deny" as const, reason: "Task policy denied" }));
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.on("tool_authorization", authorize);
+			},
+			toolSession.cwd,
+			new EventBus(),
+			runtime,
+		);
+		const auth = createInMemoryAuthStorage();
+		try {
+			const runner = new ExtensionRunner(
+				[extension],
+				runtime,
+				toolSession.cwd,
+				SessionManager.inMemory(toolSession.cwd),
+				new ModelRegistry(auth),
+			);
+			const config = createSpeculativeToolExecutionConfig(toolSession.settings, toolSession, runner);
+			const tool = await TaskTool.create(toolSession);
+			const launchAllowed = Promise.withResolvers<boolean>();
+			const stream = await tool.speculation.stream?.open({
+				coordinator: {
+					...sink,
+					authorizeLaunch: async context => {
+						const decision = (await config.host?.authorizeLaunch?.(context)) ?? {
+							allowed: false,
+							reason: "No launch host",
+						};
+						launchAllowed.resolve(decision.allowed);
+						return decision;
+					},
+				},
+				parentToolCallId: toolCall.id,
+			});
+			if (!stream) throw new Error("Expected task stream session");
+			stream.update(toolCall, alphaClosed);
+			// An allowed launch must reach the subprocess before teardown; otherwise
+			// adopt([]) could abort it early and make this absence assertion vacuous.
+			if (await launchAllowed.promise) await spawn("Alpha").started.promise;
+			await (stream as TaskLaunchSession).adopt([]);
+			expect(authorize).not.toHaveBeenCalled();
+			expect(executorModule.runSubprocess).not.toHaveBeenCalled();
+			await expect(
+				new ExtensionToolWrapper(tool as unknown as AgentTool, runner).execute(toolCall.id, args),
+			).rejects.toThrow("Task policy denied");
+			expect(authorize).toHaveBeenCalledTimes(1);
+			expect([...startedIds]).toEqual([]);
+		} finally {
+			auth.close();
+		}
 	});
 
 	it("starts each item as it closes and dispatch adopts the running agents", async () => {

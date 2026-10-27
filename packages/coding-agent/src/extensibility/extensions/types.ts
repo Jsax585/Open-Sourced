@@ -137,6 +137,7 @@ import type {
 	SessionSwitchEvent,
 	SessionTreeEvent,
 	TodoReminderEvent,
+	ToolAuthorizationEventResult,
 	ToolCallEventResult,
 	ToolResultEventResult,
 	TtsrTriggeredEvent,
@@ -1497,6 +1498,21 @@ export interface ModeChangedEvent {
 	state: SessionModeState;
 }
 
+/** Fired after all `tool_call` rewrites, before execution; outer ACP approval may already have occurred. */
+export interface ToolAuthorizationEvent {
+	type: "tool_authorization";
+	sessionId: string;
+	toolCallId: string;
+	toolName: string;
+	/** Normalized tool-event view of the detached execution snapshot; mutations are ignored. */
+	input: Record<string, unknown>;
+	approvalMode: ApprovalMode;
+	nativeDecision: "allow" | "ask";
+	/** Allow overrides approvalMode only, not tool-owned/explicit policy, restricted folders, or provider safety. */
+	manualApprovalRequired: boolean;
+	reason?: string;
+}
+
 interface ToolCallEventBase {
 	type: "tool_call";
 	toolCallId: string;
@@ -1672,6 +1688,7 @@ export type ExtensionEvent =
 	| UserPythonEvent
 	| InputEvent
 	| ToolCallEvent
+	| ToolAuthorizationEvent
 	| ToolResultEvent
 	| ToolApprovalRequestedEvent
 	| ToolApprovalResolvedEvent
@@ -1704,7 +1721,7 @@ export interface AssistantMessageRewriteResult {
 
 export type BeforeProviderRequestEventResult = unknown;
 
-export type { ToolCallEventResult } from "../shared-events";
+export type { ToolAuthorizationEventResult, ToolCallEventResult } from "../shared-events";
 
 /** Result from input event handler */
 export interface InputEventResult {
@@ -1884,6 +1901,10 @@ export interface ExtensionAPI {
 	on(event: "plan_review_resolved", handler: ExtensionHandler<PlanReviewResolvedEvent>): void;
 	on(event: "mode_changed", handler: ExtensionHandler<ModeChangedEvent>): void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
+	on(
+		event: "tool_authorization",
+		handler: ExtensionHandler<ToolAuthorizationEvent, ToolAuthorizationEventResult>,
+	): void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
 	on(event: "user_python", handler: ExtensionHandler<UserPythonEvent, UserPythonEventResult>): void;
