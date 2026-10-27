@@ -38,6 +38,11 @@ export interface RemoteSkillSource {
 	readonly directory: string;
 	/** Resolved provider revision. Empty only for an unresolved descriptor (never persisted). */
 	readonly commit: string;
+	/**
+	 * Skill-relative files recorded at registration, `SKILL.md` included. Used to
+	 * materialize a complete directory before an invocation that runs scripts.
+	 */
+	readonly files?: readonly string[];
 }
 
 /** Index entry: discovery metadata plus the pinned source. */

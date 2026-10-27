@@ -54,6 +54,7 @@ async function loadRemoteSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
 				repository: descriptor.repository,
 				directory: descriptor.directory,
 				commit: descriptor.commit,
+				...(descriptor.files ? { files: descriptor.files } : {}),
 			},
 			_source: createSourceMeta(
 				REMOTE_SKILL_PROVIDER_ID,

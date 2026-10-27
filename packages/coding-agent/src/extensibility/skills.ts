@@ -20,7 +20,7 @@ import { allowsSkillTokens, SKILL_TOKEN_RE } from "@oh-my-pi/pi-tui/prompt/skill
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
-import { ensureRemoteSkillFileAt } from "../skills/remote/store";
+import { ensureRemoteSkillFileAt, ensureRemoteSkillTree } from "../skills/remote/store";
 import type { RemoteSkillSource } from "../skills/remote/types";
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
@@ -674,12 +674,15 @@ export type SkillInvocationKind = "user" | "autoload";
 export type SkillPromptInput = Pick<ParsedSkillInvocation, "args"> & Partial<Pick<ParsedSkillInvocation, "prompt">>;
 
 /** Read a skill's instruction body before rendering user-provided arguments. */
-export async function loadSkillPromptBody(skill: Pick<Skill, "filePath" | "remote">): Promise<string> {
+export async function loadSkillPromptBody(skill: Pick<Skill, "filePath" | "baseDir" | "remote">): Promise<string> {
 	// A remote skill's cache file only exists after its first read; `/skill:<name>`,
 	// RPC, and autoload go straight to the path, so materialize it here.
 	const filePath = skill.remote
 		? await ensureRemoteSkillFileAt(skill.remote, skill.filePath, "SKILL.md")
 		: skill.filePath;
+	// The user invocation template resolves `scripts/…` against the skill directory and
+	// runs it with the terminal, so a remote skill needs its recorded files on disk.
+	if (skill.remote?.files?.length) await ensureRemoteSkillTree(skill.remote, skill.baseDir);
 	const content = await Bun.file(filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.

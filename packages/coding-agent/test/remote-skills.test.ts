@@ -109,6 +109,7 @@ function remoteSkillFixture(descriptor: RemoteSkillDescriptor, agentDir: string)
 			repository: descriptor.repository,
 			directory: descriptor.directory,
 			commit: descriptor.commit,
+			...(descriptor.files ? { files: descriptor.files } : {}),
 		},
 	};
 }
@@ -599,6 +600,117 @@ describe("remote skill sources", () => {
 		await expect(syncRemoteSkills({ cwd, agentDir, names: ["typo"], fetch: stub.fetch })).rejects.toMatchObject({
 			code: "NOT_FOUND",
 		});
+	});
+
+	test("invocation materializes the recorded file manifest", async () => {
+		const tree = {
+			tree: [
+				{ path: "skills/pdf/SKILL.md", type: "blob" },
+				{ path: "skills/pdf/scripts/run.py", type: "blob" },
+			],
+		};
+		const stub = stubFetch({
+			[`/git/trees/${COMMIT}?recursive=1`]: () => json(tree),
+			[`/git/trees/${SUBTREE}?recursive=1`]: () =>
+				json({
+					tree: [
+						{ path: "pdf/SKILL.md", type: "blob" },
+						{ path: "pdf/scripts/run.py", type: "blob" },
+					],
+				}),
+			[`/git/trees/${COMMIT}`]: () => json({ tree: [{ path: "skills", type: "tree", sha: SUBTREE }] }),
+			"/commits/": () => json({ sha: COMMIT }),
+			"/skills/pdf/SKILL.md": () => text(skillDoc("pdf", "Runs a script.")),
+			[`/${COMMIT}/skills/pdf/scripts/run.py`]: () => text("print(1)\n"),
+		});
+		await addRemoteSkills(`${REPO}#skills`, { cwd, global: false, fetch: stub.fetch });
+		const { entries } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(entries[0]!.descriptor.files).toEqual(["SKILL.md", "scripts/run.py"]);
+
+		const skill = remoteSkillFixture(entries[0]!.descriptor, agentDir);
+		__setRemoteSkillFetchForTests(stub.fetch);
+		await buildSkillPromptMessage(skill, { args: "" }, "user");
+		const script = path.join(path.dirname(skill.filePath), "scripts", "run.py");
+		expect(await Bun.file(script).text()).toBe("print(1)\n");
+	});
+
+	test("read-through enforces the SKILL.md cap without a prior add", async () => {
+		const descriptor = {
+			origin: "github" as const,
+			repository: REPO,
+			directory: "skills/pdf",
+			commit: COMMIT,
+		};
+		const oversized = stubFetch({ "/skills/pdf/SKILL.md": () => text("x".repeat(300 * 1024)) });
+		await expect(
+			ensureRemoteSkillResource(descriptor, "SKILL.md", { fetch: oversized.fetch, agentDir }),
+		).rejects.toMatchObject({ code: "RESOURCE_LIMIT_EXCEEDED" });
+	});
+
+	test("an oversized cached SKILL.md is rejected instead of used", async () => {
+		const descriptor = {
+			origin: "github" as const,
+			repository: REPO,
+			directory: "skills/pdf",
+			commit: COMMIT,
+		};
+		const target = remoteSkillCachePath(descriptor, "SKILL.md", agentDir);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, "x".repeat(300 * 1024));
+		await expect(ensureRemoteSkillResource(descriptor, "SKILL.md", { agentDir })).rejects.toMatchObject({
+			code: "RESOURCE_LIMIT_EXCEEDED",
+		});
+	});
+
+	test("a body-stream failure stays inside the network boundary", async () => {
+		const descriptor = {
+			origin: "github" as const,
+			repository: REPO,
+			directory: "skills/pdf",
+			commit: COMMIT,
+		};
+		const broken = stubFetch({
+			"/skills/pdf/SKILL.md": () =>
+				new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new Uint8Array(8));
+							controller.error(new Error("connection reset"));
+						},
+					}),
+				),
+		});
+		await expect(readRemoteFile(REPO, COMMIT, "skills/pdf/SKILL.md", { fetch: broken.fetch })).rejects.toMatchObject({
+			code: "NETWORK",
+		});
+		await expect(
+			ensureRemoteSkillResource(descriptor, "SKILL.md", { fetch: broken.fetch, agentDir }),
+		).rejects.toMatchObject({ code: "OFFLINE_RESOURCE_MISSING" });
+	});
+
+	test("a descriptor with a decomposed directory still matches its normalized name", async () => {
+		const indexFile = path.join(cwd, ".omp", "remote-skills.json");
+		fs.mkdirSync(path.dirname(indexFile), { recursive: true });
+		fs.writeFileSync(
+			indexFile,
+			JSON.stringify({
+				version: 1,
+				skills: {
+					"caf\u00e9": {
+						name: "caf\u00e9",
+						description: "Normalized name.",
+						origin: "github",
+						repository: REPO,
+						directory: "skills/cafe\u0301",
+						ref: "main",
+						commit: COMMIT,
+					},
+				},
+			}),
+		);
+		const { entries, warnings } = await loadRemoteSkillDescriptors(cwd, agentDir);
+		expect(warnings.join("\n")).not.toContain("does not match");
+		expect(entries.map(entry => entry.descriptor.name)).toEqual(["caf\u00e9"]);
 	});
 
 	test("project descriptors shadow a same-named user descriptor", async () => {

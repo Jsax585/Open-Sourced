@@ -12,6 +12,9 @@ import {
 	assertSkillRelativePath,
 	isValidRepositoryName,
 	MAX_RESOURCE_BYTES,
+	MAX_SKILL_DOCUMENT_BYTES,
+	MAX_SKILL_FILES,
+	MAX_SKILL_TREE_BYTES,
 	normalizeRelativeDirectory,
 	readRemoteFile,
 	type FetchFn,
@@ -105,6 +108,21 @@ function validateDescriptor(name: string, value: unknown, file: string): RemoteS
 	if (typeof commit !== "string" || !/^[0-9a-f]{40}$/.test(commit)) return fail("has no pinned commit");
 	if (typeof ref !== "string") return fail("has no ref");
 	if (typeof description !== "string") return fail("has no description");
+	let manifest: string[] | undefined;
+	if (value.files !== undefined) {
+		if (!Array.isArray(value.files) || value.files.length > MAX_SKILL_FILES) {
+			return fail(`has an invalid file manifest (limit ${MAX_SKILL_FILES})`);
+		}
+		manifest = [];
+		for (const entry of value.files) {
+			if (typeof entry !== "string") return fail("has a non-string file entry");
+			try {
+				manifest.push(assertSkillRelativePath(entry));
+			} catch {
+				return fail(`has an unsafe file entry "${entry}"`);
+			}
+		}
+	}
 	const descriptor: RemoteSkillDescriptor = {
 		name,
 		origin: "github",
@@ -113,12 +131,23 @@ function validateDescriptor(name: string, value: unknown, file: string): RemoteS
 		commit,
 		ref,
 		description,
+		...(manifest ? { files: manifest.sort() } : {}),
 	};
-	if (name.length === 0 || name.length > 64 || name !== name.toLowerCase() || !SKILL_NAME_RE.test(name)) {
+	const normalized = name.normalize("NFKC");
+	if (normalized !== name) return fail("is not NFKC-normalized");
+	if (
+		normalized.length === 0 ||
+		normalized.length > 64 ||
+		normalized !== normalized.toLowerCase() ||
+		!SKILL_NAME_RE.test(normalized)
+	) {
 		return fail("is not a lowercase skill name");
 	}
-	if (name !== expectedSkillDirName(descriptor)) {
-		return fail(`does not match its directory (${expectedSkillDirName(descriptor)})`);
+	// Registration stores the normalized name; compare against a directory that may
+	// itself arrive decomposed (`e` + combining accent).
+	const expected = expectedSkillDirName(descriptor).normalize("NFKC");
+	if (normalized !== expected) {
+		return fail(`does not match its directory (${expected})`);
 	}
 	return descriptor;
 }
@@ -283,16 +312,28 @@ export function ensureRemoteSkillFileAt(
 	relativePath: string,
 	options: EnsureRemoteResourceOptions = {},
 ): Promise<string> {
+	// An instruction document is capped far below a generic resource, including on the
+	// read-through path a checked-in descriptor can reach without a prior `remote add`.
+	const maxBytes = options.maxBytes ?? (relativePath === "SKILL.md" ? MAX_SKILL_DOCUMENT_BYTES : MAX_RESOURCE_BYTES);
 	let shared = inFlight.get(target);
 	if (!shared) {
 		shared = (async () => {
-			if (await fileExists(target)) return target;
+			if (await fileExists(target)) {
+				const { size } = await fs.stat(target);
+				if (size > maxBytes) {
+					throw new RemoteSkillError(
+						"RESOURCE_LIMIT_EXCEEDED",
+						`cached ${relativePath} is ${size} bytes; the limit is ${maxBytes}`,
+					);
+				}
+				return target;
+			}
 			const repositoryPath = source.directory === "" ? relativePath : `${source.directory}/${relativePath}`;
 			let bytes: Uint8Array | null;
 			try {
 				bytes = await readRemoteFile(source.repository, source.commit, repositoryPath, {
 					fetch: options.fetch ?? testFetch,
-					maxBytes: options.maxBytes ?? MAX_RESOURCE_BYTES,
+					maxBytes,
 				});
 			} catch (error) {
 				if (error instanceof RemoteSkillError && (error.code === "NETWORK" || error.code === "RATE_LIMITED")) {
@@ -317,6 +358,32 @@ export function ensureRemoteSkillFileAt(
 		inFlight.set(target, shared);
 	}
 	return options.signal ? raceAbort(shared, options.signal) : shared;
+}
+
+/**
+ * Materialize every file recorded for a skill, so an invocation that resolves
+ * `scripts/…` against the skill directory finds a complete tree. Per-file caps
+ * apply, and the total is bounded by {@link MAX_SKILL_TREE_BYTES}.
+ */
+export async function ensureRemoteSkillTree(
+	source: RemoteSkillSource,
+	skillDir: string,
+	options: EnsureRemoteResourceOptions = {},
+): Promise<void> {
+	const files = source.files;
+	if (!files || files.length === 0) return;
+	let total = 0;
+	for (const file of files) {
+		const target = await ensureRemoteSkillFileAt(source, path.join(skillDir, ...file.split("/")), file, options);
+		const { size } = await fs.stat(target);
+		total += size;
+		if (total > MAX_SKILL_TREE_BYTES) {
+			throw new RemoteSkillError(
+				"RESOURCE_LIMIT_EXCEEDED",
+				`${source.repository}#${source.directory} exceeds the ${MAX_SKILL_TREE_BYTES}-byte materialization budget`,
+			);
+		}
+	}
 }
 
 /** One registered descriptor plus the scope it came from. */

@@ -19,6 +19,10 @@ export const REMOTE_MAX_RETRIES = 2;
 export const MAX_SKILL_DOCUMENT_BYTES = 256 * 1024;
 /** Single resource cap. */
 export const MAX_RESOURCE_BYTES = 10 * 1024 * 1024;
+/** Total bytes materialized for one skill directory before an invocation that runs scripts. */
+export const MAX_SKILL_TREE_BYTES = 50 * 1024 * 1024;
+/** Files recorded per skill at registration. */
+export const MAX_SKILL_FILES = 512;
 
 const REPOSITORY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const COMMIT_RE = /^[0-9a-f]{40}$/;
@@ -121,6 +125,18 @@ export async function listRemoteSkillFiles(
 	directory: string,
 	options: { fetch?: FetchFn; signal?: AbortSignal } = {},
 ): Promise<string[]> {
+	return (await listRemoteTree(repository, commit, directory, options))
+		.filter(file => file === "SKILL.md" || file.endsWith("/SKILL.md"))
+		.sort();
+}
+
+/** Every blob under `directory` (repository-relative), used to record a skill's manifest. */
+export async function listRemoteTree(
+	repository: string,
+	commit: string,
+	directory: string,
+	options: { fetch?: FetchFn; signal?: AbortSignal } = {},
+): Promise<string[]> {
 	// List the requested subdirectory's own tree: a repository-wide recursive listing
 	// can be truncated, and narrowing the source could then never help.
 	const treeSha = directory === "" ? commit : await resolveSubtree(repository, commit, directory, options);
@@ -138,8 +154,6 @@ export async function listRemoteSkillFiles(
 	const files: string[] = [];
 	for (const entry of payload.tree) {
 		if (!isRecord(entry) || typeof entry.path !== "string" || entry.type !== "blob") continue;
-		const isRootSkill = directory === "" && entry.path === "SKILL.md";
-		if (!isRootSkill && !entry.path.endsWith("/SKILL.md")) continue;
 		files.push(directory === "" ? entry.path : `${directory}/${entry.path}`);
 	}
 	return files.sort();
@@ -203,7 +217,18 @@ export async function readRemoteFile(
 	if (Number.isFinite(declared) && declared > maxBytes) {
 		throw new RemoteSkillError("RESOURCE_LIMIT_EXCEEDED", `${file} is ${declared} bytes; the limit is ${maxBytes}`);
 	}
-	const body = await readBodyCapped(response, maxBytes);
+	let body: Awaited<ReturnType<typeof readBodyCapped>>;
+	try {
+		body = await readBodyCapped(response, maxBytes);
+	} catch (error) {
+		// Headers arrived but the stream failed (reset, truncated chunk); keep it inside
+		// the network boundary so `ensureRemoteSkillFileAt` can report OFFLINE.
+		if (options.signal?.aborted) throw error;
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new RemoteSkillError("NETWORK", `${repository}@${commit}:${file} failed mid-body: ${detail}`, {
+			cause: error,
+		});
+	}
 	if (body === null) {
 		throw new RemoteSkillError("NETWORK", `${file}: response carries no readable body`);
 	}

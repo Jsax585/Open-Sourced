@@ -17,7 +17,7 @@ import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
-import { ensureRemoteSkillFileAt } from "../skills/remote/store";
+import { ensureRemoteSkillFileAt, ensureRemoteSkillTree } from "../skills/remote/store";
 import {
 	buildDirectoryResource,
 	contentTypeForPath,
@@ -136,6 +136,7 @@ async function materializeRemoteSkill(
 	if (relative === "") {
 		if (!directory) return false;
 		await fs.mkdir(baseDir, { recursive: true });
+		await ensureRemoteSkillTree(remote, baseDir, { signal });
 		return true;
 	}
 	// Materialize at the path the skill object already addresses, so a session with a

@@ -9,7 +9,8 @@ import { getAgentDir, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { validateAgentSkillFrontmatter } from "../../discovery/agent-plugin-format";
 import {
 	MAX_SKILL_DOCUMENT_BYTES,
-	listRemoteSkillFiles,
+	MAX_SKILL_FILES,
+	listRemoteTree,
 	parseRemoteSourceSpec,
 	readRemoteFile,
 	repositorySkillPath,
@@ -88,10 +89,11 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		fetch: options.fetch,
 		signal: options.signal,
 	});
-	const files = await listRemoteSkillFiles(parsed.repository, commit, parsed.directory, {
+	const tree = await listRemoteTree(parsed.repository, commit, parsed.directory, {
 		fetch: options.fetch,
 		signal: options.signal,
 	});
+	const files = tree.filter(file => file === "SKILL.md" || file.endsWith("/SKILL.md"));
 	if (files.length === 0) {
 		const where = parsed.directory === "" ? "the repository root" : `"${parsed.directory}"`;
 		throw new RemoteSkillError("INVALID_SOURCE", `no SKILL.md under ${where} of ${parsed.repository}@${commit}`);
@@ -128,6 +130,14 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 		// Persist the identity the validator checked (trimmed, NFKC-normalized), not the
 		// raw scalar: `name: " pdf "` passes validation for directory `pdf`.
 		const name = String(frontmatter.name).trim().normalize("NFKC");
+		const prefix = directory === "" ? "" : `${directory}/`;
+		const manifest = tree.filter(file => file.startsWith(prefix)).map(file => file.slice(prefix.length));
+		if (manifest.length > MAX_SKILL_FILES) {
+			throw new RemoteSkillError(
+				"RESOURCE_LIMIT_EXCEEDED",
+				`${file}: ${manifest.length} files exceed the ${MAX_SKILL_FILES}-file manifest limit`,
+			);
+		}
 		const existing = Object.hasOwn(skills, name) ? skills[name] : undefined;
 		if (existing && (existing.repository !== parsed.repository || existing.directory !== directory)) {
 			throw new RemoteSkillError(
@@ -143,6 +153,7 @@ export async function addRemoteSkills(spec: string, options: RemoteAddOptions): 
 			directory,
 			ref: parsed.ref,
 			commit,
+			files: manifest.sort(),
 		};
 		(existing ? updated : added).push(name);
 	}
