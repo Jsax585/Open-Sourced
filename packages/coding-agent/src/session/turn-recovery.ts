@@ -3076,7 +3076,8 @@ export class TurnRecovery {
 				} finally {
 					if (this.#retryAbortController === fallbackAbortController) this.#retryAbortController = undefined;
 				}
-				// Auto fallback from a Fireworks Fast variant to its base model. Independent
+			}
+			// Auto fallback from a Fireworks Fast variant to its base model. Independent
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
 			// best-effort, degrade to Standard on failure) and triggers on hard router
 			// errors the generic retry classifier would otherwise reject.
