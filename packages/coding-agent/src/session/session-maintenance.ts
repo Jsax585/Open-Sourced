@@ -525,6 +525,8 @@ export class SessionMaintenance {
 	#manualCompactionCleanup: Promise<void> | undefined;
 	/** Resolves after a manual handoff commits or fails; blocks prompts while its history snapshot is pending. */
 	#handoffCleanup: Promise<void> | undefined;
+	/** Aborts a manual handoff, including its `session.compacting` step before generation starts. */
+	#handoffAbortController: AbortController | undefined;
 	/** Dispatches holding an unreleased claim from {@link waitForManualMaintenanceCleanup}/{@link claimPendingResume}; any one may supersede the interrupted-turn resume. */
 	#promptsAwaitingCleanup = 0;
 	/** Interrupted-turn resume withheld from a compaction `finally` because a claim was open; consumed by `release(false)`, {@link noteTurnStarted}, or the next manual pass. */
@@ -1400,6 +1402,7 @@ export class SessionMaintenance {
 							...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 							maxFrames,
 							includeThinking: snapcompactIncludeThinking,
+							extraContext: compactionPrep.hookContext,
 						},
 						effectiveSettings,
 						0,
@@ -1973,6 +1976,7 @@ export class SessionMaintenance {
 		const manualCompactionCleanup = this.#manualCompactionCleanup ?? this.#handoffCleanup;
 		this.#compactionAbortController?.abort(reason);
 		this.#autoCompactionAbortController?.abort(reason);
+		this.#handoffAbortController?.abort(reason);
 		this.#host.abortHandoff();
 		return manualCompactionCleanup;
 	}
@@ -2091,8 +2095,21 @@ export class SessionMaintenance {
 		if (!preparation) throw new Error("Nothing to hand off (already compacted)");
 		const cleanup = Promise.withResolvers<void>();
 		this.#handoffCleanup = cleanup.promise;
+		const abortController = new AbortController();
+		this.#handoffAbortController = abortController;
 		try {
-			const result = await this.#host.generateHandoffDocument(customInstructions, options);
+			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, undefined);
+			// No hookCompaction is passed above, so "fromHook" is unreachable;
+			// the guard just narrows the union.
+			if (compactionPrep.kind === "fromHook") return undefined;
+			// An abort during the hook step reaches generation as a pre-aborted signal.
+			const result = await this.#host.generateHandoffDocument(customInstructions, {
+				...options,
+				signal: options?.signal
+					? AbortSignal.any([options.signal, abortController.signal])
+					: abortController.signal,
+				extraContext: [...(options?.extraContext ?? []), ...(compactionPrep.hookContext ?? [])],
+			});
 			if (!result) return undefined;
 			const { summary, details } = handoffSummaryFromDocument(result.document, preparation);
 			await this.#commitCompactionEntry({
@@ -2102,13 +2119,14 @@ export class SessionMaintenance {
 				tokensBefore: preparation.tokensBefore,
 				details,
 				fromExtension: false,
-				preserveData: undefined,
+				preserveData: compactionPrep.preserveData,
 				method: "handoff",
 				codexCompaction: undefined,
 				advisorResetReason: "handoff",
 			});
 			return result;
 		} finally {
+			this.#handoffAbortController = undefined;
 			this.#handoffCleanup = undefined;
 			cleanup.resolve();
 		}
@@ -2276,11 +2294,16 @@ export class SessionMaintenance {
 		const preparation = prepareCompaction(branch, effectiveSettings, model, this.#tokenizer);
 		if (!preparation) return clear();
 		const signal = run.controller.signal;
+		const compactionPrep = await this.#prepareCompactionFromHooks(preparation, undefined);
+		// No hookCompaction is passed above, so "fromHook" is unreachable;
+		// the guard just narrows the union.
+		if (compactionPrep.kind === "fromHook") return clear();
 		let armed: ArmedSpeculation;
 		if (method === "handoff") {
 			const generated = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
 				autoTriggered: true,
 				signal,
+				extraContext: compactionPrep.hookContext,
 			});
 			if (!generated) return clear();
 			const { summary, details } = handoffSummaryFromDocument(generated.document, preparation);
@@ -2291,6 +2314,7 @@ export class SessionMaintenance {
 					firstKeptEntryId: preparation.firstKeptEntryId,
 					tokensBefore: preparation.tokensBefore,
 					details,
+					preserveData: compactionPrep.preserveData,
 				},
 				action: "handoff",
 				method,
@@ -2298,10 +2322,6 @@ export class SessionMaintenance {
 				contextTokensAtStart: contextTokens,
 			};
 		} else {
-			const compactionPrep = await this.#prepareCompactionFromHooks(preparation, undefined);
-			// No hookCompaction is passed above, so "fromHook" is unreachable;
-			// the guard just narrows the union.
-			if (compactionPrep.kind === "fromHook") return clear();
 			const candidates = this.#getCompactionModelCandidates(
 				this.#host.modelRegistry.getAvailable(),
 				method === "remote" && !effectiveSettings.remoteEndpoint
@@ -4571,6 +4591,9 @@ export class SessionMaintenance {
 				...(shapeSetting === "auto" ? {} : { shape }),
 				maxFrames,
 				includeThinking: snapcompact.readerIncludesThinking(model),
+				// compact() never inherits context from previousPreserveData, so a
+				// re-render of this entry repeats the context it was built with.
+				extraContext: snapcompact.getPreservedArchive(entry.preserveData)?.context,
 			},
 		);
 	}
@@ -5196,6 +5219,7 @@ export class SessionMaintenance {
 				handoffDocument = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
 					autoTriggered: true,
 					signal: autoCompactionSignal,
+					extraContext: compactionPrep.hookContext,
 				});
 				if (autoCompactionSignal.aborted) {
 					await this.#emitLifecycleEvent(
@@ -5290,6 +5314,7 @@ export class SessionMaintenance {
 								...(shapeSetting === "auto" ? {} : { shape }),
 								maxFrames,
 								includeThinking: snapcompactIncludeThinking,
+								extraContext: compactionPrep.hookContext,
 							},
 							effectiveSettings,
 							pendingTokens,
