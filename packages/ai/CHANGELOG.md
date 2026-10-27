@@ -26,6 +26,7 @@
 - Fixed pi-native clients crashing with `TypeError: undefined is not an object (evaluating 'event.error.stopReason')` when the auth-gateway reports a mid-stream upstream failure ([#17363](https://github.com/can1357/oh-my-pi/issues/17363))
 - Fixed Cursor turns ending after a mid-turn stream cut when the automatic retry hits a zero-token `PROVIDER_ERROR`; the retry now runs on the rotated conversation instead of surfacing the 400 ([#17319](https://github.com/can1357/oh-my-pi/pull/17319) by [@morali](https://github.com/morali))
 - Fixed the auth gateway's debug log saying it was retrying after a usage-limit error when it returned the error to the client without retrying ([#16579](https://github.com/can1357/oh-my-pi/pull/16579) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed Cursor models served through `omp auth-gateway` being told their file and shell tools were unavailable while the client ran the calls anyway, in Cursor's own argument shape (edits failed validation); gateway runs now offer Cursor only the client's tools, so each call reaches the client as one of its own and the turn stops with `toolUse` until the result comes back
 
 ## [18.13.3] - 2026-10-28
 
