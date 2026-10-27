@@ -12574,7 +12574,9 @@ export class AgentSession implements SettingsScope {
 				message =>
 					({
 						...message,
-						content: Array.isArray(message.content) ? message.content.map(block => ({ ...block })) : message.content,
+						content: Array.isArray(message.content)
+							? message.content.map(block => ({ ...block }))
+							: message.content,
 					}) as AgentMessage,
 			);
 			for (const message of detachedHistory) {
@@ -12589,7 +12591,6 @@ export class AgentSession implements SettingsScope {
 			markPerCallContextMessage(imageDescriptionNotice);
 			messages.push(imageDescriptionNotice);
 			volatileSuffix = true;
->>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 		}
 		const sidePrompt: AgentMessage = {
 			role: "user",
