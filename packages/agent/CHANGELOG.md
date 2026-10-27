@@ -1,11 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-### Added
 
+### Added
 - Added `AgentOptions.onHistoryChanged`, notified after the live transcript or the steering/follow-up queues are replaced wholesale or the transcript grows or shrinks, so per-request caches can drop snapshots pinned to the previous history ([#15225](https://github.com/can1357/oh-my-pi/pull/15225) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
-### Added
 
 - `AgentTool` gained the optional `handlesToolInterrupt` flag: an interruptible tool that sets it (such as `wait`) still runs, without blocking, when a loop-owned interrupt is already queued, so it can drain the queued wake event instead of being skipped; user cancellation still skips it ([#17174](https://github.com/can1357/oh-my-pi/pull/17174) by [@alphastorm](https://github.com/alphastorm))
 
