@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The `devin-cli` login imports Devin CLI credentials into a stored `devin` account, so the provider no longer requires `DEVIN_API_KEY` ([#13637](https://github.com/can1357/oh-my-pi/pull/13637) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
+
 ### Fixed
 
 - Fixed JSON selectors failing on BOM-prefixed input, backup and extensionless files, and modifier-only queries ([#17179](https://github.com/can1357/oh-my-pi/pull/17179) by [@alphastorm](https://github.com/alphastorm))
