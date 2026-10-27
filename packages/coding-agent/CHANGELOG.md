@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- The `tui.showLinkUrl` setting and `/link-url` command let users hide named-link URL suffixes when terminal hyperlinks keep the destination accessible ([#13162](https://github.com/can1357/oh-my-pi/pull/13162) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
+
 ### Fixed
 
 - Fixed JSON selectors failing on BOM-prefixed input, backup and extensionless files, and modifier-only queries ([#17179](https://github.com/can1357/oh-my-pi/pull/17179) by [@alphastorm](https://github.com/alphastorm))
