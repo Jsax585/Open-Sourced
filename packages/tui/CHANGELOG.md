@@ -45,8 +45,10 @@
 - Removed support for the TSP `t` (theme) verb, as surface theme synchronization is no longer required
 
 ## [18.13.2] - 2026-10-27
+### Fixed
 
 ### Added
+- Added `CustomEditor.onEscapeCancel`: it is called for a raw Escape that no configured action claims, so a host can keep Escape as a cancel key when `app.interrupt` is bound elsewhere ([#8952](https://github.com/can1357/oh-my-pi/issues/8952), [#16464](https://github.com/can1357/oh-my-pi/pull/16464) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Added a frame-write listener (`TUI.addFrameWriteListener`) for terminal integrations that need to react to emitted ANSI output, including resize paints ([#17145](https://github.com/can1357/oh-my-pi/issues/17145))
 - `HookInputComponent` (`showHookInput`) now accepts `{ secret: true }` to mask typed characters as bullets (`•`) in input overlays ([#17080](https://github.com/can1357/oh-my-pi/pull/17080) by [@GTanger](https://github.com/GTanger))
