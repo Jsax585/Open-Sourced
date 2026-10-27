@@ -12570,15 +12570,10 @@ export class AgentSession implements SettingsScope {
 		if (history?.length) {
 			// Detach the message and content-block containers without recursively
 			// cloning nested payloads; the conversion pipeline treats those as immutable.
-			const detachedHistory = history.map(
-				message =>
-					({
-						...message,
-						content: Array.isArray(message.content)
-							? message.content.map(block => ({ ...block }))
-							: message.content,
-					}) as AgentMessage,
-			);
+			const detachedHistory = history.map((message): AgentMessage => {
+				if (!("content" in message) || !Array.isArray(message.content)) return { ...message };
+				return { ...message, content: message.content.map(block => ({ ...block })) } as AgentMessage;
+			});
 			for (const message of detachedHistory) {
 				if (message.role === "custom" && message.customType === IMAGE_ATTACHMENT_DESCRIPTION_TYPE) {
 					volatileSuffix = true;
