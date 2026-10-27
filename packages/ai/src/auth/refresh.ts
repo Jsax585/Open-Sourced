@@ -664,6 +664,15 @@ export class OAuthRefresher {
 						})
 					: undefined;
 			const refreshAbort = new AbortController();
+			// Propagate a caller abort into the exchange: ESC or request cancellation
+			// must abort the in-flight token request itself (surfacing AbortError),
+			// not merely stop this caller from waiting while the request runs on.
+			const forwardCallerAbort = () =>
+				refreshAbort.abort(new AIError.AbortError("OAuth token refresh aborted by caller"));
+			if (options.signal) {
+				if (options.signal.aborted) forwardCallerAbort();
+				else options.signal.addEventListener("abort", forwardCallerAbort, { once: true });
+			}
 			const backstopReached = Promise.withResolvers<never>();
 			const backstop = setTimeout(
 				() => {
@@ -754,6 +763,7 @@ export class OAuthRefresher {
 					},
 				};
 			} finally {
+				options.signal?.removeEventListener("abort", forwardCallerAbort);
 				stopLeaseRenewal = true;
 				leaseRenewalStopped.resolve();
 				await leaseRenewal;
