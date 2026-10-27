@@ -4798,19 +4798,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#subagentPreviewTickTimer.unref?.();
 	}
 
-	#requestObserverRenderIfChanged(): void {
-		// Observe the bounded chrome, not background transcripts. Runtime extensions
-		// may rebuild TODO components without changing any visible row.
-		const key = JSON.stringify([
-			this.#subagentBadgeKey,
-			this.#subagentHudKey,
-			this.todoContainer.render(this.ui.terminal.columns),
-		]);
-		if (key === this.#observerPaintKey) return;
-		this.#observerPaintKey = key;
-		this.ui.requestRender();
-	}
-
 	#cancelSubagentPreviewTick(): void {
 		if (this.#subagentPreviewTickTimer) {
 			clearTimeout(this.#subagentPreviewTickTimer);
