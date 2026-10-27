@@ -621,14 +621,32 @@ export class SessionTools {
 		return this.#skillsReloadable;
 	}
 
-	/** Stores a re-pointed fixed skill list (see `rediscoverSkills`) and refreshes prompt metadata. */
-	async replaceSkills(skills: readonly Skill[]): Promise<void> {
-		this.#skills = [...skills];
-		if (this.#host.agentKind() === "main") {
-			setActiveSkills(this.#skills);
-		}
-		await this.refreshBaseSystemPrompt();
-		this.#host.notifyCommandMetadataChanged();
+	/**
+	 * Stores a re-pointed fixed skill list (see `rediscoverSkills`) and refreshes prompt metadata.
+	 * The inherited base a discovery merge rebuilds from follows the same re-pointing, so a later
+	 * `/reload-plugins` does not bring back an entry whose file is gone. Runs in the registry-mutation
+	 * queue, so it cannot land between a reload merge's read of the base and its write of the list.
+	 */
+	replaceSkills(skills: readonly Skill[]): Promise<void> {
+		return this.runToolRegistryMutation(async () => {
+			const base = this.#inheritedSkillsBase;
+			if (base) {
+				const previousByName = new Map(this.#skills.map(skill => [skill.name, skill]));
+				const nextByName = new Map(skills.map(skill => [skill.name, skill]));
+				this.#inheritedSkillsBase = base.flatMap(skill => {
+					// An inherited entry an extension's skill replaced was not in the list: keep it as inherited.
+					if (previousByName.get(skill.name)?.filePath !== skill.filePath) return [skill];
+					const next = nextByName.get(skill.name);
+					return next ? [next] : [];
+				});
+			}
+			this.#skills = [...skills];
+			if (this.#host.agentKind() === "main") {
+				setActiveSkills(this.#skills);
+			}
+			await this.refreshBaseSystemPrompt();
+			this.#host.notifyCommandMetadataChanged();
+		});
 	}
 
 	/** Runs `rediscover`, or joins the rediscovery already in flight, so concurrent misses share one pass. */

@@ -1970,6 +1970,100 @@ export default function (pi) {
 		}
 	});
 
+	it("keeps a stale-skill rediscovery's re-pointed and dropped inherited skills on reload", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-merge-reload-repoint-"));
+		const authStorage = createInMemoryAuthStorage();
+		let session: AgentSession | undefined;
+		try {
+			const contributedDir = path.join(tempDir, "contributed");
+			await fs.mkdir(path.join(contributedDir, "ext-skill"), { recursive: true });
+			await fs.writeFile(
+				path.join(contributedDir, "ext-skill", "SKILL.md"),
+				"---\nname: ext-skill\ndescription: Contributed by the child's extension.\n---\n\nbody\n",
+			);
+			const extensionsDir = path.join(tempDir, "ext");
+			await fs.mkdir(extensionsDir, { recursive: true });
+			const extPath = path.join(extensionsDir, "contributing-observer.ts");
+			await fs.writeFile(
+				extPath,
+				`export default function (pi) {
+	pi.on("resources_discover", () => ({ skillPaths: [${JSON.stringify(contributedDir)}] }));
+}
+`,
+			);
+			const loaded = await loadExtensions([extPath], tempDir);
+			expect(loaded.errors).toEqual([]);
+
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+			const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				streamFn: mock.stream,
+			});
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			const sessionManager = SessionManager.inMemory(tempDir);
+			const extensionRunner = new ExtensionRunner(
+				loaded.extensions,
+				loaded.runtime,
+				tempDir,
+				sessionManager,
+				modelRegistry,
+			);
+
+			const oldDir = path.join(tempDir, "plugin-v1", "plugin-skill");
+			const newDir = path.join(tempDir, "plugin-v2", "plugin-skill");
+			const inherited: Skill = {
+				name: "plugin-skill",
+				description: "Inherited from the parent.",
+				filePath: path.join(oldDir, "SKILL.md"),
+				baseDir: oldDir,
+				source: "claude:user",
+			};
+			const goneDir = path.join(tempDir, "plugin-v1", "gone-skill");
+			const gone: Skill = {
+				name: "gone-skill",
+				description: "Inherited from the parent; the upgrade removed it.",
+				filePath: path.join(goneDir, "SKILL.md"),
+				baseDir: goneDir,
+				source: "claude:user",
+			};
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false }),
+				modelRegistry,
+				extensionRunner,
+				skills: [inherited, gone],
+				skillsReloadable: false,
+				mergeDiscoveredSkillPaths: true,
+			});
+			await initializeExtensions(session, { reportSendError: () => {}, reportRuntimeError: () => {} });
+			expect(session.skills.map(skill => skill.name)).toEqual(["ext-skill", "gone-skill", "plugin-skill"]);
+
+			// A plugin upgrade moved one inherited skill and removed the other; `skill://` rediscovery
+			// re-points the first and drops the second from the fixed list.
+			const host = session.skillRediscoveryHost();
+			const repointed = session.skills.flatMap(skill => {
+				if (skill.name === "gone-skill") return [];
+				if (skill.name !== "plugin-skill") return [skill];
+				return [{ ...skill, filePath: path.join(newDir, "SKILL.md"), baseDir: newDir }];
+			});
+			await host.replaceSkills?.(repointed);
+
+			await session.refreshSkills({ rediscover: true });
+
+			const pluginSkill = session.skills.find(skill => skill.name === "plugin-skill");
+			expect(pluginSkill?.filePath).toBe(path.join(newDir, "SKILL.md"));
+			expect(session.skills.map(skill => skill.name)).toEqual(["ext-skill", "plugin-skill"]);
+		} finally {
+			await session?.dispose();
+			authStorage.close();
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("detects a frontmatter-only change (hide) on reload, not just name/filePath/description (regression: PR #9379 review, mergeDiscoveredSkillDirectories unchanged comparison)", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-merge-reload-hide-"));
 		const authStorage = createInMemoryAuthStorage();
