@@ -46,12 +46,27 @@ const runtime: {
 	disposed: boolean;
 	/** The report the terminal holds, so a repeated status writes nothing. */
 	reported: string | undefined;
+	/** Per-state publication gate; see {@link setProgramStatusFilter}. */
+	filter: ProgramStatusFilter | undefined;
 } = {
 	status: { state: "idle" },
 	enabled: true,
 	disposed: false,
 	reported: undefined,
+	filter: undefined,
 };
+
+/**
+ * Whether one run status may be published as an OSC 7501 record.
+ *
+ * A terminal that speaks the protocol turns the record into a notification of
+ * its own: Tern raises a banner and a needs-attention inbox entry when an agent
+ * is `blocked` ("waiting for input") or `done` ("finished"), which is the same
+ * event `ask.notify` and `completion.notify` govern. So a state the user
+ * silenced is withdrawn from the terminal instead of reported, and the record's
+ * own `terminal.programStatus` switch stays the separate, whole-protocol one.
+ */
+export type ProgramStatusFilter = (status: RunStatus) => boolean;
 
 function titleState(status: RunStatus): TerminalTitleState {
 	if (status.state === "working") return "working";
@@ -83,6 +98,10 @@ function formatReport(status: RunStatus): string {
 function report(): void {
 	if (runtime.disposed || !runtime.enabled) return;
 	if (!process.stdout.isTTY || isTerminalHeadless()) return;
+	if (runtime.filter && !runtime.filter(runtime.status)) {
+		clear();
+		return;
+	}
 	const next = formatReport(runtime.status);
 	if (next === runtime.reported) return;
 	writeTerminalSequence(next);
@@ -111,6 +130,16 @@ export function setProgramStatusEnabled(enabled: boolean): void {
 	runtime.enabled = enabled;
 	if (enabled) report();
 	else clear();
+}
+
+/**
+ * Replace the per-state gate consulted before a record is written, and
+ * re-publish the current status under it: a state the new gate rejects is
+ * withdrawn from the terminal, and one it accepts is reported again.
+ */
+export function setProgramStatusFilter(filter: ProgramStatusFilter | undefined): void {
+	runtime.filter = filter;
+	report();
 }
 
 /**
