@@ -108,6 +108,12 @@ interface AdmittedBody {
 	frontmatter: SkillFrontmatter | undefined;
 	namespace: string;
 	filePath: string;
+	/**
+	 * The body was read at admission. Remote skills carry a placeholder body
+	 * until their first read; comparing that placeholder would classify an
+	 * unrelated local skill with an empty body as identical and drop it.
+	 */
+	loaded: boolean;
 }
 
 interface CollisionResolution {
@@ -160,7 +166,13 @@ function resolveCollision(
 	const candidateCustom = candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	const bareCustom = bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	const identical = existingEntries
-		.filter(([_, e]) => e.body === candidateBody && Bun.deepEquals(e.frontmatter, candidateFrontmatter))
+		.filter(
+			([_, e]) =>
+				e.loaded &&
+				candidate.remote === undefined &&
+				e.body === candidateBody &&
+				Bun.deepEquals(e.frontmatter, candidateFrontmatter),
+		)
 		.map(([name]) => name);
 
 	if (bareSkill && ((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))) {
@@ -432,7 +444,14 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		const rawName = skill.name;
 		skill.name = name;
 		skillMap.set(name, skill);
-		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath });
+		admitted.set(name, {
+			rawName,
+			body,
+			frontmatter,
+			namespace,
+			filePath: skill.filePath,
+			loaded: skill.remote === undefined,
+		});
 		return name;
 	}
 

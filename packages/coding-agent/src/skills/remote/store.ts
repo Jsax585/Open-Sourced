@@ -45,16 +45,16 @@ export function __setRemoteSkillFetchForTests(fetch: FetchFn | undefined): void 
 	testFetch = fetch;
 }
 
-/** Project index path: nearest `<dir>/.omp/remote-skills.json` walking up from `cwd`. */
+/**
+ * Project index of the active project only: the nearest `.omp`, else the git
+ * root, as resolved by the shared project resolver. A nested project never
+ * reads or mutates an ancestor's index.
+ */
 export async function findProjectRemoteSkillIndex(cwd: string): Promise<string | undefined> {
-	let current = path.resolve(cwd);
-	while (true) {
-		const candidate = path.join(current, ".omp", REMOTE_SKILL_INDEX_FILE);
-		if (await fileExists(candidate)) return candidate;
-		const parent = path.dirname(current);
-		if (parent === current) return undefined;
-		current = parent;
-	}
+	const registry = await resolveOrDefaultProjectRegistryPath(cwd);
+	if (!registry) return undefined;
+	const candidate = path.join(path.dirname(path.dirname(registry)), REMOTE_SKILL_INDEX_FILE);
+	return (await fileExists(candidate)) ? candidate : undefined;
 }
 
 /** User index path (`<agentDir>/remote-skills.json`). */

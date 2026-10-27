@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
-import { buildSkillPromptMessage } from "../src/extensibility/skills";
+import { buildSkillPromptMessage, loadSkills } from "../src/extensibility/skills";
 import { parseInternalUrl } from "../src/internal-urls";
 import { SkillProtocolHandler } from "../src/internal-urls/skill-protocol";
 import {
@@ -114,6 +114,7 @@ function remoteSkillFixture(descriptor: RemoteSkillDescriptor, agentDir: string)
 			directory: descriptor.directory,
 			commit: descriptor.commit,
 			...(descriptor.files ? { files: descriptor.files } : {}),
+			...(descriptor.executables ? { executables: descriptor.executables } : {}),
 		},
 	};
 }
@@ -791,6 +792,48 @@ describe("remote skill sources", () => {
 			const mode = (await fs.promises.stat(path.join(skill.baseDir, "scripts", "run.sh"))).mode;
 			expect(mode & 0o111).not.toBe(0);
 		}
+	});
+
+	test("an unloaded remote body never merges into an identical local skill", async () => {
+		const localDir = path.join(cwd, "local-skills");
+		fs.mkdirSync(path.join(localDir, "pdf"), { recursive: true });
+		fs.writeFileSync(path.join(localDir, "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Same.\n---\n");
+		const indexFile = path.join(cwd, ".omp", "remote-skills.json");
+		fs.mkdirSync(path.dirname(indexFile), { recursive: true });
+		fs.writeFileSync(
+			indexFile,
+			JSON.stringify({
+				version: 1,
+				skills: {
+					pdf: {
+						name: "pdf",
+						description: "Same.",
+						origin: "github",
+						repository: REPO,
+						directory: "skills/pdf",
+						ref: "main",
+						commit: COMMIT,
+						files: ["SKILL.md"],
+					},
+				},
+			}),
+		);
+
+		const { skills } = await loadSkills({
+			cwd,
+			customDirectories: [localDir],
+			enableAgentsUser: false,
+			enableAgentsProject: false,
+			enableClaudeUser: false,
+			enableClaudeProject: false,
+			enableCodexUser: false,
+			enablePiUser: false,
+			enablePiProject: false,
+		});
+		const names = skills.map(skill => skill.name);
+		expect(names).toContain("pdf");
+		expect(names).toContain("acme-skills/pdf");
+		expect(skills.find(skill => skill.name === "acme-skills/pdf")?.source).toStartWith("remote");
 	});
 
 	test("project descriptors shadow a same-named user descriptor", async () => {

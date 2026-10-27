@@ -254,12 +254,17 @@ export async function syncRemoteSkills(options: {
 					`${descriptor.repository}@${commit}:${repositorySkillPath(descriptor)}`,
 				);
 			}
-			const { frontmatter } = parseFrontmatter(new TextDecoder().decode(bytes), {
-				source: `${descriptor.repository}:${repositorySkillPath(descriptor)}`,
-				level: "fatal",
-				repair: false,
-				rawKeys: true,
-			});
+			let frontmatter: Record<string, unknown>;
+			try {
+				frontmatter = parseFrontmatter(new TextDecoder().decode(bytes), {
+					source: `${descriptor.repository}:${repositorySkillPath(descriptor)}`,
+					level: "fatal",
+					repair: false,
+					rawKeys: true,
+				}).frontmatter;
+			} catch (error) {
+				throw new RemoteSkillError("INVALID_SKILL", `${name}: malformed YAML frontmatter (${String(error)})`);
+			}
 			const violation = validateAgentSkillFrontmatter(
 				frontmatter,
 				expectedDirName(descriptor.repository, descriptor.directory),
@@ -277,7 +282,9 @@ export async function syncRemoteSkills(options: {
 				commit,
 				description: (frontmatter.description as string).trim(),
 				files: manifest.files,
-				...(manifest.executables.length > 0 ? { executables: manifest.executables } : {}),
+				// Overwrite unconditionally: `...descriptor` would otherwise keep a stale
+				// executable list when the new tree has none.
+				executables: manifest.executables,
 			};
 			changes.push({ name, from: descriptor.commit, to: commit });
 			targetChanges++;
