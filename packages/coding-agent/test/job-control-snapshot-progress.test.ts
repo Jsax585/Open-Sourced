@@ -34,7 +34,13 @@ it("snapshots keep live task progress for a running task job and drop malformed 
 		const [snapshot] = snapshotJobs(session, [job]);
 		expect(snapshot?.status).toBe("running");
 		expect(snapshot?.progress).toEqual([progress as never]);
-		expect(snapshot).toMatchObject({ agentUrlId: "Worker", requests: 7, cost: 1.25, contextTokens: 100, contextWindow: 1000 });
+		expect(snapshot).toMatchObject({
+			agentUrlId: "Worker",
+			requests: 7,
+			cost: 1.25,
+			contextTokens: 100,
+			contextWindow: 1000,
+		});
 		job.resultText = "final body";
 		job.latestDetails.meta = { route: "worker" };
 		expect(snapshotJobs(session, [job], { includeResults: false })[0]?.resultText).toBeUndefined();
@@ -60,22 +66,57 @@ it("real wait updates stream the canonical collision-resolved worker, then consu
 	await initTheme();
 	const gate = Promise.withResolvers<string>();
 	const manager = new AsyncJobManager({ onJobComplete: () => {} });
-	const id = manager.register("task", "worker", async () => gate.promise, { id: "Worker-2", agentId: "Worker", ownerId: "Main" });
+	const id = manager.register("task", "worker", async () => gate.promise, {
+		id: "Worker-2",
+		agentId: "Worker",
+		ownerId: "Main",
+	});
 	const job = manager.getJob(id)!;
 	const progress = {
-		index: 0, id: "Worker", agent: "task", status: "running" as const, task: "canonical task",
-		recentTools: [], recentOutput: ["canonical output"], lastIntent: "canonical intent",
-		toolCount: 0, tokens: 0, cost: 1.25, requests: 7, contextTokens: 100, contextWindow: 1000, durationMs: 1,
+		index: 0,
+		id: "Worker",
+		agent: "task",
+		status: "running" as const,
+		task: "canonical task",
+		recentTools: [],
+		recentOutput: ["canonical output"],
+		lastIntent: "canonical intent",
+		toolCount: 0,
+		tokens: 0,
+		cost: 1.25,
+		requests: 7,
+		contextTokens: 100,
+		contextWindow: 1000,
+		durationMs: 1,
 	};
-	job.latestDetails = { progress: [{ ...progress, id: "Worker-2", lastIntent: "wrong worker", recentOutput: ["wrong output"] }, progress] };
-	const session = { asyncJobManager: manager, getAgentId: () => "Main", settings: Settings.isolated({ "launch.enabled": false }) } as unknown as ToolSession;
+	job.latestDetails = {
+		progress: [{ ...progress, id: "Worker-2", lastIntent: "wrong worker", recentOutput: ["wrong output"] }, progress],
+	};
+	const session = {
+		asyncJobManager: manager,
+		getAgentId: () => "Main",
+		settings: Settings.isolated({ "launch.enabled": false }),
+	} as unknown as ToolSession;
 	const tool = new WaitTool(session);
 	const update = Promise.withResolvers<CoordinationDetails>();
-	const waiting = tool.execute("wait-worker", {}, undefined, result => { if (result.details) update.resolve(result.details); });
+	const waiting = tool.execute("wait-worker", {}, undefined, result => {
+		if (result.details) update.resolve(result.details);
+	});
 	try {
 		const details = await update.promise;
-		expect(details.jobs?.[0]).toMatchObject({ id, agentUrlId: "Worker", requests: 7, cost: 1.25, contextTokens: 100, contextWindow: 1000 });
-		const component = waitToolRenderer.renderResult({ content: [{ type: "text", text: "" }], details }, { expanded: false, isPartial: true }, theme);
+		expect(details.jobs?.[0]).toMatchObject({
+			id,
+			agentUrlId: "Worker",
+			requests: 7,
+			cost: 1.25,
+			contextTokens: 100,
+			contextWindow: 1000,
+		});
+		const component = waitToolRenderer.renderResult(
+			{ content: [{ type: "text", text: "" }], details },
+			{ expanded: false, isPartial: true },
+			theme,
+		);
 		const output = Bun.stripANSI(component.render(140).join("\n"));
 		expect(output).toContain("canonical intent");
 		expect(output).toContain("canonical output");
