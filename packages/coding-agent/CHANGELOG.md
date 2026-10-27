@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ACP clients losing background subagent progress and completion after the parent prompt returns or `/fresh` rotates the provider session ID, retaining task ownership and close cleanup under the original ACP registration while preserving single model/thinking config notifications before and after bootstrap.
+- Fixed a cancelled ACP prompt's delayed task delivery settling its successor prompt before that successor finishes.
+
 ## [18.13.1] - 2026-10-27
 
 ### Added
@@ -200,10 +205,6 @@
 - Fixed the `computer` tool prompt leaving `el.selectText` out of the element helpers; it now says a following `el.type` on that element replaces the selection ([#16769](https://github.com/can1357/oh-my-pi/pull/16769) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed language servers keeping every file omp ever opened loaded for the whole session; files unused for 5 minutes are now closed when omp opens another, so the server can free that memory ([#15418](https://github.com/can1357/oh-my-pi/pull/15418) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `write` turning a CRLF file into LF and dropping its UTF-8 BOM when it replaces the file; it now keeps both, as `edit` does ([#16575](https://github.com/can1357/oh-my-pi/pull/16575) by [@will-bogusz](https://github.com/will-bogusz))
-### Fixed
-
-- Fixed ACP clients losing background subagent progress and completion after the parent prompt returns, while preserving single config notifications for client model/thinking changes before and after bootstrap.
-- Fixed a cancelled ACP prompt's delayed task delivery settling its successor prompt before that successor finishes.
 
 ## [18.12.6] - 2026-10-21
 

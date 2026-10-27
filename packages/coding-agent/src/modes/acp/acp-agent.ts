@@ -344,6 +344,8 @@ function isAsyncTaskUpdate(event: AgentSessionEvent): boolean {
 }
 
 type ManagedSessionRecord = {
+	// ACP ownership stays fixed when /fresh rotates the provider session id.
+	readonly registrationId: string;
 	session: AgentSession;
 	setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined;
 	mcpManager: MCPManager | undefined;
@@ -619,7 +621,8 @@ function isAcceptedElicitation(
  * `ctx.switchSession` — snapshotting it once at factory time would route
  * later elicitations to the pre-switch id. Live reads keep the bridge
  * symmetric with every other `sessionUpdate` call in this file
- * (`record.session.sessionId` is always evaluated at emit time).
+ * (`record.session.sessionId` is evaluated at emit time for non-task updates;
+ * background tasks instead retain the ACP registration identity).
  *
  * The non-elicitation surface (custom components, theming, terminal
  * input) remains stubbed — ACP clients render those themselves or not
@@ -951,7 +954,7 @@ export class AcpAgent implements Agent {
 		if (!record) {
 			return {};
 		}
-		await this.#closeManagedSession(params.sessionId, record);
+		await this.#closeManagedSession(record);
 		return {};
 	}
 
@@ -1038,7 +1041,7 @@ export class AcpAgent implements Agent {
 					sessionId: record.session.sessionId,
 					error,
 				});
-				await this.#closeManagedSession(params.sessionId, record);
+				await this.#closeManagedSession(record);
 			});
 		}
 		// A cancel that lands between this prompt's wire acceptance and its
@@ -1095,7 +1098,7 @@ export class AcpAgent implements Agent {
 							sessionId: record.session.sessionId,
 							error,
 						});
-						await this.#closeManagedSession(record.session.sessionId, record);
+						await this.#closeManagedSession(record);
 					});
 					return await pendingPrompt.promise;
 				}
@@ -1351,7 +1354,7 @@ export class AcpAgent implements Agent {
 					sessionId: record.session.sessionId,
 					error,
 				});
-				await this.#closeManagedSession(record.session.sessionId, record);
+				await this.#closeManagedSession(record);
 			}
 			return;
 		}
@@ -1372,7 +1375,7 @@ export class AcpAgent implements Agent {
 			await Promise.race([record.session.abort({ reason: USER_INTERRUPT_LABEL }), timeoutGate.promise]);
 		} catch (error: unknown) {
 			logger.warn("ACP cancel cleanup timed out; closing session", { sessionId: record.session.sessionId, error });
-			await this.#closeManagedSession(record.session.sessionId, record);
+			await this.#closeManagedSession(record);
 		} finally {
 			clearTimeout(timer);
 		}
@@ -1711,7 +1714,7 @@ export class AcpAgent implements Agent {
 		try {
 			await this.#configureExtensions(record);
 			await this.#configureMcpServers(record, mcpServers);
-			this.#sessions.set(session.sessionId, record);
+			this.#sessions.set(record.registrationId, record);
 			record.lifetimeUnsubscribe = session.subscribe(event => {
 				void this.#handleLifetimeEvent(record, event);
 			});
@@ -1727,6 +1730,7 @@ export class AcpAgent implements Agent {
 		setToolUIContext: ((uiContext: ExtensionUIContext, hasUI: boolean) => void) | undefined = undefined,
 	): ManagedSessionRecord {
 		return {
+			registrationId: session.sessionId,
 			session,
 			setToolUIContext,
 			mcpManager: undefined,
@@ -1749,7 +1753,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (this.#connection.signal.aborted || this.#sessions.get(record.session.sessionId) !== record) return;
+		if (this.#connection.signal.aborted || this.#sessions.get(record.registrationId) !== record) return;
 		let delivery: Promise<void>;
 		if (isAsyncTaskUpdate(event)) {
 			// Sole owner of these frames, even during a prompt: changing prompt
@@ -1876,7 +1880,8 @@ export class AcpAgent implements Agent {
 
 	#mapSessionEventUpdates(record: ManagedSessionRecord, event: AgentSessionEvent): SessionNotification[] {
 		const imageDataCache = new Map<string, string>();
-		return mapAgentSessionEventToAcpSessionUpdates(event, record.session.sessionId, {
+		const sessionId = isAsyncTaskUpdate(event) ? record.registrationId : record.session.sessionId;
+		return mapAgentSessionEventToAcpSessionUpdates(event, sessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
 			getToolArgs: toolCallId => record.toolArgsById.get(toolCallId),
@@ -3202,9 +3207,11 @@ export class AcpAgent implements Agent {
 		return mapped;
 	}
 
-	async #closeManagedSession(sessionId: string, record: ManagedSessionRecord): Promise<void> {
-		record.closedError ??= RequestError.resourceNotFound(sessionId);
-		this.#sessions.delete(sessionId);
+	async #closeManagedSession(record: ManagedSessionRecord): Promise<void> {
+		record.closedError ??= RequestError.resourceNotFound(record.registrationId);
+		if (this.#sessions.get(record.registrationId) === record) {
+			this.#sessions.delete(record.registrationId);
+		}
 		await this.#cancelPromptForClose(record);
 		await this.#disposeSessionRecord(record);
 	}

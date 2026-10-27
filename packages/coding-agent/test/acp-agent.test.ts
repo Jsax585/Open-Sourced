@@ -357,6 +357,14 @@ class FakeAgentSession {
 
 	async reload(): Promise<void> {}
 
+	freshSession(): { previousSessionId: string; sessionId: string; closedProviderSessions: number } | undefined {
+		if (this.isStreaming) return undefined;
+		const previousSessionId = this.sessionId;
+		this.sessionId = "00000000-0000-4000-8000-000000000099";
+		this.agent.sessionId = this.sessionId;
+		return { previousSessionId, sessionId: this.sessionId, closedProviderSessions: 0 };
+	}
+
 	async newSession(): Promise<boolean> {
 		await this.sessionManager.newSession();
 		this.sessionId = this.sessionManager.getSessionId();
@@ -1044,6 +1052,93 @@ describe("ACP agent", () => {
 			for (const listener of retainedListeners) listener(update(terminal));
 			expect(harness.updates.length).toBe(beforeClosedUpdate);
 			expect(session.listeners()).toHaveLength(0);
+		} finally {
+			await harness.agent.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	for (const freshBeforeBootstrap of [true, false]) {
+		it(`retains ACP ownership after /fresh ${freshBeforeBootstrap ? "before" : "after"} bootstrap`, async () => {
+			const harness = await createHarness();
+			vi.useFakeTimers();
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId)!;
+			const transcriptId = session.sessionManager.getSessionId();
+			const emit = (event: AgentSessionEvent) => {
+				for (const listener of session.listeners()) listener(event);
+			};
+			const taskUpdate: AgentSessionEvent = {
+				type: "tool_execution_update",
+				toolCallId: "fresh-task",
+				toolName: "task",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "still running" }],
+					details: { async: { type: "task", state: "running", jobId: "fresh-child" } },
+				},
+			};
+			try {
+				if (!freshBeforeBootstrap) await advanceBootstrapGuard();
+				await expect(
+					harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/fresh" }] }),
+				).resolves.toMatchObject({ stopReason: "end_turn" });
+				expect(session.sessionId).not.toBe(created.sessionId);
+				expect(session.agent.sessionId).toBe(session.sessionId);
+				expect(session.sessionManager.getSessionId()).toBe(transcriptId);
+				emit(taskUpdate);
+				if (freshBeforeBootstrap) await advanceBootstrapGuard();
+				const beforeConfig = harness.updates.length;
+				await harness.agent.setSessionConfigOption({
+					sessionId: created.sessionId,
+					configId: "thinking",
+					value: "high",
+				});
+				await session.setModel(TEST_MODELS[1]!);
+				const configs = harness.updates
+					.slice(beforeConfig)
+					.filter(notification => notification.update.sessionUpdate === "config_option_update");
+				// Preserve non-task notifications' existing emit-time identity contract.
+				expect(configs.map(notification => notification.sessionId)).toEqual([session.sessionId, session.sessionId]);
+				const tasks = harness.updates.filter(notification => notification.update.sessionUpdate === "tool_call_update");
+				expect(tasks).toHaveLength(1);
+				expect(tasks[0]).toMatchObject({ sessionId: created.sessionId, update: { toolCallId: "fresh-task" } });
+				expectAcpNotifications([...configs, ...tasks]);
+				await expect(harness.agent.cancel({ sessionId: session.sessionId })).rejects.toMatchObject({ code: -32002 });
+				const retainedListeners = session.listeners();
+				await harness.agent.closeSession({ sessionId: created.sessionId });
+				expect(session.disposed).toBe(true);
+				expect(session.listeners()).toHaveLength(0);
+				await expect(harness.agent.cancel({ sessionId: created.sessionId })).rejects.toMatchObject({ code: -32002 });
+				const beforeClosedUpdate = harness.updates.length;
+				for (const listener of retainedListeners) {
+					listener(taskUpdate);
+					listener({ type: "model_changed" } as AgentSessionEvent);
+				}
+				expect(harness.updates).toHaveLength(beforeClosedUpdate);
+			} finally {
+				await harness.agent.dispose();
+				vi.useRealTimers();
+			}
+		});
+	}
+
+	it("removes the original ACP registration when cancel times out after /fresh", async () => {
+		const harness = await createHarness();
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		try {
+			await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/fresh" }] });
+			harness.agent.setCancelCleanupTimeoutForTesting(10);
+			session.isStreaming = true;
+			session.abort = () => Promise.withResolvers<void>().promise;
+			const cancel = harness.agent.cancel({ sessionId: created.sessionId });
+			vi.advanceTimersByTime(10);
+			await cancel;
+			expect(session.disposed).toBe(true);
+			expect(session.listeners()).toHaveLength(0);
+			await expect(harness.agent.cancel({ sessionId: created.sessionId })).rejects.toMatchObject({ code: -32002 });
 		} finally {
 			await harness.agent.dispose();
 			vi.useRealTimers();
