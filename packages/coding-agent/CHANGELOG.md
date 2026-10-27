@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Composer predictions now first check whether you want something done to what the assistant just produced (reformat it, extend it, retry it, or change one detail) before guessing a new question, and match your usual message length instead of a fixed 20-word cap; replies over 240 characters are dropped instead of 500 ([#16689](https://github.com/can1357/oh-my-pi/pull/16689) by [@trukhinyuri](https://github.com/trukhinyuri))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
