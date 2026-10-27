@@ -83,6 +83,7 @@ import {
 	getImplicitOllamaBaseUrl,
 	getOllamaContextLengthOverride,
 	isDiscoveryAuthRejection,
+	LLAMA_CPP_DEFAULT_BASE_URLS,
 	normalizeBareDiscoveryBaseUrl,
 	normalizeLiteLLMDiscoveryBaseUrl,
 	normalizeLlamaCppBaseUrl,
@@ -1660,9 +1661,10 @@ export class ModelRegistry {
 			this.#discoverableProviders.push({
 				provider: "llama.cpp",
 				api: "openai-responses",
-				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || "http://127.0.0.1:8080",
+				baseUrl: Bun.env.LLAMA_CPP_BASE_URL || LLAMA_CPP_DEFAULT_BASE_URLS[0],
 				discovery: { type: "llama.cpp" },
 				optional: !Bun.env.LLAMA_CPP_BASE_URL,
+				fallbackBaseUrls: Bun.env.LLAMA_CPP_BASE_URL ? undefined : LLAMA_CPP_DEFAULT_BASE_URLS.slice(1),
 			});
 			// Only mark as keyless if no API key is configured
 			if (this.authStorage.keys.source("llama.cpp") === undefined) {
@@ -2015,10 +2017,11 @@ export class ModelRegistry {
 				: `${providerConfig.provider}:openai-models-list-context-v4`;
 		}
 		if (providerConfig.discovery.type === "litellm") {
-			// rich-v5 invalidates rows written before discovery filtered known
+			// rich-v6 invalidates rows written before `mode: decisions` groups moved
+			// to the Decisions runner; rich-v5 before discovery filtered known
 			// non-conversational modes. Keep this in lockstep with the catalog
 			// package's `litellm:rich-vN` namespace whenever mapping behavior changes.
-			return `${providerConfig.provider}:litellm-rich-v5`;
+			return `${providerConfig.provider}:litellm-rich-v6`;
 		}
 		return providerConfig.provider;
 	}
@@ -2329,6 +2332,7 @@ export class ModelRegistry {
 								accounts?.map(account => ({
 									accessToken: account.accessToken,
 									accountKey: oauthAccountKey(account),
+									projectId: account.projectId,
 								})) ?? null
 							);
 						},
@@ -3344,6 +3348,7 @@ export class ModelRegistry {
 			accountIds: accountAccess && Object.keys(accountAccess),
 			forceRefresh: options?.forceRefresh,
 			refreshReason: options?.refreshReason,
+			rejectedAccessToken: options?.rejectedAccessToken,
 			signal: options?.signal,
 		});
 	}
@@ -3411,8 +3416,16 @@ export class ModelRegistry {
 	}
 
 	/**
+<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
 	 * Remove custom API/OAuth registrations, rebuilding the catalog once per batch.
+||||||| Common ancestor
+	 * Remove custom API/OAuth registrations for a specific extension source.
+=======
+	 * Remove custom API/OAuth registrations for one or more extension sources.
+	 * The model catalog is rebuilt once, however many sources are cleared.
+>>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 	 */
+<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
 	clearSourceRegistrations(sourceIds: string | readonly string[]): void {
 		let changed = false;
 		for (const sourceId of new Set(typeof sourceIds === "string" ? [sourceIds] : sourceIds)) {
@@ -3427,9 +3440,56 @@ export class ModelRegistry {
 				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) continue;
 				this.#runtimeProviderSourceByName.delete(providerName);
 				this.#clearRuntimeProviderState(providerName);
-			}
+||||||| Common ancestor
+	clearSourceRegistrations(sourceId: string): void {
+		unregisterCustomApis(sourceId);
+		unregisterOAuthProviders(sourceId);
+		const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
+		if (!sourceProviders || sourceProviders.size === 0) {
+			return;
 		}
+		this.#ensureFullSnapshot();
+		this.#runtimeProvidersBySource.delete(sourceId);
+		for (const providerName of sourceProviders) {
+			if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) {
+				continue;
+=======
+	clearSourceRegistrations(sourceIds: string | Iterable<string>): void {
+		let cleared = false;
+		for (const sourceId of typeof sourceIds === "string" ? [sourceIds] : sourceIds) {
+			unregisterCustomApis(sourceId);
+			unregisterOAuthProviders(sourceId);
+			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
+			if (!sourceProviders || sourceProviders.size === 0) {
+				continue;
+>>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
+			}
+<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
+||||||| Common ancestor
+			this.#runtimeProviderSourceByName.delete(providerName);
+			this.#clearRuntimeProviderState(providerName);
+=======
+			this.#ensureFullSnapshot();
+			this.#runtimeProvidersBySource.delete(sourceId);
+			for (const providerName of sourceProviders) {
+				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) {
+					continue;
+				}
+				this.#runtimeProviderSourceByName.delete(providerName);
+				this.#clearRuntimeProviderState(providerName);
+			}
+			cleared = true;
+		}
+		if (cleared) {
+			this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
+>>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
+		}
+<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
 		if (changed) this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
+||||||| Common ancestor
+		this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
+=======
+>>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 	}
 
 	/**
@@ -3456,12 +3516,24 @@ export class ModelRegistry {
 	 */
 	syncExtensionSources(activeSourceIds: string[]): void {
 		const activeSources = new Set(activeSourceIds);
+<<<<<<< New base: docs(coding-agent): add changelog entry for batched extension provider cleanup
 		const removedSources: string[] = [];
 		for (const sourceId of this.#registeredProviderSources) {
 			if (activeSources.has(sourceId)) {
 				continue;
 			}
 			removedSources.push(sourceId);
+||||||| Common ancestor
+		for (const sourceId of this.#registeredProviderSources) {
+			if (activeSources.has(sourceId)) {
+				continue;
+			}
+			this.clearSourceRegistrations(sourceId);
+=======
+		const inactiveSources = [...this.#registeredProviderSources].filter(sourceId => !activeSources.has(sourceId));
+		this.clearSourceRegistrations(inactiveSources);
+		for (const sourceId of inactiveSources) {
+>>>>>>> Current commit: Merge 5975e2ce906f4d2a7505756a9d9cc138cd37a1dd into previous commit
 			this.#registeredProviderSources.delete(sourceId);
 		}
 		this.clearSourceRegistrations(removedSources);
