@@ -114,6 +114,7 @@ import {
 	getOpenRouterResponsesSessionId,
 	isCompiledGrammarTooLargeStrictError,
 	isOpenAIResponsesProgressEvent,
+	isOpenAIResponsesStalePreviousResponseError,
 	isStrictToolsDisabledForScope,
 	readOpenRouterRawMetadata,
 	type OpenAIPromptCacheOptions,
@@ -135,8 +136,8 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	/**
 	 * Opt in to WebSocket response.create on the standard /responses endpoint.
 	 * Defaults to model.preferWebsockets, then false; explicit false always wins.
-	 * WebSocket requests replay full history: statefulResponses chaining is HTTP-only.
-	 * Transport failures surface without an automatic HTTP fallback or request replay.
+	 * Reuses socket-local previous_response_id anchors when history is append-only.
+	 * Transport failures surface without an automatic HTTP fallback or generation replay.
 	 */
 	preferWebsockets?: boolean;
 	reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -148,10 +149,10 @@ export interface OpenAIResponsesOptions extends StreamOptions {
 	maxTokensExplicit?: boolean;
 	disableReasoning?: boolean;
 	/**
-	 * HTTP/SSE stateful turns: chain via `previous_response_id` + delta input
-	 * instead of replaying the full transcript. Ignored for WebSockets, which
-	 * always replay full history. Forces `store: true` (the platform only
-	 * resolves stored responses). Precedence: this option, then
+	 * Enables or disables `previous_response_id` chaining. WebSockets default to
+	 * socket-local continuation without forcing storage; false sends full history.
+	 * HTTP/SSE chaining forces `store: true` (the platform only resolves stored
+	 * responses). HTTP precedence: this option, then
 	 * `PI_OPENAI_STATEFUL`, then `compat.statefulResponses`, then ON against the
 	 * official OpenAI API and OFF elsewhere. Requires `sessionId` +
 	 * `providerSessionState`. Falls back to a full replay whenever history
@@ -699,17 +700,6 @@ function buildOpenAIResponsesChainedParams(
 	return { params };
 }
 
-function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
-	if (!(error instanceof Error)) return false;
-	if ((error as { code?: string }).code === "previous_response_not_found") return true;
-	// "unsupported" covers endpoints that reject the parameter outright
-	// (e.g. "Unsupported parameter: previous_response_id").
-	return (
-		/previous[ _]?response/i.test(error.message) &&
-		/not[ _]?found|invalid|expired|stale|unsupported/i.test(error.message)
-	);
-}
-
 function registerOpenAIResponsesChainStaleFailure(chain: OpenAIResponsesChainState, error: unknown): void {
 	resetOpenAIResponsesChainState(chain);
 	chain.staleFailures += 1;
@@ -954,7 +944,7 @@ const streamOpenAIResponsesOnce = (
 					if (webSocketLease) {
 						if (requestParams.previous_response_id != null) {
 							throw new Error(
-								"OpenAI responses WebSocket requests replay full history; previous_response_id is not supported",
+								"OpenAI responses WebSocket previous_response_id is connection-owned and cannot be injected",
 							);
 						}
 						if ("background" in requestParams && requestParams.background === true) {
@@ -1012,7 +1002,10 @@ const streamOpenAIResponsesOnce = (
 								model,
 							);
 						}
-						return connection.events(requestParams, rawSseObserver);
+						return connection.events(requestParams, rawSseObserver, {
+							chain: options?.statefulResponses !== false,
+							supportsImageDetailOriginal: model.compat.supportsImageDetailOriginal,
+						});
 					}
 					const headersWithTimeout = { ...headers };
 					if (requestTimeoutMs !== undefined) {
@@ -1520,6 +1513,7 @@ const streamOpenAIResponsesOnce = (
 			}
 		} catch (error) {
 			if (chainState) resetOpenAIResponsesChainState(chainState);
+			webSocketLease?.connection.close();
 			const capturedErrorResponse = error instanceof OpenAIHttpError ? error.captured : undefined;
 			const result = await AIError.finalize(error, {
 				api: model.api,

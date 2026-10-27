@@ -164,17 +164,27 @@ Responses WebSocket `response.create`; HTTP Responses compatibility alone is not
 Keep `api: openai-responses`, the existing API root, authentication and discovery:
 the client upgrades the same `/responses` endpoint without adding `/codex`.
 
-Standard Responses WebSocket requests replay the full conversation on each turn.
-They do not use `previous_response_id` chaining, even when HTTP stateful Responses
-is enabled; an injected `previous_response_id` or `background: true` is rejected.
-Connection and protocol failures surface as errors rather than silently switching
-to HTTP/SSE. Codex chaining, steering and fallback behavior are unchanged.
+Standard Responses WebSocket requests use connection-local `previous_response_id`
+continuation on the same healthy, idle connection when history and request options
+(including tools) still match. This works with `store: false` and does not force
+server-side storage. Set SDK request `statefulResponses: false` to disable WS
+continuation; HTTP's existing stored-stateful settings and precedence are unchanged.
+Changed history or options require a full request. Reconnection, credential changes
+and concurrent independent sockets never borrow another connection's anchor.
+
+An injected `previous_response_id` (including through `onPayload`) or
+`background: true` is rejected: WS anchors are connection-owned. Only an explicit
+anchor-not-found, invalid or unsupported error in the first frame permits one
+full-history resend on the same socket, before `response.created` or any output.
+Other failures surface as errors, without arbitrary generation retries or HTTP/SSE
+fallback. Codex chaining, steering and fallback behavior are unchanged.
 
 For endpoints marked `connectionBoundNativeHistory` (such as GitHub Copilot),
-standard WS rebuilds prior turns from their message content instead of replaying
-item IDs or encrypted reasoning tied to another connection. This also applies
-when a pooled connection is reused, because concurrent results can originate from
-different sockets.
+standard WS safely rebuilds prior turns from message content rather than replaying
+item IDs or encrypted reasoning from another connection. Native history payloads
+and socket-owned reasoning signatures remain suppressed in SDK outputs. A matching
+connection-local baseline can still permit continuation; an unmatched prefix uses
+a full request, without restoring suppressed reasoning metadata.
 
 `omitMaxOutputTokens` omits the model-derived output cap.
 

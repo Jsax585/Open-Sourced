@@ -14,7 +14,13 @@ import {
 	openAIResponsesReplaysNativeHistory,
 	type OpenAIResponsesOptions,
 } from "@oh-my-pi/pi-ai/providers/openai-responses";
-import type { AssistantMessage, Context, Model, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Context,
+	Model,
+	ProviderSessionState,
+	SimpleStreamOptions,
+} from "@oh-my-pi/pi-ai/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 
 const resources: Array<() => Promise<void>> = [];
@@ -28,7 +34,7 @@ function textEvents(text: string, id: string): Record<string, unknown>[] {
 		id: `msg_${id}`,
 		role: "assistant",
 		status: "completed",
-		content: [{ type: "output_text", text }],
+		content: [{ type: "output_text", text, annotations: [] }],
 	};
 	return [
 		{ type: "response.created", response: { id } },
@@ -37,13 +43,18 @@ function textEvents(text: string, id: string): Record<string, unknown>[] {
 			type: "response.content_part.added",
 			output_index: 0,
 			content_index: 0,
-			part: { type: "output_text", text: "" },
+			part: { type: "output_text", text: "", annotations: [] },
 		},
 		{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: text },
 		{ type: "response.output_item.done", output_index: 0, item },
 		{
 			type: "response.completed",
-			response: { id, status: "completed", usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
+			response: {
+				id,
+				status: "completed",
+				output: [item],
+				usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+			},
 		},
 	];
 }
@@ -124,7 +135,7 @@ function endpoint(
 		baseUrl: `http://127.0.0.1:${server.port}/v1`,
 	};
 	const context: Context = { messages: [{ role: "user", content: "Hello", timestamp: 1 }] };
-	const options: OpenAIResponsesOptions = {
+	const options = {
 		apiKey: "test-key",
 		sessionId: "main",
 		providerSessionState,
@@ -379,84 +390,386 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.requests).toHaveLength(1);
 	});
 
-	it("reuses an idle session socket but replays full history even when statefulResponses is true", async () => {
-		const fixture = endpoint();
-		const options = { ...fixture.options, preferWebsockets: true, statefulResponses: true };
-		const first = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
-		const second = await streamOpenAIResponses(
-			fixture.model,
-			{
-				messages: [...fixture.context.messages, first, { role: "user", content: "Next", timestamp: 2 }],
-			},
-			options,
-		).result();
-		expect(second.stopReason).toBe("stop");
-		expect(fixture.upgrades).toHaveLength(1);
-		expect(fixture.requests).toHaveLength(2);
-		expect(fixture.requests[1]?.connection).toBe(fixture.requests[0]?.connection);
-		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
-		expect(fixture.requests[1]?.body.input).toHaveLength(3);
-	});
-
-	it("continues a streamed tool call with its full call and result on the same socket", async () => {
-		const fixture = endpoint((socket, _body, index) => {
-			if (index !== 1) {
-				send(socket, textEvents("Found", "resp_tool_result"));
+	it("continues three SDK turns from the complete local transcript with store:false on one socket", async () => {
+		const fixture = endpoint((socket, body, index) => {
+			const input = body.input as Array<{ role?: string; content?: Array<{ text?: string }> }>;
+			const expectedText = index === 1 ? "Hello" : `Turn ${index}`;
+			if (
+				body.store !== false ||
+				body.previous_response_id !== (index === 1 ? undefined : `resp_${index - 1}`) ||
+				input.length !== 1 ||
+				input[0]?.role !== "user" ||
+				input[0]?.content?.[0]?.text !== expectedText
+			) {
+				send(socket, [
+					{ type: "error", error: { code: "invalid_request", message: "Invalid conversation continuation" } },
+				]);
 				return;
 			}
-			const item = {
-				type: "function_call",
-				id: "fc_lookup",
-				call_id: "call_lookup",
-				name: "lookup",
-				arguments: '{"query":"hello"}',
-			};
-			send(socket, [
-				{ type: "response.created", response: { id: "resp_tool" } },
-				{ type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-				{
-					type: "response.function_call_arguments.delta",
-					output_index: 0,
-					item_id: item.id,
-					delta: item.arguments,
-				},
-				{ type: "response.output_item.done", output_index: 0, item },
-				{ type: "response.completed", response: { id: "resp_tool", status: "completed" } },
-			]);
+			send(socket, textEvents(`Accepted ${expectedText}`, `resp_${index}`));
 		});
-		const options = { ...fixture.options, preferWebsockets: true, statefulResponses: true };
-		const first = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
-		expect(first.stopReason).toBe("toolUse");
-		const toolCall = first.content.find(block => block.type === "toolCall");
-		if (!toolCall || toolCall.type !== "toolCall") throw new Error("Expected streamed tool call");
-		expect(toolCall.arguments).toEqual({ query: "hello" });
-		const second = await streamOpenAIResponses(
-			fixture.model,
-			{
-				messages: [
-					...fixture.context.messages,
-					first,
-					{
-						role: "toolResult",
-						toolCallId: toolCall.id,
-						toolName: "lookup",
-						content: [{ type: "text", text: "found" }],
-						isError: false,
-						timestamp: 2,
-					},
-				],
-			},
-			options,
-		).result();
-		expect(second.stopReason).toBe("stop");
+		const options = { ...fixture.options, preferWebsockets: true, storeResponses: false };
+		const context: Context = { messages: [...fixture.context.messages] };
+		for (const turn of [1, 2, 3]) {
+			if (turn > 1) context.messages.push({ role: "user", content: `Turn ${turn}`, timestamp: turn });
+			const result = await streamSimple(fixture.model, context, options).result();
+			expect(result.stopReason).toBe("stop");
+			expect(result.content).toMatchObject([
+				{ type: "text", text: `Accepted ${turn === 1 ? "Hello" : `Turn ${turn}`}` },
+			]);
+			context.messages.push(result);
+		}
+		expect(fixture.requests).toHaveLength(3);
+		expect(fixture.requests.map(request => request.connection)).toEqual([1, 1, 1]);
+		expect(fixture.requests.map(request => request.body.previous_response_id)).toEqual([
+			undefined,
+			"resp_1",
+			"resp_2",
+		]);
 		expect(fixture.upgrades).toHaveLength(1);
+		expect(fixture.httpRequests).toHaveLength(0);
+	});
+
+	it("continues streamed function and custom tools using only each new result across three SDK turns", async () => {
+		for (const kind of ["function", "custom"] as const) {
+			const name = kind === "function" ? "lookup" : "apply_patch";
+			const callType = kind === "function" ? "function_call" : "custom_tool_call";
+			const fixture = endpoint((socket, body, index) => {
+				const input = body.input as Array<{ type?: string; call_id?: string; output?: string; role?: string }>;
+				const valid =
+					index === 1
+						? body.previous_response_id === undefined && input.length === 1 && input[0]?.role === "user"
+						: body.previous_response_id === `resp_tool_${index - 1}` &&
+							input.length === 1 &&
+							input[0]?.type === `${callType}_output` &&
+							input[0]?.call_id === `call_${index - 1}` &&
+							input[0]?.output === `result ${index - 1}`;
+				if (!valid) {
+					send(socket, [
+						{ type: "error", error: { code: "invalid_request", message: "Missing anchored tool result" } },
+					]);
+					return;
+				}
+				if (index === 3) {
+					send(socket, textEvents("Both results accepted", "resp_done"));
+					return;
+				}
+				const value = kind === "function" ? '{"query":"hello"}' : "*** Begin Patch\n*** End Patch\n";
+				const field = kind === "function" ? "arguments" : "input";
+				const item = {
+					type: callType,
+					id: `${kind === "function" ? "fc" : "ctc"}_${index}`,
+					call_id: `call_${index}`,
+					name,
+					[field]: value,
+					status: "completed",
+				};
+				send(socket, [
+					{ type: "response.created", response: { id: `resp_tool_${index}` } },
+					{
+						type: "response.output_item.added",
+						output_index: 0,
+						item: { ...item, [field]: "", status: "in_progress" },
+					},
+					{
+						type:
+							kind === "function"
+								? "response.function_call_arguments.delta"
+								: "response.custom_tool_call_input.delta",
+						output_index: 0,
+						item_id: item.id,
+						delta: value,
+					},
+					{ type: "response.output_item.done", output_index: 0, item },
+					{
+						type: "response.completed",
+						response: { id: `resp_tool_${index}`, status: "completed", output: [item] },
+					},
+				]);
+			});
+			const model = { ...fixture.model, ...(kind === "custom" ? { applyPatchToolType: "freeform" as const } : {}) };
+			const context: Context = {
+				...fixture.context,
+				messages: [...fixture.context.messages],
+				tools: [{ name, description: "Use the tool", parameters: schemaType({ query: "string" }) }],
+			};
+			const options = { ...fixture.options, preferWebsockets: true };
+			for (const turn of [1, 2, 3]) {
+				const result = await streamSimple(model, context, options).result();
+				expect(result.stopReason).toBe(turn === 3 ? "stop" : "toolUse");
+				context.messages.push(result);
+				if (turn === 3) {
+					expect(result.content).toMatchObject([{ type: "text", text: "Both results accepted" }]);
+					continue;
+				}
+				const toolCall = result.content.find(block => block.type === "toolCall");
+				if (toolCall?.type !== "toolCall") throw new Error("Expected streamed tool call");
+				expect(toolCall.arguments).toEqual(
+					kind === "function" ? { query: "hello" } : { input: "*** Begin Patch\n*** End Patch\n" },
+				);
+				context.messages.push({
+					role: "toolResult",
+					toolCallId: toolCall.id,
+					toolName: toolCall.name,
+					content: [{ type: "text", text: `result ${turn}` }],
+					isError: false,
+					timestamp: turn + 1,
+				});
+			}
+			expect(fixture.requests).toHaveLength(3);
+			expect(fixture.requests.map(request => request.connection)).toEqual([1, 1, 1]);
+			expect(fixture.upgrades).toHaveLength(1);
+			expect(fixture.httpRequests).toHaveLength(0);
+		}
+	});
+
+	it("replays complete history after history, tool, option, or post-hook payload changes", async () => {
+		const fixture = endpoint((socket, body, index) => {
+			if (
+				body.previous_response_id !== undefined ||
+				!Array.isArray(body.input) ||
+				body.input.length !== index * 2 - 1
+			) {
+				send(socket, [
+					{ type: "error", error: { code: "invalid_request", message: "Expected complete changed transcript" } },
+				]);
+				return;
+			}
+			send(socket, textEvents(`TURN ${index}`, `resp_${index}`));
+		});
+		let hookRevision = 0;
+		const options: SimpleStreamOptions = {
+			...fixture.options,
+			preferWebsockets: true,
+			onPayload: payload => ({ ...(payload as object), metadata: { revision: String(hookRevision) } }),
+		};
+		const context: Context = { messages: [...fixture.context.messages] };
+		for (const turn of [1, 2, 3, 4, 5]) {
+			if (turn > 1) context.messages.push({ role: "user", content: `Next ${turn}`, timestamp: turn });
+			if (turn === 2) context.messages[0] = { role: "user", content: "Edited Hello", timestamp: 1 };
+			if (turn === 3) context.tools = [{ name: "lookup", description: "Search", parameters: schemaType({}) }];
+			// GPT-5 Mini drops sampling options in streamSimple; change an option
+			// that actually survives SDK policy and reaches response.create.
+			if (turn === 4) options.maxTokens = 1024;
+			if (turn === 5) hookRevision++;
+			const result = await streamSimple(fixture.model, context, options).result();
+			expect(result.stopReason).toBe("stop");
+			context.messages.push(result);
+		}
+		expect(fixture.requests[4]?.body.metadata).toEqual({ revision: "1" });
+		expect(fixture.requests[3]?.body.max_output_tokens).toBe(1024);
+		expect(fixture.requests[2]?.body.tools).toHaveLength(1);
+		expect(JSON.stringify(fixture.requests[1]?.body.input)).toContain("Edited Hello");
+		expect(fixture.requests).toHaveLength(5);
+		expect(fixture.upgrades).toHaveLength(1);
+	});
+
+	it("lets statefulResponses:false opt out per request without forcing response storage", async () => {
+		const fixture = endpoint();
+		const options = { ...fixture.options, preferWebsockets: true, storeResponses: false };
+		const context: Context = { messages: [...fixture.context.messages] };
+		for (const turn of [1, 2, 3]) {
+			if (turn > 1) context.messages.push({ role: "user", content: `Next ${turn}`, timestamp: turn });
+			const result = await streamSimple(fixture.model, context, {
+				...options,
+				...(turn === 2 ? { statefulResponses: false } : {}),
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			context.messages.push(result);
+		}
 		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
-		expect(fixture.requests[1]?.body.input).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({ type: "function_call", call_id: "call_lookup" }),
-				expect.objectContaining({ type: "function_call_output", call_id: "call_lookup", output: "found" }),
-			]),
-		);
+		expect(fixture.requests[1]?.body.input).toHaveLength(3);
+		expect(fixture.requests[2]?.body.previous_response_id).toBe("resp_2");
+		expect(fixture.requests[2]?.body.input).toHaveLength(1);
+		expect(fixture.requests.map(request => request.body.store)).toEqual([false, false, false]);
+		expect(fixture.upgrades).toHaveLength(1);
+	});
+
+	it("clears the old anchor when a successful terminal response has no id", async () => {
+		const fixture = endpoint((socket, body, index) => {
+			const expectedAnchor = index === 2 ? "resp_1" : index === 4 ? "resp_3" : undefined;
+			const expectedLength = index === 3 ? 5 : 1;
+			if (
+				body.previous_response_id !== expectedAnchor ||
+				!Array.isArray(body.input) ||
+				body.input.length !== expectedLength
+			) {
+				send(socket, [
+					{
+						type: "error",
+						error: { code: "invalid_request", message: "Missing response id must break the anchor chain" },
+					},
+				]);
+				return;
+			}
+			const events = textEvents(`TURN ${index}`, `resp_${index}`);
+			if (index === 2) {
+				// The locally constructed response keeps its created id, but not its terminal id.
+				const completed = events[events.length - 1]?.response as Record<string, unknown>;
+				delete completed.id;
+			}
+			send(socket, events);
+		});
+		const options = { ...fixture.options, preferWebsockets: true };
+		const context: Context = { messages: [...fixture.context.messages] };
+		for (const turn of [1, 2, 3, 4]) {
+			if (turn > 1) context.messages.push({ role: "user", content: `Next ${turn}`, timestamp: turn });
+			const result = await streamSimple(fixture.model, context, options).result();
+			expect(result.stopReason).toBe("stop");
+			expect(result.content).toMatchObject([{ type: "text", text: `TURN ${turn}` }]);
+			context.messages.push(result);
+		}
+		expect(fixture.requests).toHaveLength(4);
+		expect(fixture.upgrades).toHaveLength(1);
+		expect(fixture.httpRequests).toHaveLength(0);
+	});
+
+	it("retries explicit first-frame stale anchors once on the same socket with complete history", async () => {
+		for (const rejection of [
+			{ code: "previous_response_not_found", message: "Response expired", recover: true },
+			{ code: "invalid_request_error", message: "Invalid previous_response_id", recover: true },
+			{ code: "invalid_request_error", message: "previous_response_id unsupported", recover: false },
+		]) {
+			const fixture = endpoint((socket, body, index) => {
+				const input = body.input as Array<{ role?: string; content?: Array<{ text?: string }> }>;
+				if (index === 1) {
+					send(socket, textEvents("FIRST", "resp_first"));
+					return;
+				}
+				if (index === 2) {
+					if (
+						body.previous_response_id !== "resp_first" ||
+						input.length !== 1 ||
+						input[0]?.content?.[0]?.text !== "Next"
+					) {
+						send(socket, [
+							{ type: "error", error: { code: "invalid_request", message: "Expected anchored new user" } },
+						]);
+						return;
+					}
+					send(socket, [{ type: "error", error: { code: rejection.code, message: rejection.message } }]);
+					return;
+				}
+				if (index === 3) {
+					if (
+						body.previous_response_id !== undefined ||
+						input.length !== 3 ||
+						input[0]?.content?.[0]?.text !== "Hello" ||
+						input[1]?.role !== "assistant" ||
+						input[1]?.content?.[0]?.text !== "FIRST" ||
+						input[2]?.content?.[0]?.text !== "Next"
+					) {
+						send(socket, [
+							{ type: "error", error: { code: "invalid_request", message: "Expected complete stale recovery" } },
+						]);
+						return;
+					}
+					if (rejection.recover) send(socket, textEvents("RECOVERED", "resp_recovered"));
+					else send(socket, [{ type: "error", error: { code: rejection.code, message: rejection.message } }]);
+					return;
+				}
+				if (
+					body.previous_response_id === "resp_recovered" &&
+					input.length === 1 &&
+					input[0]?.content?.[0]?.text === "Again"
+				) {
+					send(socket, textEvents("CONTINUED", "resp_continued"));
+				} else {
+					send(socket, [
+						{ type: "error", error: { code: "invalid_request", message: "Invalid recovered baseline" } },
+					]);
+				}
+			});
+			const options = { ...fixture.options, preferWebsockets: true };
+			const first = await streamSimple(fixture.model, fixture.context, options).result();
+			expect(first.stopReason).toBe("stop");
+			const context: Context = {
+				messages: [...fixture.context.messages, first, { role: "user", content: "Next", timestamp: 2 }],
+			};
+			const second = await streamSimple(fixture.model, context, options).result();
+			expect(second.stopReason).toBe(rejection.recover ? "stop" : "error");
+			expect(fixture.requests).toHaveLength(3);
+			expect(fixture.requests.map(request => request.connection)).toEqual([1, 1, 1]);
+			if (rejection.recover) {
+				expect(second.content).toMatchObject([{ type: "text", text: "RECOVERED" }]);
+				context.messages.push(second, { role: "user", content: "Again", timestamp: 3 });
+				const third = await streamSimple(fixture.model, context, options).result();
+				expect(third.stopReason).toBe("stop");
+				expect(third.content).toMatchObject([{ type: "text", text: "CONTINUED" }]);
+				expect(fixture.requests).toHaveLength(4);
+			} else {
+				await fixture.waitForClosed(1);
+			}
+			expect(fixture.upgrades).toHaveLength(1);
+			expect(fixture.httpRequests).toHaveLength(0);
+		}
+	});
+
+	it("never replays unknown, generation, or post-progress anchor failures and retires their connection", async () => {
+		for (const failure of ["unknown", "generation", "created", "output"] as const) {
+			const fixture = endpoint((socket, body, index) => {
+				if (index === 1) {
+					send(socket, textEvents("FIRST", "resp_first"));
+					return;
+				}
+				if (index > 2) {
+					if (body.previous_response_id !== undefined || !Array.isArray(body.input) || body.input.length !== 3) {
+						send(socket, [
+							{
+								type: "error",
+								error: { code: "invalid_request", message: "Expected full history on replacement socket" },
+							},
+						]);
+						return;
+					}
+					send(socket, textEvents("NEW CONNECTION", "resp_new"));
+					return;
+				}
+				if (failure === "generation") {
+					send(socket, [
+						{
+							type: "response.failed",
+							response: {
+								id: "resp_failed",
+								status: "failed",
+								error: { code: "server_error", message: "Generation failed" },
+							},
+						},
+					]);
+					return;
+				}
+				if (failure === "created") send(socket, [{ type: "response.created", response: { id: "resp_started" } }]);
+				if (failure === "output") send(socket, textEvents("PARTIAL", "resp_partial").slice(0, 4));
+				send(socket, [
+					{
+						type: "error",
+						error:
+							failure === "unknown"
+								? { code: "invalid_request_error", message: "Unknown request failure" }
+								: { code: "previous_response_not_found", message: "previous_response_id not found" },
+					},
+				]);
+			});
+			const options = { ...fixture.options, preferWebsockets: true };
+			const first = await streamSimple(fixture.model, fixture.context, options).result();
+			const context: Context = {
+				messages: [...fixture.context.messages, first, { role: "user", content: "Next", timestamp: 2 }],
+			};
+			const stream = streamSimple(fixture.model, context, options);
+			const deltas: string[] = [];
+			for await (const event of stream) if (event.type === "text_delta") deltas.push(event.delta);
+			const result = await stream.result();
+			expect(result.stopReason).toBe("error");
+			expect(deltas.join("")).toBe(failure === "output" ? "PARTIAL" : "");
+			expect(fixture.requests).toHaveLength(2);
+			expect(fixture.requests[1]?.body.previous_response_id).toBe("resp_first");
+			await fixture.waitForClosed(1);
+			expect((await streamSimple(fixture.model, context, options).result()).stopReason).toBe("stop");
+			expect(fixture.requests).toHaveLength(3);
+			expect(fixture.requests[2]?.connection).not.toBe(fixture.requests[0]?.connection);
+			expect(fixture.upgrades).toHaveLength(2);
+			expect(fixture.httpRequests).toHaveLength(0);
+		}
 	});
 
 	it("reconnects a silent OPEN socket before submitting another generation", async () => {
@@ -489,18 +802,27 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		});
 		const fixture = endpoint();
 		const options = { ...fixture.options, preferWebsockets: true };
-		expect((await streamOpenAIResponses(fixture.model, fixture.context, options).result()).stopReason).toBe("stop");
+		const first = await streamSimple(fixture.model, fixture.context, options).result();
+		expect(first.stopReason).toBe("stop");
 		clockOffset += 30_001;
 		silent = true;
 		expect(firstSocket?.readyState).toBe(OriginalWebSocket.OPEN);
-		const result = await streamOpenAIResponses(fixture.model, fixture.context, {
-			...options,
-			streamFirstEventTimeoutMs: 250,
-		}).result();
+		const result = await streamSimple(
+			fixture.model,
+			{
+				messages: [...fixture.context.messages, first, { role: "user", content: "Next", timestamp: 2 }],
+			},
+			{
+				...options,
+				streamFirstEventTimeoutMs: 250,
+			},
+		).result();
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "WS" }));
 		expect(fixture.upgrades).toHaveLength(2);
 		expect(fixture.requests).toHaveLength(2);
+		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
+		expect(fixture.requests[1]?.body.input).toHaveLength(3);
 		expect(fixture.httpRequests).toHaveLength(0);
 	});
 
@@ -561,6 +883,7 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 					response: {
 						id: `resp_${id}`,
 						status: "completed",
+						output: [item],
 						usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
 					},
 				},
@@ -691,6 +1014,9 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 					{ type: "response.output_item.added", output_index: 1, item: reasoning },
 					{ type: "response.output_item.done", output_index: 1, item: reasoning },
 				);
+				// textEvents constructs a completed response with an output array.
+				const completed = events[events.length - 1]?.response as { output: unknown[] };
+				completed.output.push(reasoning);
 				send(socket, events);
 			},
 			{
@@ -710,6 +1036,9 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 						{ type: "response.output_item.added", output_index: 1, item: reasoning },
 						{ type: "response.output_item.done", output_index: 1, item: reasoning },
 					);
+					// textEvents constructs a completed response with an output array.
+					const completed = events[events.length - 1]?.response as { output: unknown[] };
+					completed.output.push(reasoning);
 					return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""), {
 						headers: { "content-type": "text/event-stream" },
 					});
@@ -728,11 +1057,23 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		const context: Context = {
 			messages: [...fixture.context.messages, first, { role: "user", content: "Continue", timestamp: 2 }],
 		};
+		const warm = await streamSimple(model, context, options).result();
+		expect(warm.stopReason).toBe("stop");
+		// SDK-safe history omits socket-owned reasoning; continuation must not
+		// secretly reconstruct it just to make the response prefix match.
+		expect(fixture.requests[1]?.connection).toBe(fixture.requests[0]?.connection);
+		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
+		expect(fixture.requests[1]?.body.input).toHaveLength(3);
+		expect(JSON.stringify(fixture.requests[1]?.body.input)).not.toContain("rs_resp_");
+		expect(JSON.stringify(fixture.requests[1]?.body.input)).not.toContain("ws-owned-");
+		context.messages.push(warm, { role: "user", content: "Reconnect", timestamp: 3 });
 		const second = await streamSimple(model, context, { ...options, apiKey: "replacement-key" }).result();
 		expect(second.stopReason).toBe("stop");
-		expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "TURN 2" }));
-		expect(JSON.stringify(fixture.requests[1]?.body.input)).not.toContain("rs_resp_1");
-		expect(JSON.stringify(fixture.requests[1]?.body.input)).toContain("TURN 1");
+		expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "TURN 3" }));
+		expect(fixture.requests[2]?.body.previous_response_id).toBeUndefined();
+		expect(JSON.stringify(fixture.requests[2]?.body.input)).not.toContain("rs_resp_");
+		expect(JSON.stringify(fixture.requests[2]?.body.input)).toContain("TURN 1");
+		expect(JSON.stringify(fixture.requests[2]?.body.input)).toContain("TURN 2");
 		expect(fixture.upgrades).toHaveLength(2);
 		expect(fixture.httpRequests).toHaveLength(0);
 		expect(openAIResponsesReplaysNativeHistory(model, fixture.providerSessionState, true)).toBe(false);
@@ -758,6 +1099,7 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(replay).not.toContain("ws-owned-");
 		expect(replay).toContain("TURN 1");
 		expect(replay).toContain("TURN 2");
+		expect(replay).toContain("TURN 3");
 		expect(replay).toContain("http-owned");
 	});
 
@@ -794,7 +1136,7 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 			onPayload: payload => ({ ...(payload as object), previous_response_id: "resp_foreign" }),
 		}).result();
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("previous_response_id is not supported");
+		expect(result.errorMessage).toContain("previous_response_id");
 		expect(fixture.upgrades).toHaveLength(0);
 		expect(fixture.httpRequests).toHaveLength(0);
 	});
@@ -811,24 +1153,55 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 		expect(fixture.upgrades).toHaveLength(0);
 	});
 
-	it("isolates concurrent same-session calls and does not close an in-flight socket", async () => {
+	it("isolates a concurrent temporary socket from the busy session's continuation anchor", async () => {
 		const firstSeen = Promise.withResolvers<void>();
 		let firstSocket: ServerWebSocket<{ id: number }> | undefined;
-		const fixture = endpoint((socket, _body, index) => {
+		const fixture = endpoint((socket, body, index) => {
 			if (index === 1) {
+				send(socket, textEvents("SEED", "resp_seed"));
+				return;
+			}
+			if (index === 2) {
 				firstSocket = socket;
 				firstSeen.resolve();
-			} else send(socket, textEvents("SECOND", "resp_second"));
+			}
+			const expectedAnchor = index === 2 ? "resp_seed" : index === 3 ? undefined : "resp_first";
+			if (
+				body.previous_response_id !== expectedAnchor ||
+				!Array.isArray(body.input) ||
+				body.input.length !== (index === 3 ? 3 : 1)
+			) {
+				send(socket, [
+					{ type: "error", error: { code: "invalid_request", message: "Cross-connection continuation" } },
+				]);
+				return;
+			}
+			if (index !== 2) send(socket, textEvents(index === 3 ? "SECOND" : "AFTER", `resp_${index}`));
 		});
 		const options = { ...fixture.options, preferWebsockets: true };
-		const first = streamOpenAIResponses(fixture.model, fixture.context, options).result();
+		const seed = await streamSimple(fixture.model, fixture.context, options).result();
+		expect(seed.stopReason).toBe("stop");
+		const context: Context = {
+			messages: [...fixture.context.messages, seed, { role: "user", content: "Primary", timestamp: 2 }],
+		};
+		const first = streamSimple(fixture.model, context, options).result();
 		await firstSeen.promise;
-		const second = await streamOpenAIResponses(fixture.model, fixture.context, options).result();
+		const second = await streamSimple(fixture.model, context, options).result();
 		expect(second.content).toMatchObject([{ type: "text", text: "SECOND" }]);
 		if (!firstSocket) throw new Error("Expected first socket");
 		send(firstSocket, textEvents("FIRST", "resp_first"));
-		expect((await first).content).toMatchObject([{ type: "text", text: "FIRST" }]);
-		expect(fixture.requests[0]?.connection).not.toBe(fixture.requests[1]?.connection);
+		const primary = await first;
+		expect(primary.content).toMatchObject([{ type: "text", text: "FIRST" }]);
+		const after = await streamSimple(
+			fixture.model,
+			{
+				messages: [...context.messages, primary, { role: "user", content: "After", timestamp: 3 }],
+			},
+			options,
+		).result();
+		expect(after.content).toMatchObject([{ type: "text", text: "AFTER" }]);
+		expect(fixture.requests.map(request => request.connection)).toEqual([1, 1, 2, 1]);
+		expect(fixture.upgrades).toHaveLength(2);
 		expect(fixture.httpRequests).toHaveLength(0);
 	});
 
@@ -934,11 +1307,16 @@ describe("standard OpenAI Responses WebSocket opt-in", () => {
 	it("replaces an idle socket on credential change without reusing its authentication", async () => {
 		const fixture = endpoint();
 		const options = { ...fixture.options, preferWebsockets: true };
-		await streamOpenAIResponses(fixture.model, fixture.context, options).result();
-		await streamOpenAIResponses(fixture.model, fixture.context, { ...options, apiKey: "replacement-key" }).result();
+		const first = await streamSimple(fixture.model, fixture.context, options).result();
+		const context: Context = {
+			messages: [...fixture.context.messages, first, { role: "user", content: "Next", timestamp: 2 }],
+		};
+		const second = await streamSimple(fixture.model, context, { ...options, apiKey: "replacement-key" }).result();
+		expect(second.stopReason).toBe("stop");
 		expect(fixture.upgrades).toHaveLength(2);
 		expect(fixture.upgrades[1]?.headers.get("authorization")).toBe("Bearer replacement-key");
 		expect(fixture.requests[1]?.body.previous_response_id).toBeUndefined();
+		expect(fixture.requests[1]?.body.input).toHaveLength(3);
 	});
 	it("does not retry a rejected upgrade or fall back to HTTP", async () => {
 		let upgradeAttempts = 0;

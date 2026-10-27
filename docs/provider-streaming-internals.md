@@ -135,24 +135,44 @@ providers retain the DOM interface. The lease keeps the rejected response body a
 until classification finishes, and closes it on cancellation or release. An alternate
 identity attempt therefore precedes generation rather than replaying a request.
 
-Standard WebSocket requests replay full history and never consult or update the
-HTTP `previous_response_id` baseline. Reconnection therefore requires no native
-chain reconstruction. The provider rejects injected response anchors and background
-execution, and bypasses HTTP transient-stream retry and stored-result recovery on
-WebSocket errors. This boundary avoids hidden replay after uncertain execution;
-Codex recovery policy remains independent.
+Standard WS keeps a short-lived continuation baseline on the physical connection,
+separate from HTTP's stored `previous_response_id` baseline and stateful precedence.
+It records the complete post-`onPayload` request, response ID and replayable output
+items only after successful completion and one-to-one output sanitization.
+`buildResponsesDeltaInput` and
+`sanitizeOpenAIResponsesAssistantHistoryItemsForReplay` in `openai-shared.ts` own
+history comparison and replay normalization; the transport does not duplicate them
+or adopt Codex's state machine. A matching history prefix and unchanged options
+(including tools) allow incremental `previous_response_id` continuation on the same
+healthy idle socket. Otherwise the request sends full history.
+
+WS continuation works with `store: false` and never forces `store: true`; SDK
+`statefulResponses: false` disables it for that request. Reconnection, changed
+credentials and concurrent ephemeral connections cannot borrow another socket's
+baseline. Injected response anchors, including from `onPayload`, remain rejected
+as connection-owned, as does background execution.
+
+The only WS recovery is one full-history resend on the same socket when its first
+frame explicitly rejects the anchor as not found, invalid or unsupported. Once
+`response.created` or output has arrived, failures cannot trigger this recovery.
+HTTP transient-stream retries, empty-generation retries and stored-result recovery
+do not apply, and there is no HTTP fallback. Failure or cancellation discards the
+connection and its baseline. Codex steering, Lite shaping and retry policies remain
+independent.
 
 WS frame serialization removes the HTTP/SSE-only `stream` and `stream_options`
 fields after payload hooks run. The shared HTTP builder retains its streaming
 controls, including the obfuscation opt-out; custom payload fields remain intact.
 
-On `connectionBoundNativeHistory` hosts, standard WS always rebuilds history from
-message content rather than replaying connection-owned item IDs or encrypted
-reasoning. Checking only whether a socket is warm would not cover contexts that
-include results from concurrent ephemeral sockets. WS exchanges invalidate the
-HTTP native-history warm baseline rather than warming it. The replay predicate
-accepts the request's transport preference so token/output-cap estimates use the
-same rule, including requests waiting for a provider concurrency slot.
+On `connectionBoundNativeHistory` hosts, standard WS safely rebuilds history from
+message content rather than replaying foreign connection-owned item IDs or encrypted
+reasoning. A warm socket alone is insufficient: contexts may include results from
+concurrent ephemeral sockets. A rebuilt prefix must match that connection's baseline
+to use a delta; otherwise a full request is sent, without restoring suppressed
+reasoning metadata. WS exchanges invalidate the HTTP native-history warm baseline
+rather than warming it. The replay predicate accepts the request's transport
+preference so token/output-cap estimates use the same rule, including requests
+waiting for a provider concurrency slot.
 
 These WS outputs do not retain native history payloads or socket-owned reasoning
 signatures. The shared event processor suppresses those signatures before partial

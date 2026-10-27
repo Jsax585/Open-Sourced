@@ -1,11 +1,18 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import type { ServerSentEvent } from "@oh-my-pi/pi-utils";
+import { cloneJsonTree, type ServerSentEvent } from "@oh-my-pi/pi-utils";
 import { AbortError } from "../error/abort";
+import { sanitizeOpenAIResponsesAssistantHistoryItemsForReplay } from "../utils";
 import { getProxyForUrl } from "../utils/proxy";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { extractWebSocketHandshakeHeaders, toWebSocketHeaders, toWebSocketUrl } from "../utils/websocket";
-import type { ResponseStreamEvent } from "./openai-responses-wire";
+import type {
+	ResponseCreateParamsBase,
+	ResponseInput,
+	ResponseOutputItem,
+	ResponseStreamEvent,
+} from "./openai-responses-wire";
+import { buildResponsesDeltaInput, isOpenAIResponsesStalePreviousResponseError } from "./openai-shared";
 
 const IDLE_REUSE_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -42,6 +49,8 @@ export class OpenAIResponsesWebSocketConnection {
 	#receiving = false;
 	#completed = false;
 	#lastResponseId?: string;
+	#lastRequest?: ResponseCreateParamsBase;
+	#lastResponseItems?: ResponseInput;
 	#lastInboundAt?: number;
 	handshakeHeaders?: Headers;
 
@@ -156,8 +165,14 @@ export class OpenAIResponsesWebSocketConnection {
 		}
 	}
 
-	async *events(body: object, observer?: (event: ServerSentEvent) => void): AsyncGenerator<ResponseStreamEvent> {
+	async *events(
+		body: ResponseCreateParamsBase,
+		observer: ((event: ServerSentEvent) => void) | undefined,
+		options: { chain: boolean; supportsImageDetailOriginal?: boolean },
+	): AsyncGenerator<ResponseStreamEvent> {
 		let terminal = false;
+		let sawResponseEvent = false;
+		const outputItems: ResponseOutputItem[] = [];
 		this.#queue.length = 0;
 		this.#receiving = true;
 		try {
@@ -165,11 +180,23 @@ export class OpenAIResponsesWebSocketConnection {
 			if (!this.#socket || this.#socket.readyState !== WebSocket.OPEN) {
 				throw new Error("OpenAI responses WebSocket is not open");
 			}
-			const request: Record<string, unknown> = { ...body, type: "response.create" };
+			// Compare the full post-hook request, not the previous turn's delta.
+			const request: ResponseCreateParamsBase & { type: string } = { ...body, type: "response.create" };
 			delete request.stream;
 			delete request.stream_options;
 			delete request.background;
-			this.#socket.send(JSON.stringify(request));
+			const delta =
+				options.chain && this.#lastResponseId
+					? buildResponsesDeltaInput(this.#lastRequest, this.#lastResponseItems, request)
+					: null;
+			let chained = delta !== null;
+			this.#lastRequest = undefined;
+			this.#lastResponseItems = undefined;
+			this.#socket.send(
+				JSON.stringify(
+					chained ? { ...request, previous_response_id: this.#lastResponseId, input: delta } : request,
+				),
+			);
 			for (;;) {
 				while (this.#queue.length === 0) {
 					if (this.#failure) throw this.#failure;
@@ -188,9 +215,27 @@ export class OpenAIResponsesWebSocketConnection {
 						raw: [`: ws ← ${event.type}`, `event: ${event.type}`, `data: ${data}`],
 					});
 				}
+				const rejection =
+					event.type === "response.failed"
+						? event.response.error
+						: event.type === "error"
+							? "error" in event
+								? (event.error ?? event)
+								: event
+							: undefined;
+				if (chained && !sawResponseEvent && isOpenAIResponsesStalePreviousResponseError(rejection)) {
+					// An explicit first-frame rejection did not start a generation.
+					// Retry once in full on this socket; never replay uncertain output.
+					chained = false;
+					this.#socket.send(JSON.stringify(request));
+					continue;
+				}
+				sawResponseEvent = true;
+				if (event.type === "response.output_item.done") outputItems[event.output_index] = event.item;
 				const type: string = event.type;
 				terminal = type === "response.completed" || type === "response.incomplete" || type === "response.done";
 				if (terminal) {
+					this.#lastResponseId = undefined;
 					if (
 						"response" in event &&
 						event.response &&
@@ -200,6 +245,23 @@ export class OpenAIResponsesWebSocketConnection {
 						this.#lastResponseId = typeof event.response.id === "string" ? event.response.id : undefined;
 					}
 					this.#completed = true;
+					if (
+						type !== "response.incomplete" &&
+						"response" in event &&
+						event.response?.status !== "incomplete" &&
+						event.response?.status !== "failed" &&
+						this.#lastResponseId
+					) {
+						const items = Array.isArray(event.response?.output) ? event.response.output : outputItems;
+						const replayable = sanitizeOpenAIResponsesAssistantHistoryItemsForReplay(
+							cloneJsonTree(items as unknown as Array<Record<string, unknown>>),
+							{ supportsImageDetailOriginal: options.supportsImageDetailOriginal },
+						);
+						if (replayable && replayable.length === items.length) {
+							this.#lastRequest = cloneJsonTree(request);
+							this.#lastResponseItems = replayable;
+						}
+					}
 				}
 				yield event;
 				if (terminal) return;
@@ -219,6 +281,8 @@ export class OpenAIResponsesWebSocketConnection {
 	close(error = new Error("OpenAI responses WebSocket released")): void {
 		if (this.#failure) return;
 		this.#failure = error;
+		this.#lastRequest = undefined;
+		this.#lastResponseItems = undefined;
 		this.#handshakeResponse?.destroy();
 		this.#handshakeResponse = undefined;
 		this.#rejectConnect?.(error);

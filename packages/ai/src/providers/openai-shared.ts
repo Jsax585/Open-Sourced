@@ -4436,8 +4436,8 @@ const REPLAY_SANITIZED_ITEM_EXCLUDE_MAP = {
 };
 
 /**
- * Strict-prefix delta for stateful `previous_response_id` chaining (used by the
- * platform Responses provider and the Codex provider on both transports):
+ * Strict-prefix delta for stateful `previous_response_id` chaining, shared by
+ * standard Responses HTTP/WS and Codex WS:
  * returns the input items the current request appends beyond the previous
  * request's input plus the previous response's output items, or null when the
  * request options differ or history mutated (the chain must break). Per-turn
@@ -4445,9 +4445,9 @@ const REPLAY_SANITIZED_ITEM_EXCLUDE_MAP = {
  * comparison; codex-rs excludes it from the same check.
  */
 export function buildResponsesDeltaInput<TItem extends ResponseInputItem | InputItem>(
-	previous: { input?: TItem[] } | undefined,
+	previous: { input?: string | TItem[] | null } | undefined,
 	previousResponseItems: readonly TItem[] | undefined,
-	current: { input?: TItem[] },
+	current: { input?: string | TItem[] | null },
 	additionalTopLevelExcludeMap?: Readonly<Record<string, boolean>>,
 ): TItem[] | null {
 	if (!previous) return null;
@@ -4476,4 +4476,15 @@ export function buildResponsesDeltaInput<TItem extends ResponseInputItem | Input
 		}
 	}
 	return current.input.slice(index) as TItem[];
+}
+
+/** Stored HTTP responses and socket-local WS anchors use the same rejection vocabulary. */
+export function isOpenAIResponsesStalePreviousResponseError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	if ("code" in error && error.code === "previous_response_not_found") return true;
+	if (!("message" in error) || typeof error.message !== "string") return false;
+	return (
+		/previous[ _]?response/i.test(error.message) &&
+		/not[ _]?found|invalid|expired|stale|unsupported/i.test(error.message)
+	);
 }
