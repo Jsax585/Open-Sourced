@@ -1665,6 +1665,31 @@ describe("per-call model preflight", () => {
 		expect(policy.perCallModelGrants?.matchPreferences?.usageOrder).toEqual(["mock/worker-a", "mock/worker-b"]);
 	});
 
+	it("does not backfill absent spawn-time preferences after discovery settles", async () => {
+		mockDiscovery();
+		const first = createMockModel({ id: "worker-a" });
+		const second = createMockModel({ id: "worker-b" });
+		let usageOrder: string[] | undefined;
+		const base = perCallSession({ "task.perCallModel": "on" });
+		base.settings = Settings.isolated(
+			{ "task.perCallModel": "on", modelRoles: { review: "mock/worker" } },
+			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
+		);
+		Object.assign(base, {
+			modelRegistry: {
+				getAll: () => [first, second],
+				getAvailable: () => [first, second],
+				awaitBackgroundRefresh: async () => {
+					usageOrder = ["mock/worker-b", "mock/worker-a"];
+				},
+			},
+		});
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["mock/worker-a"]);
+		expect(policy.perCallModelGrants?.matchPreferences?.usageOrder).toBeUndefined();
+		expect(usageOrder).toEqual(["mock/worker-b", "mock/worker-a"]);
+	});
+
 	it("refuses a role candidate with Factory server-side fallbacks even when its target is granted", async () => {
 		mockDiscovery();
 		const fable = buildModel(
