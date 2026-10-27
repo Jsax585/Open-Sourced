@@ -832,6 +832,7 @@ type OpenAICompatibleModelManagerBuilderOptions<TApi extends Api> = {
 	config?: SimpleProviderConfig;
 	headers?: SimpleProviderDiscoveryHeaders;
 	dynamicModelsAuthoritative?: true;
+	dynamicRunnerRowsAuthoritative?: true;
 	requireApiKey?: true;
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	cacheProviderId?: string;
@@ -858,6 +859,7 @@ function createOpenAICompatibleModelManagerOptions<TApi extends Api>(
 		providerId: options.providerId,
 		...(options.cacheProviderId && { cacheProviderId: options.cacheProviderId }),
 		...(options.dynamicModelsAuthoritative && { dynamicModelsAuthoritative: true }),
+		...(options.dynamicRunnerRowsAuthoritative && { dynamicRunnerRowsAuthoritative: true }),
 		...(options.dropCachedModelIdsOnStaticMismatch && {
 			dropCachedModelIdsOnStaticMismatch: options.dropCachedModelIdsOnStaticMismatch,
 		}),
@@ -1229,6 +1231,28 @@ export interface GmiCloudModelManagerConfig {
  * reference index. Pricing is deliberately never borrowed across providers:
  * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
  * than inheriting another provider's rate.
+ *
+ * Unlike Munito, GMI keeps the reference's thinking ladder: only the seeded
+ * DeepSeek-V4-Flash is authored in KDL, so resold rows need the reference's
+ * exact tiers.
+ */
+/**
+ * Map a discovered GMI Cloud model to a full spec.
+ *
+ * GMI's `/v1/models` returns only bare `{id}` rows, so discovery defaults carry
+ * no limits, reasoning, or thinking metadata. When a gmi-cloud bundled
+ * reference exists (the seeded default) it supplies GMI's published tariff and
+ * limits directly. Every other id is an open-weight model GMI resells under its
+ * canonical id (`deepseek-ai/…`, `moonshotai/…`, `zai-org/…`, `Qwen/…`), so its
+ * intrinsic capabilities — context window, output limit, reasoning, thinking
+ * ladder — are recovered from any bundled upstream entry via the canonical
+ * reference index. Pricing is deliberately never borrowed across providers:
+ * GMI's per-model tariff is unknown for these ids, so cost stays zeroed rather
+ * than inheriting another provider's rate.
+ *
+ * Unlike Munito, GMI keeps the reference's thinking ladder: only the seeded
+ * DeepSeek-V4-Flash is authored in KDL, so resold rows need the reference's
+ * exact tiers.
  */
 function mapGmiCloudModel(
 	entry: OpenAICompatibleModelRecord,
@@ -5440,6 +5464,90 @@ export function stepfunModelManagerOptions(
 		// Must live on the manager options, not only the KDL descriptor:
 		// `createModelManager()` prunes the bundled slice from this flag.
 		dynamicModelsAuthoritative: true,
+	});
+}
+
+// ---------------------------------------------------------------------------
+// 16.10 Munito
+// ---------------------------------------------------------------------------
+
+export interface MunitoModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/** OCR SKUs serve only the document API; `runtime/behavior.kdl` excludes them by provider. */
+export function isMunitoChatModelId(id: string): boolean {
+	const normalized = id.trim().toLowerCase();
+	if (!normalized) {
+		return false;
+	}
+	return !isExcludedModel("munito", normalized);
+}
+
+/**
+ * Munito reference recovery: `/models` rows carry only `id`/`owned_by`. An id
+ * bundled on Munito hydrates through {@link mapWithBundledReference}; anything
+ * else recovers intrinsic capabilities (context window, output limit,
+ * reasoning, input modalities) from the bundled canonical index. The
+ * `recover-canonical-params "munito"` membership in `taxonomy/_discovery.kdl`
+ * records that posture; this function is the mapping.
+ *
+ * Thinking stays unset: an inherited reference ladder would win
+ * `resolveThinkingPolicy` and defeat Munito's authored effort rules, so the
+ * provider KDL owns the ladder and wire dialect. Identity, pricing, and compat
+ * are never borrowed: Munito publishes no per-model tariff, so pricing stays
+ * zeroed.
+ */
+export function mapMunitoReferenceModel<TApi extends Api>(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<TApi>,
+	reference: ModelSpec<TApi> | undefined,
+): ModelSpec<TApi> {
+	if (reference) {
+		return mapWithBundledReference(entry, defaults, reference);
+	}
+	const canonical = resolveModelReference(defaults.id, getBundledModelReferenceIndex()) as ModelSpec<TApi> | undefined;
+	if (!canonical) {
+		return { ...defaults, name: toModelName(entry.name, defaults.name) };
+	}
+	const contextWindow = canonical.contextWindow ?? defaults.contextWindow;
+	const maxTokens =
+		canonical.maxTokens != null && contextWindow != null
+			? Math.min(canonical.maxTokens, contextWindow)
+			: (canonical.maxTokens ?? defaults.maxTokens);
+	return {
+		...defaults,
+		name: toModelName(entry.name, canonical.name ?? defaults.name),
+		reasoning: canonical.reasoning,
+		input: canonical.input,
+		contextWindow,
+		maxTokens,
+	};
+}
+
+const MUNITO_GLOBAL_BASE_URL = "https://api.munito.ai/inference/v1";
+
+/**
+ * Munito model-manager options. `/models` is public (invalid keys still 401),
+ * so discovery runs keyless; the key gates inference, not the roster probe.
+ * A successful snapshot is authoritative over the bundled seed rows, and it
+ * also owns the KDL-classified decision lanes: those ids ship as judge rows,
+ * but the roster decides whether they exist and which endpoint serves them.
+ */
+export function munitoModelManagerOptions(
+	config?: MunitoModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "munito",
+		defaultBaseUrl: MUNITO_GLOBAL_BASE_URL,
+		config,
+		dynamicModelsAuthoritative: true,
+		dynamicRunnerRowsAuthoritative: true,
+		filterModel: (_entry, model) => isMunitoChatModelId(model.id),
+		mapModel: mapMunitoReferenceModel,
 	});
 }
 
