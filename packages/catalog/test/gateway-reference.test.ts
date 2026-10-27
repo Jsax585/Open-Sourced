@@ -34,14 +34,30 @@ describe("Bundled model references", () => {
 		expect(reference?.provider).not.toBe("cline-pass");
 	});
 
-	test("resolves namespace tails and the reviewed dated logical alias", () => {
-		const canonical = referenceModel("deepseek/deepseek-v4.1-flash-1017");
+	test("resolves namespace tails before consulting reviewed logical aliases", () => {
 		const exactTail = referenceModel("gpt-5.4");
-		const index = buildModelReferenceIndex([canonical, exactTail]);
+		const index = buildModelReferenceIndex([exactTail]);
 
 		expect(resolveModelReference("org/team/gpt-5.4", index)).toBe(exactTail);
-		expect(resolveModelReference("nku/deepseek-v4-1-flash-261017", index)).toBe(canonical);
-		expect(resolveModelReference("org/team/deepseek-v4-1-flash-261017", index)).toBe(canonical);
+	});
+
+	test("recovers reviewed raw dated aliases through exact and suffix reference keys", () => {
+		for (const canonicalId of ["deepseek-v4.1-flash-1017", "deepseek/deepseek-v4.1-flash-1017"]) {
+			const canonical = referenceModel(canonicalId);
+			const index = buildModelReferenceIndex([canonical]);
+
+			expect(resolveModelReference("nku/deepseek-v4-1-flash-261017", index)).toBe(canonical);
+			expect(resolveModelReference("org/team/deepseek-v4-1-flash-261017", index)).toBe(canonical);
+		}
+	});
+
+	test("does not grant a reviewed dated alias after stripping an unreviewed marker", () => {
+		const index = buildModelReferenceIndex([referenceModel("deepseek/deepseek-v4.1-flash-1017")]);
+
+		// Billing-marker and cloud-route stripping remain available to direct
+		// reference lookup, but must not widen reviewed logical-alias policy.
+		expect(resolveModelReference("nku/deepseek-v4-1-flash-261017-free", index)).toBeUndefined();
+		expect(resolveModelReference("org/team/deepseek-v4-1-flash-261017:cloud", index)).toBeUndefined();
 	});
 
 	test("keeps exact full-id and tail matches ahead of logical alias recovery", () => {
@@ -75,14 +91,15 @@ describe("Portkey gateway model references", () => {
 	});
 
 	test("strips compiled discovery and collapse markers for proxy recovery", () => {
-		const index = getBundledModelReferenceIndex();
+		const canonical = referenceModel("claude-opus-4-6");
+		const index = buildModelReferenceIndex([canonical]);
 		for (const id of [
 			"claude-opus-4-6-fp8",
 			"claude-opus-4-6-search",
 			"claude-opus-4-6-thinking",
 			"claude-opus-4-6-free",
 		]) {
-			expect(resolveModelReference(id, index)?.id).toBe("claude-opus-4-6");
+			expect(resolveModelReference(id, index)).toBe(canonical);
 		}
 	});
 

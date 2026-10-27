@@ -565,10 +565,14 @@ from `baseUrl` before appending `/v1/messages`, so a single discovery `baseUrl`
 
 Missing capability metadata is recovered from the bundled catalog: full-ID matches take precedence,
 then the final slash-separated component is matched (for example, `reseller/gpt-5.4`).
-Reviewed KDL logical aliases are a last fallback, including
-`nku/deepseek-v4-1-flash-261017` → `deepseek-v4.1-flash-1017`. Arbitrary dates and version
-suffixes are not stripped, and unknown releases are not guessed. The original full model ID,
-provider, endpoint, headers, and local pricing remain unchanged.
+Reviewed KDL logical aliases are a last fallback, classified from the original full model ID,
+including `nku/deepseek-v4-1-flash-261017` → `deepseek-v4.1-flash-1017`; namespace wrappers such
+as `org/team/deepseek-v4-1-flash-261017` also work. This does not extend reviewed aliases to
+unreviewed marked variants: `nku/deepseek-v4-1-flash-261017-free` does not inherit that alias's
+capabilities. Existing marker stripping still recovers direct canonical references, such as
+`claude-opus-4-6-free` → `claude-opus-4-6`. Arbitrary dates and version suffixes are not stripped,
+and unknown releases are not guessed. The original full model ID, provider, endpoint, headers,
+and local pricing remain unchanged.
 
 Provider-reported input modalities and token limits outrank catalog fallbacks, using the same
 limit fields and precedence as `openai-models-list` above. Output limits are capped at the resolved

@@ -230,14 +230,12 @@ export function resolveModelReference(modelId: string, index: ModelReferenceInde
 		if (reference) return reference;
 	}
 	// Reviewed provider-agnostic identity aliases are a last resort, after all
-	// existing full-id and slash-tail matches. Never guess a family or drop a
-	// release date: the logical id must itself name an exact catalog reference.
-	for (const candidate of candidates) {
-		const logicalId = classifyModel("", candidate, { lenient: true }).logicalId;
-		if (!logicalId) continue;
-		const key = normalizeReferenceKey(logicalId);
-		const reference = index.exact.get(key) ?? index.suffixAlias.get(key);
-		if (reference) return reference;
-	}
-	return undefined;
+	// existing full-id and slash-tail matches. Classify the original wire id so
+	// stripping a marker cannot grant an alias that target policy does not know.
+	// Never guess a family or drop a release date: the logical id must itself
+	// name an exact catalog reference.
+	const logicalId = classifyModel("", modelId, { lenient: true }).logicalId;
+	if (!logicalId) return undefined;
+	const key = normalizeReferenceKey(logicalId);
+	return index.exact.get(key) ?? index.suffixAlias.get(key);
 }
