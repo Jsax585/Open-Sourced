@@ -247,13 +247,86 @@ function isInlineImageMimeTypeSupported(mimeType: string): boolean {
 }
 
 /**
- * Try fetching URL with .md appended (llms.txt convention)
+ * Soft-404 markers: error text served with HTTP 200 by a guessed URL that has
+ * no page of its own. Any body whose first heading is a marker is rejected —
+ * error documents open with their error — and any short body matching a
+ * marker anywhere is rejected too, so real articles that mention error pages
+ * in passing still pass.
+ */
+const MD_SUFFIX_SOFT_404_MARKERS = [
+	"page not found",
+	"the page you requested",
+	"the page you are looking for",
+	"does not exist",
+	"no longer exists",
+	"error 404",
+	"404 not found",
+	"404 error",
+	"couldn't find this page",
+	"couldn't find the page",
+	"could not find this page",
+	"could not find the page",
+];
+
+function looksLikeSoft404Markdown(content: string): boolean {
+	const trimmed = content.trim();
+	const heading = (trimmed.match(/^#{1,3}\s+(.+)$/m)?.[1] ?? trimmed.split("\n", 1)[0] ?? "").toLowerCase();
+	if (MD_SUFFIX_SOFT_404_MARKERS.some(marker => heading.includes(marker))) return true;
+	return trimmed.length < 2000 && MD_SUFFIX_SOFT_404_MARKERS.some(marker => trimmed.toLowerCase().includes(marker));
+}
+
+/**
+ * Significant words in a page title or candidate heading: lowercased
+ * alphanumeric tokens of length 3+, minus stopwords, so version numbers and
+ * product names carry the comparison.
+ */
+const MD_SUFFIX_STOPWORDS: Record<string, true> = {
+	the: true,
+	and: true,
+	for: true,
+	with: true,
+	from: true,
+	docs: true,
+	guide: true,
+	page: true,
+	home: true,
+	index: true,
+};
+
+function titleWords(value: string): Set<string> {
+	const words = new Set<string>();
+	for (const token of value.toLowerCase().split(/[^a-z0-9]+/)) {
+		if (token.length >= 3 && !MD_SUFFIX_STOPWORDS[token]) {
+			words.add(token);
+		}
+	}
+	return words;
+}
+
+function mdSuffixTitleMatches(candidate: string, pageTitle: string): boolean {
+	const heading = candidate.match(/^#{1,3}\s+(.+)$/m)?.[1] ?? candidate.slice(0, 200);
+	const headingWords = titleWords(heading);
+	const titleWordSet = titleWords(pageTitle);
+	if (headingWords.size === 0 || titleWordSet.size === 0) return true;
+	let shared = 0;
+	for (const word of headingWords) {
+		if (titleWordSet.has(word)) shared++;
+	}
+	return shared >= Math.min(2, titleWordSet.size);
+}
+
+/**
+ * Try fetching URL with .md appended (llms.txt convention).
+ * `pageTitle` is the requested HTML page's title; a guessed candidate whose
+ * heading barely overlaps it is stale/versioned material for another page and
+ * is rejected. Returns the candidate URL so the caller reports real provenance.
  */
 async function tryMdSuffix(
 	url: string,
 	timeout: number,
 	signal?: AbortSignal,
-): Promise<{ content: string; truncated: boolean } | null> {
+	pageTitle?: string,
+): Promise<{ content: string; truncated: boolean; finalUrl: string } | null> {
 	const candidates: string[] = [];
 
 	try {
@@ -283,9 +356,21 @@ async function tryMdSuffix(
 			return null;
 		}
 		const result = await loadPage(candidate, { timeout, signal });
-		if (result.ok && result.content.trim().length > 100 && !looksLikeHtml(result.content)) {
-			return { content: result.content, truncated: Boolean(result.truncated) };
+		if (!result.ok || result.content.trim().length <= 100 || looksLikeHtml(result.content)) {
+			continue;
 		}
+		// A guessed suffix that answers an error document (soft-404 with HTTP
+		// 200) is not the requested page: reject it so the real HTML renders.
+		if (looksLikeSoft404Markdown(result.content)) {
+			continue;
+		}
+		// A guessed suffix for another version of the page must not replace the
+		// requested one: require the candidate's heading to share words with
+		// the original page title.
+		if (pageTitle !== undefined && !mdSuffixTitleMatches(result.content, pageTitle)) {
+			continue;
+		}
+		return { content: result.content, truncated: Boolean(result.truncated), finalUrl: result.finalUrl || candidate };
 	}
 
 	return null;
@@ -1447,13 +1532,17 @@ async function renderUrl(
 		}
 
 		// 5B: Try URL.md suffix (llms.txt convention)
-		const mdSuffix = await tryMdSuffix(finalUrl, timeout, signal);
+		const pageTitle = rawContent
+			.match(/<title[^>]*>([\s\S]{1,500}?)<\/title\s*>/i)?.[1]
+			?.replace(/\s+/g, " ")
+			.trim();
+		const mdSuffix = await tryMdSuffix(finalUrl, timeout, signal, pageTitle || undefined);
 		if (mdSuffix) {
-			notes.push("Found .md suffix version");
+			notes.push(`Found .md suffix version: ${mdSuffix.finalUrl}`);
 			const output = finalizeOutput(mdSuffix.content);
 			return {
 				url,
-				finalUrl,
+				finalUrl: mdSuffix.finalUrl,
 				contentType: "text/markdown",
 				method: "md-suffix",
 				content: output,
