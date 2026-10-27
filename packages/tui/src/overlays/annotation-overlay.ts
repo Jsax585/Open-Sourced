@@ -515,6 +515,7 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	handleInput(data: string): void {
+		if (this.#finished || this.#finishing) return;
 		if (this.#confirmation) {
 			this.#handleConfirmation(data);
 			return;
@@ -635,12 +636,16 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	async #discardAndFinish(): Promise<void> {
+		if (this.#finished || this.#finishing) return;
+		this.#finishing = true;
 		try {
-			await this.#callbacks.onDiscard?.();
+			if (this.#callbacks.onDiscard) await this.#callbacks.onDiscard();
+			else await this.#callbacks.onComplete(undefined as never);
 			this.#confirmation = undefined;
 			this.#finished = true;
 		} catch (error) {
 			this.#callbacks.onWarning?.(`Failed to discard annotation draft: ${error instanceof Error ? error.message : String(error)}`);
+			this.#finishing = false;
 		}
 	}
 	#deleteAnnotation(): void {
@@ -882,12 +887,6 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotating = true;
 		this.#editor.setText(existing?.annotation.note ?? "");
 		this.#emitDraftChange();
-	}
-
-	#cancelAnnotation(): void {
-		this.#annotating = false;
-		this.#editingAnnotationIndex = undefined;
-		this.#editor.setText("");
 	}
 
 	#commitAnnotation(value: string): void {
@@ -1315,12 +1314,15 @@ export class AnnotationOverlay implements Focusable {
 		);
 	}
 
-	#renderActions(): string[] {
-		if (this.#annotationChooser) return [];
+	#renderActions(maxRows = Number.POSITIVE_INFINITY): string[] {
+		if (this.#annotationChooser || this.#annotating && !this.#confirmation || maxRows <= 0) return [];
 		const labels = this.#confirmation
 			? this.#confirmation === "discard" ? ["Keep draft", "Discard draft"] : ["Keep editing", "Delete annotation"]
 			: this.#actions;
-		return labels.map((label, index) => {
+		const limit = Number.isFinite(maxRows) ? Math.max(1, Math.floor(maxRows)) : labels.length;
+		const start = Math.max(0, Math.min(this.#actionIndex - limit + 1, labels.length - limit));
+		return labels.slice(start, start + limit).map((label, offset) => {
+			const index = start + offset;
 			const disabled = !this.#confirmation && this.#actionDisabled(index);
 			const selected = index === this.#actionIndex;
 			const cursor = selected ? `${this.#theme.nav.cursor} ` : "  ";
@@ -1635,7 +1637,7 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#finished || this.#externalOperation) return;
+		if (this.#finished || this.#finishing || this.#externalOperation) return;
 		if (event.type === "action") {
 			if (event.act === "close") {
 				this.#escape();
@@ -2085,11 +2087,12 @@ export class AnnotationOverlay implements Focusable {
 			? Math.max(0, Math.min(chooserBaseRows, Math.max(3, chooserBaseRows - MIN_BODY_ROWS)))
 			: Number.POSITIVE_INFINITY;
 		const footer = this.#renderFooter(innerWidth, chooserFooterRows);
-		const fixedRows = (this.#annotationChooser ? 0 : this.#actions.length) + footer.length + 7;
-		const availableBodyRows = terminalHeight - fixedRows;
-		this.#bodyHeight = this.#annotationChooser
-			? Math.max(0, availableBodyRows)
-			: Math.max(MIN_BODY_ROWS, availableBodyRows);
+		const minBodyRows = this.#textSource ? 1 : 2;
+		const actions = this.#annotationChooser
+			? []
+			: this.#renderActions(Math.max(0, terminalHeight - footer.length - 7 - minBodyRows));
+		const availableBodyRows = terminalHeight - actions.length - footer.length - 7;
+		this.#bodyHeight = Math.max(0, availableBodyRows);
 		const bodyContentWidth = Math.max(1, bodyWidth - 1);
 		let renderedBody = this.#renderBody(bodyContentWidth);
 		this.#scrollView.setLines(renderedBody.lines);
@@ -2116,7 +2119,7 @@ export class AnnotationOverlay implements Focusable {
 			output.push(divider(width));
 		}
 		output.push(row(this.#theme.bold(this.#theme.fg("accent", sanitizeStatusText(this.#mode))), width));
-		for (const action of this.#renderActions()) output.push(row(action, width));
+		for (const action of actions) output.push(row(action, width));
 		output.push(divider(width));
 		for (const footerLine of footer) output.push(row(footerLine, width));
 		output.push(bottomBorder(width));

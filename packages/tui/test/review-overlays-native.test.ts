@@ -28,8 +28,14 @@ function findKeyed(root: NativeNode, key: string, path = ""): { node: NativeNode
 	return undefined;
 }
 
-function list(root: NativeNode, key: string): { path: string; items: NativeNode[]; selected: unknown } {
-	const findList = (parent: NativeNode, path = ""): { node: NativeNode; path: string } | undefined => {
+function list(
+	root: NativeNode,
+	key: string,
+): { path: string; items: Extract<NativeNode, { k: "item" }>[]; selected: unknown } {
+	const findList = (
+		parent: NativeNode,
+		path = "",
+	): { node: Extract<NativeNode, { k: "list" }>; path: string } | undefined => {
 		for (const [index, child] of (parent.c ?? []).entries()) {
 			if (!isNode(child)) continue;
 			const childPath = path ? `${path}/${child.key ?? index}` : `${child.key ?? index}`;
@@ -43,7 +49,9 @@ function list(root: NativeNode, key: string): { path: string; items: NativeNode[
 	if (!found) throw new Error(`no list ${key}`);
 	return {
 		path: found.path,
-		items: (found.node.c ?? []).filter(isNode),
+		items: (found.node.c ?? []).filter(
+			(child): child is Extract<NativeNode, { k: "item" }> => isNode(child) && child.k === "item",
+		),
 		selected: found.node.p?.selected,
 	};
 }
@@ -154,7 +162,11 @@ describe("review overlays under a native surface", () => {
 			getKeybindings() as KeybindingsManager,
 			[file],
 			"Reviewing",
-			{ onComplete: r => (result = r) },
+			{
+				onComplete: r => {
+					result = r;
+				},
+			},
 		);
 		const lines = list(overlay.describe(), "lines");
 		const removed = lines.items.find(node => itemLabel(node).includes("gone"))!;

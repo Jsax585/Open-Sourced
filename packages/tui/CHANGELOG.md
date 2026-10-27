@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Annotation overlays preserve unfinished notes on close and require explicit completion or discard, with consistent native confirmation actions ([#17230](https://github.com/can1357/oh-my-pi/pull/17230) by [@Shadorain](https://github.com/Shadorain)).
+- Annotation overlays preserve unfinished notes on close, serialize discard against other completions, and keep source rows and completion controls visible in short terminals ([#17230](https://github.com/can1357/oh-my-pi/pull/17230) by [@Shadorain](https://github.com/Shadorain)).
 
 ## [18.13.2] - 2026-10-27
 

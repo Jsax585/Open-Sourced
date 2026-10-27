@@ -707,6 +707,74 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getDraft()).toMatchObject({ annotations: [{ annotation: { note: "retained" } }] });
 	});
 
+	it("guards keyboard and native input while discard is pending", async () => {
+		let discarded = 0;
+		let completed = 0;
+		const { promise: pending, resolve: resolveDiscard } = Promise.withResolvers<void>();
+		const withDiscard = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "discard-race", kind: "prompt", label: "Prompt", text: "source" },
+			{
+				onComplete: () => {
+					completed++;
+				},
+				onDiscard: () => {
+					discarded++;
+					return pending;
+				},
+			},
+		);
+		withDiscard.handleNativeEvent({ type: "activate", key: "actions", item: "a3" });
+		withDiscard.handleNativeEvent({ type: "activate", key: "actions", item: "a1" });
+		withDiscard.handleInput(CANCEL);
+		withDiscard.handleNativeEvent({ type: "activate", key: "actions", item: "a1" });
+		withDiscard.handleNativeEvent(click("close"));
+		expect(discarded).toBe(1);
+		expect(completed).toBe(0);
+		resolveDiscard();
+		await Promise.resolve();
+		expect(withDiscard.getDraft()).toMatchObject({ kind: "text" });
+	});
+
+	it("fits active editor, action, and confirmation frames in twelve rows", () => {
+		const overlay = makeTextOverlay(
+			{ id: "short-frame", kind: "prompt", label: "Prompt", text: "source" },
+			() => {},
+			12,
+		);
+		overlay.handleInput("A");
+		overlay.handleInput("unfinished");
+		expect(render(overlay)).toContain("source");
+		expect(overlay.render(80).length).toBeLessThanOrEqual(12);
+		overlay.handleInput(ENTER);
+		overlay.handleInput(TAB);
+		expect(overlay.render(80).length).toBeLessThanOrEqual(12);
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: "a3" });
+		overlay.handleInput(DOWN);
+		expect(overlay.render(80).length).toBeLessThanOrEqual(12);
+		expect(render(overlay, 80)).toContain("Discard draft");
+		const diff = makeDiffOverlay(oneLineFiles, { rows: 12 });
+		const diffRows = render(diff, 80);
+		expect(diff.render(80).length).toBeLessThanOrEqual(12);
+		expect(diffRows).toMatch(/-\s+1 old/);
+	});
+
+	it("uses completion to close discard when no discard callback is supplied", async () => {
+		const completed: Array<TextReviewOverlayResult | undefined> = [];
+		const overlay = makeTextOverlay(
+			{ id: "discard-fallback", kind: "prompt", label: "Prompt", text: "source" },
+			result => completed.push(result),
+		);
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: "a3" });
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: "a1" });
+		await Promise.resolve();
+		expect(completed).toEqual([undefined]);
+		overlay.handleNativeEvent(click("close"));
+		expect(completed).toEqual([undefined]);
+	});
+
 	it("keeps Enter on the default completion choice in the overlay", () => {
 		let completed = false;
 		const overlay = makeTextOverlay(
