@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Built-in themes beyond the active dark/light pair now load on first use instead of at startup, so launching with a non-default theme no longer parses all 100 bundled theme files up front ([#17094](https://github.com/can1357/oh-my-pi/pull/17094) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
 
@@ -87,7 +90,6 @@
 - Added `noteOption` to `ExtensionAskDialogResultItem`, `QuestionResult`, and single-question `AskToolDetails`: the label of the option an ask note is on (unset for a note on the custom answer) ([#17126](https://github.com/can1357/oh-my-pi/pull/17126) by [@H4vC](https://github.com/H4vC))
 
 ### Changed
-- Built-in themes beyond the active dark/light pair now load on first use instead of at startup, so launching with a non-default theme no longer parses all 100 bundled theme files up front ([#17094](https://github.com/can1357/oh-my-pi/pull/17094) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - `StatusLineComponent.setRunningSubagents()` and `setSubagentTreeCost()` now report whether their state changed, allowing callers to skip redundant redraws ([#17131](https://github.com/can1357/oh-my-pi/pull/17131) by [@iliaal](https://github.com/iliaal)).
 
