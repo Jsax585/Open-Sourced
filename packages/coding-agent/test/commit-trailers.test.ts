@@ -73,6 +73,10 @@ const SHAPES: Record<string, string> = {
 	"git-generated trailer under prose with continuations":
 		"subject\n\nprose\n one\n two\n three\n four\n five\n six\nSigned-off-by: A <a@b>\n",
 	"git-generated trailer under three prose lines": "subject\n\nprose\nx\ny\nSigned-off-by: A <a@b>\n",
+	"a subject that looks like a trailer, never a trailer to git": "style: formatted code\n",
+	"a dotted key, which git counts as prose": "subject\n\nfile.txt: changed\n",
+	"whitespace before the separator": "subject\n\nKey : v\n",
+	"the trailer with a continuation, a different value to git": `subject\n\n${TRAILER}\n  more\n`,
 };
 
 // git's two code paths disagree on these: `interpret-trailers` appends inside
@@ -141,5 +145,13 @@ describe("withCommitTrailers", () => {
 	it("leaves a message that already carries the trailer unchanged, so an amend never repeats it", () => {
 		const message = `subject\n\n${TRAILER}\n`;
 		expect(withCommitTrailers(message, TRAILER)).toBe(message);
+	});
+
+	it("finds the trailer in every spelling git parses to the same trailer", () => {
+		const value = TRAILER.slice("Omp-Session: ".length);
+		for (const line of [`Omp-Session:${value}`, `omp-session: ${value.toUpperCase()}`, `Omp-Session :  ${value} `]) {
+			const message = `subject\n\n${line}\n`;
+			expect(withCommitTrailers(message, TRAILER)).toBe(message);
+		}
 	});
 });

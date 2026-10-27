@@ -20,23 +20,23 @@ const BLANK_LINE = /^[ \t\r]*$/;
 // A configured line counts only with git's own key grammar, letters, digits and
 // hyphens, so a stray line of prose in the variable never lands in a message.
 const CONFIGURED_TRAILER = /^[A-Za-z0-9][A-Za-z0-9-]*:(\s|$)/;
-// git's separator rule: the first `:`, with no whitespace before it, and not at
-// the start of the line. No space after it is needed and the value may be empty.
-const TRAILER_LINE = /^[^\s:][^\s:]*:/;
+// git's separator rule (`trailer.c` `find_separator`): a key of letters, digits
+// and hyphens, optional spaces or tabs, then `:`. No space after it is needed
+// and the value may be empty. `file.txt: changed` is prose to git.
+const TRAILER_LINE = /^[A-Za-z0-9-]+[ \t]*:/;
 // git treats these two as trailers whatever else the block holds (`trailer.c`).
 const GIT_GENERATED_LINE = /^(Signed-off-by: |\(cherry picked from commit )/;
 
 /**
  * Where git would say the message's trailer block starts, as `trailer.c`'s
- * `find_trailer_start` decides it: scan the last paragraph upwards; a line is a
- * trailer when a whitespace-free key is followed by `:` (no space after it
- * needed, empty value allowed), a continuation when it starts with whitespace,
+ * `find_trailer_start` decides it: the first paragraph is the title and
+ * never trailers; scan the last paragraph below it upwards; a line is a trailer
+ * when it matches `TRAILER_LINE`, a continuation when it starts with whitespace,
  * and prose otherwise. Continuations below the topmost trailer belong to it; the
  * rest count as prose. The paragraph is a trailer block when it holds a trailer
  * and either no prose at all, or a git-generated trailer and at most three prose
- * lines per trailer line. Returns
- * `lines.length` when there is no block. Pinned against `git interpret-trailers`
- * by this module's test.
+ * lines per trailer line. Returns `lines.length` when there is no block. Pinned
+ * against `git interpret-trailers` by this module's test.
  */
 function trailerBlockStart(lines: readonly string[]): number {
 	let trailers = 0;
@@ -45,7 +45,9 @@ function trailerBlockStart(lines: readonly string[]): number {
 	let gitGenerated = false;
 	let onlyBlank = true;
 	let start = lines.length;
-	for (let i = lines.length - 1; i >= 0; i--) {
+	const titleEnd = lines.findIndex(line => BLANK_LINE.test(line));
+	if (titleEnd < 0) return lines.length;
+	for (let i = lines.length - 1; i > titleEnd; i--) {
 		const line = lines[i];
 		if (BLANK_LINE.test(line)) {
 			if (onlyBlank) continue;
@@ -71,14 +73,43 @@ function trailerBlockStart(lines: readonly string[]): number {
 }
 
 /**
+ * A trailer line the way git compares it, like `trailer.c`'s `same_trailer`:
+ * whitespace around key and value dropped, and both without case, so
+ * `Omp-Session:x` and `omp-session : X` are one trailer. git also matches a key
+ * by prefix (`O: x` counts as `Omp-Session: x`); this compares the whole key, so
+ * the trailer is not lost.
+ */
+function comparable(trailer: string): string {
+	const separator = trailer.indexOf(":");
+	return `${trailer.slice(0, separator).trim()}:${trailer.slice(separator + 1).trim()}`.toLowerCase();
+}
+
+/** The block's trailer lines, each with its continuation lines unfolded into it. */
+function unfoldedTrailers(block: readonly string[]): string[] {
+	const trailers: string[] = [];
+	let inTrailer = false;
+	for (const line of block) {
+		if (inTrailer && (line[0] === " " || line[0] === "\t")) {
+			trailers[trailers.length - 1] += ` ${line.trim()}`;
+			continue;
+		}
+		inTrailer = TRAILER_LINE.test(line);
+		if (inTrailer) trailers.push(line);
+	}
+	return trailers;
+}
+
+/**
  * Append the configured trailers to `message`, into the trailer block it ends in
  * or as a new paragraph, exactly where `git interpret-trailers` would put them. A
- * trailer the block already carries is not repeated, so an amend adds nothing.
+ * trailer the block already carries, in any spelling git parses to the same
+ * trailer, is not repeated, so an amend adds nothing.
  *
- * One deliberate difference from git: after a message with no trailer block at
- * all (a bare subject line), git appends with no blank line between, and its own
- * parser then reads back no trailer. This opens the paragraph instead, so the
- * trailer is readable.
+ * One deliberate difference from git: when the message has no final newline and
+ * ends in no trailer block (a bare subject, or a prose paragraph), git appends
+ * the trailer to the last line with no blank line between, and its own parser
+ * then reads back no trailer. This opens a new paragraph instead, so the trailer
+ * is readable.
  */
 export function withCommitTrailers(message: string, configured = $env.PI_COMMIT_TRAILERS): string {
 	const wanted = (configured ?? "")
@@ -89,8 +120,13 @@ export function withCommitTrailers(message: string, configured = $env.PI_COMMIT_
 	if (wanted.length === 0 || !body) return message;
 	const lines = body.split("\n");
 	const start = trailerBlockStart(lines);
-	const block = lines.slice(start);
-	const missing = [...new Set(wanted)].filter(line => !block.includes(line));
+	const present = new Set(unfoldedTrailers(lines.slice(start)).map(comparable));
+	const missing = wanted.filter(line => {
+		const trailer = comparable(line);
+		if (present.has(trailer)) return false;
+		present.add(trailer);
+		return true;
+	});
 	if (missing.length === 0) return message;
 	return `${body}${start < lines.length ? "\n" : "\n\n"}${missing.join("\n")}\n`;
 }
