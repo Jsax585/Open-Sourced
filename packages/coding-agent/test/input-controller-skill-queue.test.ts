@@ -12,8 +12,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import * as skills from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
@@ -21,7 +20,11 @@ import type { CompactionQueuedMessage, InteractiveModeContext } from "@oh-my-pi/
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "@oh-my-pi/pi-coding-agent/session/messages";
+import {
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+	USER_INTERRUPT_LABEL,
+} from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Container } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -49,7 +52,13 @@ type PromptCustomMessage = Mock<
 			attribution?: string;
 			details: SkillPromptDetails;
 		},
-		options?: { streamingBehavior?: "steer" | "followUp"; queueChipText?: string; queueOnly?: boolean },
+		options?: {
+			streamingBehavior?: "steer" | "followUp";
+			queueChipText?: string;
+			queueOnly?: boolean;
+			onPromptQueued?: (queued: readonly unknown[]) => void;
+			onPromptAdmitted?: () => void;
+		},
 	) => Promise<void>
 >;
 
@@ -106,6 +115,7 @@ function createStubInputControllerContext(opts: {
 		editor,
 		ui: { requestRender },
 		skillCommands: opts.skillCommands,
+		fileSlashCommands: new Set<string>(),
 		session: {
 			isStreaming: opts.isStreaming,
 			isCompacting: opts.isCompacting ?? false,
@@ -113,6 +123,7 @@ function createStubInputControllerContext(opts: {
 			isEvalRunning: false,
 			extensionRunner: undefined,
 			prompt,
+			buildUserSkillPrompt: buildSkillPromptMessage,
 			promptCustomMessage,
 		},
 		get viewSession() {
@@ -189,6 +200,43 @@ describe("InputController skill queue chip metadata", () => {
 		expect(promptCustomMessage.mock.calls[0]?.[0].details.__queueChipText).toBeUndefined();
 		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("queues known skill steers during compaction instead of dispatching immediately", async () => {
+		const { ctx, editor, promptCustomMessage, prompt } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+			isCompacting: true,
+		});
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+		editor.setText("/skill:test-skill arg1 arg2");
+
+		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
+
+		expect(ctx.compactionQueuedMessages).toEqual([{ text: "/skill:test-skill arg1 arg2", mode: "steer" }]);
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(editor.getText()).toBe("");
+	});
+
+	it("captures the loop prompt for a /skill: submission queued during compaction", async () => {
+		const { ctx, editor, promptCustomMessage, setLoopPrompt, armLoopAutoSubmit } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: true,
+			isCompacting: true,
+			loopModeEnabled: true,
+		});
+		const controller = new InputController(ctx);
+		controller.setupEditorSubmitHandler();
+		editor.setText("/skill:test-skill arg1 arg2");
+
+		await editor.onSubmit?.("/skill:test-skill arg1 arg2");
+
+		expect(ctx.compactionQueuedMessages).toEqual([{ text: "/skill:test-skill arg1 arg2", mode: "steer" }]);
+		expect(setLoopPrompt).toHaveBeenCalledWith("/skill:test-skill arg1 arg2");
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(armLoopAutoSubmit).not.toHaveBeenCalled();
 	});
 
 	it("captures the loop prompt for a /skill: submission (regression: /loop never resubmitted a skill prompt)", async () => {
@@ -537,11 +585,12 @@ describe("compaction skill re-invocation", () => {
 			recordLocalSubmission: vi.fn((_text: string, _imageCount: number) => vi.fn()),
 			withLocalSubmission: vi.fn(async (_text: string, fn: () => unknown) => Promise.resolve(fn())),
 			session: {
+				buildUserSkillPrompt: buildSkillPromptMessage,
 				promptCustomMessage,
 				prompt,
 				steer,
 				followUp,
-				clearQueue: vi.fn(),
+				dropQueuedMessages: vi.fn(),
 				customCommands: [],
 			},
 		} as unknown as InteractiveModeContext;
@@ -609,9 +658,12 @@ describe("compaction skill re-invocation", () => {
 		expect(renderedText.text).toContain("arg1 arg2");
 		expect(message.content[1]).toEqual(image);
 		expect(message.details).toMatchObject({ name: "test-skill", args: "arg1 arg2", lineCount: 1 });
+		// The flush also passes its own admission callbacks; the skill prompt is sent, not queue-only.
 		expect(options).toEqual({
 			streamingBehavior: "followUp",
 			queueChipText: "/skill:test-skill arg1 arg2",
+			onPromptQueued: expect.any(Function),
+			onPromptAdmitted: expect.any(Function),
 		});
 		expect(prompt).not.toHaveBeenCalled();
 		expect(steer).not.toHaveBeenCalled();
@@ -669,6 +721,98 @@ describe("compaction skill re-invocation", () => {
 		},
 	);
 
+	it.each([
+		{ text: "plain guest prompt", readOnly: false },
+		{ text: "read-only guest prompt", readOnly: true },
+		{ text: "/skill:test-skill go", readOnly: false },
+	])("does not replay consumed guest input after a later failure (%s)", async ({ text, readOnly }) => {
+		const first: CompactionQueuedMessage = { text, mode: "followUp" };
+		const later: CompactionQueuedMessage = { text: "/hotkeys", mode: "followUp" };
+		const { ctx, promptCustomMessage, prompt, steer, followUp, handleHotkeysCommand } = createCompactionDrainContext([
+			first,
+			later,
+		]);
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly, sendPrompt } });
+		handleHotkeysCommand.mockImplementationOnce(() => {
+			throw new Error("local command failed");
+		});
+		const helpers = new UiHelpers(ctx);
+
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(ctx.compactionQueuedMessages).toEqual([later]);
+		expect(ctx.showError).toHaveBeenCalledTimes(1);
+		await helpers.flushCompactionQueue({ willRetry: false });
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+		expect(sendPrompt.mock.calls).toEqual(readOnly || text.startsWith("/") ? [] : [[text, undefined]]);
+		expect(handleHotkeysCommand).toHaveBeenCalledTimes(2);
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it("does not replay a skill consumed after joining during its load when later delivery fails", async () => {
+		const first: CompactionQueuedMessage = { text: "/skill:test-skill go", mode: "followUp" };
+		const later: CompactionQueuedMessage = { text: "/hotkeys", mode: "followUp" };
+		const { ctx, promptCustomMessage, prompt, steer, followUp, handleHotkeysCommand } = createCompactionDrainContext([
+			first,
+			later,
+		]);
+		const sendPrompt = vi.fn();
+		const originalBuild = ctx.session.buildUserSkillPrompt.bind(ctx.session);
+		const build = vi.spyOn(ctx.session, "buildUserSkillPrompt").mockImplementation(async (skill, input) => {
+			const built = await originalBuild(skill, input);
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+			return built;
+		});
+		handleHotkeysCommand.mockImplementationOnce(() => {
+			throw new Error("local command failed");
+		});
+		const helpers = new UiHelpers(ctx);
+
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(ctx.compactionQueuedMessages).toEqual([later]);
+		expect(ctx.showError).toHaveBeenCalledTimes(1);
+		await helpers.flushCompactionQueue({ willRetry: false });
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+		expect(build).toHaveBeenCalledTimes(1);
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it("does not forward the first guest prompt again when leaving the session fails", async () => {
+		const first: CompactionQueuedMessage = { text: "plain guest prompt", mode: "followUp" };
+		const later: CompactionQueuedMessage = { text: "/leave", mode: "followUp" };
+		const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([first, later]);
+		const sendPrompt = vi.fn();
+		const leave = vi.fn(async (_reason: string) => {});
+		leave.mockImplementationOnce(async () => {
+			throw new Error("Local session restoration was cancelled");
+		});
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt, leave } });
+		const helpers = new UiHelpers(ctx);
+
+		await helpers.flushCompactionQueue({ willRetry: false });
+
+		expect(ctx.compactionQueuedMessages).toEqual([later]);
+		expect(sendPrompt).toHaveBeenCalledTimes(1);
+		expect(ctx.showError).toHaveBeenCalledTimes(1);
+		await helpers.flushCompactionQueue({ willRetry: false });
+		expect(ctx.compactionQueuedMessages).toEqual([]);
+		expect(sendPrompt).toHaveBeenCalledTimes(1);
+		expect(leave.mock.calls).toEqual([["left"], ["left"]]);
+		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+	});
+
 	it("gates the all-slash drain without losing allowed read-only commands or newer drafts", async () => {
 		const { ctx, editor, promptCustomMessage, prompt, steer, followUp, handleHotkeysCommand, handleGoalModeCommand } =
 			createCompactionDrainContext([]);
@@ -723,11 +867,11 @@ describe("compaction skill re-invocation", () => {
 		]);
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		const originalBuild = skills.buildSkillPromptMessage;
-		vi.spyOn(skills, "buildSkillPromptMessage").mockImplementation(async (skill, input, invocation) => {
+		const originalBuild = ctx.session.buildUserSkillPrompt.bind(ctx.session);
+		vi.spyOn(ctx.session, "buildUserSkillPrompt").mockImplementation(async (skill, input) => {
 			entered.resolve();
 			await release.promise;
-			return originalBuild(skill, input, invocation);
+			return originalBuild(skill, input);
 		});
 		const helpers = new UiHelpers(ctx);
 		const flushing = helpers.flushCompactionQueue({ willRetry });
@@ -956,7 +1100,7 @@ describe("AgentSession derived queued custom display", () => {
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 
-	it("never restores a visible agent-authored custom steer; preserves on dequeue, drops on interrupt", async () => {
+	it("never restores a visible agent-authored custom steer; preserves on dequeue, records on interrupt", async () => {
 		fixture = await createRealSession();
 		const { session } = fixture;
 		// An IRC aside / extension/hook notice: visible, but agent-authored — editing it
@@ -980,9 +1124,11 @@ describe("AgentSession derived queued custom display", () => {
 		// ...plain dequeue restores nothing but PRESERVES the extension steer (not lost)...
 		expect(session.clearQueue().steering).toEqual([]);
 		expect(session.agent.peekSteeringQueue()).toHaveLength(1);
-		// ...and only Esc+abort drops it (no auto-resume leftover).
+		// ...and Esc+abort records it in the transcript instead (no auto-resume leftover, not lost).
 		expect(session.clearQueue({ forInterrupt: true }).steering).toEqual([]);
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
 		expect(session.agent.hasQueuedMessages()).toBe(false);
+		expect(session.agent.state.messages).toMatchObject([{ role: "custom", content: "peer pinged you" }]);
 	});
 
 	it("counts a queued advisor card as pending work but keeps it out of chips and restore", async () => {

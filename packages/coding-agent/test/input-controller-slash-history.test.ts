@@ -64,6 +64,7 @@ function makeCtx(isStreaming = false, messages: AgentMessage[] = []) {
 			extensionRunner: undefined,
 			customCommands: [],
 			promptTemplates: [],
+			slashCommands: [],
 			followUp,
 			steer,
 			prompt,

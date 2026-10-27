@@ -6,7 +6,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { ExtensionFactory, InputEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
@@ -69,6 +69,7 @@ async function createHarness(factory: ExtensionFactory) {
 		queuedMessageCount: 0,
 		prompt,
 		followUp: vi.fn(async (_text: string, _images?: ImageContent[]) => {}),
+		buildUserSkillPrompt: buildSkillPromptMessage,
 		promptCustomMessage: vi.fn(async () => true),
 		abort: vi.fn(async () => {}),
 		prewarmModelConnection: vi.fn(),
@@ -78,6 +79,7 @@ async function createHarness(factory: ExtensionFactory) {
 		session,
 		viewSession: session,
 		sessionManager,
+		eventController: { isAwaitingAsyncWork: () => false },
 		settings: Settings.isolated({}),
 		keybindings: KeybindingsManager.inMemory(),
 		dictationSpaceHold: vi.fn(),
@@ -102,6 +104,7 @@ async function createHarness(factory: ExtensionFactory) {
 		dismissCommandReport: () => false,
 		updateEditorBorderColor: vi.fn(),
 		updatePendingMessagesDisplay: vi.fn(),
+		syncIdleMaintenanceView: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
@@ -307,6 +310,50 @@ describe("interactive native input ingress", () => {
 					expect(h.prompt).not.toHaveBeenCalled();
 					expect(h.session.promptCustomMessage).not.toHaveBeenCalled();
 				}
+			}
+		});
+	}
+
+	for (const [label, key, compacting] of [
+		["Enter", ENTER, false],
+		["Ctrl+Enter", FOLLOW_UP, false],
+		["Enter compaction", ENTER, true],
+		["Ctrl+Enter compaction", FOLLOW_UP, true],
+	] as const) {
+		it(`${label} records each side file command once in SQL history`, async () => {
+			const h = await createHarness(() => {});
+			h.session.isCompacting = compacting;
+			h.ctx.fileSlashCommands.add("sitrep");
+			Object.assign(h.session, {
+				slashCommands: [
+					{
+						name: "sitrep",
+						description: "",
+						content: "Report. Focus: $ARGUMENTS",
+						side: true,
+						source: "via OMP User",
+					},
+				],
+			});
+			const handleBtwCommand = vi.fn(async () => true);
+			h.ctx.handleBtwCommand = handleBtwCommand;
+			const storage = attachHistory(h.editor);
+
+			for (const count of [1, 2]) {
+				h.editor.setText("/sitrep current work");
+				await h.pressSubmit(key);
+				expect(storage.getRecent(10).map(row => ({ text: row.prompt, uses: row.useCount }))).toEqual([
+					{ text: "/sitrep current work", uses: count },
+				]);
+				expect(handleBtwCommand).toHaveBeenCalledTimes(count);
+				expect(handleBtwCommand).toHaveBeenLastCalledWith(
+					"Report. Focus: current work",
+					undefined,
+					"/sitrep current work",
+				);
+				expect(h.ctx.compactionQueuedMessages).toEqual([]);
+				expect(h.prompt).not.toHaveBeenCalled();
+				expect(h.session.promptCustomMessage).not.toHaveBeenCalled();
 			}
 		});
 	}
@@ -685,6 +732,138 @@ describe("interactive native input ingress", () => {
 		expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 		expect(h.editor.imageLinks).toEqual(["local://newer.jpg", "local://original.png"]);
 		expect(h.prompt).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["tan", "handleTanCommand"],
+		["btw", "handleBtwCommand"],
+	] as const)(
+		"Enter /%s takes its images out of the composer, so the next draft cannot send them",
+		async (command, handler) => {
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const h = await createHarness(() => {});
+			Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+			const handle = vi.fn(async (_text: string, _images?: ImageContent[]) => {
+				entered.resolve();
+				await release.promise;
+				return true;
+			});
+			h.ctx[handler] = handle;
+			h.draftWithImage(`/${command} fix this block [Image #1]`);
+			const submitting = h.pressSubmit(ENTER);
+			await entered.promise;
+			// Pasted while the command dispatches: the composer holds only this image, so it is #1.
+			h.editor.pendingImages.push(newerImage);
+			h.editor.pendingImageLinks.push("local://newer.jpg");
+			h.editor.setText("newer [Image #1]");
+			release.resolve();
+			await submitting;
+
+			expect(handle).toHaveBeenCalledWith("fix this block [Image #1]", [originalImage]);
+			expect(h.editor.pendingImages).toEqual([newerImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://newer.jpg"]);
+
+			await h.pressSubmit(ENTER);
+
+			expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", {
+				streamingBehavior: "steer",
+				images: [newerImage],
+			});
+		},
+	);
+
+	it.each([
+		["tan", "handleTanCommand"],
+		["btw", "handleBtwCommand"],
+	] as const)(
+		"Enter /%s that does not start gives its draft back, with or without an image",
+		async (command, handler) => {
+			const h = await createHarness(() => {});
+			Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+			h.ctx[handler] = vi.fn(async () => false);
+			h.draftWithImage(`/${command} fix this block [Image #1]`);
+
+			await h.pressSubmit(ENTER);
+
+			expect(h.editor.getExpandedText()).toBe(`/${command} fix this block [Image #1]`);
+			expect(h.editor.pendingImages).toEqual([originalImage]);
+			expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
+
+			h.editor.clearDraft();
+			h.editor.setText(`/${command} just text`);
+			await h.pressSubmit(ENTER);
+
+			expect(h.editor.getExpandedText()).toBe(`/${command} just text`);
+		},
+	);
+
+	it.each([
+		["omfg", "handleOmfgCommand"],
+		["handoff", "handleHandoffCommand"],
+		["cleanse", "handleCleanseCommand"],
+	] as const)("Enter /%s with an image keeps the draft and does not run", async (command, handler) => {
+		const h = await createHarness(() => {});
+		const showWarning = vi.fn();
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		Object.assign(h.ctx, { showWarning });
+		const run = vi.fn(async () => {});
+		h.ctx[handler] = run;
+		h.draftWithImage(`/${command} look at this [Image #1]`);
+
+		await h.pressSubmit(ENTER);
+
+		expect(run).not.toHaveBeenCalled();
+		expect(showWarning).toHaveBeenCalledWith(`/${command} takes text only; remove the images to run it`);
+		expect(h.editor.getExpandedText()).toBe(`/${command} look at this [Image #1]`);
+		expect(h.editor.pendingImages).toEqual([originalImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
+	});
+
+	it("Enter /tan as a collab guest gives the draft and its image back", async () => {
+		const h = await createHarness(() => {});
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		Object.assign(h.ctx, { collabGuest: {} });
+		const run = vi.fn(async () => true);
+		h.ctx.handleTanCommand = run;
+		h.draftWithImage("/tan fix this block [Image #1]");
+
+		await h.pressSubmit(ENTER);
+
+		expect(run).not.toHaveBeenCalled();
+		expect(h.ctx.showStatus).toHaveBeenCalledWith("/tan is host-only during a collab session");
+		expect(h.editor.getExpandedText()).toBe("/tan fix this block [Image #1]");
+		expect(h.editor.pendingImages).toEqual([originalImage]);
+		expect(h.editor.pendingImageLinks).toEqual(["local://original.png"]);
+	});
+
+	it("Enter /tan renumbers an image pasted while its input hook runs", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const h = await createHarness(pi => {
+			pi.on("input", async () => {
+				entered.resolve();
+				await release.promise;
+			});
+		});
+		Object.assign(h.session, { customCommands: [], promptTemplates: [] });
+		h.ctx.handleTanCommand = vi.fn(async () => true);
+		h.draftWithImage("/tan fix this block [Image #1]");
+		const submitting = h.pressSubmit(ENTER);
+		await entered.promise;
+		// The submitted image is still pending while the hook runs, so this paste is #2.
+		h.editor.pendingImages.push(newerImage);
+		h.editor.pendingImageLinks.push("local://newer.jpg");
+		h.editor.setText("newer [Image #2]");
+		release.resolve();
+		await submitting;
+
+		expect(h.editor.getExpandedText()).toBe("newer [Image #1]");
+		expect(h.editor.pendingImages).toEqual([newerImage]);
+
+		await h.pressSubmit(ENTER);
+
+		expect(h.prompt).toHaveBeenCalledWith("newer [Image #1]", { streamingBehavior: "steer", images: [newerImage] });
 	});
 
 	it.each(["/clear", "/export"])(
