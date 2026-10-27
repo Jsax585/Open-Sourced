@@ -27,7 +27,7 @@ import { resolveToCwd } from "../tools/path-utils";
 import { getBundledAgent } from "./agents";
 import { assertPerCallModelApproved, isPerCallModelApproved, type PerCallModelGrants } from "./model-approval";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
-import type { AgentDefinition } from "./types";
+import type { AgentDefinition, SeanceTaskSchemaFields } from "./types";
 
 export interface ResolvedSeanceSource {
 	file: string;
@@ -167,7 +167,7 @@ export async function resolveSeanceSource(
 export const seanceTaskSchemaFields = {
 	"sourceSession?": type("string"),
 	"model?": type("string"),
-};
+} satisfies Required<SeanceTaskSchemaFields>;
 export const seanceTaskGuidance = seanceTaskGuidanceTemplate;
 
 function validateSeanceFields(
