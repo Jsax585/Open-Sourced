@@ -32,6 +32,7 @@
 - Fixed reading `proc://<id>/kill` or `proc://<id>/mode` answering only "writable only", so agents often moved on with the job still running; the error now names the `write` call that cancels the job or sets the mode, with the real id ([#16580](https://github.com/can1357/oh-my-pi/pull/16580) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `history://<id>` failing with "has no transcript: session is gone" for a worker that is still running but has not created its session or transcript file yet; it now answers "No transcript has been written yet". ([#16645](https://github.com/can1357/oh-my-pi/pull/16645) by [@Komzpa](https://github.com/Komzpa))
 - Fixed the `eval` tool telling sessions with only the Python runtime to call `tool.<name>(args)` without `await`, which returns a coroutine and never runs the tool ([#16578](https://github.com/can1357/oh-my-pi/pull/16578) by [@will-bogusz](https://github.com/will-bogusz))
+- A `doas` or `sudo` command now runs on an interactive terminal, so it can ask for the password instead of dying with `doas: Authentication failed`; the user shell's `!` commands get the same terminal, which they previously lacked ([#16103](https://github.com/can1357/oh-my-pi/pull/16103) by [@iacore](https://github.com/iacore)).
 
 ## [18.12.6] - 2026-10-21
 
@@ -360,9 +361,6 @@
 ### Removed
 
 - Removed the built-in `rs-parking-lot` rule; Rust edits using `std::sync::{Mutex, RwLock}` with `.lock().unwrap()` are no longer steered to `parking_lot`
-### Fixed
-
-- A `doas` or `sudo` command now runs on an interactive terminal, so it can ask for the password instead of dying with `doas: Authentication failed` ([#16103](https://github.com/can1357/oh-my-pi/pull/16103) by [@iacore](https://github.com/iacore)).
 
 ## [18.11.2] - 2026-10-16
 
