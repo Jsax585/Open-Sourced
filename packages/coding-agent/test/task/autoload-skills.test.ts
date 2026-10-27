@@ -404,6 +404,46 @@ describe("autoloadSkills in executor", () => {
 			{ triggerTurn: false },
 		);
 	});
+
+	// A direct SDK caller of the exported runSubprocess() who passes `skills`
+	// gets a fixed snapshot: only callers that set mergeDiscoveredSkillPaths
+	// (the task, eval and vibe spawners) let the child's resources_discover
+	// results merge into it (PR #9379 review).
+	it("keeps a direct caller's skills fixed unless it sets mergeDiscoveredSkillPaths", async () => {
+		const supplied: Skill = {
+			name: "curated-skill",
+			description: "curated by the SDK caller",
+			filePath: "/sdk/skills/curated-skill/SKILL.md",
+			baseDir: "/sdk/skills/curated-skill",
+			source: "user",
+		};
+		const yieldNow = ({ emit }: { emit: (event: AgentSessionEvent) => void }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-1",
+				toolName: "yield",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		};
+		const createSession = vi
+			.spyOn(sdkModule, "createAgentSession")
+			.mockImplementation(async () => createSessionResult(createMockSession(yieldNow, [supplied])));
+
+		await runSubprocess({ ...baseOptions, skills: [supplied] });
+		await runSubprocess({ ...baseOptions, skills: [supplied], mergeDiscoveredSkillPaths: true });
+
+		expect(createSession).toHaveBeenCalledTimes(2);
+		const [direct] = createSession.mock.calls[0];
+		const [spawner] = createSession.mock.calls[1];
+		expect(direct?.skills).toEqual([supplied]);
+		expect(direct?.mergeDiscoveredSkillPaths).toBe(false);
+		expect(spawner?.skills).toEqual([supplied]);
+		expect(spawner?.mergeDiscoveredSkillPaths).toBe(true);
+	});
 });
 
 describe("autoloadSkills through task spawn", () => {

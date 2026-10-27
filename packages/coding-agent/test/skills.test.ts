@@ -1550,6 +1550,88 @@ export default function (pi) {
 		}
 	});
 
+	it("adds no discovered skill to a merge-marked subagent snapshot when skills.enabled is false (regression: PR #9379 review)", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-merge-skills-disabled-"));
+		const authStorage = createInMemoryAuthStorage();
+		let session: AgentSession | undefined;
+		try {
+			const discoveredDir = path.join(tempDir, "task-discovered-skill");
+			await fs.mkdir(discoveredDir, { recursive: true });
+			await fs.writeFile(
+				path.join(discoveredDir, "SKILL.md"),
+				"---\nname: task-discovered-skill\ndescription: Must stay out while skills are off.\n---\n\nbody\n",
+			);
+			const markerPath = path.join(tempDir, "resources-discover.marker");
+			const extensionsDir = path.join(tempDir, "ext");
+			await fs.mkdir(extensionsDir, { recursive: true });
+			const extPath = path.join(extensionsDir, "task-merge-disabled-observer.ts");
+			await fs.writeFile(
+				extPath,
+				`import * as fs from "node:fs";
+export default function (pi) {
+	pi.on("resources_discover", () => {
+		fs.writeFileSync(${JSON.stringify(markerPath)}, "discovered");
+		return { skillPaths: [${JSON.stringify(tempDir)}] };
+	});
+}
+`,
+			);
+
+			const loaded = await loadExtensions([extPath], tempDir);
+			expect(loaded.errors).toEqual([]);
+
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+			const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model, systemPrompt: ["Test"], tools: [] },
+				streamFn: mock.stream,
+			});
+			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+			const sessionManager = SessionManager.inMemory(tempDir);
+			const extensionRunner = new ExtensionRunner(
+				loaded.extensions,
+				loaded.runtime,
+				tempDir,
+				sessionManager,
+				modelRegistry,
+			);
+
+			// The master switch gates the merge exactly as it gates `loadSkills`.
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settings: Settings.isolated({ "compaction.enabled": false, "skills.enabled": false }),
+				modelRegistry,
+				extensionRunner,
+				skills: [],
+				skillsReloadable: false,
+				mergeDiscoveredSkillPaths: true,
+			});
+
+			const runtimeErrors: ExtensionError[] = [];
+			await initializeExtensions(session, {
+				reportSendError: () => {},
+				reportRuntimeError: error => {
+					runtimeErrors.push(error);
+				},
+			});
+
+			expect(runtimeErrors).toEqual([]);
+			// The handler ran, so a missing skill means the merge refused it.
+			expect(await Bun.file(markerPath).exists()).toBe(true);
+			expect(session.skills).toEqual([]);
+
+			await session.refreshSkills({ rediscover: true });
+			expect(session.skills).toEqual([]);
+		} finally {
+			await session?.dispose();
+			authStorage.close();
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("still emits resources_discover on /reload-plugins for a session with a fixed skill snapshot", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-fixed-skills-reload-"));
 		const authStorage = createInMemoryAuthStorage();
