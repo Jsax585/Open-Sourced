@@ -4,9 +4,9 @@
 
 ### Fixed
 
-- `/annotate` preserves notes and unfinished edits across early exits, pasting into the prompt, and restarts, with session-local resume and discard actions.
-- Annotation feedback includes source line numbers so notes on blank lines remain identifiable.
-- Annotation drafts handle Windows line endings and edited-source recovery, remain retryable after save failures, and keep native confirmation actions in sync.
+- `/annotate` preserves notes and unfinished edits across early exits, pasting into the prompt, and restarts, with session-local resume and discard actions ([#17230](https://github.com/can1357/oh-my-pi/pull/17230) by [@Shadorain](https://github.com/Shadorain)).
+- Annotation feedback includes source line numbers so notes on blank lines remain identifiable ([#17230](https://github.com/can1357/oh-my-pi/pull/17230) by [@Shadorain](https://github.com/Shadorain)).
+- Annotation drafts handle Windows line endings and edited-source recovery, remain retryable after save failures, and keep native confirmation actions in sync ([#17230](https://github.com/can1357/oh-my-pi/pull/17230) by [@Shadorain](https://github.com/Shadorain)).
 
 ## [18.13.2] - 2026-10-27
 
