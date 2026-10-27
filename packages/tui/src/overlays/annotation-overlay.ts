@@ -76,8 +76,6 @@ export interface TextReviewOverlayCallbacks extends AnnotationOverlayCallbacks {
 	onComplete(result: TextReviewOverlayResult | undefined): void | Promise<void>;
 }
 
-type OverlayCallbacks = CodeReviewOverlayCallbacks | TextReviewOverlayCallbacks;
-
 type AnnotationScope = CodeReviewAnnotation["scope"] | TextReviewAnnotation["scope"];
 type DiffColor = "toolDiffAdded" | "toolDiffRemoved" | "toolDiffContext";
 
@@ -126,8 +124,19 @@ const MIN_BODY_ROWS = 3;
 const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
 const MAX_ANNOTATION_EDITOR_ROWS = 6;
-const CODE_REVIEW_ACTIONS = ["Continue annotating", PASTE_CODE_REVIEW_ACTION, CONTINUE_CODE_REVIEW_ACTION, "Save draft and close", "Discard draft"] as const;
-const TEXT_REVIEW_ACTIONS = ["Continue annotating", PASTE_CODE_REVIEW_ACTION, "Save draft and close", "Discard draft"] as const;
+const CODE_REVIEW_ACTIONS = [
+	"Continue annotating",
+	PASTE_CODE_REVIEW_ACTION,
+	CONTINUE_CODE_REVIEW_ACTION,
+	"Save draft and close",
+	"Discard draft",
+] as const;
+const TEXT_REVIEW_ACTIONS = [
+	"Continue annotating",
+	PASTE_CODE_REVIEW_ACTION,
+	"Save draft and close",
+	"Discard draft",
+] as const;
 
 function isSourceRow(row: ReviewDiffRow): row is ReviewSourceRow {
 	return row.kind === "context" || row.kind === "added" || row.kind === "removed";
@@ -259,7 +268,7 @@ export class AnnotationOverlay implements Focusable {
 	readonly #keybindings: KeybindingsManager;
 	readonly #files: readonly ReviewDiffFile[];
 	readonly #mode: string;
-	readonly #callbacks: OverlayCallbacks;
+	readonly #callbacks: AnnotationOverlayCallbacks;
 
 	constructor(
 		tui: TUI,
@@ -345,13 +354,10 @@ export class AnnotationOverlay implements Focusable {
 		this.#editor.describePlaceholder = () => NOTE_PLACEHOLDER;
 		this.#editor.setScrollbarVisible(true);
 		this.#editor.onChange = () => this.#emitDraftChange();
-		this.#editor.onSubmit = value => {
-			this.#commitAnnotation(value);
-			this.#emitDraftChange();
-		};
+		this.#editor.onSubmit = value => this.#commitAnnotation(value);
 		this.#resetSourceCursor();
 	}
- 
+
 	capturesInput(data: string): boolean {
 		return data === "\x03" || data === "\x04";
 	}
@@ -371,37 +377,39 @@ export class AnnotationOverlay implements Focusable {
 
 	getDraft(): AnnotationOverlayDraft {
 		if (this.#textSource) {
-			return {
+			const draft: AnnotationOverlayDraft = {
 				kind: "text",
 				annotations: this.#textAnnotations.map(entry => ({ ...entry, annotation: { ...entry.annotation } })),
 				...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}),
-				...(this.#annotating
-					? {
-							editor: {
-								sourceIndex: this.#annotationScope === "text" ? -1 : this.#sourceIndex,
-								scope: this.#annotationScope === "text" ? "text" : "line",
-								...(this.#editingAnnotationIndex === undefined ? {} : { editingAnnotationIndex: this.#editingAnnotationIndex }),
-								text: this.#editor.getExpandedText(),
-							},
-						}
-					: {}),
 			};
+			if (this.#annotating) {
+				draft.editor = {
+					sourceIndex: this.#annotationScope === "text" ? -1 : this.#sourceIndex,
+					scope: this.#annotationScope === "text" ? "text" : "line",
+					...(this.#editingAnnotationIndex === undefined
+						? {}
+						: { editingAnnotationIndex: this.#editingAnnotationIndex }),
+					text: this.#editor.getExpandedText(),
+				};
+			}
+			return draft;
 		}
-		return {
+		const draft: AnnotationOverlayDraft = {
 			kind: "diff",
 			annotations: this.#annotations.map(entry => ({ ...entry, annotation: { ...entry.annotation } })),
-			...(this.#annotating
-				? {
-						editor: {
-							fileIndex: this.#fileIndex,
-							sourceIndex: this.#sourceIndex,
-							scope: this.#annotationScope === "file" ? "file" : "line",
-							...(this.#editingAnnotationIndex === undefined ? {} : { editingAnnotationIndex: this.#editingAnnotationIndex }),
-							text: this.#editor.getExpandedText(),
-						},
-					}
-				: {}),
 		};
+		if (this.#annotating) {
+			draft.editor = {
+				fileIndex: this.#fileIndex,
+				sourceIndex: this.#sourceIndex,
+				scope: this.#annotationScope === "file" ? "file" : "line",
+				...(this.#editingAnnotationIndex === undefined
+					? {}
+					: { editingAnnotationIndex: this.#editingAnnotationIndex }),
+				text: this.#editor.getExpandedText(),
+			};
+		}
+		return draft;
 	}
 
 	restoreDraft(draft: AnnotationOverlayDraft): void {
@@ -410,12 +418,17 @@ export class AnnotationOverlay implements Focusable {
 			if (draft.kind === "text" && this.#textSource) {
 				if (draft.editedText !== undefined) this.replaceTextSource(draft.editedText);
 				this.#textAnnotations = draft.annotations
-					.filter(entry => entry.sourceIndex === -1 || (entry.sourceIndex >= 0 && entry.sourceIndex < this.#textLines.length))
+					.filter(
+						entry =>
+							entry.sourceIndex === -1 || (entry.sourceIndex >= 0 && entry.sourceIndex < this.#textLines.length),
+					)
 					.map(entry => ({ ...entry, annotation: { ...entry.annotation } }));
 				const editor = draft.editor;
 				if (
 					editor &&
-					(editor.scope === "text" ? editor.sourceIndex === -1 : editor.sourceIndex >= 0 && editor.sourceIndex < this.#textLines.length)
+					(editor.scope === "text"
+						? editor.sourceIndex === -1
+						: editor.sourceIndex >= 0 && editor.sourceIndex < this.#textLines.length)
 				) {
 					if (editor.scope === "line") this.#sourceIndex = editor.sourceIndex;
 					this.#annotationScope = editor.scope;
@@ -425,12 +438,24 @@ export class AnnotationOverlay implements Focusable {
 				}
 			} else if (draft.kind === "diff" && !this.#textSource) {
 				this.#annotations = draft.annotations
-					.filter(entry => entry.fileIndex >= 0 && entry.fileIndex < this.#files.length &&
-						(entry.sourceIndex === -1 || entry.sourceIndex >= 0 && entry.sourceIndex < this.#files[entry.fileIndex]!.rows.filter(isSourceRow).length))
+					.filter(
+						entry =>
+							entry.fileIndex >= 0 &&
+							entry.fileIndex < this.#files.length &&
+							(entry.sourceIndex === -1 ||
+								(entry.sourceIndex >= 0 &&
+									entry.sourceIndex < this.#files[entry.fileIndex]!.rows.filter(isSourceRow).length)),
+					)
 					.map(entry => ({ ...entry, annotation: { ...entry.annotation } }));
 				const editor = draft.editor;
-				if (editor && editor.fileIndex >= 0 && editor.fileIndex < this.#files.length &&
-					(editor.scope === "file" || editor.sourceIndex >= 0 && editor.sourceIndex < this.#files[editor.fileIndex]!.rows.filter(isSourceRow).length)) {
+				if (
+					editor &&
+					editor.fileIndex >= 0 &&
+					editor.fileIndex < this.#files.length &&
+					(editor.scope === "file" ||
+						(editor.sourceIndex >= 0 &&
+							editor.sourceIndex < this.#files[editor.fileIndex]!.rows.filter(isSourceRow).length))
+				) {
 					this.#fileIndex = editor.fileIndex;
 					this.#sourceIndex = editor.sourceIndex;
 					this.#annotationScope = editor.scope;
@@ -524,7 +549,7 @@ export class AnnotationOverlay implements Focusable {
 			void this.#finish(undefined);
 			return;
 		}
-		if (this.#finished || this.#externalOperation) return;
+		if (this.#externalOperation) return;
 		if (this.#annotationChooser) {
 			this.#handleAnnotationChooser(data);
 			return;
@@ -588,14 +613,22 @@ export class AnnotationOverlay implements Focusable {
 		return key ? formatKeyHint(key) : "";
 	}
 
-	async #finish(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): Promise<void> {
+	async #finish(
+		result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined,
+		discard = false,
+	): Promise<void> {
 		if (this.#finished || this.#finishing) return;
 		this.#finishing = true;
 		try {
-			await this.#callbacks.onComplete(result as never);
+			if (discard && this.#callbacks.onDiscard) await this.#callbacks.onDiscard();
+			else await this.#callbacks.onComplete(result);
+			this.#confirmation = undefined;
 			this.#finished = true;
 		} catch (error) {
-			this.#callbacks.onWarning?.(`Failed to save annotation draft: ${error instanceof Error ? error.message : String(error)}`);
+			const action = discard ? "discard" : "save";
+			this.#callbacks.onWarning?.(
+				`Failed to ${action} annotation draft: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			this.#finishing = false;
 		}
 	}
@@ -627,27 +660,13 @@ export class AnnotationOverlay implements Focusable {
 				if (note !== undefined) this.#editor.setText(note);
 			}
 			this.#confirmation = undefined;
-		}
-		else if (this.#confirmation === "discard") void this.#discardAndFinish();
+		} else if (this.#confirmation === "discard") void this.#finish(undefined, true);
 		else {
 			this.#confirmation = undefined;
 			this.#deleteAnnotation();
 		}
 	}
 
-	async #discardAndFinish(): Promise<void> {
-		if (this.#finished || this.#finishing) return;
-		this.#finishing = true;
-		try {
-			if (this.#callbacks.onDiscard) await this.#callbacks.onDiscard();
-			else await this.#callbacks.onComplete(undefined as never);
-			this.#confirmation = undefined;
-			this.#finished = true;
-		} catch (error) {
-			this.#callbacks.onWarning?.(`Failed to discard annotation draft: ${error instanceof Error ? error.message : String(error)}`);
-			this.#finishing = false;
-		}
-	}
 	#deleteAnnotation(): void {
 		const index = this.#editingAnnotationIndex;
 		if (index === undefined) return;
@@ -656,12 +675,8 @@ export class AnnotationOverlay implements Focusable {
 		else this.#annotations.splice(index, 1);
 		this.#annotating = false;
 		this.#editingAnnotationIndex = undefined;
-		this.#suppressDraftChange = true;
 		this.#editor.setText("");
-		this.#suppressDraftChange = false;
-		this.#emitDraftChange();
 	}
-
 
 	#cycleFocus(direction: number): void {
 		const regions: FocusRegion[] = this.#sidebarShown ? ["files", "diff", "actions"] : ["diff", "actions"];
@@ -801,7 +816,12 @@ export class AnnotationOverlay implements Focusable {
 		}
 		if (this.#actionDisabled(this.#actionIndex)) return;
 		if (this.#actionIndex === 1) {
-			if (this.#textSource) void this.#finish({ action: "paste", annotations: this.getTextAnnotations(), ...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}) });
+			if (this.#textSource)
+				void this.#finish({
+					action: "paste",
+					annotations: this.getTextAnnotations(),
+					...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}),
+				});
 			else void this.#finish({ action: "paste", annotations: this.getAnnotations() });
 		} else if (!this.#textSource) void this.#finish({ action: "review", annotations: this.getAnnotations() });
 	}
@@ -875,7 +895,6 @@ export class AnnotationOverlay implements Focusable {
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
 		this.#editor.setText(existing?.annotation.note ?? "");
-		this.#emitDraftChange();
 	}
 
 	#startTextAnnotation(scope: TextReviewAnnotation["scope"], existingIndex?: number): void {
@@ -886,37 +905,29 @@ export class AnnotationOverlay implements Focusable {
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
 		this.#editor.setText(existing?.annotation.note ?? "");
-		this.#emitDraftChange();
 	}
 
 	#commitAnnotation(value: string): void {
-		if (this.#textSource) {
-			this.#commitTextAnnotation(value);
-			return;
-		}
 		const note = value.trim();
-		const file = this.#currentFile();
-		const source = this.#currentSourceRows()[this.#sourceIndex];
-		const editingIndex = this.#editingAnnotationIndex;
-		const scope: CodeReviewAnnotation["scope"] = this.#annotationScope === "file" ? "file" : "line";
-		if (!note && editingIndex !== undefined) {
+		if (!note && this.#editingAnnotationIndex !== undefined) {
 			this.#confirmation = "delete";
 			this.#actionIndex = 0;
 			return;
 		}
 		this.#annotating = false;
-		this.#focus = scope === "file" ? "files" : "diff";
-		this.#suppressDraftChange = true;
-		this.#editor.setText("");
-		this.#suppressDraftChange = false;
-
-		if (!note) {
-			if (editingIndex !== undefined) {
-				this.#pushUndo();
-				this.#annotations.splice(editingIndex, 1);
-			}
-			return;
+		this.#focus = this.#annotationScope === "file" ? "files" : "diff";
+		if (note) {
+			if (this.#textSource) this.#commitTextAnnotation(note);
+			else this.#commitDiffAnnotation(note);
 		}
+		this.#editor.setText("");
+	}
+
+	#commitDiffAnnotation(note: string): void {
+		const file = this.#currentFile();
+		const source = this.#currentSourceRows()[this.#sourceIndex];
+		const editingIndex = this.#editingAnnotationIndex;
+		const scope: CodeReviewAnnotation["scope"] = this.#annotationScope === "file" ? "file" : "line";
 		if (editingIndex !== undefined) {
 			const existing = this.#annotations[editingIndex];
 			if (existing) {
@@ -956,29 +967,11 @@ export class AnnotationOverlay implements Focusable {
 		});
 	}
 
-	#commitTextAnnotation(value: string): void {
-		const note = value.trim();
+	#commitTextAnnotation(note: string): void {
 		const editingIndex = this.#editingAnnotationIndex;
-		if (!note && editingIndex !== undefined) {
-			this.#confirmation = "delete";
-			this.#actionIndex = 0;
-			return;
-		}
+		this.#editingAnnotationIndex = undefined;
 		const scope: TextReviewAnnotation["scope"] = this.#annotationScope === "text" ? "text" : "line";
 		const sourceLine = this.#textLines[this.#sourceIndex] ?? "";
-		this.#annotating = false;
-		this.#focus = "diff";
-		this.#editingAnnotationIndex = undefined;
-		this.#suppressDraftChange = true;
-		this.#editor.setText("");
-		this.#suppressDraftChange = false;
-		if (!note) {
-			if (editingIndex !== undefined) {
-				this.#pushUndo();
-				this.#textAnnotations.splice(editingIndex, 1);
-			}
-			return;
-		}
 		if (editingIndex !== undefined) {
 			const existing = this.#textAnnotations[editingIndex];
 			if (existing) {
@@ -1315,9 +1308,11 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#renderActions(maxRows = Number.POSITIVE_INFINITY): string[] {
-		if (this.#annotationChooser || this.#annotating && !this.#confirmation || maxRows <= 0) return [];
+		if (this.#annotationChooser || (this.#annotating && !this.#confirmation) || maxRows <= 0) return [];
 		const labels = this.#confirmation
-			? this.#confirmation === "discard" ? ["Keep draft", "Discard draft"] : ["Keep editing", "Delete annotation"]
+			? this.#confirmation === "discard"
+				? ["Keep draft", "Discard draft"]
+				: ["Keep editing", "Delete annotation"]
 			: this.#actions;
 		const limit = Number.isFinite(maxRows) ? Math.max(1, Math.floor(maxRows)) : labels.length;
 		const start = Math.max(0, Math.min(this.#actionIndex - limit + 1, labels.length - limit));
@@ -1661,7 +1656,7 @@ export class AnnotationOverlay implements Focusable {
 		if (leaf === "actions") {
 			const index = itemIndex(event.item, "a");
 			const count = this.#confirmation ? 2 : this.#actions.length;
-			if (index < 0 || index >= count || !this.#confirmation && this.#actionDisabled(index)) return;
+			if (index < 0 || index >= count || (!this.#confirmation && this.#actionDisabled(index))) return;
 			this.#actionIndex = index;
 			this.#focus = "actions";
 			if (activate) {
@@ -1998,12 +1993,14 @@ export class AnnotationOverlay implements Focusable {
 	 */
 	#describeFooter(editing: boolean): NativeNode {
 		const labels = this.#confirmation
-			? this.#confirmation === "discard" ? ["Keep draft", "Discard draft"] : ["Keep editing", "Delete annotation"]
+			? this.#confirmation === "discard"
+				? ["Keep draft", "Discard draft"]
+				: ["Keep editing", "Delete annotation"]
 			: this.#actions;
 		const choices = labels.map((label, index) =>
 			item(`a${index}`, {
 				label: [span(label)],
-				disabled: editing && !this.#confirmation || !this.#confirmation && this.#actionDisabled(index),
+				disabled: (editing && !this.#confirmation) || (!this.#confirmation && this.#actionDisabled(index)),
 				tone: index === 0 ? "success" : undefined,
 			}),
 		);

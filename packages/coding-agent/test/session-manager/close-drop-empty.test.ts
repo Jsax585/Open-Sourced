@@ -69,6 +69,30 @@ class DrainSignalingStorage extends FileSessionStorage {
 	}
 }
 
+async function createAnnotationSession(directory: string, storage = new FileSessionStorage()) {
+	const session = SessionManager.create(directory, directory, storage);
+	await session.saveDraft("materialize session");
+	await session.saveDraft("");
+	const sessionFile = session.getSessionFile()!;
+	const artifactsDir = session.getArtifactsDir()!;
+	const sessionId = session.getSessionId();
+	const source: AnnotationDraftSource = {
+		kind: "text",
+		cwd: directory,
+		source: { id: "prompt", kind: "prompt", label: "Prompt", text: "source", provenance: { kind: "prompt" } },
+	};
+	const record: AnnotationDraftRecord = {
+		version: 1,
+		sessionId,
+		key: annotationDraftKey(source),
+		createdAt: 1,
+		updatedAt: 1,
+		source,
+		state: { kind: "text", annotations: [], editor: { sourceIndex: -1, scope: "text", text: "recover this note" } },
+	};
+	const store = await AnnotationDraftStore.open(artifactsDir, sessionId, () => session.ensureOnDisk());
+	return { session, sessionFile, artifactsDir, sessionId, record, store };
+}
 
 describe("SessionManager close() drops empty metadata-only sessions", () => {
 	// Repro of issue #4571: saveDraft(text) materializes the JSONL so the
@@ -272,30 +296,9 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 	it("keeps a closing session discoverable when an active annotation checkpoint races cleanup", async () => {
 		using tempDir = TempDir.createSync("@pi-session-close-annotation-checkpoint-race-");
-		const session = SessionManager.create(tempDir.path(), tempDir.path());
-		session.appendModelChange("hai-proxy/anthropic--claude-4.6-opus");
-		await session.saveDraft("materialize session");
-		await session.saveDraft("");
-
-		const sessionFile = session.getSessionFile();
-		const artifactsDir = session.getArtifactsDir();
-		if (!sessionFile || !artifactsDir) throw new Error("Expected persistent session");
-		const sessionId = session.getSessionId();
-		const source: AnnotationDraftSource = {
-			kind: "text",
-			cwd: tempDir.path(),
-			source: { id: "prompt", kind: "prompt", label: "Prompt", text: "hello", provenance: { kind: "prompt" } },
-		};
-		const record: AnnotationDraftRecord = {
-			version: 1,
-			sessionId,
-			key: annotationDraftKey(source),
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			source,
-			state: { kind: "text", annotations: [], editor: { sourceIndex: -1, scope: "text", text: "recover this note" } },
-		};
-		const store = await AnnotationDraftStore.open(artifactsDir, sessionId);
+		const { session, sessionFile, artifactsDir, sessionId, record, store } = await createAnnotationSession(
+			tempDir.path(),
+		);
 		await store.claim(record.key);
 
 		await session.close();
@@ -315,30 +318,10 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 	it("rechecks annotation drafts under the deletion gate after the precheck", async () => {
 		using tempDir = TempDir.createSync("@pi-session-close-annotation-precheck-race-");
 		const storage = new PausingDeleteStorage();
-		const session = SessionManager.create(tempDir.path(), tempDir.path(), storage);
-		session.appendModelChange("hai-proxy/anthropic--claude-4.6-opus");
-		await session.saveDraft("materialize session");
-		await session.saveDraft("");
-
-		const sessionFile = session.getSessionFile();
-		const artifactsDir = session.getArtifactsDir();
-		if (!sessionFile || !artifactsDir) throw new Error("Expected persistent session");
-		const sessionId = session.getSessionId();
-		const source: AnnotationDraftSource = {
-			kind: "text",
-			cwd: tempDir.path(),
-			source: { id: "prompt", kind: "prompt", label: "Prompt", text: "interleaving", provenance: { kind: "prompt" } },
-		};
-		const record: AnnotationDraftRecord = {
-			version: 1,
-			sessionId,
-			key: annotationDraftKey(source),
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			source,
-			state: { kind: "text", annotations: [], editor: { sourceIndex: -1, scope: "text", text: "published between checks" } },
-		};
-		const store = await AnnotationDraftStore.open(artifactsDir, sessionId);
+		const { session, sessionFile, artifactsDir, sessionId, record, store } = await createAnnotationSession(
+			tempDir.path(),
+			storage,
+		);
 		await store.claim(record.key);
 		const closing = session.close();
 		await storage.entered;
@@ -359,34 +342,11 @@ describe("SessionManager close() drops empty metadata-only sessions", () => {
 
 	it("rematerializes a deleted owner before publishing a checkpoint", async () => {
 		using tempDir = TempDir.createSync("@pi-session-annotation-owner-recreate-");
-		const session = SessionManager.create(tempDir.path(), tempDir.path());
-		session.appendModelChange("hai-proxy/anthropic--claude-4.6-opus");
-		await session.saveDraft("materialize session");
-		await session.saveDraft("");
-
-		const sessionFile = session.getSessionFile();
-		const artifactsDir = session.getArtifactsDir();
-		if (!sessionFile || !artifactsDir) throw new Error("Expected persistent session");
-		const sessionId = session.getSessionId();
-		const source: AnnotationDraftSource = {
-			kind: "text",
-			cwd: tempDir.path(),
-			source: { id: "prompt", kind: "prompt", label: "Prompt", text: "recreated owner", provenance: { kind: "prompt" } },
-		};
-		const record: AnnotationDraftRecord = {
-			version: 1,
-			sessionId,
-			key: annotationDraftKey(source),
-			createdAt: Date.now(),
-			updatedAt: Date.now(),
-			source,
-			state: { kind: "text", annotations: [], editor: { sourceIndex: -1, scope: "text", text: "survive cleanup" } },
-		};
-
+		const { session, sessionFile, artifactsDir, sessionId, record, store } = await createAnnotationSession(
+			tempDir.path(),
+		);
 		expect(await new FileSessionStorage().deleteSessionWithArtifactsIf(sessionFile, () => true)).toBe(true);
-		const store = await AnnotationDraftStore.open(artifactsDir, sessionId);
 		await store.claim(record.key);
-		await session.ensureOnDisk();
 		store.checkpoint(record);
 		await store.flush();
 		await store.dispose();

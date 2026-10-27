@@ -5,7 +5,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import {
 	AnnotationDraftStore,
 	annotationDraftKey,
-	hasAnnotationDrafts,
+	hasAnnotationDraftsSync,
 	type AnnotationDraftRecord,
 	type AnnotationDraftSource,
 } from "../../../src/extensibility/custom-commands/bundled/annotate/draft-store";
@@ -18,7 +18,11 @@ function textSource(text: string, id = "prompt"): AnnotationDraftSource {
 	};
 }
 
-function record(sessionId: string, source: AnnotationDraftSource, state?: AnnotationDraftRecord["state"]): AnnotationDraftRecord {
+function record(
+	sessionId: string,
+	source: AnnotationDraftSource,
+	state?: AnnotationDraftRecord["state"],
+): AnnotationDraftRecord {
 	const now = Date.now();
 	return {
 		version: 1,
@@ -27,7 +31,11 @@ function record(sessionId: string, source: AnnotationDraftSource, state?: Annota
 		createdAt: now,
 		updatedAt: now,
 		source,
-		state: state ?? { kind: "text", annotations: [], editor: { sourceIndex: -1, scope: "text", text: "unfinished note" } },
+		state: state ?? {
+			kind: "text",
+			annotations: [],
+			editor: { sourceIndex: -1, scope: "text", text: "unfinished note" },
+		},
 	};
 }
 
@@ -90,7 +98,7 @@ describe("AnnotationDraftStore", () => {
 		const invalidKey = "a".repeat(64);
 		const invalidDirectory = path.join(tempDir.path(), "annotation-drafts", "sessions", "session-a");
 		await fs.writeFile(path.join(invalidDirectory, `draft-${invalidKey}.json`), "not-json");
-		expect(await hasAnnotationDrafts(tempDir.path(), "session-a")).toBe(true);
+		expect(hasAnnotationDraftsSync(tempDir.path(), "session-a")).toBe(true);
 		const store = await AnnotationDraftStore.open(tempDir.path(), "session-a");
 		expect(store.list()).toHaveLength(1);
 		expect(store.listInvalid().map(item => item.key)).toEqual([invalidKey]);
@@ -98,7 +106,9 @@ describe("AnnotationDraftStore", () => {
 		await store.discard(invalidKey);
 		expect(store.listInvalid()).toHaveLength(0);
 		expect(store.list()).toHaveLength(1);
-		expect(await fs.stat(path.join(invalidDirectory, `draft-${invalidKey}.json`)).catch(() => undefined)).toBeUndefined();
+		expect(
+			await fs.stat(path.join(invalidDirectory, `draft-${invalidKey}.json`)).catch(() => undefined),
+		).toBeUndefined();
 		await store.dispose();
 	});
 
@@ -113,9 +123,9 @@ describe("AnnotationDraftStore", () => {
 		const revision = store.revision(saved.key);
 		expect(revision).toBeDefined();
 		expect(await store.remove(saved.key, "0".repeat(64))).toBe(false);
-		expect(await hasAnnotationDrafts(tempDir.path(), "session-a")).toBe(true);
+		expect(hasAnnotationDraftsSync(tempDir.path(), "session-a")).toBe(true);
 		expect(await store.remove(saved.key, revision!)).toBe(true);
-		expect(await hasAnnotationDrafts(tempDir.path(), "session-a")).toBe(false);
+		expect(hasAnnotationDraftsSync(tempDir.path(), "session-a")).toBe(false);
 		await store.dispose();
 	});
 	it("validates CRLF and bare-CR line anchors using overlay line splitting", async () => {

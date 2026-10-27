@@ -4,9 +4,11 @@ import type {
 	CustomCommandContext,
 	CustomCommandResult,
 } from "../../../../extensibility/custom-commands/types";
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import { type AutocompleteItem, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
+import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
 import type { TextReviewSource } from "@oh-my-pi/pi-tui/overlays/annotation-types";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import {
 	extractReviewPrRefFromArgs,
 	liveCommandCwd,
@@ -24,12 +26,13 @@ import {
 	type ReviewTargetUI,
 } from "../review/target";
 import { acquireFileTextReviewSource, createPromptTextReviewSource } from "./direct-source";
+import { AnnotationDraftStore, type AnnotationDraftRecord } from "./draft-store";
 import {
-	AnnotationDraftStore,
-	type AnnotationDraftRecord,
-	type InvalidAnnotationDraft,
-} from "./draft-store";
-import { selectAnnotationSourceKind, selectSessionTextReviewSource, type AnnotationSourceChoice, type AnnotationSourceKind } from "./text-source";
+	selectAnnotationSourceKind,
+	selectSessionTextReviewSource,
+	type AnnotationSourceChoice,
+	type AnnotationSourceKind,
+} from "./text-source";
 import {
 	buildTextReviewPrompt,
 	normalizeTextReviewContextSummary,
@@ -54,7 +57,12 @@ interface CodeReviewDependencies {
 		ctx: CustomCommandContext,
 		ref: ReviewPrRef,
 	): Promise<ResolvedReviewTarget | undefined>;
-	showCodeReviewOverlay(ctx: CustomCommandContext, target: ResolvedReviewTarget, focus?: string, draft?: AnnotationDraftRecord): Promise<CodeAnnotationRun | undefined>;
+	showCodeReviewOverlay(
+		ctx: CustomCommandContext,
+		target: ResolvedReviewTarget,
+		focus?: string,
+		draft?: AnnotationDraftRecord,
+	): Promise<CodeAnnotationRun | undefined>;
 }
 
 interface TextAnnotationDependencies {
@@ -62,7 +70,11 @@ interface TextAnnotationDependencies {
 	selectSessionTextReviewSource: typeof selectSessionTextReviewSource;
 	acquireFileTextReviewSource: typeof acquireFileTextReviewSource;
 	createPromptTextReviewSource: typeof createPromptTextReviewSource;
-	showTextReviewOverlay: (ctx: CustomCommandContext, source: TextReviewSource, draft?: AnnotationDraftRecord) => Promise<TextAnnotationRun | undefined>;
+	showTextReviewOverlay: (
+		ctx: CustomCommandContext,
+		source: TextReviewSource,
+		draft?: AnnotationDraftRecord,
+	) => Promise<TextAnnotationRun | undefined>;
 	generateTextReviewContextSummary: typeof generateTextReviewContextSummary;
 }
 
@@ -185,48 +197,47 @@ async function getAnnotateArgumentCompletions(
 	return items.length > 0 ? items : null;
 }
 
-function displaySafe(value: string, limit = 56): string {
-	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, limit);
-}
-
 function draftLabel(draft: AnnotationDraftRecord): string {
 	const source = draft.source;
 	const kind = source.kind === "diff" ? "Diff" : source.source.kind;
-	const label = source.kind === "diff" ? source.target.mode : source.source.label;
+	const label = truncateToWidth(
+		sanitizeStatusText(source.kind === "diff" ? source.target.mode : source.source.label),
+		56,
+	);
+	const cwd = truncateToWidth(sanitizeStatusText(shortenPath(source.cwd)), 40);
 	const state = draft.state;
 	const noteCount = state.annotations.length;
-	const unfinished = !!state.editor?.text ? ", unfinished note" : "";
+	const unfinished = state.editor?.text ? ", unfinished note" : "";
 	const edited = state.kind === "text" && state.editedText !== undefined ? ", edited source" : "";
-	return `${kind}: ${displaySafe(label)} — ${displaySafe(source.cwd, 40)} — ${new Date(draft.updatedAt).toLocaleString()} — ${noteCount} note${noteCount === 1 ? "" : "s"}${unfinished}${edited} (${draft.key.slice(0, 8)})`;
-}
-
-function invalidDraftLabel(draft: InvalidAnnotationDraft): string {
-	return `Unreadable draft — ${draft.filename} (${draft.key.slice(0, 8)})`;
-}
-
-async function selectDraft(
-	ctx: CustomCommandContext,
-	store: AnnotationDraftStore,
-	includeUnreadable: boolean,
-): Promise<AnnotationDraftRecord | InvalidAnnotationDraft | undefined> {
-	const options = [
-		...store.list().map(draft => ({ label: draftLabel(draft), draft })),
-		...(includeUnreadable ? store.listInvalid().map(draft => ({ label: invalidDraftLabel(draft), draft })) : []),
-	];
-	if (options.length === 0) return undefined;
-	const selected = await ctx.ui.select("Select an annotation draft", options.map(option => option.label));
-	return options.find(option => option.label === selected)?.draft;
+	return `${kind}: ${label} — ${cwd} — ${new Date(draft.updatedAt).toLocaleString()} — ${noteCount} note${noteCount === 1 ? "" : "s"}${unfinished}${edited} (${draft.key.slice(0, 8)})`;
 }
 
 async function manageDraftChoice(
 	ctx: CustomCommandContext,
 	choice: Extract<AnnotationSourceChoice, "resume-draft" | "discard-draft">,
 ): Promise<AnnotationDraftRecord | undefined> {
-	const store = await AnnotationDraftStore.open(ctx.sessionManager.getArtifactsDir(), ctx.sessionManager.getSessionId());
+	const store = await AnnotationDraftStore.open(
+		ctx.sessionManager.getArtifactsDir(),
+		ctx.sessionManager.getSessionId(),
+	);
 	try {
-		const selected = await selectDraft(ctx, store, choice === "discard-draft");
+		const options = [
+			...store.list().map(draft => ({ label: draftLabel(draft), draft })),
+			...(choice === "discard-draft"
+				? store.listInvalid().map(draft => ({
+						label: `Unreadable draft — ${draft.filename} (${draft.key.slice(0, 8)})`,
+						draft,
+					}))
+				: []),
+		];
+		if (!options.length) return undefined;
+		const label = await ctx.ui.select(
+			"Select an annotation draft",
+			options.map(option => option.label),
+		);
+		const selected = options.find(option => option.label === label)?.draft;
 		if (!selected) return undefined;
-		if (choice === "resume-draft") return selected as AnnotationDraftRecord;
+		if (choice === "resume-draft") return "source" in selected ? selected : undefined;
 		const confirm = await ctx.ui.select("Discard this annotation draft?", ["Keep draft", "Discard draft"]);
 		if (confirm !== "Discard draft") return undefined;
 		await store.discard(selected.key);
@@ -237,7 +248,6 @@ async function manageDraftChoice(
 	}
 }
 
-
 async function finishCodeReview(
 	ctx: CustomCommandContext,
 	target: ResolvedReviewTarget,
@@ -246,7 +256,10 @@ async function finishCodeReview(
 	draft?: AnnotationDraftRecord,
 ): Promise<CustomCommandResult> {
 	const issue = getReviewTargetIssue(target);
-	if (issue) { ctx.ui.notify(issue, "warning"); return undefined; }
+	if (issue) {
+		ctx.ui.notify(issue, "warning");
+		return undefined;
+	}
 	const run = await showOverlay(ctx, target, focus, draft);
 	if (!run) return undefined;
 	const review = run.result.action === "review";
@@ -305,7 +318,10 @@ export async function runAnnotateCommand(
 	let source: TextReviewSource | undefined;
 	let draft: AnnotationDraftRecord | undefined;
 	if (trimmed.length === 0) {
-		const listing = await AnnotationDraftStore.open(ctx.sessionManager.getArtifactsDir(), ctx.sessionManager.getSessionId());
+		const listing = await AnnotationDraftStore.open(
+			ctx.sessionManager.getArtifactsDir(),
+			ctx.sessionManager.getSessionId(),
+		);
 		const hasDrafts = listing.list().length > 0 || listing.listInvalid().length > 0;
 		await listing.dispose();
 		kind = await textDependencies.selectAnnotationSourceKind(ctx.ui, { hasDrafts });

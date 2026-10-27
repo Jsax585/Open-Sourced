@@ -137,7 +137,7 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
-import type { Settings } from "../config/settings";
+import { type Settings, withActiveSettings } from "../config/settings";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { getEditStore } from "../edit/store";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
@@ -8177,12 +8177,9 @@ export class AgentSession implements SettingsScope {
 		}
 
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
-		let customCommandAcknowledged = false;
 		const acknowledgeCustomCommand = async () => {
-			if (!customCommandSubmitted || customCommandAcknowledged) return;
-			customCommandAcknowledged = true;
 			try {
-				await customCommandSubmitted();
+				await customCommandSubmitted?.();
 			} catch (error) {
 				logger.error("Custom command submission callback failed", { error });
 			}
@@ -9158,7 +9155,8 @@ export class AgentSession implements SettingsScope {
 
 		try {
 			const args = parseCommandArgs(argsString);
-			const result = await loaded.command.execute(args, ctx, argsString);
+			// Scoped command lookups must honor this session's settings cache policy.
+			const result = await withActiveSettings(this.settings, () => loaded.command.execute(args, ctx, argsString));
 			return result ?? "";
 		} catch (err) {
 			// Emit error via extension runner

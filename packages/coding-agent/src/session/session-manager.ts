@@ -27,7 +27,7 @@ import {
 import { isTaskToolDetails, type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { moveFileAcrossDevices } from "../utils/atomic-file";
-import { hasAnnotationDrafts, hasAnnotationDraftsSync } from "../extensibility/custom-commands/bundled/annotate/draft-store";
+import { hasAnnotationDraftsSync } from "../extensibility/custom-commands/bundled/annotate/draft-store";
 import { ArtifactManager } from "./artifacts";
 import { type BlobPutOptions, type BlobPutResult, BlobStore, lazyImageDataSync } from "./blob-store";
 import type { CompactionMethod } from "./compaction-methods";
@@ -2912,19 +2912,6 @@ export class SessionManager {
 		const draftPath = this.#draftPath();
 		if (draftPath && this.#storage.existsSync(draftPath)) return;
 		const artifactsDir = this.getArtifactsDir();
-		if (artifactsDir) {
-			try {
-				if (await hasAnnotationDrafts(artifactsDir, this.#header.id)) return;
-			} catch (err) {
-				if (!isEnoent(err)) {
-					logger.warn("Failed to inspect annotation drafts before dropping empty session", {
-						sessionFile,
-						error: String(err),
-					});
-					return;
-				}
-			}
-		}
 		if (!this.#entries.every(isDraftOnlyMetadataEntry)) {
 			await this.#clearDraftOnlySessionMarker();
 			this.#draftOnlySessionCleanupArmed = false;

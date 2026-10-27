@@ -257,30 +257,18 @@ export interface SessionStorage {
 	drain(): Promise<void>;
 }
 
-function annotationArtifactGatePath(sessionId: string): string {
-	const hash = new Bun.CryptoHasher("sha256").update(sessionId).digest("hex");
-	return path.join(sessionOwnersDir(), `annotation-${hash}`);
-}
-
 const activeAnnotationArtifactGates = new Map<string, { lock: FileLockHandle; holders: number }>();
 
 /** Held while annotation drafts are active so close-time GC cannot remove their owner. */
-export function acquireSessionArtifactGate(sessionId: string): Promise<FileLockHandle> {
-	const active = activeAnnotationArtifactGates.get(sessionId);
-	if (active) {
-		active.holders++;
-		return Promise.resolve(sharedAnnotationArtifactGate(sessionId, active));
+export async function acquireSessionArtifactGate(sessionId: string): Promise<FileLockHandle> {
+	let gate = activeAnnotationArtifactGates.get(sessionId);
+	if (!gate) {
+		const lock = tryAcquireSessionArtifactGate(sessionId);
+		if (!lock) throw new Error("Another annotation session is active for this session");
+		gate = { lock, holders: 0 };
+		activeAnnotationArtifactGates.set(sessionId, gate);
 	}
-	const lockPath = annotationArtifactGatePath(sessionId);
-	if (process.platform !== "linux" && process.platform !== "win32") fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-	const lock = tryAcquireFileLock(lockPath);
-	if (!lock) return Promise.reject(new Error("Another annotation session is active for this session"));
-	const gate = { lock, holders: 1 };
-	activeAnnotationArtifactGates.set(sessionId, gate);
-	return Promise.resolve(sharedAnnotationArtifactGate(sessionId, gate));
-}
-
-function sharedAnnotationArtifactGate(sessionId: string, gate: { lock: FileLockHandle; holders: number }): FileLockHandle {
+	gate.holders++;
 	let released = false;
 	return {
 		release() {
@@ -294,12 +282,12 @@ function sharedAnnotationArtifactGate(sessionId: string, gate: { lock: FileLockH
 }
 
 function tryAcquireSessionArtifactGate(sessionId: string): FileLockHandle | null {
-	const lockPath = annotationArtifactGatePath(sessionId);
-	if (process.platform !== "linux" && process.platform !== "win32") fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+	const hash = new Bun.CryptoHasher("sha256").update(sessionId).digest("hex");
+	const lockPath = path.join(sessionOwnersDir(), `annotation-${hash}`);
+	if (process.platform !== "linux" && process.platform !== "win32")
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
 	return tryAcquireFileLock(lockPath);
 }
-
-
 // FinalizationRegistry to clean up leaked file descriptors
 const writerRegistry = new FinalizationRegistry<number>(fd => {
 	try {
