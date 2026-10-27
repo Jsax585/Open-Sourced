@@ -92,9 +92,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		});
 		const root = await resolveSearchRoot(filesystem, rawScopeInput, cwd);
 		const scopePath =
-			root.path === path.resolve(cwd)
-				? undefined
-				: formatPathRelativeToCwd(root.path, cwd, { trailingSlash: root.type === "directory" });
+			root.type === "multiple"
+				? root.scopePath
+				: root.path === path.resolve(cwd)
+					? undefined
+					: formatPathRelativeToCwd(root.path, cwd, { trailingSlash: root.type === "directory" });
 		const registry = this.session.modelRegistry;
 		if (!registry) throw new ToolError("find has no model registry to resolve a judge from");
 		const judge = resolveJudge({
@@ -178,6 +180,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			`listed ${stats.listed} · judged ${stats.judged} · read ${stats.filesRead} files (${formatBytes(stats.fileBytes)}) · ${stats.requests} requests${unanswered} · ${formatNumber(stats.inputTokens)} tokens · $${stats.cost.toFixed(4)} · ${formatDuration(elapsedMs)} wall / ${formatDuration(stats.apiMs)} api`,
 		);
 		if (stats.failures.length > 0) out.push("failures:", ...stats.failures.map(failure => `  ${failure}`));
+		if (root.type === "multiple" && root.missingPaths.length > 0) {
+			out.push(`Skipped missing paths: ${root.missingPaths.join(", ")}`);
+		}
 		const builder = toolResult(details).text(out.join("\n"));
 		if (coverage === "unavailable") builder.error();
 		else if (hits.length === 0) builder.useless();

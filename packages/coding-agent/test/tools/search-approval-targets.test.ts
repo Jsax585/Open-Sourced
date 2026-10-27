@@ -18,6 +18,7 @@ import { approvalTargetKey, approvalTreeSearchKey } from "@oh-my-pi/pi-coding-ag
 import { AstGrepTool } from "@oh-my-pi/pi-coding-agent/tools/ast-grep";
 import { GlobTool } from "@oh-my-pi/pi-coding-agent/tools/glob";
 import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
+import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/jfind";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -77,6 +78,7 @@ describe("search tool approval cache targets", () => {
 	it("splits a semicolon-delimited root list the way execution does", () => {
 		const grep = new GrepTool(createToolSession(cwd));
 		const glob = new GlobTool(createToolSession(cwd));
+		const find = new FindTool(createToolSession(cwd));
 		const srcKey = approvalTreeSearchKey(approvalDirectoryKey(srcDir));
 		const otherKey = approvalTreeSearchKey(approvalDirectoryKey(otherDir));
 
@@ -84,8 +86,10 @@ describe("search tool approval cache targets", () => {
 		// leave the search auto-allowed, so both roots are keyed.
 		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src;other" })).toEqual([srcKey, otherKey]);
 		expect(glob.approvalCacheTargets?.({ path: "src/**/*.txt;other/**/*.txt" })).toEqual([srcKey, otherKey]);
+		expect(find.approvalCacheTargets?.({ path: "src;other" })).toEqual([srcKey, otherKey]);
 		// A root that exists literally keeps its own key beside the split parts.
 		expect(grep.approvalCacheTargets?.({ pattern: "hello", path: "src;missing" })).toEqual([srcKey]);
+		expect(find.approvalCacheTargets?.({ path: "src;missing" })).toEqual([srcKey]);
 	});
 
 	it("reports a file root as the file key a read of it would mint", () => {

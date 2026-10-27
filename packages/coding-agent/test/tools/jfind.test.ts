@@ -456,6 +456,130 @@ describe("jfind cascade", () => {
 		}
 	});
 
+	it("searches mixed scopes once and reports missing targets without searching unrelated files", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-multi-"));
+		try {
+			for (const file of ["src/token.ts", "scripts/check.ts", "tests/token.test.ts", "outside.ts"]) {
+				await Bun.write(path.join(dir, file), "export function token() { return 1; }\n");
+			}
+			const judge = new FakeJudge(() => 0.9);
+			vi.spyOn(ChainJudge.prototype, "judge").mockImplementation(request => judge.judge(request));
+			const tool = new FindTool({
+				cwd: dir,
+				hasUI: false,
+				getSessionFile: () => null,
+				getSessionSpawns: () => "*",
+				settings: Settings.isolated({ "find.enabled": "on" }),
+				modelRegistry: {} as never,
+			});
+			const result = await tool.execute("multi", {
+				query: "token implementation",
+				grep_keywords: ["token"],
+				path: "src; scripts/check.ts; tests; src/token.ts; missing",
+			});
+			expect(result.isError).not.toBe(true);
+			expect(result.details?.hits.map(hit => hit.rel).sort()).toEqual([
+				"scripts/check.ts",
+				"src/token.ts",
+				"tests/token.test.ts",
+			]);
+			expect(result.details?.stats).toMatchObject({ listed: 3, judged: 3, filesRead: 3 });
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(text).toContain("Skipped missing paths: missing");
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("keeps an existing semicolon filename literal when the separate targets also exist", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-literal-"));
+		try {
+			for (const file of ["src;tests", "src", "tests"]) {
+				await Bun.write(path.join(dir, file), "export function token() { return 1; }\n");
+			}
+			const filesystem = urlFs(dir);
+			const root = await resolveSearchRoot(filesystem, "src;tests", dir);
+			const result = await runCascade({
+				root,
+				filesystem,
+				query: "token implementation",
+				extraKeywords: [],
+				judge: new FakeJudge(() => 0.9),
+				includeHidden: false,
+			});
+			expect(result.hits.map(hit => resolveSearchResultPath(root.path, hit.rel))).toEqual([
+				path.join(dir, "src;tests"),
+			]);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("shares the candidate and file budgets across roots instead of multiplying judgment work", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-budget-"));
+		try {
+			for (const folder of ["src", "scripts", "tests"]) {
+				for (let i = 0; i < 60; i++) {
+					await Bun.write(path.join(dir, folder, `token${i}.ts`), "export const token = 1;\n");
+				}
+			}
+			const filesystem = urlFs(dir);
+			const root = await resolveSearchRoot(filesystem, "src; scripts; tests", dir);
+			const judge = new FakeJudge(() => 0.9);
+			const result = await runCascade({
+				root,
+				filesystem,
+				query: "token implementation",
+				extraKeywords: [],
+				judge,
+				includeHidden: false,
+			});
+			expect(result.stats).toMatchObject({ listed: 180, judged: 128, filesRead: 20 });
+			expect(result.hits).toHaveLength(20);
+			expect(judge.peak).toBeLessThanOrEqual(16);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("rejects all-missing scopes and selectors in a scope list before any judgment", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-missing-"));
+		try {
+			await Bun.write(path.join(dir, "token.ts"), "export const token = 1;\n");
+			const filesystem = urlFs(dir);
+			await expect(resolveSearchRoot(filesystem, "missing; also-missing", dir)).rejects.toThrow(
+				"Path not found: missing, also-missing",
+			);
+			await expect(resolveSearchRoot(filesystem, "token.ts; omp://tools/read.md:1-2", dir)).rejects.toThrow(
+				"line-range selectors are not supported",
+			);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("combines a doc URL and a host file without losing either result's readable path", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-mixed-url-"));
+		try {
+			await Bun.write(path.join(dir, "token.ts"), "export function readToken() { return 1; }\n");
+			const filesystem = urlFs(dir);
+			const root = await resolveSearchRoot(filesystem, "omp://tools/read.md; token.ts", dir);
+			const result = await runCascade({
+				root,
+				filesystem,
+				query: "reading content",
+				extraKeywords: [],
+				judge: new FakeJudge(() => 0.9),
+				includeHidden: false,
+			});
+			expect(result.hits.map(hit => resolveSearchResultPath(root.path, hit.rel)).sort()).toEqual(
+				[path.join(dir, "token.ts"), "omp://tools/read.md"].sort(),
+			);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
 	it("stops promptly when aborted mid-wave", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-cascade-abort-"));
 		try {

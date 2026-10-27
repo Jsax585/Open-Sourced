@@ -16,13 +16,14 @@ import * as path from "node:path";
 import type { Judge, JudgmentResult, NoulQuestion } from "@oh-my-pi/pi-ai";
 import type { FindCoverage, FindHit, FindStats } from "@oh-my-pi/pi-tui/tools/find";
 import type { InternalUrlFilesystem } from "../../internal-urls/url-filesystem";
+import { relativeSearchResultPath } from "../path-utils";
 import { throwIfAborted } from "../tool-errors";
-import { fileScore, grepIndex, idf } from "./lexical";
+import { fileScore, grepIndex, type GrepIndex, idf } from "./lexical";
 import { keywords as deriveKeywords } from "./keywords";
 import { type HeatRange, mergeHeat, type Passage, plainContent, selectWindows, sketch, windows } from "./passages";
 import { nameBatch, passageBatch, passageKey, entryKey, type Request, type SketchCard, sketchBatch } from "./questions";
 import { lines, readText, ReadTextError, takeChars } from "./text";
-import { type FileEntry, listFiles, type SearchRoot } from "./tree";
+import { type FileEntry, listFiles, mergeFileEntries, type SearchRoot } from "./tree";
 
 /** Requests in flight per dispatched phase. */
 const PARALLEL = 16;
@@ -107,6 +108,42 @@ function compareRel(a: FileEntry, b: FileEntry): number {
 	return a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0;
 }
 
+/** Scan only requested targets, merging overlaps before any judgment is spent. */
+async function scanSearchRoot(
+	root: SearchRoot,
+	keywords: readonly string[],
+	options: Pick<CascadeOptions, "filesystem" | "includeHidden" | "signal">,
+): Promise<{ entries: FileEntry[]; index: GrepIndex }> {
+	const { filesystem, includeHidden, signal } = options;
+	if (root.type !== "multiple") {
+		const native = filesystem.shellFilesystem();
+		const [entries, index] = await Promise.all([
+			listFiles(root, { includeHidden, filesystem: native, signal }),
+			grepIndex(root.path, keywords, { includeHidden, filesystem: native, signal, timeoutMs: SCAN_TIMEOUT_MS }),
+		]);
+		return { entries, index };
+	}
+	const batches: FileEntry[][] = [];
+	const index: GrepIndex = { keywords: [...keywords], perFileKw: new Map(), filesScanned: 0 };
+	// Keep native scans bounded; judgment concurrency and all candidate limits
+	// apply once to the merged files rather than independently to every target.
+	for (const target of root.roots) {
+		throwIfAborted(signal);
+		const scan = await scanSearchRoot(target, keywords, options);
+		batches.push(scan.entries);
+		for (const entry of scan.entries) {
+			const rel = relativeSearchResultPath(root.path, entry.path);
+			const counts = scan.index.perFileKw.get(entry.rel);
+			if (counts && !index.perFileKw.has(rel)) index.perFileKw.set(rel, counts);
+		}
+	}
+	// Use unique eligible files for multi-scope IDF so an overlapping target
+	// cannot inflate a keyword's rarity by counting the same file twice.
+	const entries = mergeFileEntries(root.path, batches);
+	index.filesScanned = entries.length;
+	return { entries, index };
+}
+
 class Cascade {
 	readonly #options: CascadeOptions;
 	readonly stats: FindStats = {
@@ -178,11 +215,7 @@ class Cascade {
 		const keywords = deriveKeywords(query, this.#options.extraKeywords);
 
 		onProgress?.("lexical scan");
-		const native = filesystem.shellFilesystem();
-		const [entries, index] = await Promise.all([
-			listFiles(root, { includeHidden, filesystem: native, signal }),
-			grepIndex(root.path, keywords, { includeHidden, filesystem: native, signal, timeoutMs: SCAN_TIMEOUT_MS }),
-		]);
+		const { entries, index } = await scanSearchRoot(root, keywords, { filesystem, includeHidden, signal });
 		this.stats.listed = entries.length;
 		const weights = idf(index);
 		const noCounts = Array.from({ length: keywords.length }, () => 0);

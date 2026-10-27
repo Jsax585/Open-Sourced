@@ -11,7 +11,15 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { buildPathTree, type PathTreeInput, walkPathTree } from "@oh-my-pi/pi-utils";
 import { InternalUrlRouter } from "../../internal-urls/router";
 import { type InternalUrlFilesystem, type UrlFileStat, UrlFsError } from "../../internal-urls/url-filesystem";
-import { resolveSearchBase, resolveSearchResultPath } from "../path-utils";
+import {
+	expandDelimitedPathEntries,
+	formatPathRelativeToCwd,
+	partitionExistingPaths,
+	relativeSearchResultPath,
+	resolveSearchBase,
+	resolveSearchResultPath,
+	splitMixedUrlPathList,
+} from "../path-utils";
 
 /** One eligible file under the search root. */
 export interface FileEntry {
@@ -22,12 +30,18 @@ export interface FileEntry {
 	size: number;
 }
 
-/** Validated `find` scope: a directory to walk, or one file searched alone. */
-export type SearchRoot = { path: string; type: "directory" } | { path: string; type: "file"; size: number };
+/** One directory to walk, or one file searched alone. */
+export type SearchTarget = { path: string; type: "directory" } | { path: string; type: "file"; size: number };
+
+/** Validated scope; multiple targets share a cwd-relative result namespace and search budget. */
+export type SearchRoot =
+	| SearchTarget
+	| { path: string; type: "multiple"; roots: SearchTarget[]; scopePath: string; missingPaths: string[] };
 
 /**
- * Resolve a `find` scope (empty = `cwd`) to an existing directory or file,
- * host path or internal URL alike, through `filesystem`.
+ * Resolve a `find` scope (empty = `cwd`), including delimited target lists.
+ * Literal paths win over delimiters, as in the sibling search tools. Missing
+ * targets are skipped only when another target exists; access errors propagate.
  * @throws {ToolError} line-range selector, missing path, or neither file nor directory.
  */
 export async function resolveSearchRoot(
@@ -35,6 +49,36 @@ export async function resolveSearchRoot(
 	input: string,
 	cwd: string,
 ): Promise<SearchRoot> {
+	const router = InternalUrlRouter.instance();
+	const inputs =
+		(await splitMixedUrlPathList(input, cwd, value => router.canHandle(router.normalize(value)))) ??
+		(await expandDelimitedPathEntries([input], cwd));
+	if (inputs.length === 1) return resolveSearchTarget(filesystem, inputs[0]!, cwd);
+	for (const entry of inputs) {
+		if (router.split(entry).sel !== undefined) {
+			throw new ToolError(`find searches whole files; line-range selectors are not supported: ${entry}`);
+		}
+	}
+	const { valid, missing } = await partitionExistingPaths(inputs, cwd, basePath => ({ basePath }), filesystem);
+	if (valid.length === 0) throw new ToolError(`Path not found: ${missing.join(", ")}`);
+	const targets = await Promise.all(valid.map(entry => resolveSearchTarget(filesystem, entry, cwd)));
+	const roots = [...new Map(targets.map(target => [target.path, target])).values()];
+	return {
+		path: path.resolve(cwd),
+		type: "multiple",
+		roots,
+		scopePath: roots
+			.map(root => formatPathRelativeToCwd(root.path, cwd, { trailingSlash: root.type === "directory" }))
+			.join(", "),
+		missingPaths: missing,
+	};
+}
+
+async function resolveSearchTarget(
+	filesystem: InternalUrlFilesystem,
+	input: string,
+	cwd: string,
+): Promise<SearchTarget> {
 	if (input.length === 0) return { path: path.resolve(cwd), type: "directory" };
 	// `find` judges whole files, so a trailing `:N-M` would silently be ignored.
 	if (InternalUrlRouter.instance().split(input).sel !== undefined) {
@@ -252,6 +296,11 @@ export interface ListFilesOptions {
  * being named explicitly admits it even when hidden.
  */
 export async function listFiles(root: SearchRoot, options: ListFilesOptions): Promise<FileEntry[]> {
+	if (root.type === "multiple") {
+		const batches: FileEntry[][] = [];
+		for (const target of root.roots) batches.push(await listFiles(target, options));
+		return mergeFileEntries(root.path, batches);
+	}
 	if (root.type === "file") {
 		return eligibleFile(path.basename(root.path), root.size, true)
 			? [{ path: root.path, rel: root.path, size: root.size }]
@@ -279,6 +328,18 @@ export async function listFiles(root: SearchRoot, options: ListFilesOptions): Pr
 	}
 	entries.sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 	return entries;
+}
+
+/** Merge target-relative listings into one namespace, retaining each file once. */
+export function mergeFileEntries(base: string, batches: readonly FileEntry[][]): FileEntry[] {
+	const files = new Map<string, FileEntry>();
+	for (const entries of batches) {
+		for (const entry of entries) {
+			if (!files.has(entry.path))
+				files.set(entry.path, { ...entry, rel: relativeSearchResultPath(base, entry.path) });
+		}
+	}
+	return [...files.values()].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 }
 
 const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];

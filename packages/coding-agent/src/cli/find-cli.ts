@@ -94,6 +94,10 @@ export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 		console.error(chalk.red(`Error: ${error.message}`));
 		process.exit(1);
 	}
+	const scopePath = root.type === "multiple" ? root.scopePath : formatPathRelativeToCwd(root.path, cwd);
+	if (root.type === "multiple" && root.missingPaths.length > 0) {
+		log(`Skipped missing paths: ${root.missingPaths.join(", ")}`);
+	}
 
 	// Settings and extensions belong to the searched project; a file or URL
 	// scope has none of its own, so it keeps the caller's.
@@ -121,9 +125,23 @@ export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 		};
 		const elapsedMs = performance.now() - started;
 		if (cmd.json) {
-			console.log(JSON.stringify({ query: cmd.query, root: root.path, elapsedMs, ...result }, null, 2));
+			console.log(
+				JSON.stringify(
+					{
+						query: cmd.query,
+						root: root.path,
+						...(root.type === "multiple"
+							? { roots: root.roots.map(target => target.path), missingPaths: root.missingPaths }
+							: {}),
+						elapsedMs,
+						...result,
+					},
+					null,
+					2,
+				),
+			);
 		} else {
-			printReport(cmd, formatPathRelativeToCwd(root.path, cwd), result, elapsedMs);
+			printReport(cmd, scopePath, result, elapsedMs);
 		}
 		// `exitCode`, not `exit`: process.exit skips the finally below, and with it close().
 		if (result.coverage === "unavailable") process.exitCode = 1;

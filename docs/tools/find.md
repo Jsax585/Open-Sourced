@@ -26,7 +26,7 @@ The cascade follows the semantic-search strategy of [jegrep](https://github.com/
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Plain-language description of the behavior or concept to locate. Quoted phrases are matched whole in the lexical pass. Whitespace-only queries are rejected. |
 | `grep_keywords` | `string[]` | Yes | Extra identifiers or terms for the lexical pre-ranking, in addition to those derived from `query`. `[]` when nothing specific comes to mind. |
-| `path` | `string` | No | Directory or single file to search: a host path or an internal URL (`omp://` for all harness docs, `omp://<file>.md` for one doc, `skill://<name>`, `local://notes`). Paths resolve against the session cwd (`~` expanded, a bare `/` means the workspace root). Omitted or empty defaults to the cwd. A missing path is rejected. A trailing `:start-end` selector on a URL is rejected too — `find` judges whole files. |
+| `path` | `string` | No | Directory or file to search, or a semicolon-separated list (`src; scripts; tests`): host paths or internal URLs (`omp://` for all harness docs, `omp://<file>.md` for one doc, `skill://<name>`, `local://notes`). Existing literal paths take precedence over delimiter expansion, as in `grep` and `glob`. Paths resolve against the session cwd (`~` expanded, a bare `/` means the workspace root). Omitted or empty defaults to the cwd. Missing targets are skipped with a warning when another target exists; all-missing scopes fail. Trailing `:start-end` selectors are rejected — `find` judges whole files. |
 
 Internal URLs are searched in place: the native listing and lexical scan and the file reads go through the session's URL filesystem (`InternalUrlFilesystem`, at the call's approval tier: `read`, or `exec` when `path` names `ssh://`, as for `grep`), which is the same one the bash tool uses. Virtual documents need no local files, and file-backed schemes resolve to their host files. Hits under a URL scope are URLs (`omp://tools/read.md`). Open them directly with `read`, including with `:start-end` selectors (`read omp://tools/read.md:50-100`). Hidden files are excluded unless the file is named as the scope. Host hit paths are cwd-relative within the session cwd and absolute outside it, not relative to the searched directory, so `read` and hyperlinks resolve without knowing the scope.
 
@@ -54,6 +54,8 @@ Use `find` first when the implementing location is unknown. Use `grep` for known
 4. **Verification.** Sketches scoring ≥ 0.45 (at most 40) are verified as complete passages, grouped per file three to a request. Only verified passages produce ranges; positive ranges (≥ τ = 0.20) that touch or overlap are merged, keeping the max probability. A file is a hit when its best verified passage reaches τ.
 
 Each judged phase drains through a dispatcher with 16 requests in flight before the next begins, so the critical path is three dependent waves.
+
+Multiple scopes are scanned separately, without walking their unrequested common parent. Files are deduplicated before ranking, and all scopes share the same candidate, file, passage, concurrency, and timeout budgets. A multi-scope `omp find` uses the caller's settings; its JSON output also lists the resolved `roots` and any `missingPaths`.
 
 ## Side Effects
 - Filesystem: reads up to 20 candidate files (4 MB each); never writes.
