@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed auto-compaction firing far below the threshold on OpenAI-compatible chat-completions models when past reasoning is not replayed, including after switching thinking off or forcing a tool: the context estimate no longer counts thinking the request drops ([#15797](https://github.com/can1357/oh-my-pi/issues/15797), [#16498](https://github.com/can1357/oh-my-pi/pull/16498) by [@ghisguth](https://github.com/ghisguth))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
@@ -32,10 +36,6 @@
 - Fixed native compaction token estimates counting opaque encrypted-state bytes as conversation text ([#16904](https://github.com/can1357/oh-my-pi/pull/16904) by [@eggpeat](https://github.com/eggpeat))
 - Fixed split-turn compaction leaving `session.compacting` context out of the turn-prefix summary ([#16707](https://github.com/can1357/oh-my-pi/pull/16707) by [@integrITsolutions](https://github.com/integrITsolutions))
 - Fixed compaction failing as a whole, and discarding the completed summary, when the optional short summary fails or returns no answer; the compaction now completes without a short summary, and cancellation still cancels it ([#16942](https://github.com/can1357/oh-my-pi/pull/16942) by [@Mouriya-Emma](https://github.com/Mouriya-Emma))
-
-### Fixed
-
-- Fixed auto-compaction firing far below the threshold on OpenAI-compatible chat-completions models when past reasoning is not replayed, including after switching thinking off or forcing a tool: the context estimate no longer counts thinking the request drops ([#15797](https://github.com/can1357/oh-my-pi/issues/15797), [#16498](https://github.com/can1357/oh-my-pi/pull/16498) by [@ghisguth](https://github.com/ghisguth))
 
 ## [18.12.4] - 2026-10-20
 
