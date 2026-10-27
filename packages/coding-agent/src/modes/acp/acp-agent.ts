@@ -335,14 +335,27 @@ function steeringQueueFromMeta(meta: unknown): "steering" | "followUp" {
 	return "steering";
 }
 
-function isAsyncTaskUpdate(event: AgentSessionEvent): boolean {
-	if (event.type !== "tool_execution_update") return false;
-	const result: unknown = event.partialResult;
+function hasAsyncTaskDetails(result: unknown): boolean {
 	if (typeof result !== "object" || result === null || !("details" in result)) return false;
 	const details = result.details;
 	if (typeof details !== "object" || details === null || !("async" in details)) return false;
 	const async = details.async;
 	return typeof async === "object" && async !== null && "type" in async && async.type === "task";
+}
+
+// Routing identity is broader than off-turn ownership: starts have no result,
+// while updates and ends can also identify tasks through structured provenance.
+function isTaskFrame(event: AgentSessionEvent): boolean {
+	switch (event.type) {
+		case "tool_execution_start":
+			return event.toolName === "task";
+		case "tool_execution_update":
+			return event.toolName === "task" || hasAsyncTaskDetails(event.partialResult);
+		case "tool_execution_end":
+			return event.toolName === "task" || hasAsyncTaskDetails(event.result);
+		default:
+			return false;
+	}
 }
 
 type ManagedSessionRecord = {
@@ -1771,7 +1784,7 @@ export class AcpAgent implements Agent {
 		const promptTurn = record.promptTurn;
 		const taskOwner = promptTurn && !promptTurn.settled && !promptTurn.cancelRequested ? promptTurn : undefined;
 		let delivery: Promise<void>;
-		if (isAsyncTaskUpdate(event)) {
+		if (event.type === "tool_execution_update" && hasAsyncTaskDetails(event.partialResult)) {
 			// Sole owner of these frames, even during a prompt: changing prompt
 			// subscriptions cannot duplicate or drop a retained task callback.
 			delivery = this.#deliverTaskUpdate(record, event);
@@ -1840,7 +1853,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (isAsyncTaskUpdate(event)) return;
+		if (event.type === "tool_execution_update" && hasAsyncTaskDetails(event.partialResult)) return;
 		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;
@@ -1894,7 +1907,7 @@ export class AcpAgent implements Agent {
 
 	#mapSessionEventUpdates(record: ManagedSessionRecord, event: AgentSessionEvent): SessionNotification[] {
 		const imageDataCache = new Map<string, string>();
-		const sessionId = isAsyncTaskUpdate(event) ? record.registrationId : record.session.sessionId;
+		const sessionId = isTaskFrame(event) ? record.registrationId : record.session.sessionId;
 		return mapAgentSessionEventToAcpSessionUpdates(event, sessionId, {
 			getMessageId: message => this.#getLiveMessageId(record, message),
 			getMessageProgress: message => this.#getLiveMessageProgress(record, message),
