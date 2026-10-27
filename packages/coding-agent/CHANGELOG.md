@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Fixed `find` on a single named file: it now searches the whole file instead of a sketch of it, and reports an error instead of "no hits" when the file is too large to search in full ([#16027](https://github.com/can1357/oh-my-pi/issues/16027), [#16114](https://github.com/can1357/oh-my-pi/pull/16114) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed Esc on a busy session (and RPC `abort_and_restore_queue`) silently discarding queued messages from extensions and agents, such as `pi.sendMessage` steer/follow-up cards and agent-attributed prompts; they now appear in the transcript without restarting the run and reach the model with your next prompt ([#17161](https://github.com/can1357/oh-my-pi/pull/17161) by [@sjawhar](https://github.com/sjawhar))
 - Fixed a failed delivery of messages typed during compaction discarding other queued messages, such as an extension's prompt; only the messages that delivery queued are taken back, and messages anything else queued before, during or after it stay queued ([#17161](https://github.com/can1357/oh-my-pi/pull/17161) by [@sjawhar](https://github.com/sjawhar))
@@ -43,7 +44,6 @@
 
 ### Fixed
 - Turning off `async.widgets` mid-session now stops spec requests for already-shown job widgets and aborts any request in flight ([#17090](https://github.com/can1357/oh-my-pi/pull/17090) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-- Fixed `find` on a single named file: it now searches the whole file instead of a sketch of it, and reports an error instead of "no hits" when the file is too large to search in full ([#16027](https://github.com/can1357/oh-my-pi/issues/16027), [#16114](https://github.com/can1357/oh-my-pi/pull/16114) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed `learn` not hot-registering a newly minted or updated managed skill in the active session (`session.skills`, `skill://`, and the system prompt), and fixed `composeRecallQuery` dropping prior user turns when an earlier turn repeated the latest prompt ([#17113](https://github.com/can1357/oh-my-pi/pull/17113) by [@GTanger](https://github.com/GTanger))
 - Fixed `@path` file mentions skipping `.pdf`, `.docx`, `.xlsx`, `.pptx`, and `.epub` files as binary instead of converting them to Markdown with `markit` like CLI `@file` arguments and `read` ([#17193](https://github.com/can1357/oh-my-pi/pull/17193) by [@GTanger](https://github.com/GTanger))
