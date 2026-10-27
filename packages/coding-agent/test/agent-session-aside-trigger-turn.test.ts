@@ -674,4 +674,146 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(mock.calls).toHaveLength(0);
 		expect(persisted(session, "CARD_BEFORE_LOAD_ESC")).toBe(true);
 	});
+
+	it("stays parked for a monitored wake when a rolled-back transition and a pooled contract catch its turn in the work-pool wait", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_POOLED"), { deliverAs: "aside", triggerTurn: true });
+		});
+		const { session, mock } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		const switchPaused = Promise.withResolvers<void>();
+		const releaseSwitch = Promise.withResolvers<void>();
+		session.setSessionBeforeSwitchReconciler(async () => {
+			switchPaused.resolve();
+			await releaseSwitch.promise;
+		});
+		const setSessionFileSpy = spyOn(SessionManager.prototype, "setSessionFile").mockImplementation(async () => {
+			throw new Error("forced switch failure");
+		});
+		let switched: Promise<boolean> | undefined;
+		try {
+			// The extension turn strands the aside, and its wake enters the work-pool wait.
+			const extensionTurn = session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await yieldWait.reached;
+
+			// A pooled turn takes the worker, and a switch disconnects the agent before its own reset.
+			void session.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+			switched = session.switchSession(path.join(tempDir.path(), "target.jsonl"));
+			await switchPaused.promise;
+
+			yieldWait.release();
+			await setImmediate();
+			releaseSwitch.resolve();
+			await expect(switched).rejects.toThrow("forced switch failure");
+			await extensionTurn;
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			releaseSwitch.resolve();
+			yieldWait.restore();
+			setSessionFileSpy.mockRestore();
+			session.setSessionBeforeSwitchReconciler(null);
+			await switched?.catch(() => {});
+		}
+
+		// The record waits for a wake of its own: a pooled turn must not flush it into its batch.
+		expect(session.ircWakesPending).toBe(true);
+		await session.prompt("POOLED_TURN");
+		await settle(session);
+		expect(requestsContaining(mock, "CARD_POOLED")).toBe(0);
+
+		// Clearing the contract gives it that wake.
+		await session.setWorkPoolYieldItems([]);
+		await settle(session);
+		expect(requestsContaining(mock, "CARD_POOLED")).toBe(1);
+	});
+
+	it("gets its turn as soon as a rolled-back switch restores the queue it was parked in", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_ROLLED_BACK"), { deliverAs: "aside", triggerTurn: true });
+		});
+		const { session, mock } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		const switchPaused = Promise.withResolvers<void>();
+		const releaseSwitch = Promise.withResolvers<void>();
+		session.setSessionBeforeSwitchReconciler(async () => {
+			switchPaused.resolve();
+			await releaseSwitch.promise;
+		});
+		const setSessionFileSpy = spyOn(SessionManager.prototype, "setSessionFile").mockImplementation(async () => {
+			throw new Error("forced switch failure");
+		});
+		let switched: Promise<boolean> | undefined;
+		try {
+			const extensionTurn = session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await yieldWait.reached;
+
+			// The switch has disconnected the agent and has not yet snapshotted the queues.
+			switched = session.switchSession(path.join(tempDir.path(), "target.jsonl"));
+			await switchPaused.promise;
+
+			yieldWait.release();
+			await setImmediate();
+			releaseSwitch.resolve();
+			await expect(switched).rejects.toThrow("forced switch failure");
+			await extensionTurn;
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			releaseSwitch.resolve();
+			yieldWait.restore();
+			setSessionFileSpy.mockRestore();
+			session.setSessionBeforeSwitchReconciler(null);
+			await switched?.catch(() => {});
+		}
+
+		// The rollback restored the record into the live session: it gets its turn with no
+		// further prompt from anyone.
+		expect(mock.calls).toHaveLength(2);
+		expect(requestsContaining(mock, "CARD_ROLLED_BACK")).toBe(1);
+	});
+
+	it("holds no agent_end of the session that replaced its own open", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		const { session, mock, agentEnds } = await createHarness();
+		try {
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			const sent = session.sendCustomMessage(imageCard("CARD_OLD_SESSION"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+			await normalizeStarted.promise;
+
+			// The send belongs to the transcript this replaces.
+			expect(await session.newSession()).toBe(true);
+			await session.prompt("NEW_SESSION_TURN");
+			await settle(session);
+
+			// That turn ended the work of the new session: nothing of the old send follows it.
+			expect(agentEnds).toEqual([true]);
+
+			releaseNormalize.resolve();
+			expect(await sent).toBe(false);
+			await settle(session);
+		} finally {
+			releaseNormalize.resolve();
+			normalizeSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(requestsContaining(mock, "CARD_OLD_SESSION")).toBe(0);
+	});
 });

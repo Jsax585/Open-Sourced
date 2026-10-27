@@ -759,6 +759,8 @@ type PromptDispatchOutcome = { sessionClaimed: boolean };
 type TurnRequestingAsideAdmission = {
 	/** {@link AgentSession} `#userInterruptCount` when the send was made; a later interrupt folds the aside. */
 	userInterruptCount: number;
+	/** {@link AgentSession} `#sessionGeneration` when the send was made; a committed transition drops the aside. */
+	sessionGeneration: number;
 	/** Closes the window; safe to call more than once. */
 	settle: () => void;
 };
@@ -1672,9 +1674,17 @@ export class AgentSession implements SettingsScope {
 					return;
 				}
 				// A transition that disconnected the agent has not reached its reset yet: leave the
-				// records in the aside queue, which it clears on success and restores on rollback.
+				// records queued, where it clears them on success and restores them on rollback. A
+				// pooled contract still owns this worker, so park them where its turns cannot flush
+				// them unobserved, exactly as the pooled branch below and the AgentBusyError path do.
 				if (this.#unsubscribeAgent === undefined) {
-					this.#irc.queueAside(records);
+					if (this.#workPoolYieldItems.length > 0) this.#irc.queueDeferredWake(records);
+					else this.#irc.queueAside(records);
+					// The transition owns the queue from here: a commit clears it, and a rollback
+					// restores it and reconnects without draining it. Resume once the transition
+					// settles so a restored record waits for a turn of its own, not for the next
+					// unrelated prompt. After a commit the queue is empty and this is a no-op.
+					void this.waitForSessionTransition().then(() => this.#resumeStrandedIrcAsides());
 					return;
 				}
 				// The checks below are synchronous and atomic with the dispatch:
@@ -1929,7 +1939,10 @@ export class AgentSession implements SettingsScope {
 		let admittedAsideTurn = false;
 		if (!(this.#clientBridge?.deferAgentInitiatedTurns === true && !this.#allowAcpAgentInitiatedTurns)) {
 			for (const aside of this.#admittedTurnRequestingAsides) {
-				if (aside.userInterruptCount === this.#userInterruptCount) {
+				if (
+					aside.userInterruptCount === this.#userInterruptCount &&
+					aside.sessionGeneration === this.#sessionGeneration
+				) {
 					admittedAsideTurn = true;
 					break;
 				}
@@ -1948,11 +1961,14 @@ export class AgentSession implements SettingsScope {
 	/**
 	 * Opens the window in which a `triggerTurn` aside is promised a turn but has no record queued
 	 * yet, for {@link #flushPendingAgentEnd}. The caller settles it once the record is queued,
-	 * folded or prompted.
+	 * folded or prompted. The admission belongs to the session that took it: a send still
+	 * normalizing across a committed `/new` or `switchSession` holds no `agent_end` of the
+	 * replacement transcript open, since its own record is dropped by the generation check.
 	 */
 	#admitTurnRequestingAside(userInterruptCount: number): TurnRequestingAsideAdmission {
 		const admission: TurnRequestingAsideAdmission = {
 			userInterruptCount,
+			sessionGeneration: this.#sessionGeneration,
 			settle: () => this.#admittedTurnRequestingAsides.delete(admission),
 		};
 		this.#admittedTurnRequestingAsides.add(admission);
