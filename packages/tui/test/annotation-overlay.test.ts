@@ -109,6 +109,17 @@ function makeTextOverlay(
 	return overlay;
 }
 
+const BRACKETED_PASTE = (text: string) => `\x1b[200~${text}\x1b[201~`;
+
+function chooseAction(overlay: AnnotationOverlay, index: number): void {
+	overlay.handleInput(TAB);
+	for (let i = 0; i < index; i++) overlay.handleInput(DOWN);
+	overlay.handleInput(ENTER);
+}
+async function activateCompletion(overlay: AnnotationOverlay, index: number): Promise<void> {
+	overlay.handleNativeEvent({ type: "activate", key: "actions", item: `a${index}` });
+	await Promise.resolve();
+}
 /** A click on the native sheet's footer button `act`. */
 function click(act: string): NativeUiEvent {
 	return { type: "action", key: `actions/${act}`, act, mods: [] };
@@ -166,13 +177,12 @@ describe("AnnotationOverlay", () => {
 	});
 
 	describe("native sheet", () => {
-		it("titles the sheet by the review and routes its footer buttons like the keys", () => {
+		it("titles the sheet by the review and routes its footer buttons like the keys", async () => {
 			let result: CodeReviewOverlayResult | undefined;
 			const overlay = makeDiffOverlay(oneLineFiles, { onComplete: value => (result = value) });
 			expect(overlay.nativeOverlay).toMatchObject({ role: "omp.overlay.codeReview", size: "full" });
 
 			overlay.describe();
-			// Paste needs a note first; a draft blocks both actions.
 			overlay.handleNativeEvent(click("paste"));
 			expect(result).toBeUndefined();
 			overlay.handleInput(TAB);
@@ -181,45 +191,72 @@ describe("AnnotationOverlay", () => {
 			overlay.handleNativeEvent(click("paste"));
 			expect(result).toBeUndefined();
 			overlay.handleInput(ENTER);
-
-			overlay.handleNativeEvent(click("paste"));
+			await activateCompletion(overlay, 1);
 			expect(result).toEqual({
 				action: "paste",
 				annotations: [expect.objectContaining({ scope: "line", note: "rename this" })],
 			});
 		});
 
-		it("opens a line's note on double-click and closes the draft before the review", () => {
+		it("closes a native draft without committing or delivering its active note", () => {
 			let completed = false;
 			const overlay = makeDiffOverlay(oneLineFiles, { onComplete: () => (completed = true) });
 			overlay.describe();
 			overlay.handleNativeEvent({ type: "activate", key: "split/pane/lines", item: "l1" });
 			for (const glyph of "why") overlay.handleInput(glyph);
 			overlay.handleNativeEvent(click("close"));
-			expect(completed).toBe(false);
+			expect(completed).toBe(true);
 			expect(overlay.getAnnotations()).toEqual([]);
+			expect(overlay.getDraft()).toMatchObject({ editor: { text: "why" } });
 			overlay.handleNativeEvent(click("close"));
 			expect(completed).toBe(true);
 		});
 
-		it("annotates text as a full sheet with only the paste action", () => {
+		it("annotates text as a full sheet with an explicit paste choice", async () => {
 			let result: TextReviewOverlayResult | undefined;
 			const overlay = makeTextOverlay({ id: "t", kind: "message", label: "Reply", text: "one\ntwo" }, value => {
 				result = value;
 			});
 			expect(overlay.nativeOverlay).toMatchObject({ role: "omp.overlay.annotateText", size: "full" });
-			overlay.describe();
-			overlay.handleNativeEvent(click("review"));
-			expect(result).toBeUndefined();
 			overlay.handleInput("A");
 			for (const glyph of "tighten") overlay.handleInput(glyph);
 			overlay.handleInput(ENTER);
-			overlay.handleNativeEvent(click("paste"));
+			overlay.handleNativeEvent(click("review"));
+			expect(result).toBeUndefined();
+			await activateCompletion(overlay, 1);
 			expect(result).toEqual({ action: "paste", annotations: [{ scope: "text", note: "tighten" }] });
 		});
+	it("keeps the overlay available after a failed completion save and allows retry", async () => {
+		let attempts = 0;
+		const warnings: string[] = [];
+		const overlay = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "retry-save", kind: "prompt", label: "Prompt", text: "source" },
+			{
+				onComplete: async () => {
+					if (++attempts === 1) throw new Error("checkpoint failed");
+				},
+				onWarning: warning => warnings.push(warning),
+			},
+		);
+		overlay.handleInput("A");
+		overlay.handleInput("saved");
+		overlay.handleInput(ENTER);
+		chooseAction(overlay, 1);
+		await Promise.resolve();
+		expect(attempts).toBe(1);
+		expect(warnings).toEqual([expect.stringContaining("checkpoint failed")]);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "saved" }]);
+		overlay.handleInput(ENTER);
+		await Promise.resolve();
+		expect(attempts).toBe(2);
 	});
 
-	it("anchors a line note to the frozen source row and deletes it on an empty edit", () => {
+	});
+
+	it("anchors a line note to the frozen source row and confirms an empty-edit deletion", () => {
 		const hunkHeader = "@@ -12,2 +12,2 @@";
 		const files = [
 			diffFile("src/long.ts", hunkHeader, [
@@ -250,12 +287,16 @@ describe("AnnotationOverlay", () => {
 		if (annotation?.scope === "line") expect(annotation.newLine).toBeUndefined();
 
 		overlay.handleInput("e");
-		overlay.handleInput("\x15");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(CTRL_U);
+		overlay.handleInput(ENTER);
+		expect(overlay.getAnnotations()).toHaveLength(1);
+		overlay.handleInput(DOWN);
 		overlay.handleInput(ENTER);
 		expect(overlay.getAnnotations()).toEqual([]);
 	});
 
-	it("preserves a saved note when editing is cancelled", () => {
+	it("preserves a saved note and active edit buffer across Escape", () => {
 		const overlay = makeDiffOverlay(oneLineFiles);
 		render(overlay);
 		overlay.handleInput(TAB);
@@ -263,10 +304,12 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput("saved");
 		overlay.handleInput(ENTER);
 		overlay.handleInput("e");
-		overlay.handleInput("\x15");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(CTRL_U);
 		overlay.handleInput("discarded");
 		overlay.handleInput(CANCEL);
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["saved"]);
+		expect(overlay.getDraft()).toMatchObject({ editor: { editingAnnotationIndex: 0, text: "discarded" } });
 	});
 
 	it("undoes the latest change instead of dropping the newest note", () => {
@@ -282,6 +325,7 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput(ENTER);
 		overlay.handleInput("\x1b[A");
 		overlay.handleInput("e");
+		overlay.handleInput(ENTER);
 		overlay.handleInput(CTRL_U);
 		overlay.handleInput("edited");
 		overlay.handleInput(ENTER);
@@ -291,7 +335,11 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first", "second"]);
 
 		overlay.handleInput("e");
+		overlay.handleInput(ENTER);
 		overlay.handleInput(CTRL_U);
+		overlay.handleInput(ENTER);
+		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first", "second"]);
+		overlay.handleInput(DOWN);
 		overlay.handleInput(ENTER);
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["second"]);
 		overlay.handleInput("u");
@@ -315,8 +363,7 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getTextAnnotations()).toEqual([
 			{ scope: "line", line: 2, quote: "  exact source line  ", note: "note" },
 		]);
-		overlay.handleInput(TAB);
-		overlay.handleInput(ENTER);
+		chooseAction(overlay, 1);
 		expect(completed).toEqual([{ action: "paste", annotations: overlay.getTextAnnotations() }]);
 	});
 
@@ -337,6 +384,9 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput(DOWN);
 		overlay.handleInput(ENTER);
 		overlay.handleInput(CTRL_U);
+		overlay.handleInput(ENTER);
+		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first", "second"]);
+		overlay.handleInput(DOWN);
 		overlay.handleInput(ENTER);
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first"]);
 	});
@@ -377,7 +427,7 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getAnnotations()).toEqual([expect.objectContaining({ note: "first\nsecond" })]);
 	});
 
-	it("deletes an existing text note on blank submit and preserves it on Escape", () => {
+	it("preserves an edited text note on Escape and requires explicit deletion confirmation", () => {
 		const source: TextReviewSource = {
 			id: "reply",
 			kind: "message",
@@ -390,15 +440,22 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput("whole note");
 		overlay.handleInput(ENTER);
 		overlay.handleInput("e");
+		overlay.handleInput(ENTER);
 		overlay.handleInput(CTRL_U);
 		overlay.handleInput("discarded");
 		overlay.handleInput(CANCEL);
 		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "whole note" }]);
+		const snapshot = overlay.getDraft();
+		expect(snapshot).toMatchObject({ kind: "text", editor: { editingAnnotationIndex: 0, text: "discarded" } });
 
-		overlay.handleInput("e");
-		overlay.handleInput(CTRL_U);
-		overlay.handleInput(ENTER);
-		expect(overlay.getTextAnnotations()).toEqual([]);
+		const restored = makeTextOverlay(source);
+		restored.restoreDraft(snapshot);
+		restored.handleInput(CTRL_U);
+		restored.handleInput(ENTER);
+		expect(restored.getTextAnnotations()).toEqual([{ scope: "text", note: "whole note" }]);
+		restored.handleInput(DOWN);
+		restored.handleInput(ENTER);
+		expect(restored.getTextAnnotations()).toEqual([]);
 	});
 
 	it("commits external-editor drafts", async () => {
@@ -496,8 +553,7 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput("on beta");
 		overlay.handleInput(ENTER);
 		expect(overlay.replaceTextSource("beta\nalpha\nalpha")).toBe(1);
-		overlay.handleInput(TAB);
-		overlay.handleInput(ENTER);
+		chooseAction(overlay, 1);
 		expect(completed).toEqual([
 			{
 				action: "paste",
@@ -521,6 +577,147 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "whole" }]);
 	});
 
+	it("preserves an active note editor across Escape and restores its exact buffer", () => {
+		const source = { id: "prompt", kind: "prompt" as const, label: "Prompt", text: "alpha\nbeta" };
+		const original = makeTextOverlay(source);
+		original.handleInput("A");
+		original.handleInput(BRACKETED_PASTE("unfinished\nnote"));
+		const snapshot = original.getDraft();
+		original.handleInput(CANCEL);
+		expect(snapshot).toMatchObject({ kind: "text", editor: { text: "unfinished\nnote", sourceIndex: -1, scope: "text" } });
+		const restored = makeTextOverlay(source);
+		restored.restoreDraft(snapshot);
+		expect(restored.getDraft()).toEqual(snapshot);
+		restored.handleInput(ENTER);
+		expect(restored.getTextAnnotations()).toEqual([{ scope: "text", note: "unfinished\nnote" }]);
+	});
+
+	it("restores an editor targeting the second duplicate note and commits only that note", () => {
+		const original = makeDiffOverlay(oneLineFiles);
+		original.handleInput(TAB);
+		original.handleInput("a");
+		original.handleInput("first");
+		original.handleInput(ENTER);
+		original.handleInput("a");
+		original.handleInput("second");
+		original.handleInput(ENTER);
+		original.handleInput("e");
+		original.handleInput(DOWN);
+		original.handleInput(ENTER);
+		const snapshot = original.getDraft();
+		expect(snapshot).toMatchObject({ kind: "diff", editor: { editingAnnotationIndex: 1, text: "second" } });
+
+		const restored = makeDiffOverlay(oneLineFiles);
+		restored.restoreDraft(snapshot);
+		restored.handleInput(CTRL_U);
+		restored.handleInput("updated second");
+		restored.handleInput(ENTER);
+		expect(restored.getAnnotations().map(annotation => annotation.note)).toEqual(["first", "updated second"]);
+	});
+
+	it("retains expanded contents of a large pasted unfinished note", () => {
+		const pasted = `${"one\n".repeat(400)}tail  `;
+		const overlay = makeTextOverlay({ id: "paste", kind: "prompt", label: "Prompt", text: "source" });
+		overlay.handleInput("a");
+		overlay.handleInput(BRACKETED_PASTE(pasted));
+		expect(overlay.getDraft()).toMatchObject({ kind: "text", editor: { text: pasted } });
+	});
+
+	it("ignores external note-editor results after disposal", async () => {
+		let apply: ((text: string | null) => void) | undefined;
+		let settleEditor: (() => void) | undefined;
+		const changes: string[] = [];
+		const editorGate = Promise.withResolvers<void>();
+		const overlay = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "late-editor", kind: "prompt", label: "Prompt", text: "source" },
+			{
+				onAnnotationExternalEditor: (_text, commit) => {
+					apply = commit;
+					settleEditor = () => editorGate.resolve();
+					return editorGate.promise;
+				},
+				onDraftChange: draft => changes.push(draft.kind === "text" ? (draft.editor?.text ?? "") : ""),
+				onComplete: () => {},
+			},
+		);
+		overlay.handleInput("a");
+		overlay.handleInput("safe");
+		overlay.handleInput(CTRL_E);
+		await Promise.resolve();
+		overlay.dispose();
+		const checkpointCount = changes.length;
+		apply!("late result");
+		settleEditor!();
+		await Promise.resolve();
+		expect(overlay.getDraft()).toMatchObject({ editor: { text: "safe" } });
+		expect(changes).toHaveLength(checkpointCount);
+	});
+
+	it("keeps the note and live editor when delete confirmation is cancelled", () => {
+		const overlay = makeTextOverlay({ id: "confirm-delete", kind: "prompt", label: "Prompt", text: "source" });
+		overlay.handleInput("A");
+		overlay.handleInput("keep");
+		overlay.handleInput(ENTER);
+		overlay.handleInput("e");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(CTRL_U);
+		overlay.handleInput(ENTER);
+		overlay.handleInput(CANCEL);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "keep" }]);
+		expect(overlay.getDraft()).toMatchObject({ editor: { editingAnnotationIndex: 0, text: "" } });
+	});
+
+	it("retains the live draft and warns when discard fails", async () => {
+		const warnings: string[] = [];
+		const overlay = new AnnotationOverlay(
+			makeTui(),
+			darkTheme!,
+			getKeybindings() as KeybindingsManager,
+			{ id: "failed-discard", kind: "prompt", label: "Prompt", text: "source" },
+			{
+				onComplete: () => {},
+				onDiscard: async () => {
+					throw new Error("unlink failed");
+				},
+				onWarning: warning => warnings.push(warning),
+			},
+		);
+		overlay.handleInput("A");
+		overlay.handleInput("retained");
+		overlay.handleInput(ENTER);
+		overlay.handleInput(TAB);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(ENTER);
+		overlay.handleInput(CANCEL);
+		expect(overlay.getDraft()).toMatchObject({ annotations: [{ annotation: { note: "retained" } }] });
+		overlay.handleInput(DOWN);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(ENTER);
+		overlay.handleInput(DOWN);
+		overlay.handleInput(ENTER);
+		await Promise.resolve();
+		expect(warnings).toEqual([expect.stringContaining("unlink failed")]);
+		expect(overlay.getTextAnnotations()).toEqual([{ scope: "text", note: "retained" }]);
+		expect(overlay.getDraft()).toMatchObject({ annotations: [{ annotation: { note: "retained" } }] });
+	});
+
+	it("keeps Enter on the default completion choice in the overlay", () => {
+		let completed = false;
+		const overlay = makeTextOverlay(
+			{ id: "prompt", kind: "prompt", label: "Prompt", text: "alpha" },
+			() => (completed = true),
+		);
+		overlay.handleInput(TAB);
+		overlay.handleInput(ENTER);
+		expect(completed).toBe(false);
+		expect(overlay.getTextAnnotations()).toEqual([]);
+	});
 	it("returns undefined on cancel without a review result", () => {
 		const completed: Array<CodeReviewOverlayResult | undefined> = [];
 		const overlay = makeDiffOverlay(oneLineFiles, {

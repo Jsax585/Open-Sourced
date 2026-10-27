@@ -77,7 +77,7 @@ describe("AnnotationOverlay fullscreen hardware cursor", () => {
 		setKeybindings(previousKeybindings);
 	});
 
-	it("preserves full-cell input, moves only the terminal cursor, and restores focus on cancel", async () => {
+	it("preserves full-cell input, saves the active editor, and restores focus on close", async () => {
 		const terminal = new RecordingTerminal(WIDTH, 20);
 		const scheduler = new VirtualRenderScheduler();
 		const tui = new TUI(terminal, true, { renderScheduler: scheduler });
@@ -141,36 +141,16 @@ describe("AnnotationOverlay fullscreen hardware cursor", () => {
 			expect(stripVTControlCharacters(terminal.takeWrites())).toBe("");
 			expect(terminal.cursorVisible).toBe(true);
 
-			terminal.takeWrites();
-			terminal.sendInput("\x1b");
-			await scheduler.settle(terminal);
-			expect(terminal.takeWrites()).toContain(HARDWARE_CURSOR_HIDE);
-			expect(terminal.cursorVisible).toBe(false);
-			expect(tui.getFocused()).toBe(overlay);
-			expect(renderedInputRows(terminal)).toEqual([]);
-
-			terminal.sendInput("A");
-			sendText(terminal, `${"Q".repeat(INPUT_CAPACITY - 2)}界`);
-			await scheduler.settle(terminal);
-			expect(renderedInputRows(terminal)).toEqual([`${"Q".repeat(INPUT_CAPACITY - 2)}界`]);
-			expectNoSoftwareCaret(terminal);
-			expect(terminal.takeWrites()).toContain(HARDWARE_CURSOR_SHOW);
-			expect(terminal.cursorVisible).toBe(true);
-			const wideRow = terminal.getViewport().findIndex(row => row.includes("界"));
-			expect(terminal.getCursor()).toEqual({ row: wideRow, col: WIDTH - 2 });
-
-			terminal.takeWrites();
-			terminal.sendInput("\x1b");
-			await scheduler.settle(terminal);
-			expect(terminal.takeWrites()).toContain(HARDWARE_CURSOR_HIDE);
-			expect(terminal.cursorVisible).toBe(false);
-
 			terminal.sendInput("\x1b");
 			await scheduler.settle(terminal);
 			expect(tui.hasOverlay()).toBe(false);
 			expect(tui.getFocused()).toBe(input);
 			expect(input.focused).toBe(true);
 			expect(overlay.focused).toBe(false);
+			expect(overlay.getDraft()).toMatchObject({
+				kind: "text",
+				editor: { scope: "text", text: `${"Q".repeat(INPUT_CAPACITY)}QQ` },
+			});
 			expect(terminal.getViewport().join("\n")).toContain("restored input");
 			expect(terminal.cursorVisible).toBe(true);
 		} finally {
@@ -189,7 +169,9 @@ describe("AnnotationOverlay fullscreen hardware cursor", () => {
 			text: "source text",
 		};
 		const overlay = new AnnotationOverlay(tui, darkTheme!, getKeybindings() as KeybindingsManager, source, {
-			onComplete() {},
+			onComplete() {
+				tui.hideOverlay();
+			},
 		});
 
 		tui.start();
@@ -218,7 +200,8 @@ describe("AnnotationOverlay fullscreen hardware cursor", () => {
 
 			terminal.sendInput("\x1b");
 			await scheduler.settle(terminal);
-			expect(renderedInputRows(terminal)).toEqual([]);
+			expect(tui.hasOverlay()).toBe(false);
+			expect(overlay.getDraft()).toMatchObject({ kind: "text", editor: { text: "Q" } });
 			expect(terminal.cursorVisible).toBe(false);
 		} finally {
 			tui.stop();

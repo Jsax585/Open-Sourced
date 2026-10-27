@@ -27,6 +27,7 @@ import type {
 	TextReviewAnnotation,
 	TextReviewOverlayResult,
 	TextReviewSource,
+	AnnotationOverlayDraft,
 } from "./annotation-types";
 import {
 	bottomBorder,
@@ -59,20 +60,20 @@ export const CONTINUE_CODE_REVIEW_ACTION = "Continue with LLM review";
 export const PASTE_CODE_REVIEW_ACTION = "Paste annotations into prompt";
 
 export interface AnnotationOverlayCallbacks {
-	onComplete(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): void;
+	onComplete(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): void | Promise<void>;
 	onWarning?(message: string): void;
-	/** Open the draft in the host's editor and invoke `commit` with its result. */
+	onDraftChange?(draft: AnnotationOverlayDraft): void;
+	onDiscard?(): Promise<void>;
 	onAnnotationExternalEditor?(draft: string, commit: (text: string | null) => void): void | Promise<void>;
-	/** Open the current source in the host's editor. The overlay stays open. */
 	onExternalEditor?(): void | Promise<void>;
 }
 
 export interface CodeReviewOverlayCallbacks extends AnnotationOverlayCallbacks {
-	onComplete(result: CodeReviewOverlayResult | undefined): void;
+	onComplete(result: CodeReviewOverlayResult | undefined): void | Promise<void>;
 }
 
 export interface TextReviewOverlayCallbacks extends AnnotationOverlayCallbacks {
-	onComplete(result: TextReviewOverlayResult | undefined): void;
+	onComplete(result: TextReviewOverlayResult | undefined): void | Promise<void>;
 }
 
 type OverlayCallbacks = CodeReviewOverlayCallbacks | TextReviewOverlayCallbacks;
@@ -125,8 +126,8 @@ const MIN_BODY_ROWS = 3;
 const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
 const MAX_ANNOTATION_EDITOR_ROWS = 6;
-const CODE_REVIEW_ACTIONS = [CONTINUE_CODE_REVIEW_ACTION, PASTE_CODE_REVIEW_ACTION] as const;
-const TEXT_REVIEW_ACTIONS = [PASTE_CODE_REVIEW_ACTION] as const;
+const CODE_REVIEW_ACTIONS = ["Continue annotating", PASTE_CODE_REVIEW_ACTION, CONTINUE_CODE_REVIEW_ACTION, "Save draft and close", "Discard draft"] as const;
+const TEXT_REVIEW_ACTIONS = ["Continue annotating", PASTE_CODE_REVIEW_ACTION, "Save draft and close", "Discard draft"] as const;
 
 function isSourceRow(row: ReviewDiffRow): row is ReviewSourceRow {
 	return row.kind === "context" || row.kind === "added" || row.kind === "removed";
@@ -229,6 +230,9 @@ export class AnnotationOverlay implements Focusable {
 	/** Set once {@link replaceTextSource} runs; the paste result then carries the edited text. */
 	#textSourceEdited = false;
 	#finished = false;
+	#finishing = false;
+	#suppressDraftChange = false;
+	#confirmation: "discard" | "delete" | undefined;
 	#annotations: CommittedAnnotation[] = [];
 	#textAnnotations: CommittedTextAnnotation[] = [];
 	/** Annotation lists before each create/edit/delete, restored by `u`. */
@@ -340,10 +344,17 @@ export class AnnotationOverlay implements Focusable {
 		this.#editor.setPromptGutter("> ");
 		this.#editor.describePlaceholder = () => NOTE_PLACEHOLDER;
 		this.#editor.setScrollbarVisible(true);
-		this.#editor.onSubmit = value => this.#commitAnnotation(value);
+		this.#editor.onChange = () => this.#emitDraftChange();
+		this.#editor.onSubmit = value => {
+			this.#commitAnnotation(value);
+			this.#emitDraftChange();
+		};
 		this.#resetSourceCursor();
 	}
-
+ 
+	capturesInput(data: string): boolean {
+		return data === "\x03" || data === "\x04";
+	}
 	/** Keep the nested editor's cursor mode aligned with the overlay focus target. */
 	setUseTerminalCursor(useTerminalCursor: boolean): void {
 		this.#editor.setUseTerminalCursor(useTerminalCursor);
@@ -354,7 +365,89 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	dispose(): void {
+		this.#emitDraftChange();
 		this.#finished = true;
+	}
+
+	getDraft(): AnnotationOverlayDraft {
+		if (this.#textSource) {
+			return {
+				kind: "text",
+				annotations: this.#textAnnotations.map(entry => ({ ...entry, annotation: { ...entry.annotation } })),
+				...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}),
+				...(this.#annotating
+					? {
+							editor: {
+								sourceIndex: this.#annotationScope === "text" ? -1 : this.#sourceIndex,
+								scope: this.#annotationScope === "text" ? "text" : "line",
+								...(this.#editingAnnotationIndex === undefined ? {} : { editingAnnotationIndex: this.#editingAnnotationIndex }),
+								text: this.#editor.getExpandedText(),
+							},
+						}
+					: {}),
+			};
+		}
+		return {
+			kind: "diff",
+			annotations: this.#annotations.map(entry => ({ ...entry, annotation: { ...entry.annotation } })),
+			...(this.#annotating
+				? {
+						editor: {
+							fileIndex: this.#fileIndex,
+							sourceIndex: this.#sourceIndex,
+							scope: this.#annotationScope === "file" ? "file" : "line",
+							...(this.#editingAnnotationIndex === undefined ? {} : { editingAnnotationIndex: this.#editingAnnotationIndex }),
+							text: this.#editor.getExpandedText(),
+						},
+					}
+				: {}),
+		};
+	}
+
+	restoreDraft(draft: AnnotationOverlayDraft): void {
+		this.#suppressDraftChange = true;
+		try {
+			if (draft.kind === "text" && this.#textSource) {
+				if (draft.editedText !== undefined) this.replaceTextSource(draft.editedText);
+				this.#textAnnotations = draft.annotations
+					.filter(entry => entry.sourceIndex === -1 || (entry.sourceIndex >= 0 && entry.sourceIndex < this.#textLines.length))
+					.map(entry => ({ ...entry, annotation: { ...entry.annotation } }));
+				const editor = draft.editor;
+				if (
+					editor &&
+					(editor.scope === "text" ? editor.sourceIndex === -1 : editor.sourceIndex >= 0 && editor.sourceIndex < this.#textLines.length)
+				) {
+					if (editor.scope === "line") this.#sourceIndex = editor.sourceIndex;
+					this.#annotationScope = editor.scope;
+					this.#editingAnnotationIndex = editor.editingAnnotationIndex;
+					this.#annotating = true;
+					this.#editor.setText(editor.text);
+				}
+			} else if (draft.kind === "diff" && !this.#textSource) {
+				this.#annotations = draft.annotations
+					.filter(entry => entry.fileIndex >= 0 && entry.fileIndex < this.#files.length &&
+						(entry.sourceIndex === -1 || entry.sourceIndex >= 0 && entry.sourceIndex < this.#files[entry.fileIndex]!.rows.filter(isSourceRow).length))
+					.map(entry => ({ ...entry, annotation: { ...entry.annotation } }));
+				const editor = draft.editor;
+				if (editor && editor.fileIndex >= 0 && editor.fileIndex < this.#files.length &&
+					(editor.scope === "file" || editor.sourceIndex >= 0 && editor.sourceIndex < this.#files[editor.fileIndex]!.rows.filter(isSourceRow).length)) {
+					this.#fileIndex = editor.fileIndex;
+					this.#sourceIndex = editor.sourceIndex;
+					this.#annotationScope = editor.scope;
+					this.#editingAnnotationIndex = editor.editingAnnotationIndex;
+					this.#annotating = true;
+					this.#editor.setText(editor.text);
+				}
+			}
+			this.#actionIndex = 0;
+		} finally {
+			this.#suppressDraftChange = false;
+		}
+		this.#nativeBody = undefined;
+	}
+
+	#emitDraftChange(): void {
+		if (!this.#suppressDraftChange && !this.#finished) this.#callbacks.onDraftChange?.(this.getDraft());
 	}
 
 	getAnnotations(): CodeReviewAnnotation[] {
@@ -417,10 +510,19 @@ export class AnnotationOverlay implements Focusable {
 		this.#undoStack = [];
 		this.#annotationRev++;
 		this.#nativeBody = undefined;
+		this.#emitDraftChange();
 		return dropped;
 	}
 
 	handleInput(data: string): void {
+		if (this.#confirmation) {
+			this.#handleConfirmation(data);
+			return;
+		}
+		if (data === "\x03" || data === "\x04") {
+			void this.#finish(undefined);
+			return;
+		}
 		if (this.#finished || this.#externalOperation) return;
 		if (this.#annotationChooser) {
 			this.#handleAnnotationChooser(data);
@@ -432,7 +534,7 @@ export class AnnotationOverlay implements Focusable {
 				return;
 			}
 			if (this.#keybindings.matches(data, "tui.select.cancel")) {
-				this.#cancelAnnotation();
+				void this.#finish(undefined);
 				return;
 			}
 			this.#editor.handleInput(data);
@@ -485,28 +587,83 @@ export class AnnotationOverlay implements Focusable {
 		return key ? formatKeyHint(key) : "";
 	}
 
-	#finish(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): void {
-		if (this.#finished) return;
-		this.#finished = true;
-		if (this.#textSource) {
-			(this.#callbacks as TextReviewOverlayCallbacks).onComplete(result as TextReviewOverlayResult | undefined);
-		} else {
-			(this.#callbacks as CodeReviewOverlayCallbacks).onComplete(result as CodeReviewOverlayResult | undefined);
+	async #finish(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): Promise<void> {
+		if (this.#finished || this.#finishing) return;
+		this.#finishing = true;
+		try {
+			await this.#callbacks.onComplete(result as never);
+			this.#finished = true;
+		} catch (error) {
+			this.#callbacks.onWarning?.(`Failed to save annotation draft: ${error instanceof Error ? error.message : String(error)}`);
+			this.#finishing = false;
 		}
 	}
 
-	/** Esc, by state: leave the note chooser, drop the note draft, else close the review. */
 	#escape(): void {
 		if (this.#annotationChooser) this.#annotationChooser = undefined;
-		else if (this.#annotating) this.#cancelAnnotation();
-		else this.#finish(undefined);
+		else void this.#finish(undefined);
 	}
+
+	#handleConfirmation(data: string): void {
+		if (this.#keybindings.matches(data, "tui.select.cancel")) {
+			this.#confirmation = undefined;
+			return;
+		}
+		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "up") || matchesKey(data, "k")) {
+			this.#actionIndex = 0;
+			return;
+		}
+		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "down") || matchesKey(data, "j")) {
+			this.#actionIndex = 1;
+			return;
+		}
+		if (!this.#keybindings.matches(data, "tui.select.confirm")) return;
+		if (this.#actionIndex === 0) {
+			if (this.#confirmation === "delete" && this.#editingAnnotationIndex !== undefined) {
+				const note = this.#textSource
+					? this.#textAnnotations[this.#editingAnnotationIndex]?.annotation.note
+					: this.#annotations[this.#editingAnnotationIndex]?.annotation.note;
+				if (note !== undefined) this.#editor.setText(note);
+			}
+			this.#confirmation = undefined;
+		}
+		else if (this.#confirmation === "discard") void this.#discardAndFinish();
+		else {
+			this.#confirmation = undefined;
+			this.#deleteAnnotation();
+		}
+	}
+
+	async #discardAndFinish(): Promise<void> {
+		try {
+			await this.#callbacks.onDiscard?.();
+			this.#confirmation = undefined;
+			this.#finished = true;
+		} catch (error) {
+			this.#callbacks.onWarning?.(`Failed to discard annotation draft: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	#deleteAnnotation(): void {
+		const index = this.#editingAnnotationIndex;
+		if (index === undefined) return;
+		this.#pushUndo();
+		if (this.#textSource) this.#textAnnotations.splice(index, 1);
+		else this.#annotations.splice(index, 1);
+		this.#annotating = false;
+		this.#editingAnnotationIndex = undefined;
+		this.#suppressDraftChange = true;
+		this.#editor.setText("");
+		this.#suppressDraftChange = false;
+		this.#emitDraftChange();
+	}
+
 
 	#cycleFocus(direction: number): void {
 		const regions: FocusRegion[] = this.#sidebarShown ? ["files", "diff", "actions"] : ["diff", "actions"];
 		const current = regions.indexOf(this.#focus);
 		const index = current < 0 ? regions.length - 1 : current;
 		this.#focus = regions[(index + direction + regions.length) % regions.length]!;
+		if (this.#focus === "actions") this.#actionIndex = 0;
 	}
 
 	#handleFiles(data: string): void {
@@ -538,6 +695,7 @@ export class AnnotationOverlay implements Focusable {
 		}
 		if (matchesKey(data, "right") || matchesKey(data, "l") || this.#keybindings.matches(data, "tui.select.confirm")) {
 			this.#focus = "actions";
+			this.#actionIndex = 0;
 			return;
 		}
 		if (matchesKey(data, "shift+up")) {
@@ -560,7 +718,7 @@ export class AnnotationOverlay implements Focusable {
 			if (this.#tui.nativeRendering && !this.#textSource) {
 				this.#moveSourceCursor(-Math.max(1, this.#bodyHeight - 1));
 			} else {
-				this.#scrollView.page(-1);
+				this.#scrollView.scroll(-Math.max(4, this.#bodyHeight - 1));
 				this.#viewportDriven = true;
 				this.#viewportTowardEnd = false;
 				this.#syncCursorToViewport();
@@ -571,7 +729,7 @@ export class AnnotationOverlay implements Focusable {
 			if (this.#tui.nativeRendering && !this.#textSource) {
 				this.#moveSourceCursor(Math.max(1, this.#bodyHeight - 1));
 			} else {
-				this.#scrollView.page(1);
+				this.#scrollView.scroll(Math.max(4, this.#bodyHeight - 1));
 				this.#viewportDriven = true;
 				this.#viewportTowardEnd = true;
 				this.#syncCursorToViewport();
@@ -604,18 +762,12 @@ export class AnnotationOverlay implements Focusable {
 
 	#handleActions(data: string): void {
 		const actionCount = this.#actions.length;
-		if (actionCount === 0) return;
-		const hasAnnotations = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
 		if (this.#keybindings.matches(data, "tui.select.up") || matchesKey(data, "k")) {
-			this.#actionIndex = this.#textSource ? (this.#actionIndex - 1 + actionCount) % actionCount : 0;
+			this.#actionIndex = (this.#actionIndex - 1 + actionCount) % actionCount;
 			return;
 		}
 		if (this.#keybindings.matches(data, "tui.select.down") || matchesKey(data, "j")) {
-			if (this.#textSource) {
-				this.#actionIndex = (this.#actionIndex + 1) % actionCount;
-			} else if (hasAnnotations) {
-				this.#actionIndex = Math.min(actionCount - 1, this.#actionIndex + 1);
-			}
+			this.#actionIndex = (this.#actionIndex + 1) % actionCount;
 			return;
 		}
 		if (this.#keybindings.matches(data, "tui.select.confirm")) this.#confirmAction();
@@ -623,23 +775,30 @@ export class AnnotationOverlay implements Focusable {
 
 	#actionDisabled(index: number): boolean {
 		const hasAnnotations = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		return this.#textSource ? !hasAnnotations : index === 1 && !hasAnnotations;
+		return (index === 1 && !hasAnnotations) || (index === 2 && this.#textSource !== undefined);
 	}
 
 	#confirmAction(): void {
-		if (this.#actionDisabled(this.#actionIndex)) return;
-		if (this.#textSource) {
-			this.#finish({
-				action: "paste",
-				annotations: this.getTextAnnotations(),
-				...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}),
-			});
-		} else {
-			this.#finish({
-				action: this.#actionIndex === 0 ? "review" : "paste",
-				annotations: this.getAnnotations(),
-			});
+		const saveIndex = this.#textSource ? 2 : 3;
+		const discardIndex = saveIndex + 1;
+		if (this.#actionIndex === 0) {
+			this.#focus = "diff";
+			return;
 		}
+		if (this.#actionIndex === saveIndex) {
+			void this.#finish(undefined);
+			return;
+		}
+		if (this.#actionIndex === discardIndex) {
+			this.#confirmation = "discard";
+			this.#actionIndex = 0;
+			return;
+		}
+		if (this.#actionDisabled(this.#actionIndex)) return;
+		if (this.#actionIndex === 1) {
+			if (this.#textSource) void this.#finish({ action: "paste", annotations: this.getTextAnnotations(), ...(this.#textSourceEdited ? { editedText: this.#textSource.text } : {}) });
+			else void this.#finish({ action: "paste", annotations: this.getAnnotations() });
+		} else if (!this.#textSource) void this.#finish({ action: "review", annotations: this.getAnnotations() });
 	}
 
 	#selectFile(index: number): void {
@@ -706,19 +865,23 @@ export class AnnotationOverlay implements Focusable {
 		if (existing && (existing.fileIndex !== this.#fileIndex || existing.annotation.scope !== scope)) {
 			return;
 		}
+		this.#focus = scope === "file" ? "files" : "diff";
 		this.#annotationScope = scope === "file" ? "file" : "line";
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
 		this.#editor.setText(existing?.annotation.note ?? "");
+		this.#emitDraftChange();
 	}
 
 	#startTextAnnotation(scope: TextReviewAnnotation["scope"], existingIndex?: number): void {
 		const existing = existingIndex === undefined ? undefined : this.#textAnnotations[existingIndex];
 		if (existing && existing.annotation.scope !== scope) return;
 		this.#annotationScope = scope;
+		this.#sourceIndex = Math.min(this.#sourceIndex, Math.max(0, this.#textLines.length - 1));
 		this.#editingAnnotationIndex = existingIndex;
 		this.#annotating = true;
 		this.#editor.setText(existing?.annotation.note ?? "");
+		this.#emitDraftChange();
 	}
 
 	#cancelAnnotation(): void {
@@ -737,9 +900,16 @@ export class AnnotationOverlay implements Focusable {
 		const source = this.#currentSourceRows()[this.#sourceIndex];
 		const editingIndex = this.#editingAnnotationIndex;
 		const scope: CodeReviewAnnotation["scope"] = this.#annotationScope === "file" ? "file" : "line";
+		if (!note && editingIndex !== undefined) {
+			this.#confirmation = "delete";
+			this.#actionIndex = 0;
+			return;
+		}
 		this.#annotating = false;
-		this.#editingAnnotationIndex = undefined;
+		this.#focus = scope === "file" ? "files" : "diff";
+		this.#suppressDraftChange = true;
 		this.#editor.setText("");
+		this.#suppressDraftChange = false;
 
 		if (!note) {
 			if (editingIndex !== undefined) {
@@ -790,11 +960,19 @@ export class AnnotationOverlay implements Focusable {
 	#commitTextAnnotation(value: string): void {
 		const note = value.trim();
 		const editingIndex = this.#editingAnnotationIndex;
+		if (!note && editingIndex !== undefined) {
+			this.#confirmation = "delete";
+			this.#actionIndex = 0;
+			return;
+		}
 		const scope: TextReviewAnnotation["scope"] = this.#annotationScope === "text" ? "text" : "line";
 		const sourceLine = this.#textLines[this.#sourceIndex] ?? "";
 		this.#annotating = false;
+		this.#focus = "diff";
 		this.#editingAnnotationIndex = undefined;
+		this.#suppressDraftChange = true;
 		this.#editor.setText("");
+		this.#suppressDraftChange = false;
 		if (!note) {
 			if (editingIndex !== undefined) {
 				this.#pushUndo();
@@ -855,17 +1033,9 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#editCurrentAnnotation(): void {
+		if (this.#focus === "actions") this.#focus = "diff";
 		const entries = this.#annotationCandidates();
 		if (entries.length === 0) return;
-		if (entries.length === 1) {
-			const index = entries[0]!;
-			if (this.#textSource) {
-				this.#startTextAnnotation(this.#textAnnotations[index]!.annotation.scope, index);
-			} else {
-				this.#startAnnotation(this.#annotations[index]!.annotation.scope, index);
-			}
-			return;
-		}
 		this.#annotationChooser = {
 			kind: this.#textSource ? "text" : "diff",
 			entries,
@@ -925,7 +1095,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#annotationRev++;
 		this.#annotations = snapshot.annotations;
 		this.#textAnnotations = snapshot.textAnnotations;
-		if (this.#annotations.length === 0 && this.#actionIndex === 1) this.#actionIndex = 0;
+		this.#emitDraftChange();
 	}
 
 	async #openAnnotationEditor(): Promise<void> {
@@ -939,7 +1109,7 @@ export class AnnotationOverlay implements Focusable {
 		this.#externalOperation = true;
 		try {
 			await openEditor(draft, text => {
-				if (text !== null) this.#editor.setText(text);
+				if (!this.#finished && text !== null) this.#editor.setText(text);
 			});
 		} catch (error) {
 			this.#callbacks.onWarning?.(
@@ -1146,9 +1316,12 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#renderActions(): string[] {
-		const hasAnnotations = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		return this.#actions.map((label, index) => {
-			const disabled = this.#textSource ? !hasAnnotations : index === 1 && !hasAnnotations;
+		if (this.#annotationChooser) return [];
+		const labels = this.#confirmation
+			? this.#confirmation === "discard" ? ["Keep draft", "Discard draft"] : ["Keep editing", "Delete annotation"]
+			: this.#actions;
+		return labels.map((label, index) => {
+			const disabled = !this.#confirmation && this.#actionDisabled(index);
 			const selected = index === this.#actionIndex;
 			const cursor = selected ? `${this.#theme.nav.cursor} ` : "  ";
 			const text = disabled
@@ -1467,13 +1640,8 @@ export class AnnotationOverlay implements Focusable {
 				this.#escape();
 				return;
 			}
-			// A draft or the note chooser is open: finish or leave it first.
 			if (this.#annotating || this.#annotationChooser) return;
-			const index =
-				event.act === "review" && !this.#textSource ? 0 : event.act === "paste" ? (this.#textSource ? 0 : 1) : -1;
-			if (index < 0 || this.#actionDisabled(index)) return;
-			this.#actionIndex = index;
-			this.#confirmAction();
+			this.#actionIndex = 0;
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
@@ -1485,6 +1653,18 @@ export class AnnotationOverlay implements Focusable {
 			if (!chooser || index < 0 || index >= chooser.entries.length) return;
 			chooser.selected = index;
 			if (activate) this.#openChosenAnnotation(chooser);
+			return;
+		}
+		if (leaf === "actions") {
+			const index = itemIndex(event.item, "a");
+			const count = this.#confirmation ? 2 : this.#actions.length;
+			if (index < 0 || index >= count || !this.#confirmation && this.#actionDisabled(index)) return;
+			this.#actionIndex = index;
+			this.#focus = "actions";
+			if (activate) {
+				if (this.#confirmation) this.#handleConfirmation("\r");
+				else this.#confirmAction();
+			}
 			return;
 		}
 		// A draft commits against the current file/row, so the target stays put
@@ -1814,30 +1994,23 @@ export class AnnotationOverlay implements Focusable {
 	 * picked from the keyboard is marked `pick`, an unavailable one `drop`.
 	 */
 	#describeFooter(editing: boolean): NativeNode {
-		const pick = (index: number): "pick" | "drop" | undefined =>
-			editing || this.#actionDisabled(index)
-				? "drop"
-				: this.#focus === "actions" && this.#actionIndex === index
-					? "pick"
-					: undefined;
-		const marked = (button: NativeNode, mark: "pick" | "drop" | undefined): NativeNode =>
-			mark ? ({ ...button, p: { ...button.p, mark } } as NativeNode) : button;
-		const hasNotes = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		const pasteTitle = hasNotes ? PASTE_CODE_REVIEW_ACTION : "Add a note to paste it into the prompt";
-		const buttons: NativeNode[] = [actionButton("Cancel", "close", { keys: "escape" })];
-		if (this.#textSource) {
-			buttons.push(
-				marked(actionButton("Paste into prompt", "paste", { tone: "accent", title: pasteTitle }), pick(0)),
-			);
-		} else {
-			buttons.push(
-				marked(actionButton("Paste into prompt", "paste", { title: pasteTitle }), pick(1)),
-				marked(
-					actionButton("Review with LLM", "review", { tone: "accent", title: CONTINUE_CODE_REVIEW_ACTION }),
-					pick(0),
-				),
-			);
-		}
+		const labels = this.#confirmation
+			? this.#confirmation === "discard" ? ["Keep draft", "Discard draft"] : ["Keep editing", "Delete annotation"]
+			: this.#actions;
+		const choices = labels.map((label, index) =>
+			item(`a${index}`, {
+				label: [span(label)],
+				disabled: editing && !this.#confirmation || !this.#confirmation && this.#actionDisabled(index),
+				tone: index === 0 ? "success" : undefined,
+			}),
+		);
+		const buttons: NativeNode[] = [
+			actionButton("Cancel", "close", { keys: "escape" }),
+			selectList("actions", choices, {
+				selected: `a${this.#actionIndex}`,
+				tone: this.#focus === "actions" && !editing ? "accent" : undefined,
+			}),
+		];
 		return node(
 			"row",
 			{ role: "omp.actions", gap: "sm", align: "center" },
@@ -1906,12 +2079,12 @@ export class AnnotationOverlay implements Focusable {
 		const bodyWidth = this.#sidebarShown ? splitBodyWidth(width, sidebarWidth) : innerWidth;
 		this.#editor.setMaxHeight(Math.max(1, Math.min(MAX_ANNOTATION_EDITOR_ROWS, terminalHeight - 12)));
 		this.#editor.focused = this.focused && this.#annotating;
-		const chooserBaseRows = terminalHeight - (this.#actions.length + 7);
+		const chooserBaseRows = terminalHeight - 7;
 		const chooserFooterRows = this.#annotationChooser
 			? Math.max(0, Math.min(chooserBaseRows, Math.max(3, chooserBaseRows - MIN_BODY_ROWS)))
 			: Number.POSITIVE_INFINITY;
 		const footer = this.#renderFooter(innerWidth, chooserFooterRows);
-		const fixedRows = this.#actions.length + footer.length + 7;
+		const fixedRows = (this.#annotationChooser ? 0 : this.#actions.length) + footer.length + 7;
 		const availableBodyRows = terminalHeight - fixedRows;
 		this.#bodyHeight = this.#annotationChooser
 			? Math.max(0, availableBodyRows)

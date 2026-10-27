@@ -118,7 +118,11 @@ describe("review overlays under a native surface", () => {
 		expect(list(moved, "options").selected).toBe("o1");
 	});
 
-	it("code review: selecting a diff row anchors the next line note to it", () => {
+	async function activateCompletion(overlay: AnnotationOverlay, index: number): Promise<void> {
+		overlay.handleNativeEvent({ type: "activate", key: "actions", item: `a${index}` });
+		await Promise.resolve();
+	}
+	it("code review: selecting a diff row anchors the next line note and explicit paste completes", async () => {
 		const hunkHeader = "@@ -1,2 +1,2 @@";
 		const file: ReviewDiffFile = {
 			path: "src/a.ts",
@@ -154,9 +158,9 @@ describe("review overlays under a native surface", () => {
 			expect.objectContaining({ scope: "line", oldLine: 2, rawLine: "-gone", note: "why remove" }),
 		]);
 
-		// Paste is enabled once a note exists; its footer button finishes with the notes.
+		// Paste is an explicit selection from the safe completion menu.
 		overlay.describe();
-		overlay.handleNativeEvent({ type: "action", key: "actions/paste", act: "paste", mods: [] });
+		await activateCompletion(overlay, 1);
 		expect(result).toEqual({ action: "paste", annotations: overlay.getAnnotations() });
 	});
 
