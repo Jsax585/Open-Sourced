@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Korean translations for settings, startup help, and input hints, with terminal display-width handling.
+- Added Korean translations for settings, startup help, and input hints, with terminal display-width handling ([#17203](https://github.com/can1357/oh-my-pi/pull/17203) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 ## [18.13.1] - 2026-10-27
 
