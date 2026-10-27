@@ -499,9 +499,10 @@ async function preflightPerCallModel(
 		let resolvedAny = false;
 		for (const source of candidateRole ? resolveConfiguredModelPatterns(candidate, operatorSettings) : [candidate]) {
 			// The operator's role values resolve as they do everywhere else; the caller's own ids only exactly.
+			// Roles stay live; absent spawn-time preferences must not inherit later settings.
 			const resolution = candidateRole
 				? resolveModelRoleValue(source, chat, {
-						settings: operatorSettings,
+						roleLookup: operatorSettings,
 						matchPreferences: grants.matchPreferences,
 					})
 				: resolveModelOverride([source], chatRegistry, operatorSettings, exact);
