@@ -3420,28 +3420,22 @@ export class ModelRegistry {
 	 * The model catalog is rebuilt once, however many sources are cleared.
 	 */
 	clearSourceRegistrations(sourceIds: string | Iterable<string>): void {
-		let cleared = false;
-		for (const sourceId of typeof sourceIds === "string" ? [sourceIds] : sourceIds) {
+		let changed = false;
+		for (const sourceId of new Set(typeof sourceIds === "string" ? [sourceIds] : sourceIds)) {
 			unregisterCustomApis(sourceId);
 			unregisterOAuthProviders(sourceId);
 			const sourceProviders = this.#runtimeProvidersBySource.get(sourceId);
-			if (!sourceProviders || sourceProviders.size === 0) {
-				continue;
-			}
-			this.#ensureFullSnapshot();
+			if (!sourceProviders?.size) continue;
+			if (!changed) this.#ensureFullSnapshot();
+			changed = true;
 			this.#runtimeProvidersBySource.delete(sourceId);
 			for (const providerName of sourceProviders) {
-				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) {
-					continue;
-				}
+				if (this.#runtimeProviderSourceByName.get(providerName) !== sourceId) continue;
 				this.#runtimeProviderSourceByName.delete(providerName);
 				this.#clearRuntimeProviderState(providerName);
 			}
-			cleared = true;
 		}
-		if (cleared) {
-			this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
-		}
+		if (changed) this.#reloadStaticModels({ force: true, preserveRuntimeDiscovery: true });
 	}
 
 	/**
@@ -3470,9 +3464,7 @@ export class ModelRegistry {
 		const activeSources = new Set(activeSourceIds);
 		const inactiveSources = [...this.#registeredProviderSources].filter(sourceId => !activeSources.has(sourceId));
 		this.clearSourceRegistrations(inactiveSources);
-		for (const sourceId of inactiveSources) {
-			this.#registeredProviderSources.delete(sourceId);
-		}
+		for (const sourceId of inactiveSources) this.#registeredProviderSources.delete(sourceId);
 	}
 
 	/**

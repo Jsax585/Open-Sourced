@@ -11,6 +11,7 @@
 - Fixed a failed delivery of messages typed during compaction sending the first of them twice: once now and again with the retried batch ([#17161](https://github.com/can1357/oh-my-pi/pull/17161) by [@sjawhar](https://github.com/sjawhar))
 ### Changed
 
+- Rebuilt the model catalog once, instead of once per provider, when extension providers are cleared during session creation and extension rebinding ([#16513](https://github.com/can1357/oh-my-pi/pull/16513) by [@Komzpa](https://github.com/Komzpa))
 - TTSR interrupts include a bounded excerpt of the text that matched the rule, quoted as untrusted data with harness tags escaped; excerpts are retained once per stream, preserved alongside AST matches, and omitted for zero-width matches ([#17099](https://github.com/can1357/oh-my-pi/pull/17099) by [@shgew](https://github.com/shgew))
 ### Fixed
 
