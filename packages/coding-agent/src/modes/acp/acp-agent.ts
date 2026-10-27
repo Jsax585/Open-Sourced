@@ -168,6 +168,8 @@ type PromptTurnState = {
 	 * the error nor drop it when delivery fails.
 	 */
 	errorTextDelivery: Promise<boolean> | undefined;
+	// Captured at notification dispatch, never transferred to a successor turn.
+	taskUpdateDeliveries: Set<Promise<void>>;
 	/**
 	 * `abort()` is in-flight (or its bounded-timeout race). `undefined` while the turn is
 	 * running normally and after cleanup completes. The turn occupies `record.promptTurn`
@@ -376,7 +378,6 @@ type ManagedSessionRecord = {
 	lifetimeUnsubscribe: (() => void) | undefined;
 	closedError: RequestError | undefined;
 	promptEventHandlers: Set<Promise<void>>;
-	taskUpdateDeliveries: Set<Promise<void>>;
 	extensionUserMessageTasks: Set<Promise<void>>;
 };
 
@@ -1070,6 +1071,7 @@ export class AcpAgent implements Agent {
 					cancelRequested: false,
 					settled: false,
 					errorTextDelivery: undefined,
+					taskUpdateDeliveries: new Set(),
 					cleanup: undefined,
 					usageBaseline: this.#cloneUsageStatistics(record.session.sessionManager.getUsageStatistics()),
 					unsubscribe: undefined,
@@ -1167,9 +1169,11 @@ export class AcpAgent implements Agent {
 	}
 
 	async #waitForPromptEventHandlers(record: ManagedSessionRecord): Promise<void> {
+		const promptTurn = record.promptTurn;
 		while (record.promptEventHandlers.size > 0) {
 			await Promise.allSettled(Array.from(record.promptEventHandlers));
 		}
+		if (promptTurn && !promptTurn.settled) await this.#waitForTurnTaskUpdates(promptTurn);
 	}
 
 	#trackExtensionUserMessage(record: ManagedSessionRecord, task: Promise<void>): void {
@@ -1275,6 +1279,14 @@ export class AcpAgent implements Agent {
 				if (!residualAgentInvoked) {
 					await this.#waitForExtensionUserMessages(record, residualBaseline);
 					await this.#waitForPromptEventHandlers(record);
+					if (
+						record.promptTurn !== promptTurn ||
+						!promptTurn ||
+						promptTurn.settled ||
+						promptTurn.cancelRequested
+					) {
+						return;
+					}
 					this.#finishPrompt(record, { stopReason: "end_turn" });
 				}
 				return;
@@ -1300,6 +1312,9 @@ export class AcpAgent implements Agent {
 		if (!agentInvoked) {
 			await this.#waitForExtensionUserMessages(record, extensionPromptBaseline);
 			await this.#waitForPromptEventHandlers(record);
+			if (record.promptTurn !== promptTurn || !promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
+				return;
+			}
 			this.#finishPrompt(record, { stopReason: "end_turn" });
 		}
 	}
@@ -1744,7 +1759,6 @@ export class AcpAgent implements Agent {
 			extensionsConfigured: false,
 			closedError: undefined,
 			promptEventHandlers: new Set(),
-			taskUpdateDeliveries: new Set(),
 			pendingPromptDispatches: [],
 			extensionUserMessageTasks: new Set(),
 			lifetimeReady: false,
@@ -1754,18 +1768,20 @@ export class AcpAgent implements Agent {
 
 	async #handleLifetimeEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
 		if (this.#connection.signal.aborted || this.#sessions.get(record.registrationId) !== record) return;
+		const promptTurn = record.promptTurn;
+		const taskOwner = promptTurn && !promptTurn.settled && !promptTurn.cancelRequested ? promptTurn : undefined;
 		let delivery: Promise<void>;
 		if (isAsyncTaskUpdate(event)) {
 			// Sole owner of these frames, even during a prompt: changing prompt
 			// subscriptions cannot duplicate or drop a retained task callback.
 			delivery = this.#deliverTaskUpdate(record, event);
-			record.taskUpdateDeliveries.add(delivery);
+			taskOwner?.taskUpdateDeliveries.add(delivery);
 		} else if (record.lifetimeReady && (event.type === "thinking_level_changed" || event.type === "model_changed")) {
 			delivery = this.#pushConfigOptionUpdate(record);
+			record.promptEventHandlers.add(delivery);
 		} else {
 			return;
 		}
-		record.promptEventHandlers.add(delivery);
 		try {
 			await delivery;
 		} catch (error) {
@@ -1776,7 +1792,7 @@ export class AcpAgent implements Agent {
 			});
 		} finally {
 			record.promptEventHandlers.delete(delivery);
-			record.taskUpdateDeliveries.delete(delivery);
+			taskOwner?.taskUpdateDeliveries.delete(delivery);
 		}
 	}
 
@@ -1863,9 +1879,7 @@ export class AcpAgent implements Agent {
 			await this.#flushUnreportedTurnError(record, event);
 			await this.#emitEndOfTurnUpdates(record);
 			await this.#waitForAcpPromptIdle(record);
-			while (record.taskUpdateDeliveries.size > 0) {
-				await Promise.allSettled(Array.from(record.taskUpdateDeliveries));
-			}
+			await this.#waitForTurnTaskUpdates(promptTurn);
 			if (record.promptTurn !== promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 				return;
 			}
@@ -1978,6 +1992,24 @@ export class AcpAgent implements Agent {
 				messageId: record.liveMessageId ?? crypto.randomUUID(),
 			},
 		});
+	}
+
+	async #waitForTurnTaskUpdates(promptTurn: PromptTurnState): Promise<void> {
+		if (promptTurn.taskUpdateDeliveries.size === 0 || promptTurn.abortController.signal.aborted) return;
+		// Snapshot once: progress arriving during this drain remains session-owned
+		// and must not extend the prompt's lifetime. A stalled transport is bounded
+		// by the same budget as the async-job drain; delivery itself continues.
+		const pending = Promise.allSettled(Array.from(promptTurn.taskUpdateDeliveries));
+		const gate = Promise.withResolvers<void>();
+		const finish = () => gate.resolve();
+		const timer = setTimeout(finish, ACP_ASYNC_DELIVERY_DRAIN_TIMEOUT_MS);
+		promptTurn.abortController.signal.addEventListener("abort", finish, { once: true });
+		try {
+			await Promise.race([pending, gate.promise]);
+		} finally {
+			clearTimeout(timer);
+			promptTurn.abortController.signal.removeEventListener("abort", finish);
+		}
 	}
 
 	async #waitForAcpPromptIdle(record: ManagedSessionRecord): Promise<void> {
