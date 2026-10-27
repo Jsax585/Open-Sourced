@@ -458,6 +458,20 @@ export class EventController {
 		if (recap) this.ctx.present(new RecapNotice(recap));
 	}
 
+	/**
+	 * Re-arm idle work after a settings reload. Upstream folded the separate
+	 * compaction and recap timers into the session's single idle-maintenance
+	 * owner, which re-reads both settings on refresh, so the two entries share
+	 * one path and keep the reload replay's per-group routing.
+	 */
+	refreshIdleCompactionTimer(): void {
+		this.ctx.session.refreshIdleMaintenance();
+	}
+
+	refreshIdleRecapTimer(): void {
+		this.ctx.session.refreshIdleMaintenance();
+	}
+
 	dispose(): void {
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
