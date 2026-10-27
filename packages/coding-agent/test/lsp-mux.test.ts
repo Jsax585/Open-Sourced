@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { IpcConnection, ipcEndpoint } from "@oh-my-pi/pi-natives";
 import { MessageFramer } from "../src/jsonrpc/message-framing";
 import {
@@ -30,6 +31,7 @@ interface FakeState {
 	didChange: Record<string, number[]>;
 	didClose: string[];
 	notifications: string[];
+	watchedFiles: Array<{ uri: string; type: number }>;
 }
 
 interface PublishDiagnosticsParams {
@@ -391,6 +393,51 @@ describe("LspMuxServer", () => {
 		expect(replacement.connected.pid).not.toBe(first.connected.pid);
 		expect(replacement.connected.pid).not.toBe(second.connected.pid);
 	}, 10_000);
+
+	it.skipIf(process.platform === "win32")(
+		"keeps registered file watches with the retained server across client disconnects",
+		async () => {
+			const target = path.join(tmpDir, "dependency.ts");
+			const uri = pathToFileURL(target).href;
+			await Bun.write(target, "before");
+			const first = await link();
+			await initialize(first.client);
+			const response = await first.client.request<{ error: unknown }>("test/serverRequest", {
+				method: "client/registerCapability",
+				params: {
+					registrations: [
+						{
+							id: "dependencies",
+							method: "workspace/didChangeWatchedFiles",
+							registerOptions: { watchers: [{ globPattern: "**/*.ts" }] },
+						},
+					],
+				},
+			});
+			expect(response.error).toBeNull();
+			await Bun.write(target, "first external edit");
+			await pollUntil(async () => (await state(first.client)).watchedFiles.length === 1, "first watched-file event");
+			expect((await state(first.client)).watchedFiles).toEqual([{ uri, type: 2 }]);
+
+			const closed = first.client.waitForClose();
+			first.client.destroy();
+			await closed;
+			await Bun.write(target, "edit while detached");
+			const second = await link();
+			expect(second.connected.pid).toBe(first.connected.pid);
+			expect(second.connected.spawned).toBe(false);
+			await initialize(second.client);
+			await pollUntil(
+				async () => (await state(second.client)).watchedFiles.length === 2,
+				"detached watched-file event",
+			);
+			expect((await state(second.client)).watchedFiles).toEqual([
+				{ uri, type: 2 },
+				{ uri, type: 2 },
+			]);
+		},
+		10_000,
+	);
 
 	it("survives a language server that exits while documents are open", async () => {
 		// Regression: session teardown wrote didClose to the exited child's

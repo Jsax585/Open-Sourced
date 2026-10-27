@@ -1,7 +1,8 @@
 import { type IpcConnection, IpcServer } from "@oh-my-pi/pi-natives";
-import { isRecord, logger, postmortem, ptree, setProcessName } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, postmortem, ptree, setProcessName, untilAborted } from "@oh-my-pi/pi-utils";
 import { encodeMessageFrame, MessageFramer } from "../../jsonrpc/message-framing";
 import type { LspJsonRpcId, LspJsonRpcNotification, LspJsonRpcRequest, LspJsonRpcResponse } from "../types";
+import { WATCHED_FILES_METHOD, WatchedFiles } from "../watched-files";
 import {
 	LSP_MUX_PROJECT_DIR_ENV,
 	LSP_MUX_SOCKET_ENV,
@@ -96,6 +97,7 @@ class ServerInstance {
 	nextClientId = 1;
 	lingerTimer?: NodeJS.Timeout;
 	stopping = false;
+	watchedFiles?: WatchedFiles;
 
 	constructor(key: string, params: MuxConnectParams) {
 		this.key = key;
@@ -394,6 +396,23 @@ export class LspMuxServer {
 
 	#spawnServer(key: string, params: MuxConnectParams): ServerInstance {
 		const server = new ServerInstance(key, params);
+		server.watchedFiles = new WatchedFiles(params.cwd, async changes => {
+			if (server.stopping) return;
+			for (const change of changes) server.diagnostics.delete(change.uri);
+			try {
+				await untilAborted(
+					AbortSignal.timeout(SHUTDOWN_BUDGET_MS),
+					this.#writeServer(server, {
+						jsonrpc: "2.0",
+						method: WATCHED_FILES_METHOD,
+						params: { changes },
+					}),
+				);
+			} catch (error) {
+				this.#killServer(server);
+				throw error;
+			}
+		});
 		this.#servers.add(server);
 		void this.#readServer(server);
 		server.proc.exited.then(
@@ -489,6 +508,25 @@ export class LspMuxServer {
 	}
 
 	async #handleServerRequest(server: ServerInstance, message: LspJsonRpcRequest): Promise<void> {
+		try {
+			if (message.method === "client/registerCapability" && isRecord(message.params)) {
+				const registrations = message.params.registrations;
+				if (Array.isArray(registrations)) await server.watchedFiles?.register(registrations);
+			} else if (message.method === "client/unregisterCapability" && isRecord(message.params)) {
+				const raw = message.params.unregisterations ?? message.params.unregistrations;
+				if (Array.isArray(raw)) {
+					await server.watchedFiles?.unregister(
+						raw.flatMap(item => (isRecord(item) && typeof item.id === "string" ? [item.id] : [])),
+					);
+				}
+			}
+		} catch (error) {
+			await this.#writeServer(
+				server,
+				rpcError(message.id, -32603, `Capability registration failed: ${String(error)}`),
+			);
+			return;
+		}
 		if (
 			message.method === "client/registerCapability" ||
 			message.method === "client/unregisterCapability" ||
@@ -642,6 +680,7 @@ export class LspMuxServer {
 
 	#serverExited(server: ServerInstance): void {
 		server.stopping = true;
+		void server.watchedFiles?.close();
 		this.#servers.delete(server);
 		if (server.lingerTimer) clearTimeout(server.lingerTimer);
 		server.pending.clear();
@@ -652,6 +691,7 @@ export class LspMuxServer {
 	async #stopServer(server: ServerInstance): Promise<void> {
 		if (server.stopping) return;
 		server.stopping = true;
+		await server.watchedFiles?.close();
 		if (server.lingerTimer) clearTimeout(server.lingerTimer);
 		const id = server.muxId();
 		const { promise, resolve } = Promise.withResolvers<void>();
@@ -675,6 +715,7 @@ export class LspMuxServer {
 
 	#killServer(server: ServerInstance): void {
 		server.stopping = true;
+		void server.watchedFiles?.close();
 		try {
 			server.proc.kill();
 		} catch {
