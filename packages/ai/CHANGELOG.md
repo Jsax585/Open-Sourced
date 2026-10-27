@@ -4,7 +4,6 @@
 
 ### Fixed
 
-- Codex accounts whose spend cap is used up are no longer picked through credit overage or from usage cached before the upgrade ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))
 - Fixed Codex WebSocket response reads stalling behind final request-debug dump writes when `PI_REQ_DEBUG=1`, preventing debug I/O from overflowing the response queue while preserving exact sent-body dumps and awaiting debug cleanup at completion.
 - Fixed Codex WebSocket reconnects across authentication or routing changes, including pooled sockets that fail the 30-second idle health gate, hook deletes or replacements that require immutable full replay, and lazy steering attaches whose ownership changes before consumption, so effective hook-adjusted tool history is replayed in order without an obsolete `previous_response_id` before same-route chaining resumes; unchanged hook-owned `client_metadata` now receives the live transport turn-state just before send, while explicit turn-state edits or deletion remain respected; prepared hook payloads are reused across pre-send retries and handshake-to-SSE fallback without repeating hook side effects, while post-send retries retain their existing hook behavior; stable hook-adjusted options retain chaining without permitting incompatible steering attaches, and hook-owned WebSocket frame types survive preparation and retries without leaking into SSE bodies; requestless steering attaches clear the prior turn's request/usage diagnostic pair without incrementing request counters or changing returned usage; this overlaps the scope discussed in [#12131](https://github.com/can1357/oh-my-pi/issues/12131) without claiming coordination or supersession ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed Codex payload hooks receiving only a chained input suffix: hooks now inspect the complete logical input, and empty or redacted replacements are sent without restoring old history or inheriting its continuation; safe wire deltas are derived after hook approval, including conservative accepted-steering handling ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
@@ -12,6 +11,13 @@
 - Fixed late Codex WebSocket prewarming interrupting active requests, pending handshakes, or outstanding steering successors, including overlapping SSE completion, settlement, and lazy-attach handoffs; append-history resets no longer consume queued steering, and ordinary idle routing, authentication, and health-based replacement resumes once steering ownership is consumed or retired ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed overlapping Codex requests that lose socket ownership during payload hooks, handshake joins, or lazy stream handoff falling back to SSE without closing the active request's socket or repeating already prepared hooks ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
 - Fixed lazy Codex compaction streams that fall back to SSE retaining an obsolete WebSocket continuation baseline; append history is now invalidated after successful SSE submission, including busy-socket fallback, but not when submission fails ([#15024](https://github.com/can1357/oh-my-pi/pull/15024) by [@xiangnan0811](https://github.com/xiangnan0811)).
+
+## [18.13.1] - 2026-10-27
+
+### Fixed
+
+- Codex accounts whose spend cap is used up are no longer picked through credit overage or from usage cached before the upgrade ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))
+- Fixed Codex capacity 429s (`turn_rate_limit_exceeded`, "Codex is at capacity") reporting "Try again in ~N min" from the plan's usage-window reset, which made retries wait hours instead of the response's Retry-After ([#17087](https://github.com/can1357/oh-my-pi/pull/17087) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.0] - 2026-10-26
 
