@@ -8,6 +8,8 @@
 - Fixed an edit after a restart replacing a line that `read` or `grep` had shown cut at the column cap and silently dropping the rest of that line; such edits now ask for a full `:raw` read of the line first, while edits to lines within the cap still apply ([#16171](https://github.com/can1357/oh-my-pi/issues/16171))
 - Fixed Enter on an unknown slash command such as `/not-a-command` running a command whose description happened to match it (e.g. `/loop`, which then resent every later prompt after each turn); Enter now sends what you typed, including as the deny-and-steer message for a pending tool approval, unless you select a suggestion first ([#16265](https://github.com/can1357/oh-my-pi/issues/16265))
 - Fixed `read` of web pages dropping collapsed sections such as accordion and expander panels (e.g. a product page's "Item details" table); content in `<template>`, `<noscript>` and scripts stays out ([#16246](https://github.com/can1357/oh-my-pi/issues/16246))
+- Fixed an extension message sent with `deliverAs: "aside"` and `triggerTurn: true` being folded into the conversation with no turn in plan mode or after an earlier interrupt, when it was sent to an idle session or no run picked it up (a prompt refused before its run, or the message arriving after the run's last check); it now starts a turn unless you interrupt after it was sent
+- Fixed `agent_end` reporting `isTerminal: false` after an interrupt when the messages left over were only folded into the conversation and no turn followed
 
 ## [18.12.2] - 2026-10-18
 
