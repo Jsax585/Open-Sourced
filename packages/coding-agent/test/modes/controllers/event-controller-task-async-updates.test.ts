@@ -30,6 +30,7 @@ import { createInteractiveModeContext } from "../../helpers/interactive-mode-con
 function taskResult(asyncState: "running" | "completed" | "failed" | undefined, text: string) {
 	const details: TaskToolDetails = {
 		projectAgentsDir: null,
+		blockingActive: false,
 		results: [],
 		totalDurationMs: 5,
 		...(asyncState ? { async: { state: asyncState, jobId: "Job1", type: "task" as const } } : {}),

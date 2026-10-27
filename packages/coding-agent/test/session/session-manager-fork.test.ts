@@ -335,6 +335,7 @@ describe("SessionManager.forkFrom", () => {
 			nestedTask?: TaskToolDetails,
 		): TaskToolDetails => ({
 			projectAgentsDir: null,
+			blockingActive: false,
 			usage,
 			totalDurationMs: 1,
 			results: [
@@ -394,6 +395,7 @@ describe("SessionManager.forkFrom", () => {
 				isError: false,
 				timestamp: Date.now(),
 				details: {
+					blockingActive: false,
 					usage: taskUsage,
 					results: [
 						{

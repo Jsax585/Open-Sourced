@@ -2544,6 +2544,7 @@ export interface TaskToolDetails {
 	projectAgentsDir: string | null;
 	results: SingleResult[];
 	totalDurationMs: number;
+	blockingActive: boolean;
 	/** Aggregated usage across all subagents. */
 	usage?: Usage;
 	outputPaths?: string[];

@@ -72,6 +72,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [makeCompletedResult(extractedToolData)],
 			totalDurationMs: 250,
 		};
@@ -87,6 +88,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [],
 			totalDurationMs: 250,
 			progress: [makeCompletedProgress(extractedToolData)],

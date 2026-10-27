@@ -343,19 +343,29 @@ function hasAsyncTaskDetails(result: unknown): boolean {
 	return typeof async === "object" && async !== null && "type" in async && async.type === "task";
 }
 
-// Routing identity is broader than off-turn ownership: starts have no result,
-// while updates and ends can also identify tasks through structured provenance.
-function isTaskFrame(event: AgentSessionEvent): boolean {
-	switch (event.type) {
-		case "tool_execution_start":
-			return event.toolName === "task";
-		case "tool_execution_update":
-			return event.toolName === "task" || hasAsyncTaskDetails(event.partialResult);
-		case "tool_execution_end":
-			return event.toolName === "task" || hasAsyncTaskDetails(event.result);
-		default:
-			return false;
-	}
+// Only native task calls have a stable retained identity from their start frame.
+function isTaskFrame(
+	event: AgentSessionEvent,
+): event is Extract<
+	AgentSessionEvent,
+	{ type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end" }
+> & { toolName: "task" } {
+	return (
+		(event.type === "tool_execution_start" ||
+			event.type === "tool_execution_update" ||
+			event.type === "tool_execution_end") &&
+		event.toolName === "task"
+	);
+}
+
+function isAsyncTaskUpdate(event: AgentSessionEvent): event is Extract<
+	AgentSessionEvent,
+	{ type: "tool_execution_update" }
+> & {
+	toolName: "task";
+	partialResult: { details: { async: { type: "task" } } };
+} {
+	return isTaskFrame(event) && event.type === "tool_execution_update" && hasAsyncTaskDetails(event.partialResult);
 }
 
 type ManagedSessionRecord = {
@@ -1784,7 +1794,7 @@ export class AcpAgent implements Agent {
 		const promptTurn = record.promptTurn;
 		const taskOwner = promptTurn && !promptTurn.settled && !promptTurn.cancelRequested ? promptTurn : undefined;
 		let delivery: Promise<void>;
-		if (event.type === "tool_execution_update" && hasAsyncTaskDetails(event.partialResult)) {
+		if (isAsyncTaskUpdate(event)) {
 			// Sole owner of these frames, even during a prompt: changing prompt
 			// subscriptions cannot duplicate or drop a retained task callback.
 			delivery = this.#deliverTaskUpdate(record, event);
@@ -1853,7 +1863,7 @@ export class AcpAgent implements Agent {
 	}
 
 	async #handlePromptEvent(record: ManagedSessionRecord, event: AgentSessionEvent): Promise<void> {
-		if (event.type === "tool_execution_update" && hasAsyncTaskDetails(event.partialResult)) return;
+		if (isAsyncTaskUpdate(event)) return;
 		const promptTurn = record.promptTurn;
 		if (!promptTurn || promptTurn.settled || promptTurn.cancelRequested) {
 			return;

@@ -85,6 +85,7 @@ describe("task renderer: nested live rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1234,
 			progress: [progress],
@@ -105,6 +106,7 @@ describe("task renderer: nested live rendering", () => {
 				task: [
 					{
 						projectAgentsDir: null,
+						blockingActive: false,
 						results: [
 							makeCompletedSubResult("Parent.AlphaSub", "Alpha child"),
 							makeCompletedSubResult("Parent.BetaSub", "Beta child"),
@@ -130,6 +132,7 @@ describe("task renderer: nested live rendering", () => {
 	it("renders the in-flight nested task snapshot (progress[]) before the call ends", async () => {
 		const inflight: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [
@@ -156,6 +159,7 @@ describe("task renderer: nested live rendering", () => {
 	it("does not recurse forever when a nested task snapshot points at itself", async () => {
 		const inflight: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [],
@@ -183,6 +187,7 @@ describe("task renderer: nested live rendering", () => {
 				task: [
 					{
 						projectAgentsDir: null,
+						blockingActive: false,
 						results: [makeCompletedSubResult("Parent.EpsilonSub", "Epsilon done")],
 						totalDurationMs: 1000,
 					} satisfies TaskToolDetails,
@@ -190,6 +195,7 @@ describe("task renderer: nested live rendering", () => {
 			},
 			inflightTaskDetails: {
 				projectAgentsDir: null,
+				blockingActive: true,
 				results: [],
 				totalDurationMs: 0,
 				progress: [makeRunningSubProgress("Parent.ZetaSub", "Zeta running")],
@@ -232,6 +238,7 @@ describe("task renderer: nested live rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [makeRunningProgress({ id: "Probe", description: "Investigate padding" })],
@@ -265,6 +272,7 @@ describe("task renderer: nested live rendering", () => {
 		const bad: SingleResult = { ...makeCompletedSubResult("Beta", "blew up"), exitCode: 1, error: "boom" };
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [ok, bad],
 			totalDurationMs: 39_400,
 		};

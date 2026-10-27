@@ -370,6 +370,7 @@ export class WorkPool {
 					if (progress.contextWindow !== undefined) agent.contextWindow = progress.contextWindow;
 					const details: TaskToolDetails = {
 						projectAgentsDir: null,
+						blockingActive: false,
 						results: [],
 						totalDurationMs: Date.now() - batch.startedAt,
 						progress: [progress],

@@ -33,6 +33,7 @@ function asyncSnapshot(description: string): {
 		content: [{ type: "text", text: "Background job started" }],
 		details: {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [],
 			totalDurationMs: 0,
 			progress: [progressEntry(description)],
@@ -63,6 +64,7 @@ function finalSnapshot(output: string): {
 		content: [{ type: "text", text: output }],
 		details: {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [result],
 			totalDurationMs: 1234,
 			async: { state: "completed", jobId: "job-1", type: "task" },

@@ -83,6 +83,7 @@ describe("native task", () => {
 	it("renders one agent node per subagent, no cards, with the assignment prefix stripped", () => {
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [
@@ -121,12 +122,14 @@ describe("native task", () => {
 	it("nests a subagent's in-flight children as agent nodes inside its node", () => {
 		const child: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [progress("Child")],
 		};
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [progress("Parent", { inflightTaskDetails: child })],

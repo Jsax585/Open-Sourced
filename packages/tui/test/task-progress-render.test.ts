@@ -48,7 +48,13 @@ function finishedResult(overrides: Partial<SingleResult> = {}): SingleResult {
 }
 
 function detailsFor(progress: AgentProgress): TaskToolDetails {
-	return { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: [progress] };
+	return {
+		projectAgentsDir: null,
+		blockingActive: progress.status === "running" || progress.status === "pending",
+		results: [],
+		totalDurationMs: 0,
+		progress: [progress],
+	};
 }
 
 function findRow(component: { render: (w: number) => readonly string[] }, needle: string): string {
@@ -242,6 +248,7 @@ describe("task progress rendering", () => {
 							content: [],
 							details: {
 								projectAgentsDir: null,
+								blockingActive: false,
 								totalDurationMs: 1000,
 								results: [
 									finishedResult({
@@ -287,12 +294,18 @@ describe("task progress rendering", () => {
 			{ details: detailsFor(runningProgress({ ...metadata, status: "completed" })) },
 			{ details: detailsFor(runningProgress({ ...metadata, status: "failed" })), status: "failed" },
 			{
-				details: { projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult(metadata)] },
+				details: {
+					projectAgentsDir: null,
+					blockingActive: false,
+					totalDurationMs: 0,
+					results: [finishedResult(metadata)],
+				},
 				status: "done",
 			},
 			{
 				details: {
 					projectAgentsDir: null,
+					blockingActive: false,
 					totalDurationMs: 0,
 					results: [finishedResult({ ...metadata, exitCode: 1 })],
 				},
@@ -344,7 +357,7 @@ describe("task progress rendering", () => {
 		};
 		const snapshots: TaskToolDetails[] = [
 			detailsFor(runningProgress(metadata)),
-			{ projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult(metadata)] },
+			{ projectAgentsDir: null, blockingActive: false, totalDurationMs: 0, results: [finishedResult(metadata)] },
 		];
 		for (const details of snapshots) {
 			const row = Bun.stripANSI(
@@ -367,6 +380,7 @@ describe("task progress rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			totalDurationMs: 0,
 			results: [finishedResult({ id: "UnknownWidthWorker", agent: "scout", exitCode: 1 })],
 		};
@@ -391,7 +405,12 @@ describe("task progress rendering", () => {
 			setFeedModelBadgeEnabled(enabled);
 			for (const details of [
 				detailsFor(runningProgress({ ...metadata, status: "failed" })),
-				{ projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult({ ...metadata, exitCode: 1 })] },
+				{
+					projectAgentsDir: null,
+					blockingActive: false,
+					totalDurationMs: 0,
+					results: [finishedResult({ ...metadata, exitCode: 1 })],
+				},
 			]) {
 				const component = taskToolRenderer.renderResult(
 					{ content: [], details },
@@ -417,7 +436,7 @@ describe("task progress rendering", () => {
 		const metadata = { id: "LegacyWorker", resolvedModel: "custom/model:high" };
 		const snapshots: TaskToolDetails[] = [
 			detailsFor(runningProgress(metadata)),
-			{ projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult(metadata)] },
+			{ projectAgentsDir: null, blockingActive: false, totalDurationMs: 0, results: [finishedResult(metadata)] },
 		];
 		for (const details of snapshots) {
 			const row = Bun.stripANSI(
@@ -489,6 +508,7 @@ describe("task progress rendering", () => {
 
 		const resultDetails: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [finishedResult({ id: "SonicCount", agent: "sonic" })],
 			totalDurationMs: 0,
 		};
@@ -524,6 +544,7 @@ describe("task progress rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [
@@ -671,6 +692,7 @@ describe("task progress rendering", () => {
 		const options: RenderResultOptions = { expanded: false, isPartial: true, spinnerFrame: 0 };
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [
@@ -700,6 +722,7 @@ describe("task progress rendering", () => {
 		const options: RenderResultOptions = { expanded: false, isPartial: false };
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [
 				finishedResult({ index: 0, id: "SlowFinish", durationMs: 9000 }),
 				finishedResult({ index: 1, id: "FastFinish", durationMs: 1000 }),
@@ -724,6 +747,7 @@ describe("task progress rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 0,
 			progress: [
@@ -771,6 +795,7 @@ describe("task progress rendering", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [
 				finishedResult({ index: 0, id: "FastOne", durationMs: 1000 }),
 				finishedResult({ index: 1, id: "FastTwo", durationMs: 2000 }),
@@ -810,7 +835,12 @@ describe("task progress rendering", () => {
 		const description = "Inspect\trendering\tboundaries";
 		const snapshots: TaskToolDetails[] = [
 			detailsFor(runningProgress({ id: "TabWorker", description })),
-			{ projectAgentsDir: null, totalDurationMs: 0, results: [finishedResult({ id: "TabWorker", description })] },
+			{
+				projectAgentsDir: null,
+				blockingActive: false,
+				totalDurationMs: 0,
+				results: [finishedResult({ id: "TabWorker", description })],
+			},
 		];
 		for (const details of snapshots) {
 			const rows = taskToolRenderer
@@ -827,6 +857,7 @@ describe("task progress rendering", () => {
 			detailsFor(runningProgress({ id: "TabNarrow", description: longDescription })),
 			{
 				projectAgentsDir: null,
+				blockingActive: false,
 				totalDurationMs: 0,
 				results: [finishedResult({ id: "TabNarrow", description: longDescription })],
 			},

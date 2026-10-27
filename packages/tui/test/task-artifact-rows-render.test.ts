@@ -38,6 +38,7 @@ describe("task renderer: isolation artifact row labels", () => {
 		const theme = (await getThemeByName("dark"))!;
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [result],
 			totalDurationMs: 250,
 		};

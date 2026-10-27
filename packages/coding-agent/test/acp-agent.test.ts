@@ -1113,8 +1113,8 @@ describe("ACP agent", () => {
 						toolName: "task",
 						result: completed,
 					});
-					// Structured task provenance also routes wrapped task results,
-					// without treating unrelated tool names as spawning-call metadata.
+					// Task-shaped results do not change a wrapper's live-session ownership.
+					emit({ type: "tool_execution_start", toolCallId: "wrapped-fresh-task", toolName: "wrapped_task", args });
 					emit({
 						type: "tool_execution_update",
 						toolCallId: "wrapped-fresh-task",
@@ -1158,12 +1158,19 @@ describe("ACP agent", () => {
 					args,
 					partialResult: { content: [], details: { results: [] } },
 				});
+				// A wrapper cannot acquire off-turn forwarding from result provenance.
+				emit({
+					type: "tool_execution_update",
+					toolCallId: "wrapped-fresh-task",
+					toolName: "wrapped_task",
+					args,
+					partialResult: progress,
+				});
 				const lifecycle = harness.updates.filter(
 					notification =>
 						"toolCallId" in notification.update && notification.update.toolCallId === "new-fresh-task",
 				);
-				// Clients only accept notifications for their registered ACP session,
-				// and cannot apply updates until the spawning call has been introduced.
+				// Retained native task notifications remain visible to the registered client.
 				const accepted = lifecycle.filter(notification => notification.sessionId === created.sessionId);
 				expect(accepted.map(notification => notification.update)).toMatchObject([
 					{ sessionUpdate: "tool_call", toolCallId: "new-fresh-task", status: "pending", rawInput: args },
@@ -1187,10 +1194,30 @@ describe("ACP agent", () => {
 						"toolCallId" in notification.update && notification.update.toolCallId === "wrapped-fresh-task",
 				);
 				expect(wrappedFrames.map(notification => notification.sessionId)).toEqual([
-					created.sessionId,
-					created.sessionId,
+					session.sessionId,
+					session.sessionId,
+					session.sessionId,
 				]);
-				expect(wrappedFrames.map(notification => notification.update._meta)).toEqual([undefined, undefined]);
+				expect(wrappedFrames.map(notification => notification.update)).toMatchObject([
+					{ sessionUpdate: "tool_call", toolCallId: "wrapped-fresh-task", status: "pending", rawInput: args },
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "wrapped-fresh-task",
+						status: "in_progress",
+						rawOutput: progress,
+					},
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "wrapped-fresh-task",
+						status: "completed",
+						rawOutput: completed,
+					},
+				]);
+				expect(wrappedFrames.map(notification => notification.update._meta)).toEqual([
+					undefined,
+					undefined,
+					undefined,
+				]);
 				const nonTaskFrames = harness.updates.filter(
 					notification => "toolCallId" in notification.update && notification.update.toolCallId === "fresh-bash",
 				);
@@ -1200,6 +1227,20 @@ describe("ACP agent", () => {
 					session.sessionId,
 				]);
 				expectAcpNotifications([...lifecycle, ...wrappedFrames, ...nonTaskFrames]);
+				// A consumer keys tool calls by session and rejects orphan updates.
+				const introduced = new Map<string, Set<string>>();
+				for (const { sessionId, update } of harness.updates) {
+					if (update.sessionUpdate === "tool_call") {
+						let calls = introduced.get(sessionId);
+						if (!calls) introduced.set(sessionId, (calls = new Set()));
+						calls.add(update.toolCallId);
+					} else if (
+						update.sessionUpdate === "tool_call_update" &&
+						["new-fresh-task", "wrapped-fresh-task", "fresh-bash"].includes(update.toolCallId)
+					) {
+						expect(introduced.get(sessionId)?.has(update.toolCallId)).toBe(true);
+					}
+				}
 				if (freshBeforeBootstrap) await advanceBootstrapGuard();
 				const beforeConfig = harness.updates.length;
 				await harness.agent.setSessionConfigOption({

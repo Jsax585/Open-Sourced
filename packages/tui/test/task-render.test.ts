@@ -55,6 +55,7 @@ function makeParentWithNestedProgress(childCount: number): AgentProgress {
 		task: "parent task",
 		inflightTaskDetails: {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1,
 			progress: children,
@@ -83,6 +84,7 @@ function makeSingleResult(index: number, overrides?: Partial<SingleResult>): Sin
 function makeParentWithNestedResults(childCount: number): TaskToolDetails {
 	const nested: TaskToolDetails = {
 		projectAgentsDir: null,
+		blockingActive: false,
 		// Failure on the LAST child in display order (equal durations, index tiebreak):
 		// a plain head-of-list pick would elide it, so its visibility proves the
 		// failure-first selection of `selectCollapsedResults`.
@@ -92,7 +94,7 @@ function makeParentWithNestedResults(childCount: number): TaskToolDetails {
 		totalDurationMs: 1,
 	};
 	const parent = makeSingleResult(0, { id: "Parent", extractedToolData: { task: [nested] } });
-	return { projectAgentsDir: null, results: [parent], totalDurationMs: 1 };
+	return { projectAgentsDir: null, blockingActive: false, results: [parent], totalDurationMs: 1 };
 }
 
 function renderResultText(details: TaskToolDetails, expanded: boolean, uiTheme: Theme): string {
@@ -107,6 +109,7 @@ function renderResultText(details: TaskToolDetails, expanded: boolean, uiTheme: 
 function renderProgressText(progress: AgentProgress, expanded: boolean, uiTheme: Theme): string {
 	const details: TaskToolDetails = {
 		projectAgentsDir: null,
+		blockingActive: progress.status === "running" || progress.status === "pending",
 		results: [],
 		totalDurationMs: 1,
 		progress: [progress],
@@ -200,6 +203,7 @@ describe("task live progress rendering", () => {
 		const output = JSON.stringify({ "\x1b[2Kkey": "safe value" });
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [
 				makeSingleResult(0, {
 					id: "Final\x1b[2KAgent",
@@ -273,6 +277,7 @@ describe("task live progress rendering", () => {
 		const progress = makeProgress([]);
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1,
 			progress: [progress],
@@ -311,6 +316,7 @@ describe("taskCardAgentIds", () => {
 	it("collects in-flight progress ids before any result settles", () => {
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1,
 			progress: [
@@ -324,6 +330,7 @@ describe("taskCardAgentIds", () => {
 	it("unions settled result ids and dedupes repeats", () => {
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [makeResult("DoneOne"), makeResult("DoneOne")],
 			totalDurationMs: 1,
 			progress: [{ ...makeProgress([]), id: "DoneOne" }],
@@ -334,18 +341,21 @@ describe("taskCardAgentIds", () => {
 	it("collects nested worker ids from extracted task snapshots", () => {
 		const nested: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [makeResult("NestedDone")],
 			totalDurationMs: 1,
 			progress: [{ ...makeProgress([]), id: "NestedLive" }],
 		};
 		const inflight: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1,
 			progress: [{ ...makeProgress([]), id: "InflightLive" }],
 		};
 		const details: TaskToolDetails = {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 1,
 			progress: [
