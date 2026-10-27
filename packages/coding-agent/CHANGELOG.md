@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Browser `app.relay` now also accepts a relay URL (`app: { relay: "http://127.0.0.1:9225" }`), so one session can drive several relays, such as one per Chrome profile, without writing `browser.relayUrl` and answering a settings prompt for each switch ([#16678](https://github.com/can1357/oh-my-pi/pull/16678) by [@trukhinyuri](https://github.com/trukhinyuri))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
