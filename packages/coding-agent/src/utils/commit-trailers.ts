@@ -33,7 +33,8 @@ const GIT_GENERATED_LINE = /^(Signed-off-by: |\(cherry picked from commit )/;
  * needed, empty value allowed), a continuation when it starts with whitespace,
  * and prose otherwise. Continuations below the topmost trailer belong to it; the
  * rest count as prose. The paragraph is a trailer block when it holds a trailer
- * and either a git-generated one or under a quarter prose lines. Returns
+ * and either no prose at all, or a git-generated trailer and at most three prose
+ * lines per trailer line. Returns
  * `lines.length` when there is no block. Pinned against `git interpret-trailers`
  * by this module's test.
  */
@@ -64,7 +65,8 @@ function trailerBlockStart(lines: readonly string[]): number {
 		}
 	}
 	if (onlyBlank || trailers === 0) return lines.length;
-	if (gitGenerated || (prose + continuations) * 3 < trailers) return start;
+	const nonTrailers = prose + continuations;
+	if (nonTrailers === 0 || (gitGenerated && trailers * 3 >= nonTrailers)) return start;
 	return lines.length;
 }
 

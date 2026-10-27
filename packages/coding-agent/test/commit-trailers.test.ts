@@ -68,6 +68,11 @@ const SHAPES: Record<string, string> = {
 	"the trailer is already there": `subject\n\n${TRAILER}\n`,
 	"a key with a space, rescued by a git-generated trailer":
 		"subject\n\nBenchmark entrypoint: bash a.sh\nSigned-off-by: A <a@b>",
+	"one prose line above four trailers": "subject\n\nprose\nA: b\nC: d\nE: f\nG: h\n",
+	"git-generated trailer under four prose lines": "subject\n\nprose\nx\ny\nz\nSigned-off-by: A <a@b>\n",
+	"git-generated trailer under prose with continuations":
+		"subject\n\nprose\n one\n two\n three\n four\n five\n six\nSigned-off-by: A <a@b>\n",
+	"git-generated trailer under three prose lines": "subject\n\nprose\nx\ny\nSigned-off-by: A <a@b>\n",
 };
 
 // git's two code paths disagree on these: `interpret-trailers` appends inside
