@@ -119,6 +119,10 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		(options.useDefaults ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined);
 	const input = resolvedModel.input ?? reference?.input ?? (options.useDefaults ? ["text"] : undefined);
 	const supportsTools = resolvedModel.supportsTools ?? reference?.supportsTools;
+	const referenceThinkingEfforts =
+		resolvedModel.thinking === undefined
+			? getReferenceThinkingEfforts(reference, resolvedModel.provider, resolvedModel.api)
+			: undefined;
 	const built = buildModel({
 		id: resolvedModel.id,
 		name: resolvedModel.name ?? (options.useDefaults ? resolvedModel.id : undefined),
@@ -128,10 +132,7 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		baseUrl: resolvedModel.baseUrl,
 		reasoning: resolvedModel.reasoning ?? reference?.reasoning ?? (options.useDefaults ? false : undefined),
 		thinking: inheritReferenceThinking(resolvedModel.thinking, reference, resolvedModel.provider),
-		referenceThinkingEfforts:
-			resolvedModel.thinking === undefined
-				? getReferenceThinkingEfforts(reference, resolvedModel.provider, resolvedModel.api)
-				: undefined,
+		referenceThinkingEfforts,
 		input: input as ("text" | "image")[],
 		imageInputDecoder: resolvedModel.imageInputDecoder,
 		imageCountBudget: resolvedModel.imageCountBudget,
@@ -145,7 +146,11 @@ export function finalizeCustomModel(resolvedModel: CustomModelOverlay, options: 
 		resolveHeaders: resolvedModel.resolveHeaders,
 		omitMaxOutputTokens: resolvedModel.omitMaxOutputTokens ?? reference?.omitMaxOutputTokens,
 		preferWebsockets: resolvedModel.preferWebsockets,
-		compat: mergeCompat(reference?.compatConfig, resolvedModel.compat),
+		// A portable ladder carries model capability, not the source host's wire contract.
+		compat:
+			referenceThinkingEfforts !== undefined
+				? resolvedModel.compat
+				: mergeCompat(reference?.compatConfig, resolvedModel.compat),
 		tokenizer: resolvedModel.tokenizer,
 		contextPromotionTarget: resolvedModel.contextPromotionTarget,
 		compactionModel: resolvedModel.compactionModel,

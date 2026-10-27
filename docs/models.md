@@ -586,6 +586,10 @@ configured compatibility flags still control whether effort is sent; set
 `compat.supportsReasoningEffort: false` if the gateway rejects it. Catalog recovery describes the
 expected model capabilities, not a live validation of a proxy's implementation.
 
+For custom model definitions that borrow a cross-provider effort ladder, the reference's `compat`
+is not inherited. Target provider/model compatibility remains authoritative; same-provider and
+non-borrowing custom references keep their existing compatibility merge behavior.
+
 ```yaml
 providers:
   newapi-reseller:

@@ -3858,6 +3858,176 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(model.requestModelId).toBeUndefined();
 	});
 
+	test("custom portable effort recovery excludes source wire compat while preserving target gates", async () => {
+		const id = "tenant/catalog-custom-wire-effort-fixture";
+		const efforts = [Effort.High, Effort.Max];
+		const reference = buildModel({
+			id: "catalog-custom-wire-effort-fixture",
+			name: "Custom source wire fixture",
+			api: "openai-completions",
+			provider: "custom-source-fixture",
+			baseUrl: "https://source.example/v1",
+			requestModelId: "source-only-deployment",
+			headers: { "X-Source": "source-only" },
+			reasoning: true,
+			thinking: { mode: "effort", efforts, defaultLevel: Effort.High, requiresEffort: true },
+			compat: {
+				supportsReasoningEffort: false,
+				omitReasoningEffort: true,
+				supportsReasoningParams: false,
+				trustExplicitThinkingOnly: true,
+				thinkingFormat: "openrouter",
+				reasoningEffortMap: { [Effort.Low]: "source-low" },
+				extraBody: { source_only: true },
+				whenThinking: {
+					supportsReasoningEffort: false,
+					omitReasoningEffort: true,
+					extraBody: { source_nested: true },
+				},
+			},
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const apis = ["openai-completions", "openai-responses"] as const;
+		const cases: { model: Model; enabled: boolean }[] = [];
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		try {
+			const providers: Record<string, unknown> = {};
+			for (const api of apis) {
+				const providerConfig = {
+					api,
+					baseUrl: "https://custom.example/v1",
+					auth: "none",
+					headers: { "X-Target": "local" },
+					models: [{ id }],
+				};
+				providers[`custom-effort-${api}`] = providerConfig;
+				providers[`custom-provider-disabled-${api}`] = {
+					...providerConfig,
+					compat: { supportsReasoningEffort: false },
+				};
+				providers[`custom-model-disabled-${api}`] = {
+					...providerConfig,
+					models: [{ id, compat: { supportsReasoningEffort: false } }],
+				};
+			}
+			writeRawModelsJson(providers);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			for (const api of apis) {
+				for (const kind of ["effort", "provider-disabled", "model-disabled"]) {
+					const provider = `custom-${kind}-${api}`;
+					const model = registry.find(provider, id);
+					if (!model) throw new Error(`Missing custom model: ${provider}/${id}`);
+					cases.push({ model, enabled: kind === "effort" });
+				}
+				for (const provider of ["commandcode", "custom-explicit-disabled"]) {
+					cases.push({
+						model: finalizeCustomModel(
+							{
+								id,
+								provider,
+								api,
+								baseUrl: "https://custom.example/v1",
+								headers: { "X-Target": "local" },
+								...(provider === "custom-explicit-disabled"
+									? { compat: { supportsReasoningEffort: false } }
+									: {}),
+							},
+							{ useDefaults: true },
+						),
+						enabled: false,
+					});
+				}
+
+				const sameProvider = finalizeCustomModel(
+					{ id, provider: reference.provider, api, baseUrl: "https://custom.example/v1" },
+					{ useDefaults: true },
+				);
+				expect(sameProvider.compat).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider.thinking).toEqual(api === "openai-completions" ? reference.thinking : undefined);
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+
+		for (const { model, enabled } of cases) {
+			expect(model).toMatchObject({
+				id,
+				compat: { supportsReasoningEffort: enabled, omitReasoningEffort: !enabled },
+			});
+			expect(model.requestModelId).toBeUndefined();
+			expect(model.compatConfig ?? {}).not.toHaveProperty("whenThinking");
+			expect(model.compatConfig ?? {}).not.toHaveProperty("extraBody");
+			if (enabled) {
+				expect(model.thinking).toEqual({ mode: "effort", efforts });
+				expect(model.compat).toMatchObject({ supportsReasoningParams: true, thinkingFormat: "openai" });
+			} else if (model.api === "openai-responses") {
+				expect(model.thinking).toBeUndefined();
+			}
+
+			let requestUrl: string | undefined;
+			let requestHeaders: Headers | undefined;
+			let requestBody: string | undefined;
+			const requestFetch: FetchImpl = async (input, init) => {
+				requestUrl = String(input);
+				requestHeaders = new Headers(init?.headers);
+				requestBody = typeof init?.body === "string" ? init.body : undefined;
+				if (model.api === "openai-completions") {
+					return new Response(
+						'data: {"id":"custom-effort","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				}
+				const events = [
+					{
+						type: "response.output_item.added",
+						output_index: 0,
+						item: { type: "message", id: "msg_custom_effort", role: "assistant", content: [] },
+					},
+					{ type: "response.output_text.delta", item_id: "msg_custom_effort", content_index: 0, delta: "ok" },
+					{
+						type: "response.completed",
+						response: {
+							id: "resp_custom_effort",
+							status: "completed",
+							usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+						},
+					},
+				];
+				return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+					headers: { "Content-Type": "text/event-stream" },
+				});
+			};
+			const result = await stream(
+				model,
+				{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+				{ apiKey: "local-secret", reasoning: "max", fetch: requestFetch },
+			).result();
+			expect(result.stopReason).toBe("stop");
+			const path = model.api === "openai-completions" ? "chat/completions" : "responses";
+			expect(requestUrl).toBe(`https://custom.example/v1/${path}`);
+			expect(requestHeaders?.get("X-Target")).toBe("local");
+			expect(requestHeaders?.get("X-Source")).toBeNull();
+			expect(requestHeaders?.get("Authorization")).toBe("Bearer local-secret");
+			expect(requestBody).toBeDefined();
+			const body = JSON.parse(requestBody ?? "{}") as Record<string, unknown>;
+			expect(body.model).toBe(id);
+			expect(body.source_only).toBeUndefined();
+			expect(body.source_nested).toBeUndefined();
+			if (model.api === "openai-completions") {
+				expect(body.reasoning_effort).toBe(enabled ? "max" : undefined);
+			} else if (enabled) {
+				expect(body.reasoning).toMatchObject({ effort: "max" });
+			} else {
+				expect(body.reasoning).toBeUndefined();
+			}
+		}
+	});
+
 	test("custom model recovery keeps borrowed efforts below target policy and authored thinking", () => {
 		const custom = {
 			id: "deepseek/deepseek-v4-pro",
