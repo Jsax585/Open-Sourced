@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, isSyntheticToolResultMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Spacer, Text } from "@oh-my-pi/pi-tui";
@@ -509,6 +509,8 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
+		// Tool calls of an error or abort turn; Cursor runs them inside the stream, so a real result may still follow.
+		const erroredTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
 		// Defer per-turn metrics until the turn's tool results have materialized.
 		// Read-only invisible turns attach the metrics to their shared compact
 		// group; every other turn keeps the standalone row below its tool blocks.
@@ -675,6 +677,7 @@ export class UiHelpers {
 								false,
 								content.id,
 							);
+							erroredTools.set(content.id, readGroup);
 						} else if (afterToolSegment) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -739,6 +742,7 @@ export class UiHelpers {
 							false,
 							content.id,
 						);
+						erroredTools.set(content.id, component);
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
@@ -768,10 +772,14 @@ export class UiHelpers {
 					: undefined;
 			} else if (message.role === "toolResult") {
 				if (options.preservedLiveToolCallIds?.has(message.toolCallId)) continue;
-				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
+				// A real result replaces an error row; the agent loop's synthetic placeholder for a call that never ran keeps it.
+				const pendingTool = this.ctx.pendingTools.get(message.toolCallId);
+				const errored = erroredTools.get(message.toolCallId);
+				erroredTools.delete(message.toolCallId);
+				if (!pendingTool && errored && isSyntheticToolResultMessage(message)) continue;
+				const resultComponent = pendingTool ?? errored;
 				const isReadGroupResult =
-					message.toolName === "read" &&
-					(!pendingReadComponent || pendingReadComponent instanceof ReadToolGroupComponent);
+					message.toolName === "read" && (!resultComponent || resultComponent instanceof ReadToolGroupComponent);
 				if (isReadGroupResult) {
 					const assistantComponent = readToolCallAssistantComponents.get(message.toolCallId);
 					if (this.ctx.viewSession.isStreaming) {
@@ -787,8 +795,8 @@ export class UiHelpers {
 						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
 						const hasText = message.content.some(c => c.type === "text");
 						if (!hasText && cfgTerminalShowImages.get(settings)) {
-							if (pendingReadComponent) {
-								pendingReadComponent.updateResult(message, false, message.toolCallId);
+							if (resultComponent) {
+								resultComponent.updateResult(message, false, message.toolCallId);
 								this.ctx.pendingTools.delete(message.toolCallId);
 							}
 							readToolCallArgs.delete(message.toolCallId);
@@ -796,7 +804,7 @@ export class UiHelpers {
 							continue;
 						}
 					}
-					let component = this.ctx.pendingTools.get(message.toolCallId);
+					let component = resultComponent;
 					if (!component) {
 						if (!readGroup) {
 							readGroup = new ReadToolGroupComponent({
@@ -820,7 +828,7 @@ export class UiHelpers {
 				}
 
 				// Match tool results to pending tool components
-				const component = this.ctx.pendingTools.get(message.toolCallId);
+				const component = resultComponent;
 				if (component) {
 					const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
 					const frame = activeToolExecutionUpdates.find(
