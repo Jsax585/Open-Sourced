@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Hare to the built-in `gdb` DAP adapter: launching a `.ha` target now selects `gdb -i dap` ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
+
+### Changed
+
+- Launching a source file (e.g. `.c`, `.rs`, `.ha`) that selects a native debugger (`gdb`, `lldb-dap`, `codelldb`) now fails upfront with build guidance instead of surfacing the adapter's `not in executable format` error after spawning the adapter ([#16503](https://github.com/can1357/oh-my-pi/pull/16503) by [@jgarte](https://github.com/jgarte))
+
 ### Fixed
 
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
