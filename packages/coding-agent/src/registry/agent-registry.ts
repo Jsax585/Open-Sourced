@@ -388,11 +388,11 @@ export class AgentRegistry {
 
 	/**
 	 * Bind `name` to the live agent `targetId`, which runs the journal at
-	 * `sessionFile`: everything that resolves an agent by name — a peer's
-	 * `agent://<name>`, Agent Hub focus, a `task` resume, `proc://`,
-	 * `history://` — then reaches the running session under that name. Used by
-	 * the roster scan for the transcript this process is itself running, which
-	 * is a live agent, not a revivable one.
+	 * `sessionFile`: everything that resolves an agent through {@link get} — a
+	 * peer's `agent://<name>`, Agent Hub focus, a `task` resume,
+	 * `history://<name>` — then reaches the running session under that name.
+	 * Used by the roster scan for the transcript this process is itself
+	 * running, which is a live agent, not a revivable one.
 	 *
 	 * Refused while a real agent holds the name (that agent is the recipient)
 	 * and when the target is not a live session on that journal.
@@ -403,11 +403,6 @@ export class AgentRegistry {
 		if (!target?.session || target.sessionFile !== sessionFile) return false;
 		this.#aliases.set(name, { targetId, sessionFile });
 		return true;
-	}
-
-	/** Drop a name bound by {@link bindLiveName}. */
-	unbindLiveName(name: string): boolean {
-		return this.#aliases.delete(name);
 	}
 
 	get(id: string): AgentRef | undefined {

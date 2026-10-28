@@ -433,20 +433,23 @@ export class AgentLifecycleManager {
 					`Unknown agent "${id}" — it was never registered or has been released. If a transcript exists, read history://${id}.`,
 			);
 		}
+		if (ref.status === "aborted") ref = await this.#reopen(id, ref);
+		// A revive attaches its session before it finishes initializing it: join the revive rather
+		// than hand out a session whose extensions have not re-registered their tools yet. This
+		// comes before the liveness probe below: a revive in flight has already claimed the
+		// journal, so probing first would read this process's own revive as a live session
+		// holding the transcript and refuse to join it.
+		const inflight = this.#revivals.get(id);
+		if (inflight?.ref === ref) return { session: await inflight.promise, agentId: ref.id, revived: true };
+		if (ref.session) return { session: ref.session, agentId: ref.id, revived: false };
 		// A ref whose journal a live agent loop writes is not revivable, however
 		// it got here (a scan that ran before the session went live, a kill and
 		// re-registration, a collab mirror): rebuilding it would run a second
 		// agent loop on a running session.
-		if (!ref.session && ref.sessionFile) {
+		if (ref.sessionFile) {
 			const holder = sessionJournalLiveness(ref.sessionFile);
 			if (holder !== "free") return this.#liveJournalTarget(ref.id, ref.sessionFile, holder);
 		}
-		if (ref.status === "aborted") ref = await this.#reopen(id, ref);
-		// A revive attaches its session before it finishes initializing it: join the revive rather
-		// than hand out a session whose extensions have not re-registered their tools yet.
-		const inflight = this.#revivals.get(id);
-		if (inflight?.ref === ref) return { session: await inflight.promise, agentId: ref.id, revived: true };
-		if (ref.session) return { session: ref.session, agentId: ref.id, revived: false };
 		const revival = this.#resolveAndRevive(id, ref);
 		const pending: RevivingAgent = { ref, promise: revival };
 		this.#revivals.set(id, pending);

@@ -393,6 +393,120 @@ describe("a session this process is running is not a revivable transcript", () =
 
 		expect(registry.get("Copy")).toMatchObject({ status: "parked", session: null, sessionFile: copyFile });
 	});
+
+	/**
+	 * What a cold revive does to the journal before its session exists:
+	 * `createAgentSession` opens the transcript and claims it as its writer,
+	 * and only then attaches the session to the ref. A liveness probe during
+	 * that window sees a claimed journal with no live ref behind it, which is
+	 * this process's own revive, not a foreign session.
+	 */
+	function gatedReviver(sessionFile: string): { started: Promise<void>; release: () => void; sessions: number } {
+		const started = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const state = { started: started.promise, release: () => gate.resolve(), sessions: 0 };
+		lifecycle.setPersistedSubagentReviverFactory(
+			async (ref: AgentRef) => {
+				if (ref.sessionFile !== sessionFile) return undefined;
+				const revive: AgentReviver = async () => {
+					const manager = await SessionManager.open(
+						sessionFile,
+						path.dirname(sessionFile),
+						new FileSessionStorage(),
+						{
+							suppressBreadcrumb: true,
+							throwIfMissing: true,
+						},
+					);
+					openManagers.push(manager);
+					manager.claimForWriting();
+					started.resolve();
+					await gate.promise;
+					state.sessions++;
+					revived.push(ref.id);
+					return makeFakeSession().session;
+				};
+				return revive;
+			},
+			() => 0,
+		);
+		return state;
+	}
+
+	it("joins a revive in flight instead of reading its claim as a live session", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-revive-race-");
+		const tree = await buildTree(tempDir);
+		await runLaneHere(tree.laneFile);
+		await ensurePersistedRoster(registry, tree.laneFile);
+		const reviver = gatedReviver(tree.parkedFile);
+
+		const first = lifecycle.ensureLive("Parked");
+		await reviver.started;
+		const second = lifecycle.ensureLive("Parked");
+		reviver.release();
+
+		expect(await second).toBe(await first);
+		expect(reviver.sessions).toBe(1);
+		expect(revived).toEqual(["Parked"]);
+	});
+
+	it("leaves a ref alone while this process is opening its transcript", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-scan-race-");
+		const tree = await buildTree(tempDir);
+		await runLaneHere(tree.laneFile);
+		await ensurePersistedRoster(registry, tree.laneFile);
+		const parked = registry.get("Parked");
+		const reviver = gatedReviver(tree.parkedFile);
+
+		const revive = lifecycle.ensureLive("Parked");
+		await reviver.started;
+		// A peer send mid-revive re-scans the tree; the ref being revived must
+		// survive it, or the revive fails and the agent disappears.
+		await ensurePersistedRoster(registry, tree.laneFile);
+		expect(registry.get("Parked")).toBe(parked);
+		reviver.release();
+
+		expect(await revive).toBeTruthy();
+		expect(registry.get("Parked")?.session).toBeTruthy();
+	});
+
+	it("neither suppresses nor re-registers a subagent running in this process", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-live-sub-");
+		const tree = await buildTree(tempDir);
+		await runLaneHere(tree.laneFile);
+		// A spawned subagent of this process: its own ref, its own journal,
+		// claimed by the loop that writes it.
+		const manager = await SessionManager.open(
+			tree.parkedFile,
+			path.dirname(tree.parkedFile),
+			new FileSessionStorage(),
+			{
+				suppressBreadcrumb: true,
+				throwIfMissing: true,
+			},
+		);
+		openManagers.push(manager);
+		manager.claimForWriting();
+		const worker = registry.register({
+			id: "Parked",
+			displayName: "Parked",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: makeFakeSession().session,
+			sessionFile: tree.parkedFile,
+			status: "running",
+		});
+
+		await ensurePersistedRoster(registry, tree.laneFile);
+		await ensurePersistedRoster(registry, tree.laneFile);
+
+		expect(registry.get("Parked")).toBe(worker);
+		expect(registry.get("Parked")?.status).toBe("running");
+		// It is a live agent, not a refused transcript: a message reaches it.
+		const receipt = await bus.send({ from: MAIN_AGENT_ID, to: "Parked", body: "ping" });
+		expect(receipt.outcome).toBe("injected");
+		expect(revived).toEqual([]);
+	});
 });
 
 describe("a session another omp process is running is not a revivable transcript", () => {

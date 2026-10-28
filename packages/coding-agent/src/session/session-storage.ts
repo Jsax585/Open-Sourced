@@ -564,11 +564,18 @@ function isPidAlive(pid: number): boolean {
  * process exits, so a crashed owner never blocks a later claim.
  *
  * `writers` counts the holders that append to the journal while they hold it
- * (see {@link SessionClaimOptions.writer}). The lease is shared, the writer
- * slot is not: one journal has one writer in this process, exactly as it has
- * one across processes.
+ * (see {@link SessionClaimOptions.writer}), and `writerPath` is the file that
+ * writer appends to. The lease is shared, the writer slot is not: one journal
+ * has one writer in this process, exactly as it has one across processes.
  */
-const sessionLeases = new Map<string, { lease: FileLockHandle; holders: number; writers: number }>();
+interface SessionLease {
+	lease: FileLockHandle;
+	holders: number;
+	writers: number;
+	writerPath?: string;
+}
+
+const sessionLeases = new Map<string, SessionLease>();
 
 const TEST_SESSION_OWNERS_DIR_ENV = "PI_TEST_SESSION_OWNERS_DIR";
 
@@ -668,23 +675,27 @@ export function isSameJournalFile(sessionPath: string, otherPath: string): boole
 
 /**
  * Where the agent loop that writes a journal runs: nowhere (`free`), in this
- * process (`here`), or in another omp process (`elsewhere`).
+ * process on this very file (`here`), in this process on another file that
+ * carries the same session id (`copy`), or in another omp process
+ * (`elsewhere`).
  */
-export type SessionJournalLiveness = "free" | "here" | "elsewhere";
+export type SessionJournalLiveness = "free" | "here" | "copy" | "elsewhere";
 
 /**
  * Whether a live agent loop writes the session in the journal at
  * `sessionPath`, and where it runs. A `free` journal is a parked transcript:
- * it can be reopened, revived, and offered to peers as revivable. A journal
- * that is `here` or `elsewhere` belongs to a running session, so a registry
- * ref derived from it would offer a running agent as a revivable transcript.
+ * it can be reopened, revived, and offered to peers as revivable. Anything
+ * else belongs to a running session, so a registry ref derived from it would
+ * offer a running agent as a revivable transcript.
  *
  * Keyed by the session id in the header — the identity the ownership lease
  * uses — so one journal reached through a symlink, a hard link, or after a
- * move gives one answer. A plain copy of a live journal carries that same id
- * and so reads as live too: no probe can tell a copy from the original across
- * processes, and nothing may run a second loop under a session id while the
- * first loop holds it.
+ * move gives one answer. A plain copy of a live journal carries that same id,
+ * so it reads as live too; `copy` separates it from the journal this process
+ * actually writes, which `here` names, because only the latter is a session
+ * running here. Across processes the lease carries no path, so a copy of a
+ * journal another process runs is `elsewhere` like the original: nothing may
+ * run a second loop under a session id while the first loop holds it.
  */
 export function sessionJournalLiveness(sessionPath: string): SessionJournalLiveness {
 	const id = readSessionHeaderIdSync(sessionPath);
@@ -693,7 +704,10 @@ export function sessionJournalLiveness(sessionPath: string): SessionJournalLiven
 	// This process holds the lease. Only a writer is an agent loop appending to
 	// the journal — a transfer guard or a collab replica claim is not — and the
 	// lock below answers "held" for this process's own lease anyway.
-	if (held) return held.writers > 0 ? "here" : "free";
+	if (held) {
+		if (held.writers === 0) return "free";
+		return held.writerPath !== undefined && isSameJournalFile(held.writerPath, sessionPath) ? "here" : "copy";
+	}
 	let lease: FileLockHandle | null;
 	try {
 		lease = tryAcquireSessionLease(id);
@@ -1428,12 +1442,20 @@ export class FileSessionStorage implements SessionStorage {
 		}
 		const claim = held;
 		claim.holders++;
-		if (writer) claim.writers++;
+		if (writer) {
+			claim.writers++;
+			// One writer per journal, so one path: it tells a journal this
+			// process is running from a copy of it that shares the session id.
+			claim.writerPath = sessionPath;
+		}
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
-			if (writer) claim.writers--;
+			if (writer) {
+				claim.writers--;
+				if (claim.writers === 0) claim.writerPath = undefined;
+			}
 			if (--claim.holders > 0) return;
 			sessionLeases.delete(sessionId);
 			claim.lease.release();

@@ -36,13 +36,20 @@ export type LiveJournalHolder = Exclude<SessionJournalLiveness, "free">;
 /**
  * Why a transcript whose journal a live session holds is not revivable here,
  * and what to do with it instead. A journal running in another process cannot
- * be reached locally at all; one running here under a different file is a
- * copy carrying the live session's id, which a second loop must not take.
+ * be reached locally at all; one running here under a different file is a copy
+ * carrying the live session's id, which a second loop must not take; and the
+ * journal of a session this process is still opening is nobody's to revive
+ * until that session attaches.
  */
 export function liveJournalRefusal(id: string, sessionFile: string, holder: LiveJournalHolder): string {
-	return holder === "elsewhere"
-		? `Agent "${id}" is the transcript of a session another omp process is running, so it cannot be revived here. Reach that session over Envoy, or read history://${id}.`
-		: `Agent "${id}" is a copy of the transcript this session is running and carries its session id, so reviving it here would run a second agent loop on that session. Open it in its own process (\`omp --resume ${sessionFile}\`), or read history://${id}.`;
+	switch (holder) {
+		case "elsewhere":
+			return `Agent "${id}" is the transcript of a session another omp process is running, so it cannot be revived here. Reach it in that process, or read history://${id}.`;
+		case "copy":
+			return `Agent "${id}" is a copy of the transcript this session is running and carries its session id, so reviving it here would run a second agent loop on that session. Open it in its own process (\`omp --resume ${sessionFile}\`), or read history://${id}.`;
+		case "here":
+			return `Agent "${id}" is the transcript of a session this process is opening right now; it is not revivable while that session takes it. Retry in a moment, or read history://${id}.`;
+	}
 }
 
 /**
@@ -865,18 +872,6 @@ async function registerPersistedSubagentsFromDir(
 			// live one is simply not listed.
 			if (isAdvisorTranscriptName(entry.name)) continue;
 			const liveId = entry.name.slice(0, -".jsonl".length);
-			// A detached ref on that journal is a phantom: an earlier scan (or a
-			// re-registration after a kill) derived it before the session went
-			// live, and nothing can revive it now.
-			const phantom = registry.get(liveId);
-			if (phantom && !phantom.session && phantom.sessionFile === sessionFile) {
-				registry.unregister(liveId, phantom);
-			}
-			// The session running here is what this name means: bind it, so a
-			// peer's `agent://<name>`, Hub focus and a `task` resume reach the
-			// running agent. Only the live session's own journal binds — a copy
-			// of it carries the same session id but is a different file, and a
-			// journal another process runs has nothing local to bind to.
 			let live: AgentRef | undefined;
 			if (liveness === "here") {
 				for (const ref of registry.list()) {
@@ -886,12 +881,35 @@ async function registerPersistedSubagentsFromDir(
 					break;
 				}
 			}
-			const boundFile = live?.sessionFile;
-			if (live && boundFile && registry.bindLiveName(liveId, live.id, boundFile)) {
-				// The binding is this root's to keep: it goes stale exactly when
-				// that agent stops running this journal, which re-scans.
-				owned?.set(liveId, boundFile);
+			const liveFile = live?.sessionFile;
+			if (live && liveFile) {
+				// The session running here is what this name means. Under its own
+				// id it already is that agent; under another (a pane resumed on a
+				// subagent's transcript runs it as `Main`) bind the name, so a
+				// peer's `agent://<name>`, Hub focus and a `task` resume reach the
+				// running agent, and drop the phantom an earlier scan left on the
+				// journal before the session went live.
+				if (live.id !== liveId) {
+					const phantom = registry.get(liveId);
+					if (phantom && !phantom.session && phantom.sessionFile === sessionFile) {
+						registry.unregister(liveId, phantom);
+					}
+					registry.bindLiveName(liveId, live.id, liveFile);
+				}
+				// This root's to keep: the entry goes stale exactly when that
+				// agent stops running this journal, which re-scans.
+				owned?.set(liveId, liveFile);
+			} else if (liveness === "here") {
+				// This process writes this very journal, and no live ref owns it
+				// yet: a revive that has claimed the file but not attached its
+				// session, or an agent parking after its ref detached. Both are
+				// this process's own transitions, and both end in a ref on this
+				// file — touch nothing and let them finish.
+				logger.debug("Roster scan skipped a journal this process is opening", { id: liveId, sessionFile });
 			} else {
+				// A copy of a journal running here, or a journal another omp
+				// process runs: not ours to offer, and the note says why to
+				// whoever addresses the name.
 				noteSuppressedTranscript(liveId, sessionFile, liveness);
 				suppressed?.set(liveId, sessionFile);
 			}
