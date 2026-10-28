@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Support explicit thinking level overrides on role aliases (e.g. `@work:low`) and apply default agent thinking levels to bare role aliases during model resolution ([#17254](https://github.com/can1357/oh-my-pi/pull/17254) by [@sinhduc01](https://github.com/sinhduc01))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

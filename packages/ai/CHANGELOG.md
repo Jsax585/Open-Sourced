@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `google-level` thinking models rejecting `MINIMAL` (including when disabling reasoning via `suppressWhenOff`) by clamping unsupported thinking levels to the model's minimum supported effort ([#17254](https://github.com/can1357/oh-my-pi/pull/17254) by [@sinhduc01](https://github.com/sinhduc01))
+
 ## [18.13.2] - 2026-10-27
 
 ### Fixed
