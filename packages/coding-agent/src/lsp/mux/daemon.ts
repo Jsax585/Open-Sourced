@@ -17,6 +17,7 @@ import { daemonClientForProject } from "../../launch/client";
 import { describeQuietly, stopQuietly, waitReady } from "../../launch/ensure";
 import { daemonRuntimeDir } from "../../launch/paths";
 import { resolveWorkerSpawnCmd, SMOKE_TEST_TIMEOUT_MS, workerEnvFromParent } from "../../subprocess/worker-client";
+import { assertSafeLspRoot, UnsafeLspRootError } from "../config";
 import type { LspJsonRpcRequest, LspJsonRpcResponse, LspTransport, LspWriteSink } from "../types";
 import {
 	LSP_MUX_DAEMON_NAME,
@@ -304,6 +305,7 @@ export async function connectSharedLspTransport(opts: {
 	initializationOptions: unknown;
 	signal?: AbortSignal;
 }): Promise<LspTransport | null> {
+	assertSafeLspRoot(opts.cwd);
 	try {
 		const endpoint = await ensureLspMuxDaemon(opts.cwd, opts.signal);
 		if (!endpoint) return null;
@@ -316,6 +318,7 @@ export async function connectSharedLspTransport(opts: {
 		});
 	} catch (error) {
 		if (opts.signal?.aborted) throw error;
+		if (error instanceof UnsafeLspRootError) throw error;
 		logger.debug("Shared LSP transport unavailable; falling back to local spawn", {
 			command: opts.command,
 			cwd: opts.cwd,

@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { isEnoent, logger, postmortem, ptree, stableStringifyJson, untilAborted } from "@oh-my-pi/pi-utils";
 import { encodeMessageFrame, MessageFramer } from "../jsonrpc/message-framing";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
-import { getConfig } from "./config";
+import { assertSafeLspRoot, assertSafeLspWorkspaceMessage, getConfig } from "./config";
 import { applyWorkspaceEdit, type ExecutedWorkspaceChange } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import { connectSharedLspTransport } from "./mux/daemon";
@@ -383,13 +383,17 @@ function queueWriteMessage(
 ): Promise<void> {
 	const write = client.writeQueue
 		.catch(() => {})
-		.then(() =>
-			writeMessage(
+		.then(() => {
+			if ("method" in message) {
+				if (message.method === "initialize") assertSafeLspRoot(client.cwd);
+				assertSafeLspWorkspaceMessage(message.method, message.params);
+			}
+			return writeMessage(
 				client.proc.stdin,
 				message,
 				deliverQueued && signal?.aborted ? AbortSignal.timeout(DELIVER_QUEUED_TIMEOUT_MS) : signal,
-			),
-		);
+			);
+		});
 	const result = write.catch((err: unknown) => {
 		if (err instanceof LspDrainAbortError) {
 			// Only an abort that raced this write's in-flight drain leaves
@@ -549,6 +553,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
  * for `initialize` params and `workspace/workspaceFolders` server requests.
  */
 function currentWorkspaceFolders(client: LspClient): Array<{ uri: string; name: string }> {
+	assertSafeLspRoot(client.cwd);
 	return [{ uri: fileToUri(client.cwd), name: path.basename(client.cwd) || "workspace" }];
 }
 
@@ -1024,6 +1029,7 @@ export async function getOrCreateClient(
 	initTimeoutMs?: number,
 	signal?: AbortSignal,
 ): Promise<LspClient> {
+	assertSafeLspRoot(cwd);
 	const key = clientKey(config, cwd);
 	// Check if client already exists
 	const existingClient = clients.get(key);
@@ -1087,6 +1093,8 @@ export async function getOrCreateClient(
 		const { command, args, env } = isLspmuxSupported(baseCommand)
 			? await getLspmuxCommand(baseCommand, baseArgs)
 			: { command: baseCommand, args: baseArgs };
+		// Recheck after async wrapper resolution, before either shared or private startup.
+		assertSafeLspRoot(cwd);
 
 		// Prefer the broker-shared server unless an external lspmux wrapper is
 		// already multiplexing this command. Any shared-path failure falls back
@@ -1095,11 +1103,14 @@ export async function getOrCreateClient(
 		if (sharedLspEnabled && command === baseCommand) {
 			proc = await connectSharedLspTransport({ command, args, cwd, env, initializationOptions, signal });
 		}
-		proc ??= ptree.spawn([command, ...args], {
-			cwd,
-			stdin: "pipe",
-			env: env ? { ...Bun.env, ...env } : undefined,
-		});
+		if (!proc) {
+			assertSafeLspRoot(cwd);
+			proc = ptree.spawn([command, ...args], {
+				cwd,
+				stdin: "pipe",
+				env: env ? { ...Bun.env, ...env } : undefined,
+			});
+		}
 
 		let resolveProjectLoaded!: () => void;
 		const projectLoaded = new Promise<void>(resolve => {

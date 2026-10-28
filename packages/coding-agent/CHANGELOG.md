@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed language servers indexing filesystem, temporary-directory, or non-repository home roots, including symlink aliases and later workspace-folder additions; file-targeted requests from those directories now use the nearest project, while home-directory Git repositories remain supported.
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
