@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Apple Silicon Nix builds silently omitting Apple Foundation Models support when the host Swift toolchain or SDK was unavailable ([#16584](https://github.com/can1357/oh-my-pi/pull/16584) by [@honsunrise](https://github.com/honsunrise)).
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
