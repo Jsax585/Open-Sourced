@@ -14,6 +14,7 @@
 - A muted `/live` call now stays shown as muted when the voice model starts a task or the session starts, instead of switching to "working" or "listening" while the microphone is still off ([#17013](https://github.com/can1357/oh-my-pi/pull/17013) by [@materemias](https://github.com/materemias))
 - `PI_INTENT_PROMPT` replaces the system-prompt guidance for the `i` intent field; `PI_INTENT_DESC` replaces its tool-schema description
 - Eval shows printed JSON text (`print(json.dumps(…))`, `console.log(JSON.stringify(…))`) as a collapsible JSON tree, like printed dicts and objects
+- Perplexity web search now uses the Search API with `search_type: "fast"` and a medium extraction budget for the direct API-key path, returning ranked sources; the cookie/OAuth/anonymous consumer path and the `PI_PERPLEXITY_RESPONSES=1` Responses mode are unchanged ([#12690](https://github.com/can1357/oh-my-pi/issues/12690), [#16670](https://github.com/can1357/oh-my-pi/pull/16670) by [@tomdacu](https://github.com/tomdacu))
 
 ### Changed
 
