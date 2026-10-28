@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `pr_checkout` now runs the `post-checkout` hook for a new PR worktree like `git worktree add`; a failing hook adds a warning to the result, and a second checkout of the same PR waits for the running hook ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
+- `/wt` (including `worktree.onStart` and ACP) now runs the new worktree's `post-checkout` hook like `git worktree add`; a failing or cancelled hook (Esc in the TUI, prompt cancel in ACP) keeps the worktree, shows a warning, and skips `worktree.cleanSource` ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
+
+### Changed
+
+- `omp worktree add` shows the `post-checkout` hook's output as it arrives and exits with the hook's failure status, or 1 when git can't run the hook ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
 ## [18.13.2] - 2026-10-27
 
 ### Added

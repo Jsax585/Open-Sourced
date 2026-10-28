@@ -27,6 +27,7 @@ import { hasLiveIsolationOwner, ISOLATION_OWNER_FILE, readRetainedMountBackend }
 import { formatIsolationBackend, parseIsolationBackend } from "../task/worktree";
 
 import { cfgIsolationBackend, cfgWorktreeClone } from "../task/settings";
+import { formatPostCheckoutHookWarning, runPostCheckoutHook } from "../utils/worktree-hook";
 
 type WorktreeKind = "pr-checkout" | "task-isolation" | "empty" | "stray";
 
@@ -161,10 +162,15 @@ export async function addWorktree(options: AddWorktreeOptions): Promise<void> {
 	if (result.cloneError) {
 		console.error(chalk.dim(`warning: worktree clone fell back to plain checkout: ${result.cloneError}`));
 	}
-	const hook = await vcs.runPostCheckoutHook(worktreePath, commit.sha);
-	process.stderr.write(hook.stdout);
-	process.stderr.write(hook.stderr);
-	if (hook.exitCode !== 0) process.exitCode = hook.exitCode;
+	const hook = await runPostCheckoutHook(worktreePath, commit.sha, { forwardTo: process.stderr });
+	if (hook.status === "failed") process.exitCode = hook.exitCode;
+	else if (hook.status === "error") {
+		console.error(chalk.dim(`warning: ${formatPostCheckoutHookWarning(hook)}`));
+		process.exitCode = 1;
+	} else if (hook.status === "no-git") {
+		console.error(chalk.dim("warning: post-checkout hook not run: git executable not found"));
+		process.exitCode = 1;
+	}
 }
 
 export async function listWorktrees(options: ListWorktreesOptions): Promise<void> {

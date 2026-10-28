@@ -398,6 +398,25 @@ unsaved checkpoint therefore leaves neither a new directory nor a moved session.
 The `/wt` gate is acquired before creating a branch or checkout and remains held
 through session relocation and configured source cleanup, so a busy refusal does
 not leave an unused worktree.
+After the checkout, `/wt` runs the new worktree's `post-checkout` hook the way
+`git worktree add` does (`git hook run --ignore-missing post-checkout`, git's
+new-worktree arguments, worktree as working directory, repository-location
+variables such as `GIT_DIR` removed from the environment). A hook that fails,
+or is cancelled (Esc in the TUI, or the ACP prompt's cancellation signal), keeps the worktree and the
+session still moves into it; the output is `Worktree created, but
+post-checkout hook exited with <N>: <last line>` (or `... cancelled`), and
+`worktree.cleanSource` is skipped so the source checkout is left as it is.
+Without a `git` executable no hook runs and nothing is reported.
+Cancelling stops the hook's process group (on Windows, its process tree). On
+Windows, Git runs hooks through MSYS `sh`, and the commands that shell starts
+are out of reach of the tree kill: `/wt` returns with the cancelled warning, but
+those commands keep running until they finish.
+About 250 ms after git's hook process exits, `/wt` (and `pr_checkout`) stop
+reading pipes a background process started by the hook still holds. That process
+keeps running, but its later writes to stdout/stderr fail with EPIPE.
+`omp worktree add` instead keeps forwarding until the output has been idle for
+250 ms, so a slow terminal still gets all of the hook's output; a background
+process that keeps writing holds the command open until it stops (Ctrl-C ends it).
 The `!cd` guard runs before shell execution and remains held through cwd adoption
 or rollback, so a refused command cannot leave the shell in a different directory.
 Cancelled pickers, invalid destinations, and failed moves retain the BTW conversation.

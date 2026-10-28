@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Writable } from "node:stream";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
-import { setWorktreesDir } from "@oh-my-pi/pi-utils";
+import { $which, __resetProjectDirCacheForTests, procmgr, setProjectDir, setWorktreesDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import {
 	canAutoCreateWorktree,
@@ -16,6 +17,7 @@ import {
 	type SessionWorktreeState,
 	type WorktreeExitAction,
 } from "../../src/session/session-worktree";
+import { runPostCheckoutHook } from "../../src/utils/worktree-hook";
 
 const clean: SessionWorktreeState = { dirty: false, moved: false, offBranch: false };
 
@@ -287,5 +289,247 @@ describe("session worktree helpers (real git)", () => {
 		const messages = await removeExitWorktrees(plan);
 		expect(messages).toEqual([`Failed to remove worktree ${wt.path}; branch '${branch}' kept.`]);
 		expect(branchSha(repo, branch)).toBe(wt.baseCommit);
+	});
+});
+
+describe.skipIf(process.platform === "win32")("session worktree post-checkout hook (real git)", () => {
+	let root: string;
+	let repo: string;
+	let savedCwd: string;
+	const savedEnv: Record<string, string | undefined> = {};
+	const envKeys = [
+		"OMP_WORKTREE_DIR",
+		"GIT_CONFIG_GLOBAL",
+		"GIT_CONFIG_SYSTEM",
+		"GIT_CONFIG_NOSYSTEM",
+		"GIT_DIR",
+		"HOME",
+		"XDG_CONFIG_HOME",
+	];
+	const pidsToKill: number[] = [];
+
+	const installHook = async (script: string) => {
+		const hookPath = path.join(repo, ".git", "hooks", "post-checkout");
+		await Bun.write(hookPath, `#!/bin/sh\n${script}\n`);
+		await fs.chmod(hookPath, 0o755);
+	};
+	const create = (signal?: AbortSignal) =>
+		createSessionWorktree(repo, Settings.isolated(), "wt/hook", { keepChanges: true, signal });
+	const alive = (pid: number) => {
+		try {
+			process.kill(pid, 0);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	beforeEach(async () => {
+		for (const key of envKeys) savedEnv[key] = process.env[key];
+		savedCwd = process.cwd();
+		root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-session-wt-hook-")));
+		repo = path.join(root, "repo");
+		await fs.mkdir(repo);
+		// Isolate from the developer's global git config (core.hooksPath, templates).
+		await Bun.write(path.join(root, "gitconfig"), "");
+		process.env.GIT_CONFIG_GLOBAL = path.join(root, "gitconfig");
+		process.env.GIT_CONFIG_SYSTEM = path.join(root, "gitconfig");
+		process.env.GIT_CONFIG_NOSYSTEM = "1";
+		process.env.HOME = root;
+		delete process.env.XDG_CONFIG_HOME;
+		delete process.env.GIT_DIR;
+		delete process.env.OMP_WORKTREE_DIR;
+		setWorktreesDir(path.join(root, "wt"));
+		git(repo, "init", "-q", "-b", "main");
+		await Bun.write(path.join(repo, "tracked.txt"), "base\n");
+		git(repo, "add", ".");
+		git(repo, "commit", "-q", "-m", "init");
+	});
+
+	afterEach(async () => {
+		for (const pid of pidsToKill.splice(0)) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {}
+		}
+		process.chdir(savedCwd);
+		setWorktreesDir(undefined);
+		for (const key of envKeys) {
+			if (savedEnv[key] === undefined) delete process.env[key];
+			else process.env[key] = savedEnv[key];
+		}
+		await fs.rm(root, { recursive: true, force: true });
+	});
+
+	it("runs the hook in the new worktree with git's new-worktree arguments", async () => {
+		await installHook('{ pwd -P; printf "%s\\n" "$@"; } > hook.out');
+		const wt = await create();
+		expect(wt.hookWarning).toBeUndefined();
+		const lines = (await Bun.file(path.join(wt.path, "hook.out")).text()).trim().split("\n");
+		expect(lines).toEqual([wt.path, "0".repeat(wt.baseCommit.length), wt.baseCommit, "1"]);
+	});
+
+	it("keeps the worktree and warns with the exit status and cleaned last line when the hook fails", async () => {
+		await installHook("printf 'earlier\\n'; printf '\\033[31mboom\\033[0m\\tbad\\n' >&2; exit 7");
+		const wt = await create();
+		expect(worktreePaths(repo)).toContain(wt.path);
+		expect(wt.hookWarning).toBe("post-checkout hook exited with 7: boom   bad");
+	});
+
+	it("warns with the last carriage-return progress frame rather than gluing frames together", async () => {
+		await installHook("printf 'copy 10 percent\\rcopy 55 percent\\rcopy 100 percent\\r' >&2; exit 4");
+		const wt = await create();
+		expect(wt.hookWarning).toBe("post-checkout hook exited with 4: copy 100 percent");
+	});
+
+	it("creates the worktree without a warning when no git executable exists to run the hook", async () => {
+		const bunDir = path.join(root, "bin");
+		await fs.mkdir(bunDir);
+		await fs.symlink(process.execPath, path.join(bunDir, "bun"));
+		const savedPath = process.env.PATH;
+		process.env.PATH = bunDir;
+		procmgr.__resetShellConfigCacheForTests();
+		try {
+			const wt = await create();
+			expect(worktreePaths(repo)).toContain(wt.path);
+			expect(wt.hookWarning).toBeUndefined();
+		} finally {
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+			procmgr.__resetShellConfigCacheForTests();
+		}
+	});
+
+	it("runs the hook with the git the lookup resolves when that git is not on the hook's PATH", async () => {
+		// Models $which's macOS fallback to Xcode/CLT git, which a bare `git` spawn on this PATH cannot find.
+		// $which calls Bun.which on every lookup, so spying on Bun.which is its test seam.
+		const realGit = $which("git");
+		const realWhich = Bun.which;
+		const bunDir = path.join(root, "bin");
+		await fs.mkdir(bunDir);
+		await fs.symlink(process.execPath, path.join(bunDir, "bun"));
+		await installHook("pwd -P > hook.out");
+		const head = git(repo, "rev-parse", "HEAD").trim();
+		const savedPath = process.env.PATH;
+		process.env.PATH = bunDir;
+		procmgr.__resetShellConfigCacheForTests();
+		const whichSpy = vi
+			.spyOn(Bun, "which")
+			.mockImplementation((command, options) => (command === "git" ? realGit : realWhich(command, options)));
+		try {
+			expect(await runPostCheckoutHook(repo, head)).toEqual({ status: "ok" });
+			expect((await Bun.file(path.join(repo, "hook.out")).text()).trim()).toBe(repo);
+		} finally {
+			whichSpy.mockRestore();
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+			procmgr.__resetShellConfigCacheForTests();
+		}
+	});
+
+	it("resolves a relative PATH entry against the worktree, as a bare git spawn there would", async () => {
+		const realGit = $which("git");
+		const wrapper = path.join(repo, "hookbin", "git");
+		await Bun.write(wrapper, `#!/bin/sh\nexec '${realGit}' "$@"\n`);
+		await fs.chmod(wrapper, 0o755);
+		await installHook("pwd -P > hook.out");
+		const head = git(repo, "rev-parse", "HEAD").trim();
+		const savedPath = process.env.PATH;
+		process.env.PATH = "hookbin";
+		procmgr.__resetShellConfigCacheForTests();
+		try {
+			expect(await runPostCheckoutHook(repo, head)).toEqual({ status: "ok" });
+			expect((await Bun.file(path.join(repo, "hook.out")).text()).trim()).toBe(repo);
+		} finally {
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+			procmgr.__resetShellConfigCacheForTests();
+		}
+	});
+
+	it("returns the hook's status when the output sink fails or is already destroyed", async () => {
+		await installHook("for i in 1 2 3 4 5; do echo line $i >&2; done; exit 3");
+		const head = git(repo, "rev-parse", "HEAD").trim();
+		// A failing write is what process.stderr does once its reader has gone (EPIPE).
+		const failing = new Writable({ write: (_chunk, _encoding, callback) => callback(new Error("EPIPE")) });
+		const destroyed = new Writable({ write: (_chunk, _encoding, callback) => callback() });
+		destroyed.destroy();
+		for (const sink of [failing, destroyed]) {
+			expect(await runPostCheckoutHook(repo, head, { forwardTo: sink })).toEqual({
+				status: "failed",
+				exitCode: 3,
+				output: "",
+			});
+		}
+	});
+
+	it("reports an error, not no-git, when the hook's cwd is missing but git is on PATH", async () => {
+		const result = await runPostCheckoutHook(path.join(root, "does-not-exist"), "a".repeat(40));
+		expect(result.status).toBe("error");
+	});
+
+	it("does not pass omp's GIT_DIR to the hook", async () => {
+		await installHook('printf "%s" "${GIT_DIR-unset}" > hook.out');
+		const ompGitDir = path.join(root, "omp-start-repo", ".git");
+		process.env.GIT_DIR = ompGitDir;
+		const wt = await create();
+		const seen = await Bun.file(path.join(wt.path, "hook.out")).text();
+		// Git itself points GIT_DIR at the new worktree's gitdir; it must not be omp's.
+		expect(seen).toContain(path.join(repo, ".git", "worktrees"));
+		expect(seen).not.toBe(ompGitDir);
+	});
+
+	it("does not pass the launch project's dotenv-only values to the hook", async () => {
+		const launch = path.join(root, "launch");
+		await fs.mkdir(launch);
+		await Bun.write(path.join(launch, ".env"), "OMP_HOOK_DOTENV_ONLY=from-launch-dotenv\n");
+		await installHook('printf "%s" "${OMP_HOOK_DOTENV_ONLY-unset}" > hook.out');
+		// Bun loads the launch project's dotenv into process.env; the new worktree has no .env of its own.
+		procmgr.__resetShellConfigCacheForTests();
+		__resetProjectDirCacheForTests();
+		setProjectDir(launch);
+		process.env.OMP_HOOK_DOTENV_ONLY = "from-launch-dotenv";
+		try {
+			const wt = await create();
+			expect(await Bun.file(path.join(wt.path, "hook.out")).text()).toBe("unset");
+		} finally {
+			delete process.env.OMP_HOOK_DOTENV_ONLY;
+			procmgr.__resetShellConfigCacheForTests();
+			__resetProjectDirCacheForTests();
+		}
+	});
+
+	it("returns promptly when the hook leaves a background process holding its output", async () => {
+		await installHook("sleep 30 &\necho $! > bg.pid");
+		const started = Date.now();
+		const wt = await create();
+		const pid = Number((await Bun.file(path.join(wt.path, "bg.pid")).text()).trim());
+		pidsToKill.push(pid);
+		expect(Date.now() - started).toBeLessThan(10_000);
+		expect(wt.hookWarning).toBeUndefined();
+	});
+
+	it("stops the hook's process tree and warns when the signal aborts", async () => {
+		await installHook("sleep 30 &\necho $! > child.pid\nwait");
+		const controller = new AbortController();
+		const pending = create(controller.signal);
+		const worktreeRoot = path.join(root, "wt");
+		let childPidFile: string | undefined;
+		for (let i = 0; i < 200 && !childPidFile; i++) {
+			const entries = await fs.readdir(worktreeRoot, { recursive: true }).catch(() => []);
+			const found = entries.find(f => f.endsWith("child.pid"));
+			if (found) childPidFile = path.join(worktreeRoot, found);
+			else await Bun.sleep(50);
+		}
+		if (!childPidFile) throw new Error("hook never started");
+		await Bun.sleep(50);
+		const pid = Number((await Bun.file(childPidFile).text()).trim());
+		pidsToKill.push(pid);
+		controller.abort();
+		const wt = await pending;
+		expect(wt.hookWarning).toBe("post-checkout hook cancelled");
+		expect(worktreePaths(repo)).toContain(wt.path);
+		for (let i = 0; i < 100 && alive(pid); i++) await Bun.sleep(50);
+		expect(alive(pid)).toBe(false);
 	});
 });

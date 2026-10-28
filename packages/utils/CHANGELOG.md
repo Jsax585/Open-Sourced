@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an opt-in `exitGraceMs` spawn option to `ptree` that stops reading stdout/stderr a short time after the root process exits, so a descendant holding the pipes open no longer blocks `wait()`; it kills nothing ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
+- Added a `stderr: "stream"` spawn option to `ptree` that exposes `child.stderr` without retaining every chunk ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
+- Added `procmgr.getChildShellEnv()`, the launch-pinned child-shell environment the bash tool spawns with ([#17130](https://github.com/can1357/oh-my-pi/pull/17130) by [@Dangerboi](https://github.com/Dangerboi))
 ## [18.13.2] - 2026-10-27
 
 ### Added
