@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-
-- Fixed a `models.yml` edit that does not parse (such as a half-saved file) removing every custom provider, override and API key it defines from the running session the next time the model picker opened; the session now keeps the last config that loaded and still shows the error until the file loads again ([#16401](https://github.com/can1357/oh-my-pi/pull/16401) by [@sjawhar](https://github.com/sjawhar))
 ### Added
 
 - Added `display.advisorCollapsedLines` (Settings → Appearance → Display) to cap how many note lines a collapsed advisor card shows; the default keeps the full preview ([#17228](https://github.com/can1357/oh-my-pi/pull/17228) by [@bluecapone](https://github.com/bluecapone))
@@ -34,6 +31,7 @@
 - Pasting or dropping an image file into the prompt in a terminal with enhanced paste (Tern, kitty) now attaches the image instead of typing its path
 - The plan review's edit button in Tern names your editor ("Edit in Notepad", "Edit in nvim") instead of "Edit in $EDITOR"
 - Fixed `/tan` clones ending without a final answer when they call `ask`; the clone now keeps running and the parent receives its final answer instead of an empty result ([#17223](https://github.com/can1357/oh-my-pi/pull/17223) by [@trukhinyuri](https://github.com/trukhinyuri))
+- Fixed a `models.yml` edit that does not parse (such as a half-saved file) removing every custom provider, override and API key it defines from the running session the next time the model picker opened; the session now keeps the last config that loaded and still shows the error until the file loads again ([#16401](https://github.com/can1357/oh-my-pi/pull/16401) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.13.2] - 2026-10-27
 
