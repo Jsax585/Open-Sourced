@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the todo reminder resuming the run when a question round ends with a recommendation, such as the grilling skill's `❓ Q1 …?` / `➡️ 推荐接受。` format ([#17253](https://github.com/can1357/oh-my-pi/issues/17253))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

@@ -284,6 +284,11 @@ describe("AgentSession todo reminder self-continuation suppression", () => {
 			"I'd recommend 2. Offline mode would break mocks that use CDN assets.",
 		].join("\n"),
 		"Which approach?\n1. MCP tool\n2. Markdown fence\n\nI recommend the MCP tool.",
+		// A recommendation closing a question round leaves the decision open (#17253).
+		"Which approach?\n\nI recommend the second.",
+		"❓ **Q1** - **Baseline**: Should the audit use each repo's current `miniprogram` branch?\n\n➡️ Recommended: accept. This keeps the current implementation separate from unmerged work.",
+		"❓ **Q5** - **回滚**：是否保留旧接口？\n\n➡️ 保留。\n\n---\n\n❓ **Q6** - **上线文档**：是否按生产零停机、可灰度、可回滚编写？\n\n➡️ 推荐接受。",
+		"❓ **Q2** - **Transport**: Which transport should the bridge use?\n\n- stdio\n- HTTP\n\n➡️ stdio",
 	])("does not resume an unanswered choice prompt: %s", async text => {
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 

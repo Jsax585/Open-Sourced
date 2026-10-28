@@ -30,7 +30,10 @@ const MARKDOWN_PROMPT_PREFIX_RE = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/;
 const PROMPT_LABEL_RE = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i;
 const INLINE_EMPHASIS_RE = /(\*\*|__)(.*?)\1/g;
 const OPTION_LINE_RE = /^(?:[-*+]|\d+[.)])\s+\S/;
-const RECOMMENDATION_RE = /^(?:i(?:'d| would)?\s+recommend|(?:my\s+)?recommendation)\b/i;
+// A recommendation hands the choice back rather than answering it: English/Chinese lead
+// words, or the `➡️` that leads each recommended answer in the grilling skill's rounds (#17253).
+const RECOMMENDATION_RE =
+	/^(?:\u27A1\uFE0F?|(?:i(?:'d| would)?\s+recommend|(?:my\s+)?recommendation)\b|recommended\s*[:：]|我?(?:推荐|建议))/iu;
 const CHOICE_CONFIRMATION_RE = /^(?:go|proceed|continue|stick)\s+with\b/i;
 const QUESTION_PROMPT_RE =
 	/^(?:what|which|when|where|why|how|who|whom|whose|do|does|did|can|could|would|will|should|is|are|am|may|shall)\b/i;
@@ -483,15 +486,14 @@ function isAwaitingUserAnswer(message: AssistantMessage): boolean {
 	if (closingAsk(lastParagraph) !== "none") return true;
 	// A one-line closing note ("Repository unchanged, no commits.") does not withdraw an
 	// instruction in the paragraph before it. A question there may be self-answered by
-	// that note ("Do you need…?\n\nNo, …"), so it does not count.
+	// that note ("Do you need…?\n\nNo, …"), but not by a recommendation, which leaves the
+	// choice open ("❓ Q1 - …?\n\n➡️ Recommended: accept.").
 	const previousParagraph = paragraphs.at(-2)?.trim();
-	if (
-		previousParagraph &&
-		!lastParagraph.includes("\n") &&
-		!OPTION_LINE_RE.test(lastParagraph) &&
-		closingAsk(previousParagraph) === "cue"
-	) {
-		return true;
+	if (previousParagraph && !OPTION_LINE_RE.test(lastParagraph)) {
+		const previousAsk = closingAsk(previousParagraph);
+		if (previousAsk === "cue" && !lastParagraph.includes("\n")) return true;
+		const openingLine = lastParagraph.split(/\r?\n/, 1)[0];
+		if (previousAsk !== "none" && RECOMMENDATION_RE.test(promptLine(openingLine).text)) return true;
 	}
 	const lines = text.split(/\r?\n/);
 
