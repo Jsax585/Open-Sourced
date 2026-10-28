@@ -13,6 +13,7 @@
 
 ### Changed
 
+- RPC mode now prewarms the active model's API connection on `model_changed` events and when typing triggers `predict_word`, matching interactive mode ([#17102](https://github.com/can1357/oh-my-pi/pull/17102) by [@GTanger](https://github.com/GTanger))
 - A muted `/live` call now stays shown as muted when the voice model starts a task or the session starts, instead of switching to "working" or "listening" while the microphone is still off ([#17013](https://github.com/can1357/oh-my-pi/pull/17013) by [@materemias](https://github.com/materemias))
 - `PI_INTENT_PROMPT` replaces the system-prompt guidance for the `i` intent field; `PI_INTENT_DESC` replaces its tool-schema description
 - Eval shows printed JSON text (`print(json.dumps(…))`, `console.log(JSON.stringify(…))`) as a collapsible JSON tree, like printed dicts and objects
