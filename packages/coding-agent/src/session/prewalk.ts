@@ -81,7 +81,7 @@ export interface PrewalkCoordinatorHost {
 	/** Judges a new task for `prewalk.auto`; undefined when there is nothing to judge. */
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
+	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<boolean>;
 	setActiveToolsByName(names: string[]): Promise<void>;
 	restoreNonMCPToolPresentation(
 		nonMCPToolNames: string[],
@@ -225,7 +225,7 @@ export class PrewalkCoordinator {
 
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
 		try {
-			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel);
+			if (!(await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel))) return;
 			// Temporary selection treats undefined as "keep/default"; restoration must preserve
 			// the original selector, including auto or an explicitly inherited effort.
 			this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
@@ -378,7 +378,9 @@ export class PrewalkCoordinator {
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel);
+		if (!(await this.#host.setModelTemporary(target, prewalk.thinkingLevel))) return;
+		// An explicit selection (it drops an auto arm) or a newer arm owns the session now.
+		if (this.#prewalk !== prewalk) return;
 		this.#clearPrewalkState();
 		if (source) {
 			this.#handoff = {

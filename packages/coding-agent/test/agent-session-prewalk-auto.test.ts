@@ -14,6 +14,7 @@ import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "@oh-my-pi/pi-coding-agent/session/prewalk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { SessionTools } from "@oh-my-pi/pi-coding-agent/session/session-tools";
 import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
@@ -239,6 +240,7 @@ describe("AgentSession auto-prewalk", () => {
 		return {
 			session: created,
 			settings,
+			modelRegistry,
 			primary,
 			target,
 			requested,
@@ -723,6 +725,86 @@ describe("AgentSession auto-prewalk", () => {
 			},
 		);
 
+		it.each(["metadata", "reconciliation"] as const)(
+			"an explicit Medium pick and manual Opus arm during the handoff's target %s survive the stale switch",
+			async phase => {
+				stubJudge([PREWALK, DIRECT]);
+				const f = createFixture([...cycle(), done("independent")], { auto: "on" });
+				const opus = modelOrThrow("claude-opus-4-6");
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let held = false;
+				if (phase === "metadata") {
+					const refresh = f.modelRegistry.refreshSelectedModelMetadata.bind(f.modelRegistry);
+					vi.spyOn(f.modelRegistry, "refreshSelectedModelMetadata").mockImplementation(async model => {
+						if (!held && model.id === f.target.id && f.requested.length === 2) {
+							held = true;
+							entered.resolve();
+							await release.promise;
+						}
+						return refresh(model);
+					});
+				} else {
+					const reconcile = SessionTools.prototype.reconcileThinkTool;
+					vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+						this: SessionTools,
+						...args
+					) {
+						if (!held && f.session.model?.id === f.target.id) {
+							held = true;
+							entered.resolve();
+							await release.promise;
+						}
+						return reconcile.apply(this, args);
+					});
+				}
+				const selections: string[] = [];
+				f.session.subscribe(event => {
+					if (event.type === "model_changed" || event.type === "thinking_level_changed") selections.push(event.type);
+				});
+				const task = f.session.prompt(TASK);
+				await entered.promise;
+				f.session.setThinkingLevel(Effort.Medium);
+				expect(f.session.armPrewalk(opus, Effort.Max)).toBe(true);
+				const manualArm = f.session.getPrewalkState();
+				const boundary = selections.length;
+				release.resolve();
+				await task;
+
+				const selected = phase === "metadata" ? f.primary : f.target;
+				expect(f.session.model?.id).toBe(selected.id);
+				expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
+				expect(f.session.getPrewalkState()).toBe(manualArm);
+				expect(selections.slice(boundary)).toEqual([]);
+				expect(f.notices.some(notice => notice.startsWith("Prewalk: switched"))).toBe(false);
+				expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+
+				await f.session.prompt("explain the cursor without changing any files");
+
+				expect(f.requested.at(-1)).toBe(selected.id);
+				expect(f.efforts.at(-1)).toBe(Effort.Medium);
+				expect(f.session.getPrewalkState()).toBe(manualArm);
+			},
+		);
+
+		it("an effort a subscriber selects while the handoff publishes its own stays at the next task", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([...cycle(), done("two")], { auto: "on" });
+			let picked = false;
+			f.session.subscribe(event => {
+				if (event.type !== "thinking_level_changed" || picked || f.session.model?.id !== f.target.id) return;
+				picked = true;
+				f.session.setThinkingLevel(Effort.Medium);
+			});
+			await f.session.prompt("task one");
+			expect(picked).toBe(true);
+
+			await f.session.prompt("task two");
+
+			expect(f.requested.at(-1)).toBe(f.target.id);
+			expect(f.efforts.at(-1)).toBe(Effort.Medium);
+		});
+
 		it("preserves an explicit pick and replacement manual arm when an obsolete auto handoff resumes after persistence", async () => {
 			const f = createFixture([], { auto: "on" });
 			const entered = Promise.withResolvers<void>();
@@ -741,7 +823,10 @@ describe("AgentSession auto-prewalk", () => {
 				resolveAutoPrewalkTarget: () => ({ target: f.target, thinkingLevel: Effort.Low }),
 				classifyAutoPrewalk: async () => undefined,
 				emitNotice: () => {},
-				setModelTemporary: (model, level, options) => f.session.setModelTemporary(model, level, options),
+				setModelTemporary: async (model, level) => {
+					await f.session.setModelTemporary(model, level);
+					return true;
+				},
 				setActiveToolsByName: unused,
 				restoreNonMCPToolPresentation: unused,
 				getAllToolNames: () => ["todo", "write"],
