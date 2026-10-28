@@ -6,6 +6,10 @@
 
 - Updated Bun engine requirement to ≥1.4.4
 
+### Fixed
+
+- `todo append` without a phase now adds items to the active phase, or to the last phase when all work is done; an empty list starts a "Tasks" phase ([#17265](https://github.com/can1357/oh-my-pi/issues/17265)).
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

@@ -200,6 +200,55 @@ describe("TodoTool operations", () => {
 		]);
 	});
 
+	it("appends without a phase to the active task's phase", async () => {
+		const tool = new TodoTool(createSession());
+		await tool.execute("call-1", {
+			op: "init",
+			list: [
+				{ phase: "A", items: ["a1", "a2"] },
+				{ phase: "B", items: ["b1"] },
+			],
+		});
+
+		const first = await tool.execute("call-2", { op: "append", items: ["a3"] });
+		expect(first.isError).toBeUndefined();
+		expect(first.details?.phases.map(phase => phase.tasks.map(task => task.content))).toEqual([
+			["a1", "a2", "a3"],
+			["b1"],
+		]);
+
+		await tool.execute("call-3", { op: "start", task: "b1" });
+		const second = await tool.execute("call-4", { op: "append", items: ["b2"] });
+		expect(second.details?.phases.map(phase => phase.tasks.map(task => task.content))).toEqual([
+			["a1", "a2", "a3"],
+			["b1", "b2"],
+		]);
+	});
+
+	it("appends to the last phase after completion and creates Tasks when empty", async () => {
+		const tool = new TodoTool(createSession());
+		const empty = await tool.execute("call-1", { op: "append", items: ["first"] });
+		expect(empty.isError).toBeUndefined();
+		expect(empty.details?.phases.map(phase => phase.name)).toEqual(["Tasks"]);
+
+		await tool.execute("call-2", {
+			op: "init",
+			list: [
+				{ phase: "A", items: ["a1"] },
+				{ phase: "B", items: ["b1"] },
+			],
+		});
+		await tool.execute("call-3", { op: "done", task: "a1" });
+		await tool.execute("call-4", { op: "done", task: "b1" });
+		const completed = await tool.execute("call-5", { op: "append", items: ["b2"] });
+		expect(completed.isError).toBeUndefined();
+		expect(completed.details?.phases.map(phase => phase.tasks.map(task => task.content))).toEqual([
+			["a1"],
+			["b1", "b2"],
+		]);
+		expect(completed.details?.phases[1]?.tasks[1]?.status).toBe("in_progress");
+	});
+
 	it("blocks a task (excluded from remaining, counted distinctly) and unblocks it", async () => {
 		const tool = new TodoTool(createSession());
 		await tool.execute("call-1", { op: "init", list: [{ phase: "Work", items: ["a", "b"] }] });
