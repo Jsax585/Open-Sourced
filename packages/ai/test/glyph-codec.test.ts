@@ -314,6 +314,37 @@ describe("glyph stream decode", () => {
 		expect(result.content[0]).toEqual({ type: "text", text: "new ⟦Uf0000⟧" });
 	});
 
+	it("shows AskQuestion glyphs decoded and returns answers in Cursor's encoded labels", async () => {
+		const glyph = "\ue0a0";
+		const codec = applyGlyphCodec({ messages: [{ role: "user", content: glyph, timestamp: 1 }] });
+		let shown: unknown;
+		const handlers: CursorExecHandlers = {
+			async askQuestion(call) {
+				shown = call.args;
+				return {
+					toolResult: {
+						role: "toolResult",
+						toolCallId: call.toolCallId,
+						toolName: "ask",
+						content: [{ type: "text", text: "answered" }],
+						isError: false,
+						timestamp: 0,
+					},
+					answers: [{ selectedOptions: [glyph], customInput: `${glyph} too` }],
+				};
+			},
+		};
+		const wrapped = codec.wrapCursorExecHandlers(handlers);
+		if (wrapped.askQuestion === undefined) throw new Error("expected wrapped askQuestion handler");
+		const result = await wrapped.askQuestion({
+			toolCallId: "tool-1",
+			args: { questions: [{ question: "Icon ⟦Ue0a0⟧?", options: [{ label: "⟦Ue0a0⟧" }] }] },
+		});
+
+		expect(shown).toEqual({ questions: [{ question: `Icon ${glyph}?`, options: [{ label: glyph }] }] });
+		expect(result.answers).toEqual([{ selectedOptions: ["⟦Ue0a0⟧"], customInput: "⟦Ue0a0⟧ too" }]);
+	});
+
 	it("keeps class handlers with private fields callable through the wrapper", async () => {
 		class PrivateStateHandlers implements CursorExecHandlers {
 			#prefix = "via private field";
