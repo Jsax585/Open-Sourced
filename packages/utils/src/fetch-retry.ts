@@ -1,8 +1,8 @@
 import { scheduler } from "node:timers/promises";
 
-// "reset after 1h2m3s" / "10m15s" / "39s" / "Resets in 71h48m47s" / "quotaResetDelay": "17h48m25.5s"
+// "reset after 1h2m3s" / "10m15s" / "39s" / "Resets in 71h48m47s" / "quotaResetDelay": "17h48m25.5s" / "835ms"
 const QUOTA_RESET_PATTERN =
-	/(?:reset after|resets?\s+in|"(?:quotaResetDelay)":\s*")\s*(?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
+	/(?:reset after|resets?\s+in|"quotaResetDelay":\s*")\s*(?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)\b/i;
 // "Please retry in 250ms" / "Please retry in 12s"
 const PLEASE_RETRY_PATTERN = /Please retry in ([0-9.]+)(ms|s)/i;
 // JSON field: "retryDelay": "34.074824224s"
@@ -160,7 +160,8 @@ export function extractRetryHint(
 		const minutes = quotaMatch[2] ? Number.parseInt(quotaMatch[2], 10) : 0;
 		const seconds = Number.parseFloat(quotaMatch[3]!);
 		if (!Number.isNaN(seconds)) {
-			const totalMs = ((hours * 60 + minutes) * 60 + seconds) * 1000;
+			const subMinuteMs = quotaMatch[4]!.toLowerCase() === "ms" ? seconds : seconds * 1000;
+			const totalMs = (hours * 60 + minutes) * 60_000 + subMinuteMs;
 			consider(totalMs > 0 ? totalMs : undefined);
 		}
 	}

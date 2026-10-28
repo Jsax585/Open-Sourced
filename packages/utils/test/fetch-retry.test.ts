@@ -206,7 +206,7 @@ describe("extractRetryHint", () => {
 		expect(extractRetryHint(undefined, "429 Monthly usage limit reached. Resets in 1 day.")).toBe(24 * 60 * 60_000);
 	});
 
-	it("parses Cloud Code Assist compound Resets in format", () => {
+	it("keeps a Cloud Code credential blocked for the full 71h48m47s reset instead of retrying it early", () => {
 		expect(
 			extractRetryHint(
 				undefined,
@@ -215,11 +215,22 @@ describe("extractRetryHint", () => {
 		).toBe(((71 * 60 + 48) * 60 + 47) * 1000);
 	});
 
-	it("parses Cloud Code Assist compound quotaResetDelay field", () => {
+	it("honors a compound quotaResetDelay so an exhausted Cloud Code credential is not retried early", () => {
 		expect(extractRetryHint(undefined, '{"metadata":{"quotaResetDelay":"17h48m25.5s"}}')).toBe(64105500);
 	});
 
-	it("parses Cloud Code Assist quotaResetTimeStamp field", () => {
+	it("honors a millisecond quotaResetDelay", () => {
+		expect(extractRetryHint(undefined, '{"metadata":{"quotaResetDelay":"835.150299ms"}}')).toBeCloseTo(835.150299, 3);
+	});
+
+	it.each([
+		["retryDelay before quotaResetDelay", '{"details":[{"retryDelay":"5s"},{"metadata":{"quotaResetDelay":"3600s"}}]}'],
+		["quotaResetDelay before retryDelay", '{"details":[{"metadata":{"quotaResetDelay":"3600s"}},{"retryDelay":"5s"}]}'],
+	])("waits for the longer structured delay when %s", (_label, body) => {
+		expect(extractRetryHint(undefined, body)).toBe(3_600_000);
+	});
+
+	it("honors quotaResetTimeStamp so an exhausted Cloud Code credential is not retried early", () => {
 		const future = new Date(Date.now() + 3_600_000).toISOString();
 		const hint = extractRetryHint(undefined, `{"metadata":{"quotaResetTimeStamp":"${future}"}}`);
 		expect(hint).toBeDefined();
