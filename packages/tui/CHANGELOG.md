@@ -16,7 +16,7 @@
 
 ### Fixed
 
-- Fixed the agent transcript viewer, `/copy` and rewind showing "Operation aborted" instead of the real output of tools that had already run in an aborted Cursor turn
+- Fixed the agent transcript viewer, `/copy` and rewind showing "Operation aborted" instead of the real output of tools that had already run in an aborted Cursor turn ([#17302](https://github.com/can1357/oh-my-pi/pull/17302) by [@morali](https://github.com/morali))
 
 ## [18.13.3] - 2026-10-28
 

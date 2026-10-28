@@ -25,8 +25,8 @@
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
 - A failed Hindsight memory recall (for example `recall request timed out after 30s`) now shows a warning instead of silently sending the prompt without memories; `omp -p` writes it, and Hindsight retain failures, to stderr ([#17278](https://github.com/can1357/oh-my-pi/pull/17278) by [@enieuwy](https://github.com/enieuwy))
 - Fixed cancelling an MCP OAuth login or `/mcp` auth lookup at the wrong moment crashing the session with an unhandled rejection ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
-- Fixed resumed sessions and focused subagents showing "Operation aborted" instead of the real output of tools that had already run in an aborted Cursor turn
 - Large Python dicts and lists printed or left as a cell's last expression in eval now show as a collapsible JSON tree instead of a line cut off at 768 bytes
+- Fixed resumed sessions and focused subagents showing "Operation aborted" instead of the real output of tools that had already run in an aborted Cursor turn ([#17302](https://github.com/can1357/oh-my-pi/pull/17302) by [@morali](https://github.com/morali))
 
 ## [18.13.3] - 2026-10-28
 
