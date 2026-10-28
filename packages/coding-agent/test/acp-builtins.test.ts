@@ -838,30 +838,10 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).toContain("Unknown model: gpt-fake-9000");
 	});
 
-	// Removed TUI-only and dropped commands fall through as false
-	it("removed commands return false (fall through to model)", async () => {
-		const removedCommands = [
-			"/login",
-			"/logout",
-			"/resume",
-			"/tree",
-			"/branch",
-			"/plan",
-			"/loop",
-			"/hotkeys",
-			"/extensions",
-			"/agents",
-			"/copy",
-			"/btw hi",
-			"/new",
-			"/delete",
-			"/fork",
-		];
-		for (const cmd of removedCommands) {
-			const { runtime } = createRuntime();
-			const result = await executeAcpBuiltinSlashCommand(cmd, runtime);
-			expect(result).toBe(false);
-		}
+	it("terminal commands are consumed instead of becoming model instructions", async () => {
+		const { runtime, output } = createRuntime();
+		expect(await executeAcpBuiltinSlashCommand("/quit", runtime)).toEqual({ consumed: true });
+		expect(output[0]).toContain("not supported over ACP");
 	});
 });
 

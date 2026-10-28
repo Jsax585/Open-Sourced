@@ -1,3 +1,6 @@
+import { GoalRuntime } from "../src/goals/runtime";
+import type { GoalModeState } from "../src/goals/state";
+import { cfgGoalEnabled } from "../src/goals/settings";
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -123,6 +126,25 @@ function makeAssistantMessage(text: string, thinking?: string) {
 }
 
 class FakeAgentSession {
+	goalState: GoalModeState | undefined;
+	enabledTools = ["read"];
+	getGoalModeState(): GoalModeState | undefined {
+		return this.goalState;
+	}
+	getEnabledToolNames(): string[] {
+		return [...this.enabledTools];
+	}
+	goalRuntime = new GoalRuntime({
+		getState: () => this.goalState,
+		setState: state => {
+			this.goalState = state;
+		},
+		getCurrentUsage: () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+		emit: () => {},
+		persist: () => {},
+		sendHiddenMessage: async () => {},
+	});
+
 	sessionManager: SessionManager;
 	sessionId: string;
 	agent: { sessionId: string; waitForIdle: () => Promise<void> };
@@ -308,6 +330,7 @@ class FakeAgentSession {
 	}
 
 	async abort(): Promise<void> {
+		await this.goalRuntime.onTaskAborted({ reason: "interrupted" });
 		this.isStreaming = false;
 	}
 
@@ -379,7 +402,9 @@ class FakeAgentSession {
 		return [];
 	}
 
-	setActiveToolsByName(_toolNames: string[]): void {}
+	setActiveToolsByName(toolNames: string[]): void {
+		this.enabledTools = [...toolNames];
+	}
 
 	setClientBridge(_bridge: unknown): void {}
 
@@ -621,6 +646,22 @@ async function advanceBootstrapGuard(): Promise<void> {
 }
 
 describe("ACP agent", () => {
+	it("keeps ACP routing on the saved session when the provider conversation rotates", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		session.sessionId = "fresh-provider-conversation";
+		session.agent.sessionId = session.sessionId;
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "/help" }],
+		});
+		expect(response.stopReason).toBe("end_turn");
+		expect(harness.updates.length).toBeGreaterThan(0);
+		expect(harness.updates.every(update => update.sessionId === created.sessionId)).toBe(true);
+		await harness.agent.closeSession({ sessionId: created.sessionId });
+	});
+
 	it("supports multiple live ACP sessions with model and lifecycle handlers", async () => {
 		const harness = await createHarness();
 		const first = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
@@ -1373,6 +1414,153 @@ describe("ACP agent", () => {
 		]);
 		expect(session.followUpCalls).toEqual([]);
 
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("toggles plan mode through ACP slash commands without invoking the provider", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgPlanEnabled.override(session.settings, true);
+		await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/plan" }] });
+		expect(session.getPlanModeState()?.enabled).toBe(true);
+		await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/plan" }] });
+		expect(session.getPlanModeState()).toBeUndefined();
+		expect(session.promptCalls).toEqual([]);
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("continues an ACP goal and restores tools when continuation makes no progress", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgGoalEnabled.override(session.settings, true);
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "/goal check the project" }],
+		});
+		expect(response.stopReason).toBe("end_turn");
+		expect(session.promptCalls).toHaveLength(2);
+		expect(session.goalState?.goal.status).toBe("paused");
+		expect(session.enabledTools).toEqual(["read"]);
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("cancels a goal while end-of-turn delivery is pending without starting a continuation", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgGoalEnabled.override(session.settings, true);
+		const waiting = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		session.waitForIdleBlocker = async () => {
+			waiting.resolve();
+			await release.promise;
+		};
+		const pending = harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "/goal inspect" }],
+		});
+		await waiting.promise;
+		await harness.agent.cancel({ sessionId: created.sessionId });
+		release.resolve();
+		expect((await pending).stopReason).toBe("cancelled");
+		await Bun.sleep(0);
+		expect(session.promptCalls).toHaveLength(1);
+		expect(session.goalState?.goal.status).toBe("paused");
+		expect(session.enabledTools).toEqual(["read"]);
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("stops ACP continuation at the native goal budget and restores tools", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgGoalEnabled.override(session.settings, true);
+		session.prompt = async text => {
+			session.promptCalls.push(text);
+			await session.goalRuntime.onBudgetMutated(1);
+			session.goalRuntime.onTurnStart("budget-turn", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+			await session.goalRuntime.onAgentEnd({ currentUsage: { input: 2, output: 0, cacheRead: 0, cacheWrite: 0 } });
+			for (const listener of session.listeners())
+				listener({ type: "agent_end", messages: [makeAssistantMessage("budget reached")] });
+			return true;
+		};
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "/goal inspect" }],
+		});
+		expect(response.stopReason).toBe("end_turn");
+		expect(session.promptCalls).toHaveLength(1);
+		expect(session.goalState?.goal.status).toBe("budget-limited");
+		expect(session.enabledTools).toEqual(["read"]);
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("settles ACP when a goal continuation is consumed without invoking the agent", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgGoalEnabled.override(session.settings, true);
+		const initialPrompt = session.prompt.bind(session);
+		session.prompt = async text => {
+			if (session.promptCalls.length === 0) return initialPrompt(text);
+			session.promptCalls.push(text);
+			return false;
+		};
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [{ type: "text", text: "/goal inspect" }],
+		});
+		expect(response.stopReason).toBe("end_turn");
+		expect(session.goalState?.goal.status).toBe("paused");
+		expect(session.enabledTools).toEqual(["read"]);
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("reports a failed goal prompt even when tool restoration also fails", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		cfgGoalEnabled.override(session.settings, true);
+		session.prompt = async () => {
+			session.setActiveToolsByName = () => {
+				throw new Error("restore failed");
+			};
+			throw new Error("provider failed");
+		};
+		await expect(
+			harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/goal inspect" }] }),
+		).rejects.toThrow("provider failed");
+		expect(session.goalState?.goal.status).toBe("paused");
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("queues /queue submissions without aborting the streaming run", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		session.isStreaming = true;
+		const response = await harness.agent.prompt({
+			sessionId: created.sessionId,
+			prompt: [
+				{ type: "text", text: "/queue then run the tests" },
+				{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+			],
+		});
+		expect(response.stopReason).toBe("end_turn");
+		expect(session.followUpCalls).toEqual([
+			{ text: "then run the tests", images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] },
+		]);
+		expect(session.isStreaming).toBe(true);
+		expect(session.steerCalls).toEqual([]);
 		harness.abortController.abort();
 		await Bun.sleep(0);
 	});
@@ -2333,7 +2521,7 @@ describe("ACP agent", () => {
 		expect(names).toContain("skill:sample");
 		expect(names).not.toContain("settings");
 		expect(names).not.toContain("copy");
-		expect(names).not.toContain("plan");
+		expect(names).toContain("plan");
 		expect(names).not.toContain("loop");
 		expect(names).not.toContain("login");
 		expect(names).not.toContain("new");
@@ -2342,8 +2530,8 @@ describe("ACP agent", () => {
 		expect(names).not.toContain("btw");
 		expect(names).not.toContain("delete");
 		expect(names).not.toContain("resume");
-		expect(names).not.toContain("agents");
-		expect(names).not.toContain("extensions");
+		expect(names).toContain("agents");
+		expect(names).toContain("extensions");
 		expect(names).not.toContain("hotkeys");
 
 		harness.abortController.abort();

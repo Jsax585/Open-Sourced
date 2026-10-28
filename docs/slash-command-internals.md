@@ -197,7 +197,7 @@ The Extensions dashboard also loads `slash-commands` capability and displays act
 
 ## 5) Routing and prompt-pipeline placement
 
-The unified built-in registry is checked before `AgentSession.prompt(...)` in TUI and ACP/RPC modes. A built-in can consume input or return residual prompt text. TUI-only built-ins are omitted from ACP availability and dispatch; ACP-visible built-ins are the entries with a text-mode `handle`.
+The unified built-in registry is checked before `AgentSession.prompt(...)` in TUI and ACP/RPC modes. A built-in can consume input or return residual prompt text. Built-ins without ACP handlers are omitted from ACP availability and explicitly rejected at dispatch; ACP-visible built-ins are the entries with a text-mode `handle`.
 
 Built-in parsing splits at the first whitespace or colon, so `/model:opus` is a built-in invocation. Extension/custom/file parsing instead splits only at the first literal space, preserving names such as `plugin:command`. In the TUI, a built-in with arguments falls through when its spec does not declare `allowArgs`; the ACP dispatcher leaves argument validation to the handler.
 
@@ -269,11 +269,62 @@ Unknown slash input is **not rejected** by core slash logic.
 
 If no built-in, extension, custom, or file command handles it, `expandSlashCommand` returns the original text and the literal `/...` prompt proceeds through prompt-template expansion and LLM delivery.
 
-TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...)`. A TUI-only built-in is not advertised or handled in ACP, so an otherwise unhandled spelling can still fall through as ordinary prompt text there.
+TUI and ACP/RPC dispatch the shared built-in registry before `session.prompt(...)`. A built-in without an ACP handler is not advertised. Its spelling and aliases produce an unsupported-command diagnostic instead of model instructions. Unknown names remain available to extension and prompt dispatch.
 
 ## ACP/RPC availability
 
 `buildAvailableSlashCommands(...)` publishes commands first-wins in this order: text-capable built-ins, optional skill commands, extension commands, TypeScript/MCP custom commands, then discovered file commands. Built-in primary names and aliases are reserved; extension names such as `model:foo`, whose prefix parses as a built-in, are filtered from ACP availability. The same file-command load updates the session expansion set.
+
+### Portable interactions
+
+ACP supplies the shared command runtime with form-backed selectors, confirmations,
+and text editors. Clients need form elicitation support for interactive commands.
+Cancelling a form leaves the corresponding operation unapplied.
+
+- `/advisor configure` selects project or user persistence, an advisor, and an
+  available catalog model. It edits `WATCHDOG.yml` (or an existing
+  `WATCHDOG.yaml`) and reloads advisor configuration without changing the main
+  model or advisor enablement. User scope follows the session settings directory.
+- `/clear` confirms before resetting model context. The persisted ACP session ID
+  and saved transcript remain available.
+- `/plan` uses ACP mode changes; `/plan-review` uses ACP plan approval.
+- `/goal` uses native goal state and continuation. Cancellation pauses the goal;
+  exhausted budgets and provider errors stop continuation.
+- `/queue <message>` joins an active run as a follow-up, including attached images,
+  without the ordinary ACP prompt path cancelling that run.
+- `/skills` supports help, search, installed, install, and update. Installation
+  retains native script confirmation and refreshes available commands.
+- `/seance [session id|path] [--model selector]` consults saved history through
+  the bundled task agent. Forms select the source/model; the main session is not resumed or switched.
+- `/agents` and `/extensions` (`/status`) list discovered entries. They do not
+  reproduce the terminal dashboards.
+- `/git [revision]` displays working-copy status or a Git commit.
+- `/local` edits a session-local file through a form and refuses to overwrite
+  a file that changed while the editor was open.
+
+Commands without a shared handler remain unadvertised. Invoking a recognized
+unsupported built-in returns a diagnostic instead of sending it to the model.
+This is broader command access, not complete terminal-command parity.
+
+| Remaining command group | Required integration |
+| --- | --- |
+| `new`, `resume`, `fork` | The client calls ACP session creation/loading/forking and adopts the returned session ID. These protocol methods already exist. |
+| `branch`, `tree`, `delete` | Client navigation/history replacement and destructive deletion need a host contract; closing an ACP session does not delete its transcript. |
+| `settings`, `setup`, `login`, `logout` | Settings/authentication forms must preserve persistence, account selection, credential handling, and runtime refresh. |
+| `guided-goal`, `loop`, `vibe` | Extract native run ownership, continuation, and tool restoration from InteractiveMode. |
+| `btw`, `tan`, `omfg` | Share the controllers' separate histories, jobs, cancellation, and save/approval flows. |
+| `cleanse` | Adapt its status board and prompts, and replace process-wide working-directory lookup with session-scoped execution. |
+| `collab`, `join`, `leave` | Share collaboration host/guest lifecycle independently of the terminal UI. |
+| `copy`, `open`, `hotkeys`, `hub` | Clipboard, browser, key bindings, and live agent controls belong to the client. Server-local actions would target the wrong machine. |
+| `live`, `record` | Client audio/recording integration; ACP has no OMP terminal screen to record. |
+| `pause` | Native pause is process-global; multiplexed ACP needs explicit scope and disconnect cleanup. |
+| `exit`, `quit`, `restart` | Client-owned process lifecycle; exiting the ACP process would affect all its sessions. |
+| `debug` | Separate portable diagnostics from terminal-rendering diagnostics. |
+
+ACP `PromptResponse` contains a stop reason and usage, not a replacement session
+ID. `SessionUpdate` has no navigation/history-reset event. Calling native
+session-switch methods inside a slash handler alone cannot make the client
+adopt the new conversation safely.
 
 ## 8) Streaming-time differences vs idle
 
@@ -483,3 +534,9 @@ Without an interactive UI, `code-review` delegates to `/review` instead of openi
 Estimate rules: Overview category and per-tool rows split the reported Used total by each row's estimated share, while entry headers show their own unscaled estimates, so the entries in a category need not add up to its Overview row; the Overview notes this under its legend. Skills is its own estimate-only row (the skill listing in the system prompt) and is subtracted from the System Prompt weight to avoid double counting. Multiple thinking blocks in one message share a total shown on a group heading, and grouped entries show `—`; empty interrupted thinking without usage shows `N/A · Interrupted`, not zero. Retained Anthropic web-search and tool-search calls and results appear in Tool Calls and Tool Output as JSON; opaque provider data (thinking signatures, `encrypted_content`, `encrypted_index`) is shown only as its size, such as `signature · 1,024 chars`, while still counted.
 
 Navigation uses the `tui.select.*` bindings: up/down select and scroll, confirm opens an entry, cancel goes back or closes, and page up/down scroll full-content view (see [keybindings](./keybindings.md)). In Tern, click selects, double-click opens, and the mouse wheel scrolls. Categories without entries cannot be opened. Opening the viewer does not submit the composer draft or interrupt a background turn.
+
+## ACP context reset
+
+The shared /clear handler resets context through AgentSession.resetSessionContext().
+ACP asks for form confirmation. Declining or cancelling leaves context intact.
+Session identity and saved transcript survive. Busy sessions refuse the reset.

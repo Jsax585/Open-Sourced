@@ -296,6 +296,12 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (runtime.ctx.goalModeEnabled) return "Plan: blocked by goal mode";
 			return "Plan: off";
 		},
+		handle: async (command, runtime) => {
+			if (!runtime.setPlanMode) return usage("Plan mode is unavailable in this host.", runtime);
+			if (runtime.session.getGoalModeState()?.enabled) return usage("Exit goal mode first.", runtime);
+			await runtime.setPlanMode(command.args.trim() ? true : !runtime.session.getPlanModeState()?.enabled);
+			if (command.args.trim()) return { prompt: command.args };
+		},
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
 				runtime.ctx.handlePlanModeCommand(command.args || undefined, runtime.input),
@@ -308,6 +314,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Re-open the plan review for the latest plan (plan mode only)",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.planModeEnabled ? "Plan review: available" : "Plan review: plan mode inactive",
+		handle: async (_command, runtime) => {
+			if (!runtime.reviewPlan) return usage("Plan review is unavailable in this host.", runtime);
+			await runtime.reviewPlan();
+		},
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.openPlanReview();
 			clearSubmittedText(runtime);
@@ -350,6 +360,76 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (runtime.ctx.planModeEnabled) return "Goal: blocked by plan mode";
 			const state = runtime.ctx.session.getGoalModeState();
 			return state ? `Goal: ${state.goal.status} (${shortDetail(state.goal.objective)})` : "Goal: off";
+		},
+		handle: async (command, runtime) => {
+			if (!runtime.syncGoalTools) return usage("Goal mode is unavailable in this host.", runtime);
+			if (!cfgGoalEnabled.get(runtime.settings)) return usage("Goal mode is disabled.", runtime);
+			if (runtime.session.getPlanModeState()?.enabled) return usage("Exit plan mode first.", runtime);
+			const goals = runtime.session.goalRuntime;
+			let args = command.args.trim();
+			if (!args) {
+				const state = runtime.session.getGoalModeState();
+				if (state) {
+					args = (await runtime.ui?.select("Goal", ["show", "pause", "resume", "drop", "budget"])) ?? "";
+				} else {
+					args = (await runtime.ui?.input("Goal objective")) ?? "";
+				}
+				if (!args) return;
+			}
+			if (runtime.signal?.aborted) return;
+			const separator = args.search(/\s/);
+			const op = (separator < 0 ? args : args.slice(0, separator)).toLowerCase();
+			const value = separator < 0 ? "" : args.slice(separator).trim();
+			switch (op) {
+				case "show":
+					await runtime.output(JSON.stringify(runtime.session.getGoalModeState()?.goal ?? null, null, 2));
+					return;
+				case "pause":
+					await goals.pauseGoal();
+					await runtime.syncGoalTools?.();
+					return;
+				case "drop":
+					if (!(await runtime.ui?.confirm("Drop goal", "Drop the current goal?")) || runtime.signal?.aborted)
+						return;
+					await goals.dropGoal();
+					await runtime.syncGoalTools?.();
+					return;
+				case "budget": {
+					const budget = value || (await runtime.ui?.input("Token budget (positive integer or off)"));
+					if (!budget || runtime.signal?.aborted) return;
+					const tokens = budget === "off" ? undefined : Number(budget);
+					if (tokens !== undefined && (!Number.isInteger(tokens) || tokens <= 0)) {
+						return usage("Budget must be a positive integer or off.", runtime);
+					}
+					await goals.onBudgetMutated(tokens);
+					return;
+				}
+				case "resume": {
+					const goal = runtime.session.getGoalModeState()?.goal;
+					if (goal?.tokenBudget !== undefined && goal.tokensUsed >= goal.tokenBudget) {
+						return usage("Increase or remove the exhausted goal budget before resuming.", runtime);
+					}
+					await goals.resumeGoal();
+					break;
+				}
+				default: {
+					const objective = op === "set" || op === "create" ? value : args;
+					if (!objective) return usage("Usage: /goal set <objective>", runtime);
+					if (op === "set" && runtime.session.getGoalModeState()?.enabled) {
+						await goals.replaceGoal({ objective });
+					} else {
+						await goals.createGoal({ objective });
+					}
+				}
+			}
+			try {
+				await runtime.syncGoalTools?.();
+			} catch (error) {
+				await goals.pauseGoal();
+				throw error;
+			}
+			const kickoff = goals.buildContinuationPrompt();
+			if (kickoff) return { prompt: kickoff };
 		},
 		handleTui: async (command, runtime) => {
 			await runWithDetachedDraft(command, runtime, () =>
@@ -402,6 +482,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Queue a message for after the agent yields",
 		inlineHint: "<message>",
 		allowArgs: true,
+		handle: async (command, runtime) => {
+			if (!command.args.trim()) return usage("Usage: /queue <message>", runtime);
+			return { prompt: command.args };
+		},
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleQueueCommand(
 				command.args,
