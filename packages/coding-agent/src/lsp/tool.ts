@@ -240,10 +240,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			// Independent linters do not initialize or index an LSP workspace.
 			const fallback = getConfig(this.session.cwd);
 			const servers = targetPath ? getServersForFile(fallback, targetPath) : [];
-			if (
-				action !== "status" &&
-				(action !== "diagnostics" || servers.length === 0 || servers.some(([, server]) => !server.createClient))
-			) {
+			if (action !== "status" && (action !== "diagnostics" || servers.length === 0)) {
 				throw error;
 			}
 			workspaceRoot = this.session.cwd;

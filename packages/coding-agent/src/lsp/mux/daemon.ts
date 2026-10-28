@@ -17,7 +17,6 @@ import { daemonClientForProject } from "../../launch/client";
 import { describeQuietly, stopQuietly, waitReady } from "../../launch/ensure";
 import { daemonRuntimeDir } from "../../launch/paths";
 import { resolveWorkerSpawnCmd, SMOKE_TEST_TIMEOUT_MS, workerEnvFromParent } from "../../subprocess/worker-client";
-import { assertSafeLspRoot, UnsafeLspRootError } from "../config";
 import type { LspJsonRpcRequest, LspJsonRpcResponse, LspTransport, LspWriteSink } from "../types";
 import {
 	LSP_MUX_DAEMON_NAME,
@@ -293,9 +292,9 @@ async function ensureLspMuxDaemon(projectDir: string, signal?: AbortSignal): Pro
 }
 
 /**
- * Open a broker-shared transport for one language server, ensuring the mux
- * daemon first. Returns null (after a debug log) when the shared path is
- * unavailable so the caller falls back to a process-local spawn.
+ * Open a broker-shared transport for one language server at a cwd already
+ * validated by getOrCreateClient, ensuring the mux daemon first. Returns null
+ * (after a debug log) when unavailable so the caller falls back to a local spawn.
  */
 export async function connectSharedLspTransport(opts: {
 	command: string;
@@ -305,7 +304,6 @@ export async function connectSharedLspTransport(opts: {
 	initializationOptions: unknown;
 	signal?: AbortSignal;
 }): Promise<LspTransport | null> {
-	assertSafeLspRoot(opts.cwd);
 	try {
 		const endpoint = await ensureLspMuxDaemon(opts.cwd, opts.signal);
 		if (!endpoint) return null;
@@ -318,7 +316,6 @@ export async function connectSharedLspTransport(opts: {
 		});
 	} catch (error) {
 		if (opts.signal?.aborted) throw error;
-		if (error instanceof UnsafeLspRootError) throw error;
 		logger.debug("Shared LSP transport unavailable; falling back to local spawn", {
 			command: opts.command,
 			cwd: opts.cwd,

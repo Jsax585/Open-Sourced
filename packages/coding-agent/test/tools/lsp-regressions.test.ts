@@ -513,11 +513,35 @@ describe("lsp regressions", () => {
 			expect(server.spawnCount).toBe(1);
 		});
 
+		it("does not exempt a home repository that is also a shared temporary root", async () => {
+			const home = os.homedir();
+			fs.mkdirSync(path.join(home, ".git"));
+			process.env.TEMP = home;
+			expect(loadConfig(home).servers.probe).toBeUndefined();
+			const server = installHandshakeLsp();
+			await expect(lspClient.getOrCreateClient(probeConfig, home, 1_000)).rejects.toThrow(
+				"Refusing LSP workspace root",
+			);
+			expect(server.spawnCount).toBe(0);
+		});
+
 		it("allows a project directory under the OS temporary directory", async () => {
 			expect(loadConfig(project).servers.probe).toBeDefined();
 			const server = installHandshakeLsp();
 			const client = await lspClient.getOrCreateClient(probeConfig, project, 1_000);
 			expect(client.cwd).toBe(project);
+			expect(server.spawnCount).toBe(1);
+		});
+
+		it("does not revalidate the workspace root when returning a cached client", async () => {
+			const server = installHandshakeLsp();
+			const guard = vi.spyOn(lspConfig, "assertSafeLspRoot");
+			const client = await lspClient.getOrCreateClient(probeConfig, project, 1_000);
+			expect(guard).toHaveBeenCalledWith(project);
+			guard.mockClear();
+
+			expect(await lspClient.getOrCreateClient({ ...probeConfig }, project, 1_000)).toBe(client);
+			expect(guard).not.toHaveBeenCalled();
 			expect(server.spawnCount).toBe(1);
 		});
 
@@ -535,6 +559,46 @@ describe("lsp regressions", () => {
 			expect(text).toContain(`"rootPath": "${nestedProject}"`);
 			expect(text).not.toContain(`"rootPath": "${os.tmpdir()}"`);
 		});
+
+		it.each(["project", "temporary-root"])(
+			"keeps lexical workspace and document paths through a %s symlink",
+			async kind => {
+				fs.mkdirSync(path.join(project, "src"));
+				const alias = path.join(fixture.path(), "alias");
+				fs.symlinkSync(kind === "project" ? project : fixture.path(), alias, "junction");
+				const workspace = kind === "project" ? alias : path.join(alias, "project");
+				const cwd = kind === "project" ? os.tmpdir() : alias;
+				if (kind === "temporary-root") process.env.TEMP = fixture.path();
+				const file = path.join(workspace, "src", "file.omp-root-probe");
+				fs.writeFileSync(file, "probe\n");
+
+				const root = lspConfig.resolveLspRoot(cwd, file);
+				expect(root).toBe(workspace);
+				expect(lspConfig.resolveLspRoot(cwd, path.join(workspace, "src", "missing.omp-root-probe"))).toBe(
+					workspace,
+				);
+				const server = installHandshakeLsp();
+				const client = await lspClient.getOrCreateClient(probeConfig, root, 1_000);
+				expect(server.received.find(message => message.method === "initialize")?.params).toMatchObject({
+					rootPath: workspace,
+					rootUri: fileToUri(workspace),
+					workspaceFolders: [{ uri: fileToUri(workspace), name: path.basename(workspace) }],
+				});
+
+				await lspClient.ensureFileOpen(client, file);
+				expect(await server.waitFor(message => message.method === "textDocument/didOpen")).toMatchObject({
+					params: { textDocument: { uri: fileToUri(file) } },
+				});
+				await lspClient.notifyWorkspaceWatchedFiles(root, [
+					{ filePath: file, type: lspClient.FileChangeType.Changed },
+				]);
+				expect(await server.waitFor(message => message.method === "workspace/didChangeWatchedFiles")).toMatchObject(
+					{
+						params: { changes: [{ uri: fileToUri(file), type: lspClient.FileChangeType.Changed }] },
+					},
+				);
+			},
+		);
 
 		it("resolves a custom project marker instead of a nearer unrelated language marker", async () => {
 			fs.rmSync(path.join(project, ".git"), { recursive: true });
@@ -595,6 +659,16 @@ describe("lsp regressions", () => {
 			fs.writeFileSync(path.join(shared, "project.marker"), "");
 			process.env.TEMP = shared;
 			expect(lspConfig.hasRootMarkerAncestor(path.join(shared, "src", "file.ts"), ["project.marker"])).toBe(false);
+		});
+
+		it("does not select a symlinked shared root as the file's project", () => {
+			const alias = path.join(fixture.path(), "project-alias");
+			fs.symlinkSync(project, alias, "junction");
+			process.env.TEMP = project;
+			expect(() => lspConfig.resolveLspRoot(os.tmpdir(), path.join(alias, "missing.omp-root-probe"))).toThrow(
+				"Refusing LSP workspace root",
+			);
+			expect(lspConfig.hasRootMarkerAncestor(path.join(alias, "missing.omp-root-probe"), [".git"])).toBe(false);
 		});
 
 		it.each(["notification", "request"])("refuses unsafe later workspace additions sent as a %s", async kind => {

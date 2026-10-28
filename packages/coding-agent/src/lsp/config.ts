@@ -8,12 +8,11 @@ import {
 	logger,
 	normalizePathForComparison,
 	pathIsWithin,
-	resolveEquivalentPath,
 	type WhichOptions,
 } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { getConfigDirPaths } from "../config";
-import type { ClaudePluginRoot } from "../discovery/helpers";
+import { type ClaudePluginRoot, getProjectDiscoveryCeilings } from "../discovery/helpers";
 import {
 	type ConfigFileAdapter,
 	type ConfigFileSource,
@@ -223,24 +222,12 @@ export class UnsafeLspRootError extends Error {
 	}
 }
 
-function broadLspRoots(): Set<string> {
-	const roots = [
-		os.tmpdir(),
-		"/tmp",
-		"/private/tmp",
-		"/var/tmp",
-		"/private/var/tmp",
-		process.env.TMPDIR,
-		process.env.TMP,
-		process.env.TEMP,
-	];
-	const home = os.homedir();
+function broadLspRoots(): ReadonlySet<string> {
 	// Dotfiles repositories may legitimately use the home directory as their root.
-	if (!fs.existsSync(path.join(home, ".git"))) roots.push(home);
-	return new Set(roots.filter((root): root is string => Boolean(root)).map(normalizePathForComparison));
+	return getProjectDiscoveryCeilings({ includeHome: !fs.existsSync(path.join(os.homedir(), ".git")) });
 }
 
-function isBroadLspRoot(root: string, broadRoots: Set<string>): boolean {
+function isBroadLspRoot(root: string, broadRoots: ReadonlySet<string>): boolean {
 	const resolved = path.resolve(root);
 	const normalized = normalizePathForComparison(resolved);
 	return (
@@ -284,7 +271,8 @@ export function assertSafeLspWorkspaceMessage(method: string, params: unknown): 
 
 function* lspProjectAncestors(cwd: string): Generator<string> {
 	const broadRoots = broadLspRoots();
-	let dir = resolveEquivalentPath(cwd);
+	// Keep workspace roots lexical, matching document URIs; only safety checks resolve symlinks.
+	let dir = path.resolve(cwd);
 	while (!isBroadLspRoot(dir, broadRoots)) {
 		yield dir;
 		const parent = path.dirname(dir);
@@ -306,7 +294,7 @@ export function resolveLspRoot(cwd: string, targetPath?: string): string {
 	} catch (error) {
 		if (!(error instanceof UnsafeLspRootError) || targetPath === undefined) throw error;
 	}
-	const target = resolveEquivalentPath(path.resolve(cwd, targetPath), { throughMissing: true });
+	const target = path.resolve(cwd, targetPath);
 	let start = path.dirname(target);
 	try {
 		if (fs.statSync(target).isDirectory()) start = target;
@@ -331,7 +319,7 @@ export function resolveLspRoot(cwd: string, targetPath?: string): string {
 export function hasRootMarkerAncestor(filePath: string, markers: string[]): boolean {
 	if (markers.length === 0) return false;
 
-	for (const dir of lspProjectAncestors(path.dirname(resolveEquivalentPath(filePath)))) {
+	for (const dir of lspProjectAncestors(path.dirname(path.resolve(filePath)))) {
 		if (hasRootMarkers(dir, markers)) return true;
 	}
 	return false;

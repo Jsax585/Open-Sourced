@@ -1029,7 +1029,6 @@ export async function getOrCreateClient(
 	initTimeoutMs?: number,
 	signal?: AbortSignal,
 ): Promise<LspClient> {
-	assertSafeLspRoot(cwd);
 	const key = clientKey(config, cwd);
 	// Check if client already exists
 	const existingClient = clients.get(key);
@@ -1081,6 +1080,7 @@ export async function getOrCreateClient(
 	}
 
 	// Create new client with lock
+	assertSafeLspRoot(cwd);
 	const lockToken = Symbol();
 	const clientPromise = (async () => {
 		const baseCommand = config.resolvedCommand ?? config.command;
@@ -1093,8 +1093,6 @@ export async function getOrCreateClient(
 		const { command, args, env } = isLspmuxSupported(baseCommand)
 			? await getLspmuxCommand(baseCommand, baseArgs)
 			: { command: baseCommand, args: baseArgs };
-		// Recheck after async wrapper resolution, before either shared or private startup.
-		assertSafeLspRoot(cwd);
 
 		// Prefer the broker-shared server unless an external lspmux wrapper is
 		// already multiplexing this command. Any shared-path failure falls back
@@ -1104,7 +1102,6 @@ export async function getOrCreateClient(
 			proc = await connectSharedLspTransport({ command, args, cwd, env, initializationOptions, signal });
 		}
 		if (!proc) {
-			assertSafeLspRoot(cwd);
 			proc = ptree.spawn([command, ...args], {
 				cwd,
 				stdin: "pipe",
