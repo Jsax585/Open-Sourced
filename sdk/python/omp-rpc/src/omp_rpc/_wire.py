@@ -886,6 +886,10 @@ class SubagentSnapshot:
     progress: JsonObject | None = None
     """Raw `AgentProgress` record."""
     parent_tool_call_id: str | None = None
+    parent_id: str | None = None
+    """Id of the subagent that spawned this one; null when the root session spawned it."""
+    depth: int = 0
+    """Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1282,6 +1286,10 @@ class SubagentLifecyclePayload:
     description: str | None = None
     session_file: str | None = None
     parent_tool_call_id: str | None = None
+    parent_id: str | None = None
+    """Id of the subagent that spawned this one; null when the root session spawned it."""
+    depth: int = 0
+    """Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on."""
     detached: bool | None = None
     """The subagent runs as a detached background job."""
 
@@ -1295,6 +1303,10 @@ class SubagentProgressPayload:
     progress: JsonObject
     """Raw `AgentProgress` record."""
     parent_tool_call_id: str | None = None
+    parent_id: str | None = None
+    """Id of the subagent that spawned this one; null when the root session spawned it."""
+    depth: int = 0
+    """Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on."""
     assignment: str | None = None
     session_file: str | None = None
     detached: bool | None = None
@@ -1304,6 +1316,10 @@ class SubagentProgressPayload:
 class SubagentEventPayload:
     id: str
     event: RpcAgentEvent | UnknownNotification
+    parent_id: str | None = None
+    """Id of the subagent that spawned this one; null when the root session spawned it."""
+    depth: int = 0
+    """Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2239,6 +2255,8 @@ def parse_subagent_snapshot(value: object, path: str = "SubagentSnapshot") -> Su
         session_file=optional(payload, "sessionFile", decode_str, path),
         progress=optional(payload, "progress", decode_json_object, path),
         parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        parent_id=defaulted(payload, "parentId", nullable(decode_str), path, None),
+        depth=defaulted(payload, "depth", decode_int, path, 0),
     )
 
 
@@ -2687,6 +2705,8 @@ def parse_subagent_lifecycle_payload(value: object, path: str = "SubagentLifecyc
         description=optional(payload, "description", decode_str, path),
         session_file=optional(payload, "sessionFile", decode_str, path),
         parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        parent_id=defaulted(payload, "parentId", nullable(decode_str), path, None),
+        depth=defaulted(payload, "depth", decode_int, path, 0),
         detached=optional(payload, "detached", decode_bool, path),
     )
 
@@ -2700,6 +2720,8 @@ def parse_subagent_progress_payload(value: object, path: str = "SubagentProgress
         task=required(payload, "task", decode_str, path),
         progress=required(payload, "progress", decode_json_object, path),
         parent_tool_call_id=optional(payload, "parentToolCallId", decode_str, path),
+        parent_id=defaulted(payload, "parentId", nullable(decode_str), path, None),
+        depth=defaulted(payload, "depth", decode_int, path, 0),
         assignment=optional(payload, "assignment", decode_str, path),
         session_file=optional(payload, "sessionFile", decode_str, path),
         detached=optional(payload, "detached", decode_bool, path),
@@ -2711,6 +2733,8 @@ def parse_subagent_event_payload(value: object, path: str = "SubagentEventPayloa
     return SubagentEventPayload(
         id=required(payload, "id", decode_str, path),
         event=required(payload, "event", or_unknown(parse_rpc_agent_event), path),
+        parent_id=defaulted(payload, "parentId", nullable(decode_str), path, None),
+        depth=defaulted(payload, "depth", decode_int, path, 0),
     )
 
 
@@ -3360,6 +3384,14 @@ class WireClient:
         params["subagentId"] = subagent_id
         params["message"] = message
         self._command("steer_subagent", params)
+
+    def revive_subagent(self, subagent_id: str, *, message: str | None = None) -> bool:
+        """Bring a finished, parked or killed subagent back from its transcript, optionally sending it a message; false when it was already live."""
+        params: dict[str, object] = {}
+        params["subagentId"] = subagent_id
+        if message is not None:
+            params["message"] = message
+        return required(expect_object(self._command("revive_subagent", params), "revive_subagent"), "revived", decode_bool, "revive_subagent")
 
     def live_start(self, *, voice: str | None = None, instructions: str | None = None) -> str:
         """Start a live voice session bound to this session; returns the voice in use."""

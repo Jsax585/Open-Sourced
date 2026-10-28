@@ -212,6 +212,8 @@ export class RpcSubagentRegistry {
 			assignment: existing?.assignment,
 			sessionFile,
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
+			parentId: payload.parentId,
+			depth: payload.depth,
 			lastUpdate: Date.now(),
 			progress: existing?.progress,
 		};
@@ -246,6 +248,8 @@ export class RpcSubagentRegistry {
 			sessionFile,
 			lastUpdate: Date.now(),
 			parentToolCallId: payload.parentToolCallId ?? existing?.parentToolCallId,
+			parentId: payload.parentId,
+			depth: payload.depth,
 			progress,
 		});
 		if (this.#subscriptionLevel !== "off") {
@@ -259,10 +263,18 @@ export class RpcSubagentRegistry {
 		this.#output({ type: "subagent_event", payload } satisfies RpcSubagentEventFrame);
 	}
 
+	/**
+	 * Transcript file of a subagent this session has reported (still running, or
+	 * one of the most recent finished ones), or `undefined` for ids it never
+	 * reported or forgot after a session change.
+	 */
+	reportedSessionFile(subagentId: string): string | undefined {
+		return this.#subagents.get(subagentId)?.sessionFile ?? this.#transcriptSessionFilesBySubagentId.get(subagentId);
+	}
+
 	resolveSessionFile(selector: RpcSubagentTranscriptSelector): string {
 		if (selector.subagentId) {
-			const snapshot = this.#subagents.get(selector.subagentId);
-			const sessionFile = snapshot?.sessionFile ?? this.#transcriptSessionFilesBySubagentId.get(selector.subagentId);
+			const sessionFile = this.reportedSessionFile(selector.subagentId);
 			if (!sessionFile) {
 				throw new Error(`Unknown subagent or session file unavailable: ${selector.subagentId}`);
 			}
