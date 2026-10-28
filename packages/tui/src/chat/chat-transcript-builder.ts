@@ -11,7 +11,7 @@
  * entry count, but it cannot duplicate or misorder rows the way incremental
  * component reuse could.
  */
-import type { AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, type AgentTool, isSyntheticToolResultMessage } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { type Component, type TUI } from "../tui";
 import type { AdvisorMessageDetails } from "./messages";
@@ -91,6 +91,8 @@ export interface ChatTranscriptBuilderDeps {
 export class ChatTranscriptBuilder {
 	readonly container = new TranscriptContainer();
 	#pendingTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
+	/** Tool calls of an error or abort turn; Cursor runs them inside the stream, so a real result may still follow. */
+	#erroredTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
 	#readArgs = new Map<string, Record<string, unknown>>();
 	#readGroup: ReadToolGroupComponent | null = null;
 	#pendingUsage: Usage | undefined;
@@ -165,6 +167,7 @@ export class ChatTranscriptBuilder {
 	reset(): void {
 		for (const pending of this.#pendingTools.values()) pending.seal();
 		this.#pendingTools.clear();
+		this.#erroredTools.clear();
 		this.#readArgs.clear();
 		this.#readGroup = null;
 		this.#pendingUsage = undefined;
@@ -478,6 +481,7 @@ export class ChatTranscriptBuilder {
 						false,
 						content.id,
 					);
+					this.#erroredTools.set(content.id, group);
 				} else if (afterToolSegment) {
 					const group = this.#ensureReadGroup();
 					group.updateArgs(content.arguments, content.id);
@@ -515,6 +519,7 @@ export class ChatTranscriptBuilder {
 					false,
 					content.id,
 				);
+				this.#erroredTools.set(content.id, component);
 			} else {
 				this.#pendingTools.set(content.id, component);
 			}
@@ -534,7 +539,11 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
-		const pending = this.#pendingTools.get(message.toolCallId);
+		// A real result replaces an error row; the agent loop's synthetic placeholder for a call that never ran keeps it.
+		const errored = this.#erroredTools.get(message.toolCallId);
+		this.#erroredTools.delete(message.toolCallId);
+		if (!this.#pendingTools.has(message.toolCallId) && errored && isSyntheticToolResultMessage(message)) return;
+		const pending = this.#pendingTools.get(message.toolCallId) ?? errored;
 		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
 		if (isReadGroupResult) {
 			let component = pending;
