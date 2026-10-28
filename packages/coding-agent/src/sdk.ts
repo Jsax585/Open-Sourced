@@ -52,7 +52,7 @@ import {
 import { AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
-import { loadCapability, reset as resetCapabilities } from "./capability";
+import { isProjectCodeTrusted, loadCapability, reset as resetCapabilities } from "./capability";
 import {
 	MAIN_AGENT_RULE_NAME,
 	type Rule,
@@ -1108,9 +1108,13 @@ export async function discoverSessionExtensionPaths(
 	const roots = options.extensionRoots?.();
 	const explicit = roots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const explicitOnly = roots ? roots.mode === "explicit-only" : options.disableExtensionDiscovery;
-	const configuredPaths = explicitOnly
-		? [...explicit]
-		: [...explicit, ...(roots?.configured ?? cfgExtensions.get(settings))];
+	const configuredLevel = roots?.configuredLevel ?? settings.extensionsSourceLevel();
+	// A project's own `extensions:` entries are project code; explicit (CLI) paths never are.
+	const settingsPaths =
+		configuredLevel === "project" && !(await isProjectCodeTrusted(cwd))
+			? []
+			: (roots?.configured ?? cfgExtensions.get(settings));
+	const configuredPaths = explicitOnly ? [...explicit] : [...explicit, ...settingsPaths];
 	const disabledExtensionIds = explicitOnly ? undefined : cfgDisabledExtensions.get(settings);
 	return discoverExtensionPaths(configuredPaths, cwd, disabledExtensionIds, {
 		ambient: !explicitOnly,

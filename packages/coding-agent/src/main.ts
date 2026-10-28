@@ -6,6 +6,7 @@
  */
 import * as fsSync from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
@@ -26,7 +27,15 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { reset as resetCapabilities } from "./capability";
+import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { projectTrustRoot, reset as resetCapabilities, setProjectTrustCheck } from "./capability";
+import {
+	listProjectCodeSources,
+	loadTrustedProjects,
+	type ProjectCodeSource,
+	trustProject,
+} from "./config/project-trust";
 import {
 	type Args,
 	reportInvalidFlagValues,
@@ -93,6 +102,7 @@ import { invokeSkillCommandFromText, isKnownSkillCommand } from "./modes/skill-c
 import {
 	applyStartupComposerPreferences,
 	type ComposerLease,
+	chooseInStartupComposer,
 	stopPendingStartupComposer,
 	takeStartupComposerLease,
 } from "./modes/startup-composer";
@@ -874,6 +884,87 @@ async function promptMoveSession(session: SessionInfo): Promise<SessionPromptRes
 		rl.close();
 		resumeStartupWatchdog();
 	}
+}
+
+const TRUST_PROMPT_MAX_SOURCES = 10;
+
+async function promptTrustProject(projectRoot: string, sources: ProjectCodeSource[]): Promise<boolean> {
+	const width = Math.max(...sources.map(source => source.kind.length));
+	// File names come from the project itself: strip control bytes and newlines
+	// so a hostile name cannot repaint or hide lines of this prompt.
+	const displayPath = (sourcePath: string) => {
+		const relative = path.relative(projectRoot, sourcePath);
+		const shown = relative.startsWith("..") || path.isAbsolute(relative) ? shortenPath(sourcePath) : relative;
+		return truncateToWidth(sanitizeDisplayLine(shown), TRUNCATE_LENGTHS.LONG);
+	};
+	const lines = [
+		`${chalk.yellow("⚠")} ${chalk.bold("Trust this project?")}`,
+		chalk.dim(truncateToWidth(sanitizeDisplayLine(shortenPath(projectRoot)), TRUNCATE_LENGTHS.LONG)),
+		"",
+		"It can run code on your machine as soon as it loads:",
+		...sources
+			.slice(0, TRUST_PROMPT_MAX_SOURCES)
+			.map(source => `  ${source.kind.padEnd(width)}  ${chalk.dim(displayPath(source.path))}`),
+	];
+	if (sources.length > TRUST_PROMPT_MAX_SOURCES)
+		lines.push(chalk.dim(`  ...and ${sources.length - TRUST_PROMPT_MAX_SOURCES} more`));
+	lines.push("", chalk.dim("Only trust projects you know. Your choice is saved for this project."));
+	pauseStartupWatchdog();
+	try {
+		const choice = chooseInStartupComposer(lines, [
+			{ value: "trust", label: "Trust and continue" },
+			{ value: "skip", label: "Continue without project code" },
+		]);
+		if (choice) return (await choice) === "trust";
+		// No prepaint composer (quiet start): a plain prompt on the bare terminal.
+		const createInterface = await loadReadlineInterface();
+		const rl = createInterface({ input: process.stdin, output: process.stdout });
+		try {
+			const answer = (await rl.question(`${lines.join("\n")}\nTrust and continue? [y/N] `)).trim().toLowerCase();
+			return answer === "y" || answer === "yes";
+		} finally {
+			rl.close();
+		}
+	} finally {
+		resumeStartupWatchdog();
+	}
+}
+
+/**
+ * Decide whether the session's project may run its project-level code: stored
+ * trust, `--trust-project`, or an interactive prompt. Headless launches never
+ * prompt; they skip the code and say so on stderr.
+ */
+async function resolveProjectTrust(
+	cwd: string,
+	trustedProjects: Set<string>,
+	parsedArgs: Pick<Args, "trustProject">,
+	isInteractive: boolean,
+	settings: Settings,
+): Promise<void> {
+	const root = await projectTrustRoot(cwd);
+	if (trustedProjects.has(root)) return;
+	if (parsedArgs.trustProject) {
+		trustedProjects.add(root);
+	} else {
+		const sources = await listProjectCodeSources(cwd, settings);
+		if (sources.length === 0) return;
+		if (!isInteractive) {
+			const kinds = [...new Set(sources.map(source => source.kind))].join(", ");
+			process.stderr.write(
+				`${chalk.yellow(`Skipped untrusted project code in ${sanitizeDisplayLine(shortenPath(root))} (${kinds}). Pass --trust-project to load it.`)}\n`,
+			);
+			return;
+		}
+		if (!(await promptTrustProject(root, sources))) return;
+		await trustProject(root);
+		trustedProjects.add(root);
+	}
+	// Plugin lookups cached while untrusted would keep hiding the project's plugins.
+	// The clear only starts an unawaited re-warm; await a fresh preload so sync
+	// readers (plugin LSP/DAP config) see the roots during session creation.
+	clearPluginRootsAndCaches();
+	await preloadPluginRoots(os.homedir(), cwd);
 }
 
 /**
@@ -1875,6 +1966,11 @@ export async function runRootCommand(
 		// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
 		const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
 
+		// Project-level code loads only for trusted roots. Installed before plugin
+		// preload so no cache fills with an untrusted project's plugins.
+		const trustedProjects = deps === DEFAULT_RUN_ROOT_DEPENDENCIES ? await loadTrustedProjects() : undefined;
+		if (trustedProjects) setProjectTrustCheck(root => trustedProjects.has(root));
+
 		// Kick off plugin-root preload in parallel with the remaining startup work.
 		// Awaited later (before extension/skill discovery in createAgentSession needs it).
 		const home = os.homedir();
@@ -2323,6 +2419,7 @@ export async function runRootCommand(
 			}
 		}
 		await pluginPreloadPromise;
+		if (trustedProjects) await resolveProjectTrust(cwd, trustedProjects, parsedArgs, isInteractive, settingsInstance);
 		// Pure file I/O: overlap it with session-option building, but land it before
 		// extensions load or the session can start project daemons.
 		const daemonPresencePromise =

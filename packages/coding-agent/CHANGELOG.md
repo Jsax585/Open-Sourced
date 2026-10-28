@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- A project's own MCP servers, extensions, hooks, custom tools, TypeScript slash commands, and plugins load only once you trust the project: `omp` asks the first time it finds any, and headless runs (`-p`, `--mode rpc`/`acp`) skip them with a notice unless you pass `--trust-project`; worktrees of a trusted repo share its trust ([#16582](https://github.com/can1357/oh-my-pi/pull/16582) by [@michael-bey](https://github.com/michael-bey))
+
 ### Added
 
+- Added `--trust-project` to load the current project's MCP servers, extensions, hooks, tools, commands, and plugins without asking; trust you grant at the prompt is remembered in `~/.omp/agent/trusted-projects.json` ([#16582](https://github.com/can1357/oh-my-pi/pull/16582) by [@michael-bey](https://github.com/michael-bey))
 - Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
 
 ### Fixed

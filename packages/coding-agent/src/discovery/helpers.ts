@@ -15,7 +15,7 @@ import {
 	pathIsWithin,
 	tryParseJson,
 } from "@oh-my-pi/pi-utils";
-import { isUserSourceEnabled } from "../capability";
+import { isProjectCodeTrusted, isUserSourceEnabled } from "../capability";
 import type { ContextFile } from "../capability/context-file";
 import type { ExtensionModule } from "../capability/extension-module";
 import { invalidate as invalidateFsCache, readDirEntries, readFile } from "../capability/fs";
@@ -1233,7 +1233,8 @@ export function registerPluginCacheInvalidator(invalidator: () => void): void {
 async function resolvePluginRegistryFiles(home: string, cwd: string | undefined) {
 	const claudeConfigDir = resolveClaudePaths(home).configDir;
 	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
-	const projectPath = cwd ? await resolveActiveProjectRegistryPath(cwd) : null;
+	// The project registry's install paths are project code (plugin hooks, tools, LSP servers).
+	const projectPath = cwd && (await isProjectCodeTrusted(cwd)) ? await resolveActiveProjectRegistryPath(cwd) : null;
 	const resolvedProjectPath =
 		projectPath && normalizePathForComparison(projectPath) !== normalizePathForComparison(ompRegistryPath)
 			? projectPath
