@@ -1011,6 +1011,15 @@ export class SessionManager {
 	#sessionNameChangedCallbacks = new Set<() => void>();
 	#persistenceErrorCallbacks = new Set<(error: Error) => void>();
 	#persistenceNoticeCallbacks = new Set<(notice: SessionPersistenceNotice) => void>();
+	/**
+	 * Observers of the journal this manager writes moving to another path or
+	 * another session. Whoever published this manager's file keeps its copy
+	 * current from here: the agent registry carries it as the running agent's
+	 * `sessionFile`, and a roster scan reads that to tell which session runs a
+	 * transcript, so a stale copy hides the agent under one name and answers
+	 * for it under another.
+	 */
+	#sessionFileChangedCallbacks = new Set<() => void>();
 	/** Every notice raised so far, replayed to each later subscriber. */
 	#persistenceNotices: SessionPersistenceNotice[] = [];
 	/**
@@ -1111,6 +1120,23 @@ export class SessionManager {
 	}
 
 	/**
+	 * Observe the journal this manager writes moving: a resume or a branch
+	 * (`setSessionFile`), a new session, a `/move`, a restored state, and a
+	 * write that found the file owned elsewhere and went to a sibling. The
+	 * callback runs after the manager points at the new file, and only when
+	 * the file really changed. Returns the unsubscribe.
+	 */
+	onSessionFileChanged(callback: () => void): () => void {
+		this.#sessionFileChangedCallbacks.add(callback);
+		return () => this.#sessionFileChangedCallbacks.delete(callback);
+	}
+
+	#notifySessionFileChanged(previousSessionFile: string | undefined): void {
+		if (this.#sessionFile === previousSessionFile) return;
+		for (const observer of this.#sessionFileChangedCallbacks) this.#invokePersistenceObserver(observer, undefined);
+	}
+
+	/**
 	 * Hold this process's ownership claim on `#sessionId`, moving it off a
 	 * previous session. Only write paths claim, so the first process to write a
 	 * session owns it and inspection (`omp share`, `--export`, `render`) never
@@ -1146,10 +1172,35 @@ export class SessionManager {
 	 * transcript, and a revive must not reopen it, before the agent's first
 	 * entry lands. Inspection paths (`omp share`, `--export`, `render`) never
 	 * call it, so reading a session still claims nothing.
+	 *
+	 * Returns the undo for a loop that never started: a session construction
+	 * that fails before its agent exists gives the claim back, so the next
+	 * attempt on that journal rebuilds it in place instead of being moved to a
+	 * sibling by a claim nothing holds any more. The undo drops nothing it did
+	 * not take: it is a no-op when a caller already owned this manager as a
+	 * writer, and once the manager moved on to another session. One manager
+	 * belongs to one agent loop, so a second caller taking it over while the
+	 * first is still starting is not a state this reverses.
 	 */
-	claimForWriting(): void {
+	claimForWriting(): () => void {
+		const alreadyOwned = this.#writerOwned;
+		const claimBefore = this.#sessionClaim;
 		this.#writerOwned = true;
 		this.#claimSession();
+		const claimed = this.#sessionClaim;
+		if (alreadyOwned) return () => {};
+		let undone = false;
+		return () => {
+			if (undone) return;
+			undone = true;
+			if (!this.#writerOwned || this.#sessionClaim !== claimed) return;
+			this.#writerOwned = false;
+			if (claimed === claimBefore) return;
+			claimed?.release?.();
+			// Cleared rather than restored: the next write re-claims, and a
+			// claim this manager no longer holds must not read as held.
+			this.#sessionClaim = undefined;
+		};
 	}
 
 	/**
@@ -1339,6 +1390,7 @@ export class SessionManager {
 		this.#rememberBreadcrumb(this.#cwd, to);
 		this.#claimSession();
 		this.#notifyPersistenceNotice({ reason, from, to });
+		this.#notifySessionFileChanged(from);
 		return to;
 	}
 
@@ -2046,6 +2098,7 @@ export class SessionManager {
 	}
 
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
+		const previousSessionFile = this.#sessionFile;
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 		this.#expectedDiskSize = null;
@@ -2108,6 +2161,7 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 		}
 
+		this.#notifySessionFileChanged(previousSessionFile);
 		return this.#sessionFile;
 	}
 
@@ -2313,6 +2367,7 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
+		const previousSessionFile = this.#sessionFile;
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
@@ -2342,6 +2397,7 @@ export class SessionManager {
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 		// The restored session is the one this manager's agent loop now writes.
 		if (this.#writerOwned) this.#claimSession();
+		this.#notifySessionFileChanged(previousSessionFile);
 	}
 
 	/**
@@ -2384,7 +2440,9 @@ export class SessionManager {
 	}
 	/** Switch to a different session file (resume / branch). */
 	async setSessionFile(sessionFile: string): Promise<void> {
+		const previousSessionFile = this.#sessionFile;
 		await this.#setSessionFile(sessionFile);
+		this.#notifySessionFileChanged(previousSessionFile);
 	}
 
 	async #setSessionFile(
@@ -2556,11 +2614,13 @@ export class SessionManager {
 		this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
 
 		await this.#rewriteAtomically();
+		this.#notifySessionFileChanged(oldSessionFile);
 		return { oldSessionFile, newSessionFile: this.#sessionFile };
 	}
 
 	/** Move the session to a new working directory. */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
+		const previousSessionFile = this.#sessionFile;
 		const resolvedCwd = path.resolve(newCwd);
 		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
 		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);
@@ -2787,6 +2847,10 @@ export class SessionManager {
 			this.#sessionFileRelocating = null;
 			// The destination is ours or untouched now.
 			destination?.release();
+			// Whether the move landed or rolled back, the path this manager
+			// writes is settled here; a rollback restores the old one and
+			// notifies nothing.
+			this.#notifySessionFileChanged(previousSessionFile);
 		}
 	}
 
@@ -4121,6 +4185,7 @@ export class SessionManager {
 			this.#sessionFile = undefined;
 			this.#fileIsCurrent = false;
 			this.#rewriteRequired = false;
+			this.#notifySessionFileChanged(sourceSessionFile);
 			return undefined;
 		}
 
@@ -4134,6 +4199,7 @@ export class SessionManager {
 		this.#expectedDiskSize = null;
 		this.#rewriteSynchronously();
 		this.#rememberBreadcrumb(this.#cwd, newSessionFile);
+		this.#notifySessionFileChanged(sourceSessionFile);
 		return newSessionFile;
 	}
 

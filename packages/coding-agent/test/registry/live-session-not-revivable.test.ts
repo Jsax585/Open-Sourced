@@ -1,15 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentLifecycleManager, type AgentReviver } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { ensurePersistedRoster } from "@oh-my-pi/pi-coding-agent/registry/persisted-agents";
+import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { FileSessionStorage, sessionJournalLiveness } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -154,6 +158,57 @@ describe("a session this process is running is not a revivable transcript", () =
 	let lifecycle: AgentLifecycleManager;
 	let revived: string[];
 	const openManagers: SessionManager[] = [];
+	const openSessions: AgentSession[] = [];
+	// One auth store and model registry for the whole suite: every case only
+	// needs a resolvable model behind `createAgentSession`, and a SQLite open
+	// per case is the most expensive thing these tests would do.
+	let sharedDir: TempDir;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+
+	/**
+	 * A real session on `sessionFile`, built the way `omp --resume <file>` builds
+	 * one: `createAgentSession` opens it, claims it as the journal its loop
+	 * writes, and registers the agent. Tests that are about what the SDK wires
+	 * up — the writer claim, and the ref following the journal — need the real
+	 * construction, not a stand-in ref.
+	 */
+	async function createSessionOn(
+		sessionFile: string,
+		cwd: string,
+		options?: { agentId?: string; expectedAgentRef?: AgentRef | null },
+	): Promise<AgentSession> {
+		const sessionManager = await SessionManager.open(
+			sessionFile,
+			path.dirname(sessionFile),
+			new FileSessionStorage(),
+			{
+				suppressBreadcrumb: true,
+				throwIfMissing: true,
+			},
+		);
+		openManagers.push(sessionManager);
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir: cwd,
+			authStorage,
+			modelRegistry,
+			sessionManager,
+			settings: Settings.isolated(),
+			agentId: options?.agentId,
+			expectedAgentRef: options?.expectedAgentRef,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+		});
+		openSessions.push(session);
+		return session;
+	}
 
 	/**
 	 * Run the lane transcript as this process's own session, the way
@@ -180,6 +235,18 @@ describe("a session this process is running is not a revivable transcript", () =
 		return main;
 	}
 
+	beforeAll(async () => {
+		sharedDir = TempDir.createSync("@omp-live-session-shared-");
+		authStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		modelRegistry = new ModelRegistry(authStorage, path.join(sharedDir.path(), "models.yml"));
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		sharedDir.removeSync();
+	});
+
 	beforeEach(() => {
 		AgentRegistry.resetGlobalForTests();
 		AgentLifecycleManager.resetGlobalForTests();
@@ -204,6 +271,7 @@ describe("a session this process is running is not a revivable transcript", () =
 	});
 
 	afterEach(async () => {
+		for (const session of openSessions.splice(0)) await session.dispose();
 		for (const manager of openManagers.splice(0)) await manager.close();
 		await AgentLifecycleManager.global().dispose();
 	});
@@ -249,34 +317,43 @@ describe("a session this process is running is not a revivable transcript", () =
 		expect(await leaves(tree.laneFile)).toBe(before);
 	});
 
-	it("holds when a running session adopts the transcript through a session switch", async () => {
+	it("binds the transcript name to the session that adopted it through a session switch", async () => {
 		using tempDir = TempDir.createSync("@omp-live-session-switch-");
 		const tree = await buildTree(tempDir);
-		const manager = await SessionManager.open(tree.rootFile, path.dirname(tree.rootFile), new FileSessionStorage(), {
-			suppressBreadcrumb: true,
-			throwIfMissing: true,
-		});
-		openManagers.push(manager);
-		manager.claimForWriting();
-		// `switchSession` — the extension API, RPC `switch_session`, ACP load —
-		// hands this running loop another transcript, with nothing written yet.
-		await manager.setSessionFile(tree.laneFile);
-		const main = makeFakeSession();
-		registry.register({
-			id: MAIN_AGENT_ID,
-			displayName: "Main",
-			kind: "main",
-			session: main.session,
-			sessionFile: tree.laneFile,
-		});
+		const session = await createSessionOn(tree.rootFile, tempDir.path());
+		// `switchSession` — the resume picker, the extension API, RPC
+		// `switch_session`, an ACP load — hands this running loop another
+		// transcript, with nothing written into it yet.
+		expect(await session.switchSession(tree.laneFile)).toBe(true);
+		const before = await leaves(tree.laneFile);
 
 		await ensurePersistedRoster(registry, tree.laneFile);
-		const receipt = await bus.send({ from: "Worker", to: "Lane", body: "ping" });
 
+		// The agent's ref follows the journal its loop writes, so the name the
+		// roster derives from that transcript answers for the running session
+		// instead of offering a revivable ghost of it.
+		expect(path.resolve(registry.get(MAIN_AGENT_ID)?.sessionFile ?? "")).toBe(path.resolve(tree.laneFile));
 		expect(registry.get("Lane")?.id).toBe(MAIN_AGENT_ID);
-		expect(receipt.outcome).toBe("injected");
-		expect(main.delivered.map(msg => msg.body)).toEqual(["ping"]);
 		expect(revived).toEqual([]);
+		expect(await leaves(tree.laneFile)).toBe(before);
+	});
+
+	it("stops answering for a transcript the running session switched away from", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-switch-away-");
+		const tree = await buildTree(tempDir);
+		const session = await createSessionOn(tree.laneFile, tempDir.path());
+		await ensurePersistedRoster(registry, tree.laneFile);
+		expect(registry.get("Lane")?.id).toBe(MAIN_AGENT_ID);
+
+		expect(await session.switchSession(tree.parkedFile)).toBe(true);
+		await ensurePersistedRoster(registry, tree.parkedFile);
+
+		// The session moved on; `Lane` is the transcript it left, and a peer
+		// naming it means that transcript, not whatever its reader runs now.
+		expect(registry.get("Lane")).toMatchObject({ status: "parked", session: null, sessionFile: tree.laneFile });
+		const receipt = await bus.send({ from: "Worker", to: "Lane", body: "ping" });
+		expect(receipt.outcome).toBe("revived");
+		expect(revived).toEqual(["Lane"]);
 	});
 
 	it("delivers a worker's message for the running session to it instead of reviving a second loop", async () => {
@@ -468,6 +545,142 @@ describe("a session this process is running is not a revivable transcript", () =
 
 		expect(await revive).toBeTruthy();
 		expect(registry.get("Parked")?.session).toBeTruthy();
+	});
+
+	/**
+	 * Run a roster scan that meets a session taking the lane journal in the
+	 * middle of its read of that transcript. The tombstone probe runs after
+	 * the scan asked who holds the journal and before the scan derives
+	 * anything from the answer, so landing the claim there is deterministic.
+	 * The real race is a resume starting while a peer's send re-scans a tree.
+	 */
+	async function scanWithAClaimLandingInTheRead(tree: Tree): Promise<void> {
+		let taken = false;
+		const access = fs.promises.access;
+		const spy = spyOn(fs.promises, "access").mockImplementation(async (target, mode) => {
+			if (!taken && String(target) === `${tree.laneFile}.tombstone`) {
+				taken = true;
+				await runLaneHere(tree.laneFile);
+			}
+			return access(target, mode);
+		});
+		try {
+			await ensurePersistedRoster(registry, tree.rootFile);
+		} finally {
+			spy.mockRestore();
+		}
+	}
+
+	it("registers no parked ref for a journal a session took while the scan was reading it", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-claim-race-");
+		const tree = await buildTree(tempDir);
+
+		await scanWithAClaimLandingInTheRead(tree);
+
+		// The transcript's name belongs to the session running it, and no
+		// `parked` ref stands on a live journal.
+		expect(registry.get("Lane")?.id).toBe(MAIN_AGENT_ID);
+		expect(
+			registry
+				.list()
+				.map(ref => ref.id)
+				.sort(),
+		).toEqual([MAIN_AGENT_ID, "Parked"]);
+		// And the latch does not keep a phantom: a scan that reuses it answers
+		// the same, so a peer's message reaches the session, not a revive.
+		await ensurePersistedRoster(registry, tree.rootFile);
+		const receipt = await bus.send({ from: "Worker", to: "Lane", body: "ping" });
+		expect(receipt.outcome).toBe("injected");
+		expect(revived).toEqual([]);
+	});
+
+	it("drops a parked ref it already holds when a session takes that journal mid-scan", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-latch-race-");
+		const tree = await buildTree(tempDir);
+		// A scan with nothing running leaves `Lane` as a parked transcript, so
+		// the next scan meets a ref it registered itself.
+		await ensurePersistedRoster(registry, tree.rootFile);
+		expect(registry.get("Lane")).toMatchObject({ status: "parked", session: null });
+		// A released sibling invalidates the latch, which is what makes the
+		// next call scan again instead of reusing the settled answer.
+		registry.unregister("Parked");
+
+		await scanWithAClaimLandingInTheRead(tree);
+
+		// The scan must not latch the parked ref onto the journal that went
+		// live under it: the name belongs to the session running it.
+		expect(registry.get("Lane")?.id).toBe(MAIN_AGENT_ID);
+		await ensurePersistedRoster(registry, tree.rootFile);
+		expect(registry.get("Lane")?.id).toBe(MAIN_AGENT_ID);
+		expect(revived).toEqual([]);
+	});
+
+	it("follows the journal a running session is moved to", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-move-");
+		const tree = await buildTree(tempDir);
+		const session = await createSessionOn(tree.laneFile, tempDir.path());
+		const moved = tempDir.join("moved");
+		fs.mkdirSync(moved, { recursive: true });
+
+		// `/move` relocates the journal of a session that keeps running.
+		await session.sessionManager.moveTo(moved, moved);
+
+		const movedFile = session.sessionManager.getSessionFile();
+		expect(movedFile).toBeString();
+		expect(path.dirname(movedFile ?? "")).toBe(path.resolve(moved));
+		expect(registry.get(MAIN_AGENT_ID)?.sessionFile).toBe(movedFile);
+	});
+
+	it("follows the journal a running session branches onto", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-branch-");
+		const tree = await buildTree(tempDir);
+		const session = await createSessionOn(tree.laneFile, tempDir.path());
+		const leafId = session.sessionManager.getLeafId();
+		expect(leafId).toBeString();
+
+		// A checkpoint fork and `/btw` both branch the running session onto a
+		// new journal without ever passing through a resume.
+		expect(await session.fork(leafId ?? undefined)).toBe(true);
+
+		const branchedFile = session.sessionManager.getSessionFile();
+		expect(branchedFile).not.toBe(tree.laneFile);
+		expect(registry.get(MAIN_AGENT_ID)?.sessionFile).toBe(branchedFile);
+	});
+
+	it("gives the journal back when a startup fails before its agent loop exists", async () => {
+		using tempDir = TempDir.createSync("@omp-live-session-startup-failure-");
+		const tree = await buildTree(tempDir);
+		// A running agent already holds the id this startup asks for, which is
+		// the collision `createAgentSession` throws on — after it claimed the
+		// journal its loop was going to write.
+		registry.register({
+			id: "Lane",
+			displayName: "Lane",
+			kind: "sub",
+			parentId: MAIN_AGENT_ID,
+			session: makeFakeSession().session,
+			sessionFile: tree.parkedFile,
+		});
+
+		await expect(
+			createSessionOn(tree.laneFile, tempDir.path(), { agentId: "Lane", expectedAgentRef: null }),
+		).rejects.toThrow(/already owned by another session generation/);
+
+		// Nothing runs that journal, so the next resume of this transcript
+		// rebuilds it in place. A claim left standing would outlive the failed
+		// startup for the life of the process and divert that resume onto a
+		// sibling file, which is the fork this branch exists to prevent.
+		expect(sessionJournalLiveness(tree.laneFile)).toBe("free");
+		const resumed = await SessionManager.open(tree.laneFile, path.dirname(tree.laneFile), new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+			throwIfMissing: true,
+		});
+		openManagers.push(resumed);
+		resumed.claimForWriting();
+		resumed.appendMessage({ role: "user", content: "after the failed startup", timestamp: Date.now() });
+		await resumed.flush();
+		expect(resumed.getSessionFile()).toBe(tree.laneFile);
+		expect(jsonlFilesIn(path.join(tree.dir, "root"))).toEqual(["Lane.jsonl", "Parked.jsonl"]);
 	});
 
 	it("neither suppresses nor re-registers a subagent running in this process", async () => {

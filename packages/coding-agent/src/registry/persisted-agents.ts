@@ -849,6 +849,68 @@ async function registerPersistedSubagentsFromDir(
 			suppressed,
 		);
 	};
+	/**
+	 * Take a transcript whose journal a live agent loop holds, and report that
+	 * the scan must derive nothing from it. A journal a live agent loop writes
+	 * is not a parked transcript. The tree this walks holds the journal this
+	 * process is itself running (`omp --resume <name>.jsonl` resumes a
+	 * subagent's transcript, and the scan climbs to the root above it) and
+	 * those of sibling panes in other processes. A `parked` ref derived from
+	 * one of those offers a running agent as a revivable transcript, and
+	 * reviving it runs a second agent loop on that session. Its own parked
+	 * children stay restorable.
+	 */
+	const takeLiveJournal = async (entryName: string, sessionFile: string): Promise<boolean> => {
+		const liveness = sessionJournalLiveness(sessionFile);
+		if (liveness === "free") return false;
+		// Advisor transcripts are observability-only and never peers, so a
+		// live one is simply not listed.
+		if (isAdvisorTranscriptName(entryName)) return true;
+		const liveId = entryName.slice(0, -".jsonl".length);
+		let live: AgentRef | undefined;
+		if (liveness === "here") {
+			for (const ref of registry.list()) {
+				if (!ref.session || !ref.sessionFile) continue;
+				if (!isSameJournalFile(ref.sessionFile, sessionFile)) continue;
+				live = ref;
+				break;
+			}
+		}
+		const liveFile = live?.sessionFile;
+		if (live && liveFile) {
+			// The session running here is what this name means. Under its own
+			// id it already is that agent; under another (a pane resumed on a
+			// subagent's transcript runs it as `Main`) bind the name, so a
+			// peer's `agent://<name>`, Hub focus and a `task` resume reach the
+			// running agent, and drop the phantom an earlier scan left on the
+			// journal before the session went live.
+			if (live.id !== liveId) {
+				const phantom = registry.get(liveId);
+				if (phantom && !phantom.session && phantom.sessionFile === sessionFile) {
+					registry.unregister(liveId, phantom);
+				}
+				registry.bindLiveName(liveId, live.id, liveFile);
+			}
+			// This root's to keep: the entry goes stale exactly when that
+			// agent stops running this journal, which re-scans.
+			owned?.set(liveId, liveFile);
+		} else if (liveness === "here") {
+			// This process writes this very journal, and no live ref owns it
+			// yet: a revive that has claimed the file but not attached its
+			// session, or an agent parking after its ref detached. Both are
+			// this process's own transitions, and both end in a ref on this
+			// file — touch nothing and let them finish.
+			logger.debug("Roster scan skipped a journal this process is opening", { id: liveId, sessionFile });
+		} else {
+			// A copy of a journal running here, or a journal another omp
+			// process runs: not ours to offer, and the note says why to
+			// whoever addresses the name.
+			noteSuppressedTranscript(liveId, sessionFile, liveness);
+			suppressed?.set(liveId, sessionFile);
+		}
+		await registerChildrenOf(liveId);
+		return true;
+	};
 	let entriesSinceYield = 0;
 	for (const entry of entries) {
 		if (!shouldContinue()) return;
@@ -859,63 +921,7 @@ async function registerPersistedSubagentsFromDir(
 		if (!shouldContinue()) return;
 		if (!entry.isFile() || !entry.name.endsWith(".jsonl") || entry.name.includes(".bak")) continue;
 		const sessionFile = path.join(dir, entry.name);
-		// A journal a live agent loop writes is not a parked transcript. The
-		// tree this walks holds the journal this process is itself running
-		// (`omp --resume <name>.jsonl` resumes a subagent's transcript, and the
-		// scan climbs to the root above it) and those of sibling panes in other
-		// processes. A `parked` ref derived from one of those offers a running
-		// agent as a revivable transcript, and reviving it runs a second agent
-		// loop on that session. Its own parked children stay restorable.
-		const liveness = sessionJournalLiveness(sessionFile);
-		if (liveness !== "free") {
-			// Advisor transcripts are observability-only and never peers, so a
-			// live one is simply not listed.
-			if (isAdvisorTranscriptName(entry.name)) continue;
-			const liveId = entry.name.slice(0, -".jsonl".length);
-			let live: AgentRef | undefined;
-			if (liveness === "here") {
-				for (const ref of registry.list()) {
-					if (!ref.session || !ref.sessionFile) continue;
-					if (!isSameJournalFile(ref.sessionFile, sessionFile)) continue;
-					live = ref;
-					break;
-				}
-			}
-			const liveFile = live?.sessionFile;
-			if (live && liveFile) {
-				// The session running here is what this name means. Under its own
-				// id it already is that agent; under another (a pane resumed on a
-				// subagent's transcript runs it as `Main`) bind the name, so a
-				// peer's `agent://<name>`, Hub focus and a `task` resume reach the
-				// running agent, and drop the phantom an earlier scan left on the
-				// journal before the session went live.
-				if (live.id !== liveId) {
-					const phantom = registry.get(liveId);
-					if (phantom && !phantom.session && phantom.sessionFile === sessionFile) {
-						registry.unregister(liveId, phantom);
-					}
-					registry.bindLiveName(liveId, live.id, liveFile);
-				}
-				// This root's to keep: the entry goes stale exactly when that
-				// agent stops running this journal, which re-scans.
-				owned?.set(liveId, liveFile);
-			} else if (liveness === "here") {
-				// This process writes this very journal, and no live ref owns it
-				// yet: a revive that has claimed the file but not attached its
-				// session, or an agent parking after its ref detached. Both are
-				// this process's own transitions, and both end in a ref on this
-				// file — touch nothing and let them finish.
-				logger.debug("Roster scan skipped a journal this process is opening", { id: liveId, sessionFile });
-			} else {
-				// A copy of a journal running here, or a journal another omp
-				// process runs: not ours to offer, and the note says why to
-				// whoever addresses the name.
-				noteSuppressedTranscript(liveId, sessionFile, liveness);
-				suppressed?.set(liveId, sessionFile);
-			}
-			await registerChildrenOf(liveId);
-			continue;
-		}
+		if (await takeLiveJournal(entry.name, sessionFile)) continue;
 		// The advisor transcript is observability-only: register it as a non-peer
 		// `advisor` kind under its owning session so the Hub can show its read-only
 		// transcript, but it never joins agent-facing rosters and is not revivable.
@@ -983,6 +989,11 @@ async function registerPersistedSubagentsFromDir(
 			if (isFilesystemError(error)) throw error;
 		}
 		if (!shouldContinue()) return;
+		// The vibe lookup and the tombstone probe yield too, and a session can
+		// take the journal while they do. Both branches below speak for this
+		// transcript from here on — one latches the ref it finds, the other
+		// registers a new one — so neither may run on a stale answer.
+		if (await takeLiveJournal(entry.name, sessionFile)) continue;
 		const replaceable =
 			existing !== undefined &&
 			existing.kind === "sub" &&
@@ -1004,9 +1015,16 @@ async function registerPersistedSubagentsFromDir(
 			const expected = existing ?? null;
 			const metadata = await readPersistedAgentMetadata(sessionFile, nestedPatchFilesFor(dir, entry.name, entries));
 			if (!shouldContinue()) return;
-			// Metadata reads yield. A spawn may claim the id while this scan is
-			// inspecting the file; never replace that live generation with a
-			// transcript-derived parked ref.
+			// Metadata reads yield, and a session can take this journal while
+			// they do: a resume claims its file before it registers its agent.
+			// A parked ref derived from the answer this iteration started with
+			// would be a phantom on a live session, and `owned` below would
+			// latch it, so later scans keep it instead of replacing it. Ask
+			// again, as late as anything is derived from the answer.
+			if (await takeLiveJournal(entry.name, sessionFile)) continue;
+			// A spawn may claim the id while this scan is inspecting the file;
+			// never replace that live generation with a transcript-derived
+			// parked ref.
 			const current = registry.get(id);
 			const stillUnclaimed = expected === null && !current;
 			const stillReplaceable =
