@@ -3,7 +3,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { localDay } from "../dirs";
-import { openCloexecSync } from "../fs-open";
 
 /** Write batching for {@link RotatingFileSink}. */
 export interface RotatingFileBatchOptions {
@@ -95,7 +94,7 @@ export class RotatingFileSink {
 	}
 
 	#openFd(filePath: string): void {
-		const fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
+		const fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND, 0o600);
 		try {
 			this.#onRotate?.(filePath);
 		} catch (error) {
