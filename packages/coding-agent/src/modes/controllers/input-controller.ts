@@ -1130,6 +1130,11 @@ export class InputController {
 				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
+			// Mode handlers own the submitted images. Claim them before an input
+			// hook awaits so later typing starts its own image numbering at #1.
+			const originalMode = parseSlashCommand(text)?.name;
+			const submittedDraftDetached = originalMode !== undefined && DETACHED_DRAFT_COMMANDS.has(originalMode);
+			if (submittedDraftDetached) this.#dropSubmittedPending(submittedImages);
 
 			// A startup-deferred extension's input hook must see the first submission.
 			if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
@@ -1147,7 +1152,7 @@ export class InputController {
 			}
 			const submittedMode = parseSlashCommand(text)?.name;
 			const draftDetached = submittedMode !== undefined && DETACHED_DRAFT_COMMANDS.has(submittedMode);
-			if (draftDetached) this.#dropSubmittedPending(submittedImages);
+			if (draftDetached && !submittedDraftDetached) this.#dropSubmittedPending(submittedImages);
 
 			if (!text && !hasInputImages) return;
 
