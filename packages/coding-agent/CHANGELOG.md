@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added a `hindsight.debug` log line for a successful Hindsight recall, carrying the recalled item count and the recall duration ([#10960](https://github.com/can1357/oh-my-pi/issues/10960), [#16456](https://github.com/can1357/oh-my-pi/pull/16456) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ## [18.13.3] - 2026-10-28
 
