@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `PI_LINK_SCHEME` and `PI_LINK_HOST` for host-qualified file links with optional line and column positions in remote sessions ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu)).
+
 ### Changed
 
 - `TaskItem.model` and `TaskParams.model` now document that the per-call model for an ordinary agent may be a configured `@role` or an ordered list of exact ids and roles, not only one exact id; the `string | string[]` type is unchanged ([#16793](https://github.com/can1357/oh-my-pi/pull/16793) by [@Xytronix](https://github.com/Xytronix))
