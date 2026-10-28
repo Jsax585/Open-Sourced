@@ -399,6 +399,23 @@ describe("CustomEditor bracketed path paste", () => {
 			expect(editor.getText()).toBe(`fix it ${skillChipLabel("reviewer")} please`);
 			expect(editor.getExpandedText()).toBe("fix it /skill:reviewer please");
 		});
+
+		it("keeps typed skill-glyph prose plain and character-deletable (#17287)", () => {
+			const editor = makeSkillEditor();
+			for (const ch of "SK reviewer then /skill:reviewer ") editor.handleInput(ch);
+			const chip = skillChipLabel("reviewer");
+			const text = editor.getText();
+			const chipStart = text.lastIndexOf(chip);
+			const skillMarks = editor
+				.describeDecorations(editor.getLines())
+				.filter(d => d.s.includes("customMessageLabel"))
+				.map(d => [d.from, d.to]);
+			expect(skillMarks).toEqual([[chipStart, chipStart + chip.length]]);
+
+			editor.setText("SK whatevertext");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("SK whatevertex");
+		});
 	});
 
 	describe("model mention chips", () => {

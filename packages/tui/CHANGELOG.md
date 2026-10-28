@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Typing `SK <word>` (or the active preset's skill glyph followed by a word) in the prompt or a sent message no longer renders as a skill chip or deletes as one unit; only `/skill:<name>` tokens that collapsed into a chip are styled ([#17287](https://github.com/can1357/oh-my-pi/issues/17287))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
