@@ -565,6 +565,60 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.efforts.at(-1)).toBe(Effort.High);
 		});
 
+		it("a context promotion superseded during metadata falls through to compaction", async () => {
+			stubJudge([PREWALK]);
+			const promoted = modelOrThrow("claude-opus-4-6");
+			const f = createFixture(cycle(), { auto: "on" });
+			vi.spyOn(SessionMaintenance.prototype, "deferThresholdCompactionToSpeculation").mockReturnValue(false);
+			vi.spyOn(SessionMaintenance.prototype, "resolveContextPromotionTarget").mockImplementation(async current =>
+				current.id === f.target.id ? promoted : undefined,
+			);
+			const compact = vi
+				.spyOn(SessionMaintenance.prototype, "runAutoCompaction")
+				.mockResolvedValue({ continuationScheduled: false });
+			const refresh = f.modelRegistry.refreshSelectedModelMetadata.bind(f.modelRegistry);
+			let superseded = false;
+			vi.spyOn(f.modelRegistry, "refreshSelectedModelMetadata").mockImplementation(async model => {
+				if (model.id === promoted.id) {
+					superseded = true;
+					f.session.setThinkingLevel(Effort.Medium);
+					cfgCompactionEnabled.override(f.settings, false);
+				}
+				return refresh(model);
+			});
+			f.session.subscribe(event => {
+				if (event.type !== "model_changed" || f.session.model?.id !== f.target.id) return;
+				cfgCompactionEnabled.override(f.settings, true);
+				cfgCompactionThresholdTokens.override(f.settings, 1);
+				cfgContextPromotionEnabled.override(f.settings, true);
+			});
+
+			await f.session.prompt(TASK);
+
+			expect(superseded).toBe(true);
+			expect(f.session.model?.id).toBe(f.target.id);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
+			expect(f.requested).not.toContain(promoted.id);
+			expect(compact).toHaveBeenCalledWith("threshold", false, expect.objectContaining({ phase: "mid_turn" }));
+		});
+
+		it("a restart superseded during metadata rejects without replacing the selected model or arm", async () => {
+			const f = createFixture([]);
+			const source = modelOrThrow("claude-opus-4-6");
+			expect(f.session.armPrewalk(f.target, Effort.Low)).toBe(true);
+			const arm = f.session.getPrewalkState();
+			const refresh = f.modelRegistry.refreshSelectedModelMetadata.bind(f.modelRegistry);
+			vi.spyOn(f.modelRegistry, "refreshSelectedModelMetadata").mockImplementation(async model => {
+				if (model.id === source.id) f.session.setThinkingLevel(Effort.Medium);
+				return refresh(model);
+			});
+
+			expect(await f.session.restartPrewalk(source, Effort.High, f.target, Effort.Low)).toBe("rejected");
+			expect(f.session.model?.id).toBe(f.primary.id);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
+			expect(f.session.getPrewalkState()).toBe(arm);
+		});
+
 		it("a later positive task plans on the planning model and hands off again", async () => {
 			stubJudge([PREWALK, PREWALK]);
 			const f = createFixture([...cycle(), ...cycle()], { auto: "on" });

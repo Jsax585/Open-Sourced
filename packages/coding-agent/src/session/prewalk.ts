@@ -189,10 +189,10 @@ export class PrewalkCoordinator {
 	}
 
 	/** Context promotion is not a selection: the auto handoff it replaces still returns to its source at the next task. */
-	async followContextPromotion(promote: () => Promise<unknown>): Promise<void> {
+	async followContextPromotion(promote: () => Promise<boolean>): Promise<boolean> {
 		const handoff = this.#handoff?.auto && this.#onHandoffTarget(this.#handoff) ? this.#handoff : undefined;
 		try {
-			await promote();
+			return await promote();
 		} finally {
 			const model = this.#host.model();
 			if (handoff && handoff === this.#handoff && model) {
@@ -496,7 +496,7 @@ export class PrewalkCoordinator {
 			return "rejected";
 		}
 
-		await this.#host.setModelTemporary(source, sourceThinkingLevel);
+		if (!(await this.#host.setModelTemporary(source, sourceThinkingLevel))) return "rejected";
 		if (!active) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();
@@ -631,10 +631,12 @@ export class PrewalkCoordinator {
 		this.#host.setPlanProposalHandler(null);
 		this.#planYolo = undefined;
 		this.#planYoloPreviousNonMCPPresentation = undefined;
-		await this.#host.setModelTemporary(planYolo.target, planYolo.thinkingLevel);
+		const switched = await this.#host.setModelTemporary(planYolo.target, planYolo.thinkingLevel);
+		const implementing = switched ? planYolo.target : this.#host.model();
+		const modelLabel = implementing ? `${implementing.provider}/${implementing.id}` : "the current model";
 		this.#host.emitNotice(
 			"info",
-			`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${resolvedTitle}".`,
+			`Plan-yolo: plan approved, ${switched ? "switched to" : "continuing on"} ${modelLabel} to implement "${resolvedTitle}".`,
 			"plan-yolo",
 		);
 		this.#host.agent.steer({
@@ -646,7 +648,9 @@ export class PrewalkCoordinator {
 			timestamp: Date.now(),
 		});
 		return {
-			content: [{ type: "text", text: `Plan approved. Implementing now with ${planYolo.target.id}.` }],
+			content: [
+				{ type: "text", text: `Plan approved. Implementing now with ${implementing?.id ?? "the current model"}.` },
+			],
 			details: { planFilePath, title: resolvedTitle, planExists: true },
 		};
 	}
