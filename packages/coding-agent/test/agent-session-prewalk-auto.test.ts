@@ -1288,6 +1288,47 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.session.configuredThinkingLevel()).toBe(Effort.Max);
 		});
 
+		it.each([
+			{ pick: "a newer model publication", journaled: "opus", role: "temporary" },
+			{ pick: "an effort-only selection", journaled: "target", role: "fallback" },
+		] as const)(
+			"an older switch finishing after $pick journals the right model change",
+			async ({ pick, journaled, role }) => {
+				const f = createFixture([], { auto: "on" });
+				const opus = modelOrThrow("claude-opus-4-6");
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let held = false;
+				const reconcile = SessionTools.prototype.reconcileThinkTool;
+				vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+					this: SessionTools,
+					...args
+				) {
+					if (!held && f.session.model?.id === f.target.id) {
+						held = true;
+						entered.resolve();
+						await release.promise;
+					}
+					return reconcile.apply(this, args);
+				});
+				const older = f.session.setModelTemporary(f.target, Effort.Low, { ephemeral: true });
+				await entered.promise;
+				if (pick === "an effort-only selection") f.session.setThinkingLevel(Effort.Medium);
+				else await f.session.setModelTemporary(opus, Effort.Max);
+				release.resolve();
+				await older;
+
+				const expected = journaled === "opus" ? opus : f.target;
+				const leaf = f.session.sessionManager
+					.getBranch()
+					.filter(entry => entry.type === "model_change")
+					.at(-1);
+				expect(leaf).toMatchObject({ model: formatModelStringWithRouting(expected) });
+				expect(f.session.sessionManager.getLastModelChangeRole()).toBe(role);
+				expect(f.session.model?.id).toBe(pick === "a newer model publication" ? opus.id : f.target.id);
+			},
+		);
+
 		it("preserves an explicit pick and replacement manual arm when an obsolete auto handoff resumes after persistence", async () => {
 			const f = createFixture([], { auto: "on" });
 			const entered = Promise.withResolvers<void>();

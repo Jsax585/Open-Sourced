@@ -88,6 +88,7 @@ export class ModelControls {
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
 	#selectionGeneration = 0;
+	#modelPublication = 0;
 	#serviceTierByFamily: ServiceTierByFamily;
 
 	constructor(
@@ -256,6 +257,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(targetModel);
 		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(targetModel), role);
 		if (options?.persist) {
@@ -307,12 +309,20 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
 		const published = ++this.#selectionGeneration;
+		const publication = ++this.#modelPublication;
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
-		this.#host.sessionManager.appendModelChange(
-			formatModelStringWithRouting(targetModel),
-			options?.prewalk ? PREWALK_MODEL_CHANGE_ROLE : options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
-		);
-		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		// A newer model publication owns the journal leaf; this stale one must not become the resume target.
+		if (this.#modelPublication === publication) {
+			this.#host.sessionManager.appendModelChange(
+				formatModelStringWithRouting(targetModel),
+				options?.prewalk
+					? PREWALK_MODEL_CHANGE_ROLE
+					: options?.ephemeral
+						? EPHEMERAL_MODEL_CHANGE_ROLE
+						: "temporary",
+			);
+			this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		}
 
 		// A selection made while this one reconciled owns the effort.
 		if (this.#selectionGeneration === published) {
@@ -476,6 +486,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
 		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(next.model);
 		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(next.model));
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -508,6 +519,7 @@ export class ModelControls {
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
 		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(nextModel);
 		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(nextModel));
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
