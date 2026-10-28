@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Task results and running job snapshots now report the model used on the first attempt and each retry-fallback switch with its trigger (source model, error class, HTTP status, first line of the provider message, or usage preflight); the trigger is stored on the `model_change` session entry at the switch, so it survives the error message being persisted later ([#16662](https://github.com/can1357/oh-my-pi/pull/16662) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
