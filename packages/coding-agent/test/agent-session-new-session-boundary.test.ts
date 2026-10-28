@@ -1,3 +1,4 @@
+import { executeAcpBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -81,6 +82,37 @@ describe("AgentSession.newSession boundary", () => {
 			const run = cleanup.pop();
 			if (run) await run();
 		}
+	});
+
+	it("ACP clear preserves context on decline and clears it in place on confirmation", async () => {
+		const { session, sessionManager, agent } = await createHarness();
+		sessionManager.appendMessage({ role: "user", content: "discard", timestamp: 1 });
+		agent.replaceMessages(sessionManager.buildSessionContext().messages);
+		const originalId = sessionManager.getSessionId();
+		const providerId = session.sessionId;
+		let confirmed = false;
+		const runtime = {
+			session,
+			sessionManager,
+			settings: session.settings,
+			cwd: sessionManager.getCwd(),
+			output: () => {},
+			refreshCommands: () => {},
+			reloadPlugins: async () => {},
+			ui: {
+				confirm: async () => confirmed,
+				select: async () => undefined,
+				input: async () => undefined,
+				editor: async () => undefined,
+			},
+		};
+		expect(await executeAcpBuiltinSlashCommand("/clear", runtime)).toEqual({ consumed: true });
+		expect(session.messages).toHaveLength(1);
+		confirmed = true;
+		expect(await executeAcpBuiltinSlashCommand("/clear", runtime)).toEqual({ consumed: true });
+		expect(session.messages).toEqual([]);
+		expect(sessionManager.getSessionId()).toBe(originalId);
+		expect(session.sessionId).not.toBe(providerId);
 	});
 
 	it("invalidates a primed append-only context so pre-/new bytes never reach the next turn", async () => {

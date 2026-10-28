@@ -193,6 +193,19 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Clear the conversation context in place, keeping the session",
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.session.isStreaming ? "Clear: unavailable while streaming" : "Clear: drop context, keep session",
+		handle: async (_command, runtime) => {
+			if (!runtime.ui) return usage("Context reset requires an interactive host.", runtime);
+			const confirmed = await runtime.ui.confirm(
+				"Clear conversation context?",
+				"The saved transcript and session identity will be kept.",
+				{ signal: runtime.signal },
+			);
+			if (!confirmed || runtime.signal?.aborted) return commandConsumed();
+			const reset = await runtime.session.resetSessionContext();
+			if (!reset) return usage("Wait for the current response or foreground command to finish.", runtime);
+			await runtime.output("Conversation context cleared.");
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleResetContextCommand();

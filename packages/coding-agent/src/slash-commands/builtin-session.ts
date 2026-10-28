@@ -1,3 +1,5 @@
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { discoverAgents } from "../task/discovery";
 import { clearSubmittedText } from "./helpers/draft";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -19,7 +21,11 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
 import { markdownFenceFor } from "../utils/markdown-fence";
-import { openLocalFileInEditor } from "../modes/local-file-editor";
+import {
+	resolveLocalEditorTarget,
+	sessionLocalProtocolOptions,
+	openLocalFileInEditor,
+} from "../modes/local-file-editor";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
 	describeRedeemOutcome,
@@ -274,6 +280,14 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				if (runtime.session.isStreaming) return usage("Cannot delete the session while streaming.", runtime);
 				const sessionFile = runtime.sessionManager.getSessionFile();
 				if (!sessionFile) return usage("No session file to delete (in-memory session).", runtime);
+				if (!runtime.ui) return usage("Session deletion requires an interactive host for confirmation.", runtime);
+				if (
+					!(await runtime.ui.confirm("Delete session?", sessionFile, { signal: runtime.signal })) ||
+					runtime.signal?.aborted
+				) {
+					await runtime.output("Session deletion cancelled.");
+					return commandConsumed();
+				}
 				// Route through the active SessionManager so the persist writer is
 				// closed before the file is deleted. Constructing a fresh
 				// FileSessionStorage and calling deleteSessionWithArtifacts leaves
@@ -566,6 +580,16 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["status"],
 		icon: "extension",
 		description: "Open Extension Control Center dashboard",
+		acpDescription: "List loaded extensions",
+		handle: async (_command, runtime) => {
+			const extensions = runtime.session.extensionRunner?.getLoadedExtensions() ?? [];
+			await runtime.output(
+				extensions.length
+					? extensions.map(extension => extension.label ?? extension.path).join("\n")
+					: "No extensions loaded.",
+			);
+			return commandConsumed();
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showExtensionsDashboard();
 			clearSubmittedText(runtime);
@@ -575,6 +599,14 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "agents",
 		icon: "agents",
 		description: "Open the agents hub (per-agent model, prewalk, and advisor)",
+		acpDescription: "List available agents",
+		handle: async (_command, runtime) => {
+			const { agents } = await discoverAgents(runtime.cwd);
+			await runtime.output(
+				agents.map(agent => `${agent.name}: ${agent.description}`).join("\n") || "No agents found.",
+			);
+			return commandConsumed();
+		},
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showAgentsDashboard();
 			clearSubmittedText(runtime);
@@ -584,8 +616,28 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "git",
 		icon: "branch",
 		description: "Open the git UI (split diff viewer, staging, commit composer)",
+		acpDescription: "Show working-copy status or a commit",
 		inlineHint: "[revision]",
 		allowArgs: true,
+		handle: async (command, runtime) => {
+			const repo = vcs.repoForDisplay(runtime.cwd);
+			if (!repo) return usage("Not in a repository.", runtime);
+			const revision = command.args.trim();
+			try {
+				if (revision) {
+					const git = repo.asGit();
+					if (!git) return usage("Commit viewing requires a Git repository.", runtime);
+					const commit = await git.showCommit(revision, 256 * 1024, runtime.signal);
+					await runtime.output(commit.data.toString("utf8"));
+					if (commit.truncated) await runtime.output("Commit output truncated at 256 KiB.");
+				} else {
+					await runtime.output((await repo.statusPorcelain({}, runtime.signal)) || "Working copy clean.");
+				}
+			} catch (error) {
+				return usage(errorMessage(error), runtime);
+			}
+			return commandConsumed();
+		},
 		handleTui: (command, runtime) => {
 			runtime.ctx.showGitUi(command.args.trim() || undefined);
 			clearSubmittedText(runtime);
@@ -595,8 +647,36 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "local",
 		icon: "pencil",
 		description: "Open a session local:// file in $EDITOR (picker when no name given)",
+		acpDescription: "Edit a session-local file",
 		inlineHint: "[name]",
 		allowArgs: true,
+		handle: async (command, runtime) => {
+			if (!runtime.ui) return usage("Editing local files requires an interactive host.", runtime);
+			const name =
+				command.args.trim() || (await runtime.ui.input("Local file name", "notes.md", { signal: runtime.signal }));
+			if (!name) {
+				await runtime.output("Local edit cancelled.");
+				return commandConsumed();
+			}
+			try {
+				const target = await resolveLocalEditorTarget(name, sessionLocalProtocolOptions(runtime.sessionManager));
+				const original = await Bun.file(target.path).text();
+				const edited = await runtime.ui.editor(target.url, original);
+				if (edited === undefined || runtime.signal?.aborted) {
+					await runtime.output("Local edit cancelled.");
+					return commandConsumed();
+				}
+				// Revalidate containment and reject concurrent writes before saving.
+				const current = await resolveLocalEditorTarget(name, sessionLocalProtocolOptions(runtime.sessionManager));
+				if (current.path !== target.path || (await Bun.file(current.path).text()) !== original)
+					return usage("File changed during editing; reopen it before saving.", runtime);
+				await Bun.write(current.path, edited);
+				await runtime.output("Saved " + target.url);
+				return commandConsumed();
+			} catch (error) {
+				return usage(errorMessage(error), runtime);
+			}
+		},
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			await openLocalFileInEditor(runtime.ctx, command.args);

@@ -1,3 +1,4 @@
+import type { ExtensionUIContext } from "../extensibility/extensions/types";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
@@ -75,6 +76,8 @@ export interface SlashCommandRuntime {
 	cwd: string;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
+	/** Host interaction port; absent in non-interactive text hosts. */
+	ui?: Pick<ExtensionUIContext, "select" | "confirm" | "input" | "editor">;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */
 	output: (text: string) => Promise<void> | void;
 	/** Re-advertise the available command list (no-op outside ACP). */
@@ -101,6 +104,9 @@ export interface SlashCommandRuntime {
 	 * is waiting on.
 	 */
 	keepTurnOpenUntilIdle?: () => Promise<void>;
+	setPlanMode?: (enabled: boolean) => Promise<void>;
+	reviewPlan?: () => Promise<void>;
+	syncGoalTools?: () => Promise<void>;
 	/**
 	 * Start a local command operation without holding the host's prompt response.
 	 *

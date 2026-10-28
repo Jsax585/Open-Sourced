@@ -12,7 +12,7 @@ export type { AcpBuiltinSlashCommandResult } from "./types";
  * registering `models` would appear in the palette but execute the builtin).
  */
 export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
-	BUILTIN_SLASH_COMMANDS_INTERNAL.filter(c => c.handle !== undefined).flatMap(c => [c.name, ...(c.aliases ?? [])]),
+	BUILTIN_SLASH_COMMANDS_INTERNAL.flatMap(c => [c.name, ...(c.aliases ?? [])]),
 );
 
 /**
@@ -50,7 +50,7 @@ export const ACP_BUILTIN_SLASH_COMMANDS: AvailableCommand[] = BUILTIN_SLASH_COMM
 
 /**
  * Dispatch a slash command in ACP/text mode. Returns:
- * - `false` when no builtin matched (or matched a TUI-only entry); the caller
+ * - `false` when no builtin matched; the caller
  *   should forward the input as a prompt.
  * - `{ consumed: true }` when the command handled the input entirely.
  * - `{ prompt }` when the command was handled but a residual prompt should be
@@ -63,7 +63,11 @@ export async function executeAcpBuiltinSlashCommand(
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return false;
 	const command = lookupBuiltinSlashCommand(parsed.name);
-	if (!command?.handle) return false;
+	if (!command) return false;
+	if (!command.handle) {
+		await runtime.output(`/${command.name} is not supported over ACP.`);
+		return { consumed: true };
+	}
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;

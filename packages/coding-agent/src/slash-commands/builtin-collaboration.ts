@@ -1,3 +1,11 @@
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import {
+	discoverAdvisorConfigs,
+	loadWatchdogConfigFile,
+	resolveAdvisorConfigEditPath,
+	saveWatchdogConfigFile,
+} from "../advisor/config";
+import { resolveAdvisorRoleSelection } from "../config/model-resolver";
 import { clearSubmittedText } from "./helpers/draft";
 import { Spacer } from "@oh-my-pi/pi-tui";
 import { APP_NAME, formatAge } from "@oh-my-pi/pi-utils";
@@ -70,7 +78,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			{ name: "off", description: "Disable the advisor" },
 			{ name: "status", description: "Show advisor status" },
 			{ name: "dump", description: "Copy the advisor's transcript to clipboard", usage: "[raw]" },
-			{ name: "configure", description: "Open the advisor configuration editor (TUI)" },
+			{ name: "configure", description: "Configure advisor models" },
 		],
 		allowArgs: true,
 		getTuiAutocompleteDescription: runtime => {
@@ -117,9 +125,65 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return commandConsumed();
 			}
 			if (verb === "configure") {
-				await runtime.output(
-					"/advisor configure opens an interactive editor and is only available in the interactive TUI.",
+				if (rest) return usage("Usage: /advisor configure", runtime);
+				if (!runtime.ui) return usage("/advisor configure requires ACP form elicitation support.", runtime);
+				const scope = await runtime.ui.select("Advisor model persistence scope", ["project", "user"], {
+					signal: runtime.signal,
+				});
+				if (scope === undefined || runtime.signal?.aborted) {
+					await runtime.output(
+						"Cancelled or forms unavailable. No changes saved; ACP clients must support form elicitation.",
+					);
+					return commandConsumed();
+				}
+				if (scope !== "project" && scope !== "user") return usage("Invalid advisor scope.", runtime);
+				let projectDir = runtime.cwd;
+				try {
+					projectDir = vcs.repo(runtime.cwd)?.root() ?? runtime.cwd;
+				} catch {
+					// Match the native editor's non-repository scope.
+				}
+				const agentDir = runtime.settings.getAgentDir();
+				const filePath = await resolveAdvisorConfigEditPath(scope, { projectDir, agentDir });
+				const doc = await loadWatchdogConfigFile(filePath);
+				// A model-only edit must not discard malformed entries.
+				if (doc.warnings?.length) return usage(doc.warnings.join("\n"), runtime);
+				const models = runtime.session.modelRegistry.getAvailable();
+				if (!models.length) return usage("No available models. Configure provider authentication first.", runtime);
+				const defaultModel = resolveAdvisorRoleSelection(runtime.settings, models)?.model;
+				const defaultLabel = defaultModel ? `${defaultModel.provider}/${defaultModel.id}` : "unset";
+				if (!doc.advisors.length) doc.advisors.push({ name: "default" });
+				const labels = doc.advisors.map(
+					(advisor, index) =>
+						`${index + 1}. ${advisor.name} (current: ${advisor.model ?? `advisor role: ${defaultLabel}`})`,
 				);
+				const selected = await runtime.ui.select(`Advisor in ${scope} config: ${filePath}`, labels, {
+					signal: runtime.signal,
+				});
+				if (selected === undefined || runtime.signal?.aborted) return commandConsumed();
+				const index = labels.indexOf(selected);
+				if (index < 0) return usage("Invalid advisor selection.", runtime);
+				const advisor = doc.advisors[index];
+				const choices = [...new Set(models.map(model => `${model.provider}/${model.id}`))];
+				const model = await runtime.ui.select(
+					`${advisor.name}: current ${advisor.model ?? `advisor role: ${defaultLabel}`}. Save to ${scope} ${filePath}`,
+					choices,
+					{ signal: runtime.signal },
+				);
+				if (model === undefined || runtime.signal?.aborted) return commandConsumed();
+				if (!choices.includes(model)) return usage("Invalid advisor model selection.", runtime);
+				advisor.model = model;
+				await saveWatchdogConfigFile(filePath, doc);
+				const discovered = await discoverAdvisorConfigs(runtime.cwd, agentDir);
+				runtime.session.applyAdvisorConfigs(
+					discovered.advisors,
+					discovered.sharedInstructions,
+					discovered.sharedMaxNotesPerUpdate,
+				);
+				await runtime.output(
+					`Saved ${advisor.name} model ${model} to ${scope} ${filePath}. Main model and advisor enablement unchanged. More-specific configuration takes precedence.`,
+				);
+				if (discovered.warnings.length) await runtime.output(discovered.warnings.join("\n"));
 				return commandConsumed();
 			}
 			return usage("Usage: /advisor [on|off|status|dump [raw]|configure]", runtime);

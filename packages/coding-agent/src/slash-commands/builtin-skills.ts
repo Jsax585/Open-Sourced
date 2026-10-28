@@ -12,7 +12,7 @@ import {
 	updateSkillPackages,
 } from "../skillshare/installer";
 import { clearSubmittedText } from "./helpers/draft";
-import { errorMessage, parseSubcommand } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import type { SlashCommandSpec } from "./types";
 
 const USAGE = [
@@ -77,6 +77,60 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 		],
 		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			try {
+				if (!verb || verb === "help") await runtime.output(USAGE);
+				else if (verb === "installed")
+					await runtime.output(formatInstalledSkills(await listInstalledSkills(runtime.cwd)));
+				else if (verb === "search") {
+					if (!rest) return usage("Usage: /skills search <query>", runtime);
+					await runtime.output(formatSkillSearch(await withClient(client => client.search(rest))));
+				} else if (verb === "install" || verb === "update") {
+					const targets = parseTargets(rest);
+					if ("error" in targets) return usage(targets.error, runtime);
+					if (verb === "install" && !targets.names.length) return usage(USAGE, runtime);
+					const warnings: string[] = [];
+					const hooks: SkillInstallHooks = {
+						warn: message => {
+							warnings.push(message);
+						},
+						confirmScripts: async request => {
+							if (!runtime.ui)
+								throw new Error("Installing skills with scripts requires an interactive host for approval.");
+							return await runtime.ui.confirm("Install skill with scripts?", formatScriptApproval(request), {
+								signal: runtime.signal,
+							});
+						},
+					};
+					try {
+						const changes = await withClient(client =>
+							verb === "install"
+								? installSkillPackages(
+										client,
+										{ specs: targets.names, global: targets.global, yes: false, cwd: runtime.cwd },
+										hooks,
+									)
+								: updateSkillPackages(
+										client,
+										{ names: targets.names, global: targets.global, cwd: runtime.cwd },
+										hooks,
+									),
+						);
+						if (changes.length) {
+							await runtime.session.refreshSkillsAndCommands();
+							await runtime.refreshCommands();
+						}
+						await runtime.output(changes.length ? formatSkillChanges(changes) : "No registry skills changed.");
+					} finally {
+						for (const warning of warnings) await runtime.output(warning);
+					}
+				} else return usage(USAGE, runtime);
+				return commandConsumed();
+			} catch (error) {
+				return usage(`Skills: ${errorMessage(error)}`, runtime);
+			}
+		},
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			clearSubmittedText(runtime);
