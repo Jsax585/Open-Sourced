@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed a session resumed from a subagent's transcript (`omp --resume <name>.jsonl`) starting a second agent loop on that same transcript when a peer messaged it by that name; the message now reaches the running session instead of reviving a copy of it ([#17257](https://github.com/can1357/oh-my-pi/pull/17257) by [@sjawhar](https://github.com/sjawhar))
+- Fixed a transcript a live session is running being offered to peers as a parked, revivable agent: a pane resumed on a subagent's transcript (`omp --resume <name>.jsonl`) started a second agent loop on that same transcript when a peer messaged it by that name, and a second omp process did the same to a sibling pane's. The roster scan now asks the session ownership lease who is running a journal before deriving a ref from it, and binds the transcript's name to the session running it, so `agent://<name>`, Agent Hub focus and a `task` resume all reach that session; a journal another omp process runs, and a copy of a running session's journal, are not offered and say why ([#17257](https://github.com/can1357/oh-my-pi/pull/17257) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.13.2] - 2026-10-27
 

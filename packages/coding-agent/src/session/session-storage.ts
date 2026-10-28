@@ -598,28 +598,24 @@ function sessionOwnersDir(): string {
 const SESSION_HEADER_PREFIX_BYTES = 64 * 1024;
 
 /**
- * The session id in the header of the file at `sessionPath`, read
- * synchronously from a bounded prefix (past the title slot), or `undefined`
- * when there is no readable file or no header in that prefix.
+ * Bytes read first. The title slot is a fixed 256 and an ordinary header line
+ * is a few hundred more, so this answers every realistic file in one small
+ * read; a header line longer than this falls back to the bound above. The
+ * roster scan asks this of every transcript it meets, so the difference is a
+ * whole scan's worth of decoding.
  */
-function readSessionHeaderIdSync(sessionPath: string): string | undefined {
-	let prefix: string;
-	try {
-		const fd = fs.openSync(sessionPath, "r");
-		try {
-			const buf = Buffer.alloc(SESSION_HEADER_PREFIX_BYTES);
-			prefix = buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, 0));
-		} finally {
-			fs.closeSync(fd);
-		}
-	} catch {
-		return undefined;
-	}
-	if (parseTitleSlotFromContent(prefix)) prefix = prefix.slice(prefix.indexOf("\n") + 1);
-	const end = prefix.indexOf("\n");
+const SESSION_HEADER_FIRST_READ_BYTES = 8 * 1024;
+
+/** Reused across calls: reading a header never yields, so one buffer serves every read. */
+const sessionHeaderBuffer = Buffer.allocUnsafe(SESSION_HEADER_PREFIX_BYTES);
+
+/** The session id in the first header line of `prefix`, past the title slot. */
+function parseSessionHeaderId(prefix: string): string | undefined {
+	const body = parseTitleSlotFromContent(prefix) ? prefix.slice(prefix.indexOf("\n") + 1) : prefix;
+	const end = body.indexOf("\n");
 	if (end === -1) return undefined;
 	try {
-		const entry: unknown = JSON.parse(prefix.slice(0, end));
+		const entry: unknown = JSON.parse(body.slice(0, end));
 		if (entry && typeof entry === "object" && "type" in entry && entry.type === "session" && "id" in entry) {
 			return typeof entry.id === "string" ? entry.id : undefined;
 		}
@@ -628,31 +624,89 @@ function readSessionHeaderIdSync(sessionPath: string): string | undefined {
 }
 
 /**
- * Whether both paths name one journal, by the identity the ownership lease is
- * keyed by: the session id in the header. Two paths reach one journal through
- * a symlinked session directory, a `--session-dir` that points into the same
- * tree, a hard link, or a file moved while it is open — a path comparison
- * alone reads those as two journals. The path check stays as the cheap answer
- * for the usual case, and as the answer when no header can be read.
+ * The session id in the header of the file at `sessionPath`, read
+ * synchronously from a bounded prefix (past the title slot), or `undefined`
+ * when there is no readable file or no header in that prefix.
  */
-export function isSameSessionJournal(sessionPath: string, otherPath: string): boolean {
-	if (path.resolve(sessionPath) === path.resolve(otherPath)) return true;
-	const id = readSessionHeaderIdSync(sessionPath);
-	return id !== undefined && id === readSessionHeaderIdSync(otherPath);
+function readSessionHeaderIdSync(sessionPath: string): string | undefined {
+	try {
+		const fd = fs.openSync(sessionPath, "r");
+		try {
+			const read = fs.readSync(fd, sessionHeaderBuffer, 0, SESSION_HEADER_FIRST_READ_BYTES, 0);
+			const id = parseSessionHeaderId(sessionHeaderBuffer.toString("utf8", 0, read));
+			// Only a file whose header line did not fit is read again.
+			if (id !== undefined || read < SESSION_HEADER_FIRST_READ_BYTES) return id;
+			const full = fs.readSync(fd, sessionHeaderBuffer, 0, SESSION_HEADER_PREFIX_BYTES, 0);
+			return parseSessionHeaderId(sessionHeaderBuffer.toString("utf8", 0, full));
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch {
+		return undefined;
+	}
 }
 
 /**
- * Whether a session this process already has open for writing lives in the
- * journal at `sessionPath`. Reopening such a file as a second session forks
- * the journal: two sessions append to it, each blind to the other's entries.
- * Keyed by the header id rather than the path, for the aliases above.
+ * Whether both paths name one file: the same journal reached through a
+ * symlinked session directory, a `--session-dir` that points into the same
+ * tree, or a hard link. Path equality answers the usual case, the inode pair
+ * the rest. A copy of a journal is a different file however much content it
+ * shares, so this — not {@link sessionJournalLiveness}, which is keyed by the
+ * session id both copies carry — is the test for "the journal that session is
+ * writing".
  */
-export function isSessionWrittenHere(sessionPath: string): boolean {
-	// Nothing is claimed in a process that writes no session (`omp --export`,
-	// `render`, a read-only resume), so no header is read there.
-	if (sessionLeases.size === 0) return false;
+export function isSameJournalFile(sessionPath: string, otherPath: string): boolean {
+	if (path.resolve(sessionPath) === path.resolve(otherPath)) return true;
+	try {
+		const here = fs.statSync(sessionPath);
+		const there = fs.statSync(otherPath);
+		return here.ino === there.ino && here.dev === there.dev;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Where the agent loop that writes a journal runs: nowhere (`free`), in this
+ * process (`here`), or in another omp process (`elsewhere`).
+ */
+export type SessionJournalLiveness = "free" | "here" | "elsewhere";
+
+/**
+ * Whether a live agent loop writes the session in the journal at
+ * `sessionPath`, and where it runs. A `free` journal is a parked transcript:
+ * it can be reopened, revived, and offered to peers as revivable. A journal
+ * that is `here` or `elsewhere` belongs to a running session, so a registry
+ * ref derived from it would offer a running agent as a revivable transcript.
+ *
+ * Keyed by the session id in the header — the identity the ownership lease
+ * uses — so one journal reached through a symlink, a hard link, or after a
+ * move gives one answer. A plain copy of a live journal carries that same id
+ * and so reads as live too: no probe can tell a copy from the original across
+ * processes, and nothing may run a second loop under a session id while the
+ * first loop holds it.
+ */
+export function sessionJournalLiveness(sessionPath: string): SessionJournalLiveness {
 	const id = readSessionHeaderIdSync(sessionPath);
-	return id !== undefined && (sessionLeases.get(id)?.writers ?? 0) > 0;
+	if (id === undefined) return "free";
+	const held = sessionLeases.get(id);
+	// This process holds the lease. Only a writer is an agent loop appending to
+	// the journal — a transfer guard or a collab replica claim is not — and the
+	// lock below answers "held" for this process's own lease anyway.
+	if (held) return held.writers > 0 ? "here" : "free";
+	let lease: FileLockHandle | null;
+	try {
+		lease = tryAcquireSessionLease(id);
+	} catch (err) {
+		// A lock this process cannot probe says nothing about the journal: keep
+		// the answer every caller had before the probe existed rather than hide
+		// a transcript behind a broken lock directory.
+		logger.debug("Session ownership lease probe failed", { sessionPath, error: toError(err).message });
+		return "free";
+	}
+	if (!lease) return "elsewhere";
+	lease.release();
+	return "free";
 }
 
 /**

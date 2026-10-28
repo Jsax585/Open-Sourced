@@ -9,13 +9,13 @@
  * boundary (see AgentSession.deliverIrcMessage).
  */
 
-import * as path from "node:path";
 import { type IrcDeliveryReceipt, type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { AgentLifecycleManager } from "../registry/agent-lifecycle";
-import { type AgentRef, AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { suppressedTranscriptNote } from "../registry/persisted-agents";
+import type { AgentSession } from "../session/agent-session";
 import type { CustomMessage } from "../session/messages";
-import { isSameSessionJournal, isSessionWrittenHere } from "../session/session-storage";
 
 interface IrcWaiter {
 	from?: string;
@@ -24,32 +24,17 @@ interface IrcWaiter {
 }
 
 /**
- * The live session in this process that a message addressed to `to` belongs
- * to, when `to` names a transcript this process is running rather than a
- * separate agent. A pane resumed on a subagent's transcript
- * (`omp --resume <id>.jsonl`) runs that transcript as its own session, so
- * peers that know the agent as `<id>` are addressing that session — by the
- * name the roster scan restores an agent from (`<id>.jsonl`, see
- * `registerPersistedSubagentsFromDir`). Delivering to the live session is
- * what the sender meant; reviving the transcript instead would start a second
- * agent loop on the journal this process is writing.
+ * Why a message addressed to a name the registry resolves to another agent
+ * cannot be sent by that agent itself: a pane resumed on a subagent's
+ * transcript runs it as its own session, so the transcript's name and the
+ * sender are one agent.
  */
-function liveSessionAddressedBy(registry: AgentRegistry, to: string): AgentRef | undefined {
-	const ref = registry.get(to);
-	// A live agent under that id is already the recipient.
-	if (ref?.session) return undefined;
-	const transcript = ref?.sessionFile ?? undefined;
-	// A parked ref on a transcript nothing here writes is revivable as usual.
-	if (transcript !== undefined && !isSessionWrittenHere(transcript)) return undefined;
-	for (const live of registry.list()) {
-		if (live.id === to || !live.session || !live.sessionFile) continue;
-		const addressed =
-			transcript === undefined
-				? path.basename(live.sessionFile, ".jsonl") === to
-				: isSameSessionJournal(live.sessionFile, transcript);
-		if (addressed) return live;
-	}
-	return undefined;
+function ownTranscriptRefusal(to: string, agentId: string): IrcDeliveryReceipt {
+	return {
+		to,
+		outcome: "failed",
+		error: `"${to}" is this session's own transcript, running here as "${agentId}". Nothing to send it to.`,
+	};
 }
 
 /** When a send went out: wall-clock `ts`, and `seq` to order sends within one millisecond. */
@@ -124,32 +109,24 @@ export class IrcBus {
 	 * agent directly: the main agent then already sees the body as its own
 	 * incoming card, so relaying the sibling legs would duplicate it.
 	 *
-	 * A message addressed to a transcript this process is running is readdressed
-	 * to the live session that runs it, so delivery, the receipt and the reply
-	 * bookkeeping all name the agent that received it.
+	 * A name the registry resolves to an agent registered under another id —
+	 * the transcript a pane is running, which peers know by its file name — is
+	 * sent to that agent, so delivery, the receipt and the reply bookkeeping
+	 * all name the agent that received it.
 	 */
 	async send(msg: Omit<IrcMessage, "id" | "ts">, opts?: { suppressRelay?: boolean }): Promise<IrcDeliveryReceipt> {
-		const live = liveSessionAddressedBy(this.#registry, msg.to);
-		if (live?.id === msg.from) {
-			return {
-				to: msg.to,
-				outcome: "failed",
-				error: `"${msg.to}" is this session's own transcript, running here as "${live.id}". Nothing to send it to.`,
-			};
-		}
-		const message: IrcMessage = {
-			...msg,
-			...(live ? { to: live.id } : undefined),
-			id: Snowflake.next(),
-			ts: Date.now(),
-		};
+		const resolved = this.#registry.get(msg.to)?.id ?? msg.to;
+		if (resolved !== msg.to && resolved === msg.from) return ownTranscriptRefusal(msg.to, resolved);
+		const message: IrcMessage = { ...msg, to: resolved, id: Snowflake.next(), ts: Date.now() };
 		// Taken before delivery: a reply sent while this message is still being
 		// delivered must still order after it.
 		const mark: SendMark = { ts: message.ts, seq: ++this.#sendSeq };
 		const receipt = await this.#deliver(message, opts);
 		if (receipt.outcome !== "failed") {
-			this.#record(this.#lastSent, message.from, message.to, mark);
-			if (!message.broadcast && !message.wakeRelay) this.#record(this.#lastDirect, message.from, message.to, mark);
+			// The receipt names who received it: the lifecycle can readdress the
+			// message after this call resolved the name.
+			this.#record(this.#lastSent, message.from, receipt.to, mark);
+			if (!message.broadcast && !message.wakeRelay) this.#record(this.#lastDirect, message.from, receipt.to, mark);
 		}
 		return receipt;
 	}
@@ -199,13 +176,16 @@ export class IrcBus {
 		return unanswered;
 	}
 
-	async #deliver(message: IrcMessage, opts?: { suppressRelay?: boolean }): Promise<IrcDeliveryReceipt> {
+	async #deliver(incoming: IrcMessage, opts?: { suppressRelay?: boolean }): Promise<IrcDeliveryReceipt> {
+		let message = incoming;
 		const ref = this.#registry.get(message.to);
 		if (!ref) {
 			return {
 				to: message.to,
 				outcome: "failed",
-				error: `Unknown agent "${message.to}" — check the subagent roster or read history:// for known peers.`,
+				error:
+					suppressedTranscriptNote(message.to) ??
+					`Unknown agent "${message.to}" — check the subagent roster or read history:// for known peers.`,
 			};
 		}
 		// Advisor refs are observability-only transcripts, never messageable peers.
@@ -232,14 +212,19 @@ export class IrcBus {
 			ref.status === "aborted" ||
 			(lifecycleOwnsRegistry && (lifecycle.isParking(message.to) || lifecycle.has(message.to)));
 
-		const priorSession = ref.session;
 		let revived = false;
+		let live: AgentSession | undefined;
 		if (needsLifecycleGate) {
 			try {
-				const liveSession = await lifecycle.ensureLive(message.to);
-				// Revival = we did not keep the same live instance (parked start, or
-				// park completed and a fresh session was rebuilt).
-				revived = !priorSession || liveSession !== priorSession;
+				const target = await lifecycle.ensureLiveTarget(message.to);
+				revived = target.revived;
+				live = target.session;
+				// The lifecycle can answer under another id: a ref left on the
+				// journal of a session running here resolves to that session.
+				if (target.agentId !== message.to) {
+					if (target.agentId === message.from) return ownTranscriptRefusal(message.to, target.agentId);
+					message = { ...message, to: target.agentId };
+				}
 			} catch (error) {
 				// Not revivable / released / revive failed. Do not buffer: a permanent
 				// failure must not inflate unread counts or pretend delivery is pending.
@@ -261,7 +246,7 @@ export class IrcBus {
 			return { to: message.to, outcome: revived ? "revived" : "injected" };
 		}
 
-		const session = this.#registry.get(message.to)?.session;
+		const session = live ?? this.#registry.get(message.to)?.session;
 		if (!session) {
 			return { to: message.to, outcome: "failed", error: `Agent "${message.to}" has no live session.` };
 		}
