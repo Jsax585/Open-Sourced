@@ -49,6 +49,11 @@ outstanding frames without removing a surviving owner's frame.
 Unix isolation failure aborts startup rather than exposing an unprotected TUI.
 Windows retains its existing console path.
 
+Fatal reports and SIGTERM recovery hints restore both the unified output guard
+and the legacy stderr guard before writing directly to fd 2. Recovery providers
+are captured before cleanup and read afterward, so resume commands reflect
+sessions saved or removed during teardown and print at most once.
+
 Regression entrypoints: `packages/tui/test/terminal-output-isolation.test.ts`
 drives inherited/captured diagnostics, cached Bun writes, handoff/restart,
 resize, emergency restore, piped output and independently redirected stderr.
