@@ -4,7 +4,7 @@
 
 ### Added
 
-- Hooks and extensions can listen for `session_clear`, fired after `/clear` resets the context in place, to invalidate cached "already injected" instructions; it is not a `session_switch` and keeps the session id ([#17142](https://github.com/can1357/oh-my-pi/issues/17142))
+- Hooks and extensions can listen for `session_clear`, fired after `/clear` resets the context in place, to invalidate cached "already injected" instructions; it is not a `session_switch` and keeps the session id ([#17142](https://github.com/can1357/oh-my-pi/issues/17142), [#17317](https://github.com/can1357/oh-my-pi/pull/17317) by [@SAKANA-MOONLIGHT](https://github.com/SAKANA-MOONLIGHT))
 
 ### Changed
 
