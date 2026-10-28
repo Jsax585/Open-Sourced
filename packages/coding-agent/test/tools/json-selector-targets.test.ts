@@ -98,4 +98,23 @@ describe("JSON selector target admission", () => {
 			);
 		}
 	});
+
+	it("queries a JSON artifact URL while preserving its internal source identity", async () => {
+		const artifactDir = path.join(dir, "artifacts");
+		await fs.mkdir(artifactDir, { recursive: true });
+		await Bun.write(path.join(artifactDir, "123.bash.log"), '{"head_pipeline":{"id":42}}');
+		const options = { getArtifactsDir: () => artifactDir, getSessionId: () => "artifact-query" };
+		const artifactTool = new ReadTool({
+			cwd: dir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+			localProtocolOptions: options,
+		});
+		const uri = "artifact://123?q=.head_pipeline.id";
+		const result = await artifactTool.execute("artifact-query", { path: uri });
+		expect(textOf(result)).toBe("42");
+		expect(result.details?.meta?.source).toEqual({ type: "internal", value: uri });
+	});
 });
