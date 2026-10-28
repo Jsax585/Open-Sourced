@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added configurable shortcut (Alt+S) to open the settings menu ([#13756](https://github.com/can1357/oh-my-pi/pull/13756) by [@kml93](https://github.com/kml93)).
+
 ### Fixed
 
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
