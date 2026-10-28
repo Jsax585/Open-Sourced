@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- Fixed Escape no longer leaving the focused-subagent view when `app.interrupt` was remapped to another key; a raw Escape now clears the draft or returns to the main session ([#8952](https://github.com/can1357/oh-my-pi/issues/8952), [#16464](https://github.com/can1357/oh-my-pi/pull/16464) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
@@ -25,6 +22,7 @@
 - In Tern, warnings, errors, the update notice, `@file` reads and finished background jobs, tangents and supervised processes read like the rest of the chat: an icon and the message instead of a raw terminal line
 
 ### Fixed
+- Fixed Escape no longer leaving the focused-subagent view when `app.interrupt` was remapped to another key; a raw Escape now clears the draft or returns to the main session ([#8952](https://github.com/can1357/oh-my-pi/issues/8952), [#16464](https://github.com/can1357/oh-my-pi/pull/16464) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed cached approvals offering a directory grant that would not cover every target in the call ([#17309](https://github.com/can1357/oh-my-pi/pull/17309) by [@iliaal](https://github.com/iliaal)).
 - Fixed `pr://` metadata and diffs staying stale after successful `git push` calls through `bash` ([#17183](https://github.com/can1357/oh-my-pi/pull/17183) by [@alphastorm](https://github.com/alphastorm))
