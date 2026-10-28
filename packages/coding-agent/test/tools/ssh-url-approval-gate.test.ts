@@ -1,14 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
-import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
+import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { Snowflake } from "@oh-my-pi/pi-utils";
+import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 // Exercises the real per-tool approval gate (ExtensionToolWrapper) for read/grep/glob/write/edit,
 // proving an `ssh://` target is exec-tier (prompts / is denied without a UI) while the
@@ -24,48 +27,48 @@ const BASE_SETTINGS = {
 const APPROVAL_RE = /requires approval but no interactive UI available/;
 
 describe("ssh:// tools are exec-gated through the production approval wrapper", () => {
-	let tempDir: string;
-	let session: AgentSession;
+	let tempDir: TempDir;
+	let authStorage: AuthStorage | undefined;
+	let tools: Tool[];
 
 	beforeAll(async () => {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-ssh-approval-${Snowflake.next()}-`));
-		const cwd = path.join(tempDir, "cwd");
+		tempDir = TempDir.createSync("@pi-ssh-approval-");
+		const cwd = path.join(tempDir.path(), "cwd");
 		fs.mkdirSync(cwd, { recursive: true });
 		fs.writeFileSync(path.join(cwd, "local.txt"), "hello-local\n");
-		const sessionManager = SessionManager.create(cwd, path.join(tempDir, "sessions"));
-		const created = await createAgentSession({
+		const settings = Settings.isolated(BASE_SETTINGS);
+		const session: ToolSession = {
 			cwd,
-			agentDir: tempDir,
-			sessionManager,
-			settings: Settings.isolated(BASE_SETTINGS),
-			model: getBundledModel("openai", "gpt-4o-mini"),
-			systemPrompt: "SSH tool approval test.",
-			disableExtensionDiscovery: true,
-			preloadedCustomToolPaths: [],
-			skills: [],
-			rules: [],
-			contextFiles: [],
-			workspaceTree: { rootPath: cwd, rendered: ".\n", truncated: false, totalLines: 1, agentsMdFiles: [] },
-			promptTemplates: [],
-			slashCommands: [],
-			enableMCP: false,
+			settings,
+			hasUI: false,
 			enableLsp: false,
-			toolNames: ["read", "grep", "glob", "write", "edit"],
-		});
-		session = created.session;
+			restrictToolNames: true,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+		};
+		authStorage = createInMemoryAuthStorage();
+		const runner = new ExtensionRunner(
+			[],
+			new ExtensionRuntime(),
+			cwd,
+			SessionManager.inMemory(cwd),
+			new ModelRegistry(authStorage),
+			undefined,
+			settings,
+		);
+		// Exercise the production tool factory and approval wrapper without full SDK startup.
+		tools = (await createTools(session, ["read", "grep", "glob", "write", "edit"])).map(
+			tool => new ExtensionToolWrapper(tool, runner),
+		);
 	});
 
-	afterAll(async () => {
-		await session.dispose();
-		try {
-			fs.rmSync(tempDir, { recursive: true, force: true });
-		} catch {
-			// best-effort cleanup; the OS reclaims the temp dir
-		}
+	afterAll(() => {
+		authStorage?.close();
+		tempDir?.removeSync();
 	});
 
 	function tool(name: "read" | "grep" | "glob" | "write" | "edit") {
-		const found = session.getToolByName(name);
+		const found = tools.find(tool => tool.name === name);
 		if (!found) throw new Error(`Expected ${name} tool`);
 		return found;
 	}
@@ -157,6 +160,6 @@ describe("ssh:// tools are exec-gated through the production approval wrapper", 
 			ctx("write"),
 		);
 		expect(ok.isError).not.toBe(true);
-		expect(await Bun.file(path.join(tempDir, "cwd", "local.txt")).text()).toBe("edited-local\n");
+		expect(await Bun.file(path.join(tempDir.path(), "cwd", "local.txt")).text()).toBe("edited-local\n");
 	});
 });
