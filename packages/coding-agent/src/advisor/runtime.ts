@@ -1188,7 +1188,10 @@ export class AdvisorRuntime {
 						pending: this.#pending.length,
 						backlog: this.#backlog,
 					});
+					// Re-priming this batch must not restart its three-strike failure budget.
+					const failures = this.#consecutiveFailures;
 					this.#clearAdvisorContextAtCurrentCursor();
+					this.#consecutiveFailures = failures;
 					const preparedMessages = this.#prepareBatch(rawMessages);
 					return {
 						batchText,

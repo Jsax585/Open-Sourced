@@ -4439,6 +4439,43 @@ describe("advisor", () => {
 			expect(runtime.backlog).toBe(0);
 		});
 
+		it("drops a timed 429 batch after three failures despite maintenance re-primes", async () => {
+			let prompts = 0;
+			let abandoned = 0;
+			const failures: unknown[] = [];
+			const agent: AdvisorAgent = {
+				prompt: async () => {
+					prompts++;
+					// Bound the pre-fix loop without letting it hold the test runner open.
+					if (prompts <= 6) throw new Error("429 rate limit exceeded retry-after-ms=60000");
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const messages: AgentMessage[] = [{ role: "user", content: "review this", timestamp: 1 } as AgentMessage];
+			const runtime = new AdvisorRuntime(
+				agent,
+				{
+					snapshotMessages: () => messages,
+					maintainContext: async () => true,
+					onTurnError: async () => false,
+					onTurnAbandoned: () => {
+						abandoned++;
+					},
+					notifyFailure: error => failures.push(error),
+				},
+				0,
+			);
+
+			runtime.onTurnEnd(messages);
+			await settleUntil(() => runtime.backlog === 0);
+			expect(prompts).toBe(3);
+			expect(abandoned).toBe(1);
+			expect(failures).toHaveLength(1);
+			expect(runtime.backlog).toBe(0);
+		});
+
 		it("notifies the host once when consecutive prompt failures make the advisor unavailable", async () => {
 			const promptInputs: Array<string | AgentMessage[]> = [];
 			const failures: unknown[] = [];

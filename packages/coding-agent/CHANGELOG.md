@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Advisors stop retrying a rate-limited review after three failures even when context maintenance re-primes before every attempt ([#17281](https://github.com/can1357/oh-my-pi/issues/17281)).
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
