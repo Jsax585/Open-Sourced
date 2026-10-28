@@ -1,9 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-### Fixed
-
-- Fixed the thinking-block visibility toggle and the prose-only format switch no longer clearing and replaying the whole terminal, which stalled a long transcript for a change that renders nothing, and hiding or showing thinking blocks mid-stream no longer losing or jumping the assistant's answer ([#15336](https://github.com/can1357/oh-my-pi/pull/15336) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Added
 
@@ -32,6 +29,7 @@
 - Updated Bun engine requirement to ≥1.4.4
 
 ### Fixed
+- Fixed the thinking-block visibility toggle and the prose-only format switch no longer clearing and replaying the whole terminal, which stalled a long transcript for a change that renders nothing, and hiding or showing thinking blocks mid-stream no longer losing or jumping the assistant's answer ([#15336](https://github.com/can1357/oh-my-pi/pull/15336) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - A running job's glance keeps the whole a meter counts instead of the bare numerator: a widget whose headline restated `140` beside a `140/190` bar now draws `140/190` in the job card, the HUD pill and the status line ([#17226](https://github.com/can1357/oh-my-pi/pull/17226) by [@iacore](https://github.com/iacore))
 - Fixed the managed-skills root guard rejecting a symlinked store outright; a root that resolves to a directory now accepts writes inside its target, while a broken link or a link to a non-directory is still refused ([#17201](https://github.com/can1357/oh-my-pi/pull/17201) by [@iacore](https://github.com/iacore))
