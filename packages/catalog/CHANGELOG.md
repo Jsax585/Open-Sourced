@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Together model discovery now reads live per-million pricing, context windows, and display names from `/v1/models`, so serverless models missing from the bundled snapshot (such as `deepseek-ai/DeepSeek-V4.1-Flash-1017`) are priced instead of shown as free ([#17316](https://github.com/can1357/oh-my-pi/pull/17316) by [@kevcube](https://github.com/kevcube))
 - Fixed DeepSeek V4.1 Flash image attachments being stripped on publisher-namespaced ids such as `ds/deepseek-flash` ([#16470](https://github.com/can1357/oh-my-pi/pull/16470) by [@ZanDev32](https://github.com/ZanDev32))
 
 ## [18.13.3] - 2026-10-28
