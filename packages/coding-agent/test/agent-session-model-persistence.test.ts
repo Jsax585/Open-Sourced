@@ -423,6 +423,74 @@ describe("AgentSession model persistence", () => {
 		expect(result.session.model?.id).toBe(temporaryModel.id);
 	});
 
+	it.each(["options.model", "deferred pattern"] as const)(
+		"startup resume preserves the initial SDK upstream selected by %s without a later model change",
+		async selection => {
+			const selector = "openrouter/anthropic/claude-sonnet-4.5@anthropic";
+			const model = parseModelPattern(selector, sharedModelRegistry.getAvailable()).model;
+			if (!model) throw new Error("Expected routed OpenRouter model");
+			const role = "subagent:initial-route";
+			const result = await createAgentSession({
+				cwd: tempDir.path(),
+				agentDir: tempDir.path(),
+				authStorage: sharedAuthStorage,
+				modelRegistry: sharedModelRegistry,
+				sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "initial-sdk")),
+				settings: Settings.isolated(),
+				...(selection === "options.model"
+					? { model }
+					: { modelPattern: selector, modelPatternFallbackRole: role, modelPatternDefaultFallbackChain: [] }),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+			session = result.session;
+			expect(formatModelStringWithRouting(session.model!)).toBe(selector);
+			const manager = session.sessionManager;
+			manager.appendMessage({ role: "user", content: "preserve the initial route", timestamp: Date.now() });
+			manager.appendMessage(createAssistantMessage("ready"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session");
+			await session.dispose();
+			session = undefined;
+
+			const resumed = await createStartupResumeSession(sessionFile);
+
+			expect(formatModelStringWithRouting(resumed.session.model!)).toBe(selector);
+			const models = resumed.session.sessionManager.buildSessionContext().models;
+			expect(models.default).toBe(selector);
+			if (selection === "deferred pattern") expect(models[role]).toBe(selector);
+		},
+	);
+
+	it("startup resume preserves an explicit routed switchSession selection", async () => {
+		const selector = "openrouter/anthropic/claude-sonnet-4.5";
+		const target = parseModelPattern(`${selector}@anthropic`, sharedModelRegistry.getAvailable()).model;
+		if (!target) throw new Error("Expected routed OpenRouter model");
+		const targetSessionFile = await writeRoleModelSession(`${selector}@google`, `${selector}@google`);
+		const created = await createSession({ persist: true });
+
+		await expect(created.session.switchSession(targetSessionFile, { model: target })).resolves.toBe(true);
+		expect(formatModelStringWithRouting(created.session.model!)).toBe(`${selector}@anthropic`);
+		created.session.sessionManager.appendMessage({
+			role: "user",
+			content: "preserve the explicit restore route",
+			timestamp: Date.now(),
+		});
+		created.session.sessionManager.appendMessage(createAssistantMessage("ready"));
+		await created.session.dispose();
+		session = undefined;
+
+		const resumed = await createStartupResumeSession(targetSessionFile);
+
+		expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+	});
+
 	it.each(["setModel", "setModelTemporary", "scoped cycle", "available cycle"] as const)(
 		"startup resume preserves the upstream selected by a route-only %s publication",
 		async publication => {

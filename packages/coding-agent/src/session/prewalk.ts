@@ -235,8 +235,8 @@ export class PrewalkCoordinator {
 	#onHandoffTarget(handoff: PrewalkHandoff): boolean {
 		const current = this.#host.model();
 		return (
-			current?.provider === handoff.target.provider &&
-			current?.id === handoff.target.id &&
+			current !== undefined &&
+			formatModelStringWithRouting(current) === formatModelStringWithRouting(handoff.target) &&
 			this.#host.configuredThinkingLevel() === handoff.targetThinkingLevel
 		);
 	}

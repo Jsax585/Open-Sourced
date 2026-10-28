@@ -7,6 +7,7 @@ import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mo
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AUTO_PREWALK_TIMEOUT_MS, type PrewalkRoute } from "@oh-my-pi/pi-coding-agent/auto-prewalk/classifier";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -155,6 +156,8 @@ describe("AgentSession auto-prewalk", () => {
 	interface FixtureOptions {
 		auto?: "off" | "suggest" | "on";
 		primary?: Model;
+		target?: Model;
+		retryFallback?: string;
 		/** Credential the native judge (default true). */
 		judge?: boolean;
 		agentKind?: "main" | "sub";
@@ -168,13 +171,20 @@ describe("AgentSession auto-prewalk", () => {
 
 	function createFixture(responses: MockResponse[], options: FixtureOptions = {}) {
 		const primary = options.primary ?? modelOrThrow("claude-sonnet-4-5");
-		const target = modelOrThrow("claude-sonnet-4-6");
+		const target = options.target ?? modelOrThrow("claude-sonnet-4-6");
 		authStorage = createInMemoryAuthStorage();
-		authStorage.keys.setRuntime("anthropic", "test-key");
+		for (const provider of new Set(["anthropic", primary.provider, target.provider])) {
+			authStorage.keys.setRuntime(provider, "test-key");
+		}
 		if (options.judge !== false) authStorage.keys.setRuntime("typesafe", "ts-key");
 		// Only the credentials set here exist. Ambient provider keys (TYPESAFE_API_KEY, OPENROUTER_API_KEY, …) must
 		// neither conjure a native judge nor give the chain a fallback candidate that reaches the network.
-		const credentialed = options.judge === false ? ["anthropic"] : ["anthropic", "typesafe"];
+		const credentialed = [
+			"anthropic",
+			primary.provider,
+			target.provider,
+			...(options.judge === false ? [] : ["typesafe"]),
+		];
 		const source = authStorage.keys.source.bind(authStorage.keys);
 		vi.spyOn(authStorage.keys, "source").mockImplementation((provider, sourceOptions) =>
 			credentialed.includes(provider) ? source(provider, sourceOptions) : undefined,
@@ -186,10 +196,19 @@ describe("AgentSession auto-prewalk", () => {
 			modelRoles: { judge: "typesafe/jev-1.14.0" },
 			...(options.auto ? { "prewalk.auto": options.auto } : {}),
 			...(options.todoEager ? { "todo.eager": options.todoEager } : {}),
+			...(options.retryFallback
+				? {
+						"retry.baseDelayMs": 5,
+						"retry.maxRetries": 2,
+						"retry.fallbackChains": { default: [options.retryFallback] },
+						"retry.fallbackRevertPolicy": "cooldown-expiry",
+					}
+				: {}),
 		});
-		settings.setModelRole("smol", `${target.provider}/${target.id}:low`);
+		settings.setModelRole("smol", `${formatModelStringWithRouting(target)}:low`);
 		const mock = createMockModel({ responses });
 		const requested: string[] = [];
+		const requestedSelectors: string[] = [];
 		const efforts: Array<string | undefined> = [];
 		const nudges: string[][] = [];
 		const customs: string[][] = [];
@@ -210,6 +229,7 @@ describe("AgentSession auto-prewalk", () => {
 			},
 			streamFn: async (model, context, streamOptions) => {
 				requested.push(model.id);
+				requestedSelectors.push(formatModelStringWithRouting(model));
 				efforts.push(agent.state.thinkingLevel);
 				nudges.push(requestCustoms.filter(customType => customType.startsWith("prewalk-")));
 				customs.push(requestCustoms);
@@ -251,6 +271,7 @@ describe("AgentSession auto-prewalk", () => {
 			primary,
 			target,
 			requested,
+			requestedSelectors,
 			efforts,
 			nudges,
 			customs,
@@ -535,6 +556,69 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.requested.at(-1)).toBe(f.primary.id);
 			expect(f.efforts.at(-1)).toBe(Effort.High);
 			expect(f.session.getPrewalkState()).toBeUndefined();
+		});
+
+		it.each([
+			["next task", "matching route"],
+			["/new", "matching route"],
+			["next task", "different route"],
+			["/new", "different route"],
+			["next task", "different model"],
+			["/new", "different model"],
+		] as const)("%s respects a routed auto handoff after %s", async (boundary, change) => {
+			stubJudge([PREWALK, DIRECT]);
+			const bundled = getBundledModel("openrouter", "anthropic/claude-sonnet-4.5");
+			if (!bundled) throw new Error("Expected bundled OpenRouter model");
+			const primary = parseModelPattern("openrouter/anthropic/claude-sonnet-4.5@google", [bundled]).model;
+			const target = parseModelPattern("openrouter/anthropic/claude-sonnet-4.5@anthropic", [bundled]).model;
+			if (!primary || !target) throw new Error("Expected routed OpenRouter models");
+			const fallback =
+				change === "different route"
+					? "openrouter/anthropic/claude-sonnet-4.5@amazon-bedrock"
+					: "anthropic/claude-sonnet-4-6";
+			const f = createFixture(
+				change === "matching route"
+					? [...cycle(), done("next")]
+					: [
+							toolCall("todo", "todo"),
+							toolCall("write", "write"),
+							{ throw: "500 upstream is unwell" },
+							done("recovered"),
+							done("next"),
+						],
+				{
+					auto: "on",
+					primary,
+					target,
+					retryFallback: change === "matching route" ? undefined : `${fallback}:low`,
+				},
+			);
+			const applied: string[] = [];
+			f.session.subscribe(event => {
+				if (event.type === "retry_fallback_applied") applied.push(event.to);
+			});
+
+			await f.session.prompt(TASK);
+			await f.session.waitForIdle();
+
+			expect(f.requestedSelectors.slice(0, 2)).toEqual(Array(2).fill(formatModelStringWithRouting(primary)));
+			expect(f.requestedSelectors[2]).toBe(formatModelStringWithRouting(target));
+			const outgoing = change === "matching route" ? formatModelStringWithRouting(target) : fallback;
+			expect(formatModelStringWithRouting(f.session.model!)).toBe(outgoing);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Low);
+			expect(applied).toEqual(change === "matching route" ? [] : [`${fallback}:low`]);
+			const expected = change === "matching route" ? formatModelStringWithRouting(primary) : fallback;
+			const effort = change === "matching route" ? Effort.High : Effort.Low;
+
+			if (boundary === "/new") {
+				expect(await f.session.newSession()).toBe(true);
+				expect(formatModelStringWithRouting(f.session.model!)).toBe(expected);
+				expect(f.session.configuredThinkingLevel()).toBe(effort);
+			}
+			await f.session.prompt("explain the cursor without changing any files");
+
+			expect(f.requestedSelectors.at(-1)).toBe(expected);
+			expect(f.efforts.at(-1)).toBe(effort);
 		});
 
 		it("an effort selected during source restoration reconciliation owns the next task", async () => {

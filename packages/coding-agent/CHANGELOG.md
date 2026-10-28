@@ -10,8 +10,10 @@
 - Fixed an automatic prewalk handoff overriding a model, thinking level, or `/prewalk` chosen while it was switching, including one an SDK subscriber selects ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed auto-prewalk leaving later tasks on a context-promoted handoff model instead of the model the task started on ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed an automatic prewalk handoff not returning to its planning model after `prewalk.auto` was set to `suggest` or `off`, or after `/prewalk off` ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
-- Fixed losing a pinned upstream route when resuming a session or reviving a parked subagent after a model switch ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed losing pinned upstream routes after initial model selection, explicit session restoration, or parked-subagent revival ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed cycling thinking on models without effort selectors canceling a pending automatic prewalk handoff ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed automatic prewalk restoring the planning model after a retry fallback had selected a different upstream route ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
+
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
