@@ -11,8 +11,14 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import {
+	cfgCompactionEnabled,
+	cfgCompactionThresholdTokens,
+	cfgContextPromotionEnabled,
+} from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "@oh-my-pi/pi-coding-agent/session/prewalk";
+import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { SessionTools } from "@oh-my-pi/pi-coding-agent/session/session-tools";
 import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -528,6 +534,35 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.requested.at(-1)).toBe(f.primary.id);
 			expect(f.efforts.at(-1)).toBe(Effort.High);
 			expect(f.session.getPrewalkState()).toBeUndefined();
+		});
+
+		it("a context-promoted auto handoff still returns to its planning model at the next task", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const promoted = modelOrThrow("claude-opus-4-6");
+			const f = createFixture([...cycle(), done("promoted"), done("next")], {
+				auto: "on",
+				beforeStream: async () => {
+					if (f.session.model?.id === promoted.id) cfgCompactionEnabled.override(f.settings, false);
+				},
+			});
+			vi.spyOn(SessionMaintenance.prototype, "deferThresholdCompactionToSpeculation").mockReturnValue(false);
+			vi.spyOn(SessionMaintenance.prototype, "resolveContextPromotionTarget").mockImplementation(async current =>
+				current.id === f.target.id ? promoted : undefined,
+			);
+			f.session.subscribe(event => {
+				if (event.type !== "model_changed" || f.session.model?.id !== f.target.id) return;
+				cfgCompactionEnabled.override(f.settings, true);
+				cfgCompactionThresholdTokens.override(f.settings, 1);
+				cfgContextPromotionEnabled.override(f.settings, true);
+			});
+
+			await f.session.prompt(TASK);
+			expect(f.requested).toContain(promoted.id);
+
+			await f.session.prompt("explain the cursor without changing any files");
+
+			expect(f.requested.at(-1)).toBe(f.primary.id);
+			expect(f.efforts.at(-1)).toBe(Effort.High);
 		});
 
 		it("a later positive task plans on the planning model and hands off again", async () => {

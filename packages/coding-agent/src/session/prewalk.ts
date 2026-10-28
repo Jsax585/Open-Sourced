@@ -188,6 +188,20 @@ export class PrewalkCoordinator {
 		this.#handoff = undefined;
 	}
 
+	/** Context promotion is not a selection: the auto handoff it replaces still returns to its source at the next task. */
+	async followContextPromotion(promote: () => Promise<unknown>): Promise<void> {
+		const handoff = this.#handoff?.auto && this.#onHandoffTarget(this.#handoff) ? this.#handoff : undefined;
+		try {
+			await promote();
+		} finally {
+			const model = this.#host.model();
+			if (handoff && handoff === this.#handoff && model) {
+				handoff.target = model;
+				handoff.targetThinkingLevel = this.#host.configuredThinkingLevel();
+			}
+		}
+	}
+
 	/** Retire the outgoing cycle and prepare a configured prewalk for a fresh main session. */
 	async resetForNewSession(enabled: boolean): Promise<void> {
 		const handoff = this.#handoff;
