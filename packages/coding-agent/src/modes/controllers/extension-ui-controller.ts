@@ -936,6 +936,7 @@ export class ExtensionUiController {
 					onTimeout: dialogOptions?.onTimeout,
 					tui: this.ctx.ui,
 					inputGuard,
+					expanded: this.ctx.toolOutputExpanded,
 				},
 			);
 			this.ctx.editorContainer.clear();

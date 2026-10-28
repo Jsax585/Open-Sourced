@@ -169,6 +169,7 @@ interface AskDialogOptions {
 	onTimeout?: () => void;
 	tui?: TUI;
 	inputGuard?: AskDialogInputGuard;
+	expanded?: boolean;
 }
 
 interface QuestionState {
@@ -618,6 +619,7 @@ export class AskDialogComponent implements Component {
 		private readonly options: AskDialogOptions = {},
 	) {
 		this.#questions = normalizeDialogQuestions(questions);
+		this.#expanded = options.expanded ?? false;
 		this.#states = this.#questions.map(question => {
 			const recommended = Number.isInteger(question.recommended) ? question.recommended : 0;
 			const maxIndex = Math.max(0, question.options.length - 1);
