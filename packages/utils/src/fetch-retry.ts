@@ -1,11 +1,12 @@
 import { scheduler } from "node:timers/promises";
 
-// "reset after 1h2m3s" / "10m15s" / "39s"
-const QUOTA_RESET_PATTERN = /reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
+// "reset after 1h2m3s" / "10m15s" / "39s" / "Resets in 71h48m47s"
+const QUOTA_RESET_PATTERN =
+	/(?:(?:will\s+)?reset after|(?:will\s+)?resets?\s+in|"(?:retryDelay|quotaResetDelay)":\s*")\s*(?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i;
 // "Please retry in 250ms" / "Please retry in 12s"
 const PLEASE_RETRY_PATTERN = /Please retry in ([0-9.]+)(ms|s)/i;
-// JSON field: "retryDelay": "34.074824224s"
-const RETRY_DELAY_FIELD_PATTERN = /"retryDelay":\s*"([0-9.]+)(ms|s)"/i;
+// JSON field: "retryDelay": "34.074824224s" or "quotaResetDelay": "34s"
+const RETRY_DELAY_FIELD_PATTERN = /"(?:retryDelay|quotaResetDelay)":\s*"([0-9.]+)(ms|s)"/i;
 // "try again in 250ms" / "try again in 12s" / "try again in 12sec" /
 // "try again in 5 min" / "try again in ~158 min." / "try again in 2h" /
 // "try again in 90 minutes" / "try again in 1 hour"
@@ -24,7 +25,10 @@ const WILL_RESET_AT_PATTERN =
 // a provider-specific offset (Z.AI/Zhipu Beijing time) is applied only through
 // `RetryHintOptions.naiveResetTimezoneOffset`, never inferred from the language.
 const CN_RESET_AT_PATTERN = /将在\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s*重置/;
-const RESET_AT_PATTERNS: readonly RegExp[] = [WILL_RESET_AT_PATTERN, CN_RESET_AT_PATTERN];
+// Google Cloud Code Assist structured RPC error timestamp ("quotaResetTimeStamp": "2026-10-31T20:38:36Z")
+const GOOGLE_RPC_RESET_TIMESTAMP_PATTERN =
+	/"quotaResetTimeStamp":\s*"([0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z)"/i;
+const RESET_AT_PATTERNS: readonly RegExp[] = [WILL_RESET_AT_PATTERN, CN_RESET_AT_PATTERN, GOOGLE_RPC_RESET_TIMESTAMP_PATTERN];
 // "retry-after-ms=98497000" / "retry-after-ms: 7200000" / "retry-after-ms = 7200000"
 const RETRY_AFTER_MS_BODY_PATTERN = /\bretry-after-ms\s*[:=]\s*([0-9]+)\b/i;
 

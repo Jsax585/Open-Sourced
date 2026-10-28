@@ -206,6 +206,15 @@ describe("extractRetryHint", () => {
 		expect(extractRetryHint(undefined, "429 Monthly usage limit reached. Resets in 1 day.")).toBe(24 * 60 * 60_000);
 	});
 
+	it("parses Cloud Code Assist compound Resets in format", () => {
+		expect(
+			extractRetryHint(
+				undefined,
+				"Cloud Code Assist API error (429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 71h48m47s.",
+			),
+		).toBe(((71 * 60 + 48) * 60 + 47) * 1000);
+	});
+
 	// A quota body can carry both a generic retry hint and the account reset
 	// window ("Please retry in 5s. Your limit will reset in 13 minutes"). The
 	// account-reset hint must take precedence so the exhausted credential stays
