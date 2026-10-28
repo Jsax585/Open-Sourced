@@ -117,6 +117,7 @@ import { forgetExternalizedImages, prepareEntryForPersistence } from "./session-
 import { loadPinnedSessionIds, sortPinnedFirst } from "./session-pins";
 import {
 	FileSessionStorage,
+	isSameJournalFile,
 	MemorySessionStorage,
 	type SessionStorage,
 	type SessionStorageWriter,
@@ -1039,6 +1040,14 @@ export class SessionManager {
 	 */
 	#writerOwned = false;
 	/**
+	 * Journals this manager handed to a clone of itself
+	 * ({@link cloneCurrentSession}), by session id, while that clone still
+	 * writes them. Read by {@link #reclaimsJournalHandedToClone} so coming back
+	 * to such a session is not refused as a second writer. Weak, so a clone
+	 * nobody holds any more cannot keep its entry alive.
+	 */
+	#journalsHandedToClones = new Map<string, { sessionFile: string; clone: WeakRef<SessionManager> }>();
+	/**
 	 * The background artifact copy a move or branch to `sessionFile` started (see
 	 * {@link #moveOffSessionFile}, {@link createBranchedSession}). Never rejects.
 	 */
@@ -1148,7 +1157,9 @@ export class SessionManager {
 	 *
 	 * The claim is a writer's: a second manager on one journal — this process
 	 * reopening a session it already runs — is refused here and moved to a
-	 * sibling, the same way a second process is.
+	 * sibling, the same way a second process is. The one exception is the
+	 * journal this manager itself handed to a clone; see
+	 * {@link #reclaimsJournalHandedToClone}.
 	 */
 	#claimSession(options?: { handover?: boolean }): void {
 		const sessionId = this.#sessionId;
@@ -1157,17 +1168,51 @@ export class SessionManager {
 		const current = this.#sessionClaim;
 		if (current?.sessionId === sessionId && current.release) return;
 		if (current && current.sessionId !== sessionId) current.release?.();
+		const handover = options?.handover === true || this.#reclaimsJournalHandedToClone(sessionId, sessionFile);
 		// The storage also checks that the path still holds this session: if
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
 		this.#sessionClaim = {
 			sessionId,
-			release:
-				this.#storage.claimSession(sessionId, sessionFile, {
-					writer: true,
-					handover: options?.handover,
-				}) ?? undefined,
+			release: this.#storage.claimSession(sessionId, sessionFile, { writer: true, handover }) ?? undefined,
 		};
+	}
+
+	/**
+	 * Whether `sessionFile` is the journal this manager handed to a clone of
+	 * itself and that clone is still writing it. Coming back to that session is
+	 * the ordinary end of a session transition — a bash command still running
+	 * when the user starts a new session and then resumes the one they were in
+	 * — and refusing it would move the conversation the person is looking at to
+	 * a sibling file with a new id while its own detached work keeps the
+	 * original.
+	 *
+	 * Narrow on purpose, because the refusal it steps around is what keeps one
+	 * journal to one agent loop:
+	 * - only the journal this manager handed over, and only while the clone it
+	 *   handed it to still holds a writer slot on that same file, which also
+	 *   clears the record once the clone lets go;
+	 * - the record is dropped as soon as it stops holding, so a transcript a
+	 *   different manager took over afterwards is refused like any other;
+	 * - a weak reference, so a dropped clone cannot keep the record alive;
+	 * - a second omp process is untouched: `handover` only waives this
+	 *   process's own one-writer refusal, never the cross-process lease.
+	 */
+	#reclaimsJournalHandedToClone(sessionId: string, sessionFile: string): boolean {
+		const handed = this.#journalsHandedToClones.get(sessionId);
+		if (!handed) return false;
+		const clone = handed.clone.deref();
+		const stillWriting =
+			clone !== undefined &&
+			clone.#sessionId === sessionId &&
+			clone.#sessionClaim?.release !== undefined &&
+			clone.#sessionFile !== undefined &&
+			isSameJournalFile(clone.#sessionFile, sessionFile);
+		if (!stillWriting) {
+			this.#journalsHandedToClones.delete(sessionId);
+			return false;
+		}
+		return isSameJournalFile(handed.sessionFile, sessionFile);
 	}
 
 	/**
@@ -2386,6 +2431,21 @@ export class SessionManager {
 			// change exists to end.
 			clone.#writerOwned = this.#writerOwned;
 			clone.#claimSession({ handover: true });
+			// Remember which journal went where, so coming back to this session
+			// while the clone still writes it is not refused as a second writer
+			// ({@link #reclaimsJournalHandedToClone}).
+			if (clone.#sessionClaim?.release && clone.#sessionFile) {
+				// Entries are read lazily, so drop the ones whose clone is gone here
+				// rather than let a long-lived manager accumulate one per session it
+				// ever cloned.
+				for (const [id, handed] of this.#journalsHandedToClones) {
+					if (handed.clone.deref() === undefined) this.#journalsHandedToClones.delete(id);
+				}
+				this.#journalsHandedToClones.set(clone.#sessionId, {
+					sessionFile: clone.#sessionFile,
+					clone: new WeakRef(clone),
+				});
+			}
 		}
 		return clone;
 	}
