@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Proxy-discovered models now recover catalog-backed thinking controls and respect server-reported output limits, input modalities, and empty or off-only reasoning advertisements instead of silently using incompatible catalog defaults ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
@@ -32,7 +36,6 @@
 
 ### Fixed
 
-- Proxy-discovered models now recover catalog-backed thinking controls and respect server-reported output limits, input modalities, and empty or off-only reasoning advertisements instead of silently using incompatible catalog defaults ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
 - Fixed GitHub `/review` diff links keeping the snapshot that built the request after the cached diff refreshes in the background, instead of opening whatever file now sits at the same index ([#16310](https://github.com/can1357/oh-my-pi/pull/16310) by [@tkossak](https://github.com/tkossak))
 - Fixed `ask` questions being unanswerable while the prompt held a draft: Up/Down now hand the keyboard to the question (typing still goes to the draft until then), and the untouched draft is back in the prompt once the question is answered or cancelled ([#17215](https://github.com/can1357/oh-my-pi/pull/17215) by [@H4vC](https://github.com/H4vC))
 - Fixed the Agent Hub becoming unreachable after the last subagent finished: the people icon now stays (muted) while the session has subagents to inspect, and `/subagents` opens the hub as an alias of `/hub` ([#17215](https://github.com/can1357/oh-my-pi/pull/17215) by [@H4vC](https://github.com/H4vC))

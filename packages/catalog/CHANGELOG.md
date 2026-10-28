@@ -2,15 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Namespaced proxy models can recover portable effort controls from catalog references, including the reviewed DeepSeek V4.1 Flash 1017 alias, without inheriting another provider's model-ID routing or effort remaps; discovery-declared no-control surfaces survive catalog rebuilds without disabling known reasoning capability ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
 
 - Added LM Studio decision models to discovery: models LM Studio reports as `type: "decision"` are listed as `judge` models served over its `/v1/decisions` endpoint, alongside its chat models ([#17169](https://github.com/can1357/oh-my-pi/pull/17169) by [@richiestanaway](https://github.com/richiestanaway))
-
-### Fixed
-
-- Namespaced proxy models can recover portable effort controls from catalog references, including the reviewed DeepSeek V4.1 Flash 1017 alias, without inheriting another provider's model-ID routing or effort remaps; discovery-declared no-control surfaces survive catalog rebuilds without disabling known reasoning capability ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
 
 ## [18.13.1] - 2026-10-27
 
