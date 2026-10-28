@@ -91,6 +91,12 @@ Flow (`#handleRetryableError`):
 9. Record the recoverable error, emit `auto_retry_start`, and remove the failed assistant from active context unless preserving a resolved interrupted tool turn or proven-unexecuted tool-call/result pairs.
 10. Sleep with abort support, then schedule `agent.continue()` through the post-prompt task scheduler for the same prompt generation.
 
+`retry.transientSameModelAttempts` optionally defers a chain consult for transient overload, server, transport, or short-lived rate-limit failures. It does not defer usage-limit, authentication, or account-policy recovery. Only transient-capacity failures consume the allowance: thinking-loop resamples, credential recovery, stale-Responses replays, reasonless aborts, and request-body-timeout recovery do not. The allowance counts **retries**, not the initial request, per active model, upstream route, and effective thinking level. A new active selector gets its own allowance without resetting the shared retry counter or event numbering. The existing exhausted-budget fallback path remains unchanged.
+
+Default `0` adds no discretionary deferral and preserves built-in exceptions: the first mid-stream socket drop gets one same-model retry, and a Codex steering rejection stays on the model while retry budget remains. These retries count toward the configured allowance rather than adding an unconditional `1 + N`; the setting does not restrict either exception. At `retry.maxRetries: 0` or budget exhaustion, the fallback chain still gets its last-resort consult.
+
+Discretionary deferral is allowed only when the prospective wait, `max(adjusted backoff, provider Retry-After)`, fits a positive `retry.maxDelayMs`, or when that cap is disabled. Longer waits leave fallback available; provider timing is never clamped or ignored.
+
 ### What resets retry counters
 
 `#retryAttempt` resets to `0` in these cases:
@@ -104,12 +110,15 @@ Flow (`#handleRetryableError`):
 
 The retry promise resolves and clears whenever the chain ends.
 
+The active-model allowance also clears when the saga completes or is cancelled, so a later prompt does not inherit spent retries.
+
 ## Backoff and max-attempt semantics
 
 Settings:
 
 - `retry.enabled` (default `true`)
 - `retry.maxRetries` (default `10`)
+- `retry.transientSameModelAttempts` (default `0`; discretionary same-model retries before fallback)
 - `retry.baseDelayMs` (default `500`)
 - `retry.maxDelayMs` (default `300000`, 5 minutes; `<= 0` disables the fail-fast cap)
 - `retry.waitForUsageReset` (default `false`; allows provider-timed usage resets to exceed the delay cap)
@@ -195,6 +204,7 @@ Defined in `packages/coding-agent/src/session/settings.ts`:
 - `retry.waitForUsageReset` (default `false`)
 - `retry.modelFallback` (default `true`; gates configured retry model-fallback switching)
 - `retry.fallbackOn` (default `"any"`; `"usage-limit"` or `"except-usage-limit"` restrict which errors walk the chains)
+- `retry.transientSameModelAttempts` (default `0`; per-active-model transient retry allowance, preserving built-in recovery)
 - `retry.fallbackChains`
 - `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 - `retry.usageAwareFallback` (default `false`; runs a preflight for supported coding-plan usage reports)

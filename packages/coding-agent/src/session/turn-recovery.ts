@@ -352,6 +352,8 @@ export class TurnRecovery {
 	readonly #unexpectedStopJudgeTimeoutMs: number;
 	#retryAbortController: AbortController | undefined;
 	#retryAttempt = 0;
+	#sameModelRetrySelector: string | undefined;
+	#sameModelRetryAttempt = 0;
 	/**
 	 * Selectors a classifier refusal has already moved off in the current retry saga; see the walk
 	 * bound below. Cleared in `resolveRetry()`, which every end of a saga goes through (an answer,
@@ -850,6 +852,8 @@ export class TurnRecovery {
 	/** Resolve the pending retry promise; the saga is over, and so is its refusal walk. */
 	resolveRetry(): void {
 		this.#refusalWalkTried.clear();
+		this.#sameModelRetrySelector = undefined;
+		this.#sameModelRetryAttempt = 0;
 		if (this.#retryResolve) {
 			this.#retryResolve();
 			this.#retryResolve = undefined;
@@ -2784,6 +2788,25 @@ export class TurnRecovery {
 		const currentSelector = currentModel
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
+		// Track the active route and effective effort without replenishing the
+		// saga-wide retry budget.
+		if (this.#sameModelRetrySelector !== currentSelector) {
+			this.#sameModelRetrySelector = currentSelector;
+			this.#sameModelRetryAttempt = 0;
+		}
+		// Only transient-capacity failures spend this allowance. Thinking-loop
+		// diagnostics can also classify as Transient ("stream stall"), so exclude
+		// special recovery explicitly. Socket and Codex steering retries still count.
+		const transientCapacity =
+			AIError.is(id, AIError.Flag.Transient) &&
+			!AIError.is(id, AIError.Flag.UsageLimit) &&
+			!AIError.is(id, AIError.Flag.AuthFailed) &&
+			!AIError.is(id, AIError.Flag.AccountPolicy) &&
+			!AIError.is(id, AIError.Flag.ThinkingLoop) &&
+			!AIError.is(id, AIError.Flag.Abort) &&
+			!staleOpenAIResponsesReplayError &&
+			!AIError.isResponsesRequestBodyReadTimeout(message);
+		if (transientCapacity) this.#sameModelRetryAttempt++;
 		if (accountPolicyDenial && currentModel) {
 			// `rotate` may sleep out a sibling's short block; register its signal
 			// as the retry controller so `abortRetry()` cancels that wait exactly
@@ -2872,6 +2895,16 @@ export class TurnRecovery {
 			return maxDelayMs > 0 && waitMs > maxDelayMs && !waitForUsageReset;
 		};
 
+		// The opt-in allowance delays fallback only for transient failures, never
+		// quota, auth or account-policy recovery. A wait beyond the fail-fast cap
+		// must leave fallback available rather than turn recovery into failure.
+		const sameModelDelayMs = Math.max(delayMs, parsedRetryAfterMs ?? 0);
+		const deferModelFallback =
+			transientCapacity &&
+			!retryBudgetExhausted &&
+			this.#sameModelRetryAttempt <= retrySettings.transientSameModelAttempts &&
+			!exceedsDelayCap(sameModelDelayMs);
+
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			// The retry budget bounds same-model retries against a failing provider. A
 			// classifier refusal is not that: retrying the same model reproduces it, and
@@ -2894,6 +2927,7 @@ export class TurnRecovery {
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
 				!refusalWalkRepeats &&
+				!deferModelFallback &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
 				if (classifierRefusal) {
