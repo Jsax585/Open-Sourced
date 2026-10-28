@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type Api, type Context, Effort, type Model, type SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -536,6 +536,57 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.session.getPrewalkState()).toBeUndefined();
 		});
 
+		it("an effort selected during source restoration reconciliation owns the next task", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([...cycle(), done("next")], { auto: "on" });
+			await f.session.prompt(TASK);
+			expect(f.session.model?.id).toBe(f.target.id);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const reconcile = SessionTools.prototype.reconcileThinkTool;
+			let held = false;
+			vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+				this: SessionTools,
+				...args
+			) {
+				if (!held && f.session.model?.id === f.primary.id) {
+					held = true;
+					entered.resolve();
+					await release.promise;
+				}
+				return reconcile.apply(this, args);
+			});
+
+			const task = f.session.prompt("explain the cursor without changing any files");
+			await entered.promise;
+			f.session.setThinkingLevel(Effort.Medium);
+			release.resolve();
+			await task;
+
+			expect(f.requested.at(-1)).toBe(f.primary.id);
+			expect(f.efforts.at(-1)).toBe(Effort.Medium);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
+		});
+
+		it("restores an unset source effort in the active session and persisted selection receipt", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const f = createFixture([...cycle(), done("next")], { auto: "on" });
+			f.session.setThinkingLevel(ThinkingLevel.Inherit);
+			expect(f.session.configuredThinkingLevel()).toBeUndefined();
+			await f.session.prompt(TASK);
+			expect(f.session.model?.id).toBe(f.target.id);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Low);
+
+			await f.session.prompt("explain the cursor without changing any files");
+
+			expect(f.requested.at(-1)).toBe(f.primary.id);
+			expect(f.efforts.at(-1)).toBeUndefined();
+			expect(f.session.configuredThinkingLevel()).toBeUndefined();
+			const receipt = f.session.sessionManager.getBranch().findLast(entry => entry.type === "thinking_level_change");
+			expect(receipt).toMatchObject({ thinkingLevel: null, configured: null });
+			expect(f.session.sessionManager.buildSessionContext().configuredThinkingLevel).toBeUndefined();
+		});
+
 		it("a context-promoted auto handoff still returns to its planning model at the next task", async () => {
 			stubJudge([PREWALK, DIRECT]);
 			const promoted = modelOrThrow("claude-opus-4-6");
@@ -926,7 +977,6 @@ describe("AgentSession auto-prewalk", () => {
 				settings: f.settings,
 				model: () => f.session.model,
 				configuredThinkingLevel: () => f.session.configuredThinkingLevel(),
-				restoreThinkingLevel: level => f.session.setThinkingLevel(level),
 				resolveDefaultPrewalk: () => undefined,
 				resolveAutoPrewalkTarget: () => ({ target: f.target, thinkingLevel: Effort.Low }),
 				classifyAutoPrewalk: async () => undefined,

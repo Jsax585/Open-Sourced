@@ -1,4 +1,10 @@
-import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
+import {
+	type Agent,
+	type AgentMessage,
+	type AgentToolResult,
+	type AgentTurnEndContext,
+	ThinkingLevel,
+} from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -74,7 +80,6 @@ export interface PrewalkCoordinatorHost {
 	settings: Settings;
 	model(): Model | undefined;
 	configuredThinkingLevel(): ConfiguredThinkingLevel | undefined;
-	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void;
 	resolveDefaultPrewalk(): Prewalk | undefined;
 	/** Resolves `prewalk.autoTarget`; warns and returns undefined when it cannot be used. */
 	resolveAutoPrewalkTarget(): Prewalk | undefined;
@@ -236,10 +241,8 @@ export class PrewalkCoordinator {
 
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
 		try {
-			if (!(await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel))) return;
-			// Temporary selection treats undefined as "keep/default"; restoration must preserve
-			// the original selector, including auto or an explicitly inherited effort.
-			this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
+			// Undefined means keep/default to the setter; Inherit restores the original unset selector.
+			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel ?? ThinkingLevel.Inherit);
 		} catch (error) {
 			this.#host.emitNotice(
 				"warning",

@@ -156,7 +156,6 @@ describe("plan-yolo approval autosave", () => {
 			settings,
 			model: () => undefined,
 			configuredThinkingLevel: () => undefined,
-			restoreThinkingLevel: () => {},
 			resolveDefaultPrewalk: () => undefined,
 			resolveAutoPrewalkTarget: () => undefined,
 			classifyAutoPrewalk: async () => undefined,
