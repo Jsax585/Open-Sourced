@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import { getBundledModel } from "@oh-my-pi/pi-catalog";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { kimiCodeModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models/openai-compat";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import type { MessageCreateParamsStreaming } from "../../src/providers/anthropic-wire";
@@ -14,7 +15,8 @@ import {
 } from "../../src/providers/openai-shared";
 import * as kimiOauth from "../../src/registry/oauth/kimi";
 import { streamSimple } from "../../src/stream";
-import type { Context, Model } from "../../src/types";
+import type { Context, Model, SimpleStreamOptions } from "../../src/types";
+import { anthropicChunks, captureFetch, type CapturedRequest, completionsChunks } from "../helpers/factory-droid";
 
 const BASE_CHAT_COMPLETIONS_PARAMS: OpenAICompletionsParams = { messages: [], model: "unused", stream: true };
 const KIMI_HEADERS = Object.freeze({
@@ -236,6 +238,161 @@ describe("Kimi Code prompt cache affinity", () => {
 
 		expect(openaiPayload).not.toHaveProperty("prompt_cache_key");
 		expect(anthropicPayload).not.toHaveProperty("metadata");
+	});
+});
+
+describe("Kimi Code discovered thinking controls", () => {
+	async function discoverModels() {
+		const fetchDynamicModels = kimiCodeModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () =>
+				Response.json({
+					data: [
+						{
+							id: "kimi-for-coding-highspeed",
+							display_name: "Kimi For Coding (highspeed)",
+							context_length: 262_144,
+							supports_reasoning: true,
+							supports_thinking_type: "only",
+							protocol: null,
+						},
+						{
+							id: "k3.1-pro",
+							display_name: "K3.1 Pro",
+							context_length: 1_048_576,
+							supports_reasoning: true,
+							supports_thinking_type: "only",
+							think_efforts: {
+								support: true,
+								valid_efforts: ["low", "high", "max"],
+								default_effort: "max",
+							},
+							protocol: null,
+						},
+					],
+				}),
+		}).fetchDynamicModels;
+		if (!fetchDynamicModels) throw new Error("Kimi Code dynamic discovery is not configured");
+		const specs = await fetchDynamicModels();
+		const models = specs?.map(spec => buildModel(spec as ModelSpec<"openai-completions">));
+		const highspeed = models?.find(model => model.id === "kimi-for-coding-highspeed");
+		const controlled = models?.find(model => model.id === "k3.1-pro");
+		if (!highspeed || !controlled) throw new Error("Expected both discovered Kimi Code models");
+		return { highspeed, controlled };
+	}
+
+	async function captureSimpleRequest(
+		model: Model<"openai-completions">,
+		format: KimiApiFormat,
+		options: SimpleStreamOptions,
+	) {
+		const requests: CapturedRequest[] = [];
+		const stream = streamSimple(
+			model,
+			{ systemPrompt: [], messages: [{ role: "user", content: "Reply OK", timestamp: 0 }], tools: [] },
+			{
+				...options,
+				apiKey: "test-key",
+				kimiApiFormat: format,
+				fetch: captureFetch(
+					requests,
+					format === "anthropic" ? anthropicChunks("OK") : completionsChunks("OK", model.id),
+				),
+			},
+		);
+		const result = await stream.result();
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(1);
+		const request = requests[0];
+		if (!request) throw new Error("Kimi Code request was not captured");
+		expect(request.url).toEndWith(format === "anthropic" ? "/messages" : "/chat/completions");
+		return request.body;
+	}
+
+	const requests: SimpleStreamOptions[] = [
+		{},
+		{ disableReasoning: true },
+		{ forceReasoningOff: true },
+		{ reasoning: Effort.High, thinkingBudgets: { [Effort.High]: 8192 } },
+		{ reasoning: Effort.Max },
+	];
+
+	it("does not invent controls for live Highspeed metadata on either public transport", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const { highspeed } = await discoverModels();
+		expect(highspeed.reasoning).toBe(true);
+		expect(getSupportedEfforts(highspeed)).toEqual([]);
+
+		for (const format of ["openai", "anthropic"] as const) {
+			for (const options of requests) {
+				const body = await captureSimpleRequest(highspeed, format, options);
+				expect(body.model).toBe("kimi-for-coding-highspeed");
+				expect(body).not.toHaveProperty("reasoning_effort");
+				expect(body).not.toHaveProperty("thinking");
+				expect(body).not.toHaveProperty("output_config");
+			}
+		}
+	});
+
+	it("keeps live K3.1 Pro effort controls and mandatory off clamping on both transports", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const { controlled } = await discoverModels();
+		expect(getSupportedEfforts(controlled)).toEqual([Effort.Low, Effort.High, Effort.Max]);
+
+		for (const format of ["openai", "anthropic"] as const) {
+			for (const options of requests) {
+				const body = await captureSimpleRequest(controlled, format, options);
+				const effort = options.reasoning ?? Effort.Low;
+				expect(body).not.toHaveProperty("reasoning_effort");
+				if (format === "openai") {
+					expect(body.thinking).toEqual({ type: "enabled", effort });
+				} else {
+					expect(body.thinking).toEqual({ type: "adaptive" });
+					expect(body.output_config).toMatchObject({ effort });
+				}
+			}
+		}
+	});
+
+	it("restores explicitly configured Highspeed controls without losing trusted absence policy", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const { highspeed } = await discoverModels();
+		const restored = buildModel({
+			...highspeed,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			compat: { ...highspeed.compatConfig, trustExplicitThinkingOnly: true },
+		} satisfies ModelSpec<"openai-completions">);
+		const options = { reasoning: Effort.High, thinkingBudgets: { [Effort.High]: 4096 } };
+		const openai = await captureSimpleRequest(restored, "openai", options);
+		const anthropic = await captureSimpleRequest(restored, "anthropic", options);
+
+		expect(openai.reasoning_effort).toBe(Effort.High);
+		expect(anthropic.thinking).toMatchObject({ type: "enabled", budget_tokens: 4096 });
+	});
+
+	it("retains genuinely mandatory Native thinking defaults without a source effort dial", async () => {
+		vi.spyOn(kimiOauth, "getKimiCommonHeaders").mockReturnValue(KIMI_HEADERS);
+		const { controlled } = await discoverModels();
+		const noControls = buildModel({
+			...controlled,
+			thinking: undefined,
+			compat: { ...controlled.compatConfig, trustExplicitThinkingOnly: true },
+		} satisfies ModelSpec<"openai-completions">);
+
+		let defaultBudget: number | undefined;
+		for (const options of requests) {
+			const body = await captureSimpleRequest(noControls, "anthropic", options);
+			const thinking = body.thinking as { type: string; budget_tokens: number };
+			expect(thinking.type).toBe("enabled");
+			if (defaultBudget === undefined) {
+				defaultBudget = thinking.budget_tokens;
+				expect(defaultBudget).toBeGreaterThan(0);
+			} else {
+				expect(thinking.budget_tokens).toBe(defaultBudget);
+			}
+			expect(body).not.toHaveProperty("output_config");
+			expect(body).not.toHaveProperty("reasoning_effort");
+		}
 	});
 });
 

@@ -4257,6 +4257,11 @@ export function kimiCodeModelManagerOptions(
 							thinking,
 							compat: {
 								thinkingFormat: thinking ? "kimi" : "zai",
+								// Mandatory thinking without a live dial stays server-controlled:
+								// neither an absent effort nor "off" may fabricate a disabled block.
+								...(entry.supports_thinking_type === "only" && thinking === undefined
+									? { reasoningDisableMode: "omit" as const }
+									: {}),
 								kimiApiFormat: mapKimiApiFormat(entry.protocol),
 								reasoningContentField: "reasoning_content",
 								supportsDeveloperRole: false,

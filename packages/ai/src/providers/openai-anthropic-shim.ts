@@ -52,6 +52,10 @@ export function streamOpenAIAnthropicShim(
 	// The resolver form of `apiKey` is resolved upstream in `streamSimple`;
 	// this shim only ever receives a static bearer string.
 	const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+	// A reasoning-capable model need not expose an adjustable thinking dial.
+	// Select high-level effort once, before either transport can invent controls.
+	const noThinkingControls = model.thinking === undefined;
+	const reasoningEffort = noThinkingControls ? undefined : options?.reasoning;
 
 	(async () => {
 		try {
@@ -61,7 +65,6 @@ export function streamOpenAIAnthropicShim(
 			};
 
 			if (format === "anthropic") {
-				const noThinkingControls = model.compat.trustExplicitThinkingOnly === true && model.thinking === undefined;
 				const anthropicModel = buildModel({
 					id: model.id,
 					name: model.name,
@@ -86,10 +89,11 @@ export function streamOpenAIAnthropicShim(
 						: {}),
 				} as ModelSpec<"anthropic-messages">);
 
-				const reasoningEffort = noThinkingControls ? undefined : options?.reasoning;
-				const thinkingEnabled = noThinkingControls
-					? undefined
-					: !!reasoningEffort && model.reasoning && !options?.disableReasoning;
+				const thinkingEnabled =
+					noThinkingControls &&
+					(model.compat.trustExplicitThinkingOnly === true || model.compat.reasoningDisableMode === "omit")
+						? undefined
+						: !!reasoningEffort && model.reasoning && !options?.disableReasoning;
 				const thinkingBudget = reasoningEffort
 					? (options?.thinkingBudgets?.[reasoningEffort] ?? ANTHROPIC_THINKING[reasoningEffort])
 					: undefined;
@@ -133,7 +137,6 @@ export function streamOpenAIAnthropicShim(
 						} as ModelSpec<"openai-completions">)
 					: model;
 
-				const reasoningEffort = options?.reasoning;
 				const innerStream = streamOpenAICompletions(openaiModel, context, {
 					apiKey,
 					temperature: options?.temperature,
