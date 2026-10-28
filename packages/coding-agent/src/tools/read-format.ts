@@ -88,10 +88,16 @@ function recordFullHashlineContext(
 	absolutePath: string | undefined,
 	displayPath: string,
 	fullText: string,
+	sourceStartLine?: number,
 ): HashlineHeaderContext | undefined {
 	if (!absolutePath || (!path.isAbsolute(absolutePath) && extractUriScheme(absolutePath) !== "ssh")) return undefined;
-	const normalized = normalizeToLF(fullText);
-	const tag = getEditStore(session).recordSnapshot(absolutePath, normalized);
+	// An excerpt must never replace the backing file's full edit snapshot.
+	const normalized = sourceStartLine === undefined ? normalizeToLF(fullText) : undefined;
+	const tag =
+		normalized === undefined
+			? getEditStore(session).recordSnapshotFile(absolutePath)
+			: getEditStore(session).recordSnapshot(absolutePath, normalized);
+	if (!tag) return undefined;
 	return {
 		header: formatReadHashlineHeader(displayPath, tag),
 		tag,
@@ -218,10 +224,18 @@ function recordInMemorySeenLines(
 	absolutePath: string | undefined,
 	fullText: string,
 	seenLines: readonly number[] | undefined,
+	sourceStartLine?: number,
 ): void {
 	if (!absolutePath || !seenLines || seenLines.length === 0) return;
 	if (!path.isAbsolute(absolutePath) && extractUriScheme(absolutePath) !== "ssh") return;
-	getEditStore(session).recordSnapshot(absolutePath, normalizeToLF(fullText), [...seenLines]);
+	if (sourceStartLine !== undefined) {
+		getEditStore(session).recordSnapshotFile(
+			absolutePath,
+			seenLines.map(line => line + sourceStartLine - 1),
+		);
+	} else {
+		getEditStore(session).recordSnapshot(absolutePath, normalizeToLF(fullText), [...seenLines]);
+	}
 }
 
 function lineNumbersFromEntries(entries: readonly LineEntry[]): number[] {
@@ -300,6 +314,8 @@ export interface InMemoryTextOptions {
 	sourcePath?: string;
 	/** Snapshot identity for editable remote text, without claiming a local source file. */
 	snapshotPath?: string;
+	/** Excerpt provenance: input line 1 maps to this backing-file line. */
+	sourceStartLine?: number;
 	sourceUrl?: string;
 	sourceInternal?: string;
 	entityLabel: string;
@@ -424,6 +440,7 @@ export async function buildInMemoryTextResult(
 	if (
 		!rawDisplay &&
 		options.sourcePath &&
+		options.sourceStartLine === undefined &&
 		!truncation.firstLineExceedsLimit &&
 		(startLine > 0 || endLine < totalLines || truncation.truncated)
 	) {
@@ -440,12 +457,14 @@ export async function buildInMemoryTextResult(
 					snapshotPath,
 					options.snapshotPath ?? formatPathRelativeToCwd(snapshotPath, session.cwd),
 					text,
+					options.sourceStartLine,
 				)
 			: undefined;
 	let emittedHashlineHeader = false;
 	let seenLines: number[] | undefined;
 	let rawSeenLines: number[] | undefined;
 	const formatText = (content: string, startNum: number): string => {
+		startNum += (options.sourceStartLine ?? 1) - 1;
 		const lineCount = countTextLines(content);
 		details.displayContent = {
 			text: content,
@@ -459,6 +478,13 @@ export async function buildInMemoryTextResult(
 		return prependHashlineHeader(formatted, hashContext);
 	};
 	const formatLineEntries = (entries: readonly LineEntry[], startNum: number): string => {
+		const sourceOffset = (options.sourceStartLine ?? 1) - 1;
+		if (sourceOffset !== 0) {
+			entries = entries.map(entry =>
+				entry.kind === "line" ? { ...entry, lineNumber: entry.lineNumber + sourceOffset } : entry,
+			);
+		}
+		startNum += sourceOffset;
 		const firstLine = entries.find(entry => entry.kind === "line");
 		details.displayContent = {
 			text: lineEntriesToPlainText(entries, BRACKET_CONTEXT_ELLIPSIS),
@@ -473,7 +499,7 @@ export async function buildInMemoryTextResult(
 	};
 	const buildLineEntries = (lines: readonly string[], endLineDisplay: number): LineEntry[] =>
 		buildLineEntriesWithBlockContext(lines, [{ startLine: startLineDisplay, endLine: endLineDisplay }], {
-			path: options.sourcePath,
+			path: options.sourceStartLine === undefined ? options.sourcePath : undefined,
 			text,
 		});
 
@@ -548,7 +574,7 @@ export async function buildInMemoryTextResult(
 		getEditStore(session).recordSeenLines(snapshotPath, hashContext.tag, seenLines);
 	}
 	if (options.raw === true && snapshotPath && options.immutable !== true && rawSeenLines) {
-		recordInMemorySeenLines(session, snapshotPath, text, rawSeenLines);
+		recordInMemorySeenLines(session, snapshotPath, text, rawSeenLines, options.sourceStartLine);
 	}
 	resultBuilder.text(outputText);
 	if (truncationInfo) {
@@ -588,6 +614,7 @@ export async function buildInMemoryMultiRangeResult(
 					snapshotPath,
 					options.snapshotPath ?? formatPathRelativeToCwd(snapshotPath, session.cwd),
 					text,
+					options.sourceStartLine,
 				)
 			: undefined;
 	let emittedHashlineHeader = false;
@@ -627,10 +654,23 @@ export async function buildInMemoryMultiRangeResult(
 	if (!allLines) {
 		outputText = rawParts.join("\n");
 	} else if (visibleSpans.length > 0) {
-		if (options.sourcePath && !spansCoverEveryLine(visibleSpans, totalLines)) {
+		if (
+			options.sourcePath &&
+			options.sourceStartLine === undefined &&
+			!spansCoverEveryLine(visibleSpans, totalLines)
+		) {
 			await warmBlockContext({ path: options.sourcePath, text });
 		}
-		const entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, { path: options.sourcePath, text });
+		let entries = buildLineEntriesWithBlockContext(allLines, visibleSpans, {
+			path: options.sourceStartLine === undefined ? options.sourcePath : undefined,
+			text,
+		});
+		const sourceOffset = (options.sourceStartLine ?? 1) - 1;
+		if (sourceOffset !== 0) {
+			entries = entries.map(entry =>
+				entry.kind === "line" ? { ...entry, lineNumber: entry.lineNumber + sourceOffset } : entry,
+			);
+		}
 		if (shouldAddHashLines) seenLines = lineNumbersFromEntries(entries);
 		const firstLine = entries.find(entry => entry.kind === "line");
 		if (firstLine?.kind === "line") {
@@ -654,7 +694,7 @@ export async function buildInMemoryMultiRangeResult(
 		getEditStore(session).recordSeenLines(snapshotPath, hashContext.tag, seenLines);
 	}
 	if (options.raw === true && snapshotPath && options.immutable !== true && visibleSpans.length > 0) {
-		recordInMemorySeenLines(session, snapshotPath, text, lineNumbersFromSpans(visibleSpans));
+		recordInMemorySeenLines(session, snapshotPath, text, lineNumbersFromSpans(visibleSpans), options.sourceStartLine);
 	}
 	resultBuilder.text(finalText);
 	return resultBuilder.done();
