@@ -1120,14 +1120,19 @@ export function encodeITerm2(
 }
 
 /**
- * The encoded image `encodeITerm2` wrote into `line`, without the size
- * parameters a rewrap changes; undefined for a line without one.
+ * The image an image line draws, without the size parameters a rewrap
+ * changes: the encoded data `encodeITerm2` wrote, or the image id a Kitty
+ * direct placement shows (its data was transmitted under that id). Any other
+ * image line identifies itself.
  */
-export function iterm2ImagePayload(line: string): string | undefined {
+export function imagePayload(line: string): string {
 	const start = line.indexOf(ImageProtocol.Iterm2);
-	if (start === -1) return undefined;
+	if (start === -1) {
+		const kitty = parseKittyDirectPlacementLine(line);
+		return kitty ? `kitty:${kitty.imageId}` : line;
+	}
 	const colon = line.indexOf(":", start + ImageProtocol.Iterm2.length);
-	if (colon === -1) return undefined;
+	if (colon === -1) return line;
 	const end = line.indexOf("\x07", colon + 1);
 	return line.slice(colon + 1, end === -1 ? undefined : end);
 }
