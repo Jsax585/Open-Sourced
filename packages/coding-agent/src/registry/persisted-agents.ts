@@ -7,6 +7,7 @@ import { resolveExplicitModelRole } from "../config/model-resolver";
 import { assistantTurnProducedOutput } from "../session/messages";
 import { EPHEMERAL_MODEL_CHANGE_ROLE } from "../session/session-entries";
 import { visitEntriesFromFileStream } from "../session/session-loader";
+import { isSessionWrittenHere } from "../session/session-storage";
 import { loadBundledAgents } from "../task/agents";
 import { isReadOnlyAgent } from "../task/read-only-policy";
 import { persistedVibeChildIds } from "../vibe/lifecycle";
@@ -735,6 +736,25 @@ async function registerPersistedSubagentsFromDir(
 	for (const entry of entries) {
 		if (entry.isDirectory()) childDirectories.add(entry.name);
 	}
+	/**
+	 * Restore the transcripts in `<dir>/<id>/`, the artifacts directory of the
+	 * transcript `<id>.jsonl`. A transcript stem is not proof of a child
+	 * directory: "." and ".." revisit ancestors, and symlinks can point back
+	 * into the same tree.
+	 */
+	const registerChildrenOf = async (id: string): Promise<void> => {
+		if (!childDirectories.has(id)) return;
+		await registerPersistedSubagentsFromDir(
+			registry,
+			path.join(dir, id),
+			id,
+			vibeOwned,
+			transcripts,
+			shouldContinue,
+			rootSessionFile,
+			owned,
+		);
+	};
 	let entriesSinceYield = 0;
 	for (const entry of entries) {
 		if (!shouldContinue()) return;
@@ -745,6 +765,26 @@ async function registerPersistedSubagentsFromDir(
 		if (!shouldContinue()) return;
 		if (!entry.isFile() || !entry.name.endsWith(".jsonl") || entry.name.includes(".bak")) continue;
 		const sessionFile = path.join(dir, entry.name);
+		// A session this process already holds open for writing is live, not a
+		// parked transcript: it has its own ref under the id it was spawned
+		// with. A second, `parked` ref derived from its file would offer peers
+		// a revivable copy of a live session, and reviving that copy runs a
+		// second agent loop on the journal this process is writing — two
+		// writers, two leaves, one session id. Its own parked children stay
+		// restorable.
+		if (isSessionWrittenHere(sessionFile)) {
+			const liveId = entry.name.slice(0, -".jsonl".length);
+			// A detached ref on that journal is a phantom: an earlier scan (or a
+			// re-registration after a kill) derived it before this process took
+			// the file, and nothing can revive it now. Drop it so rosters stop
+			// offering the running session as a parked peer.
+			const phantom = registry.get(liveId);
+			if (phantom && !phantom.session && phantom.sessionFile === sessionFile) {
+				registry.unregister(liveId, phantom);
+			}
+			await registerChildrenOf(liveId);
+			continue;
+		}
 		// The advisor transcript is observability-only: register it as a non-peer
 		// `advisor` kind under its owning session so the Hub can show its read-only
 		// transcript, but it never joins agent-facing rosters and is not revivable.
@@ -868,19 +908,6 @@ async function registerPersistedSubagentsFromDir(
 				}
 			}
 		}
-		// A transcript stem is not proof of a child directory: "." and ".."
-		// revisit ancestors, and symlinks can point back into the same tree.
-		if (childDirectories.has(id)) {
-			await registerPersistedSubagentsFromDir(
-				registry,
-				path.join(dir, id),
-				id,
-				vibeOwned,
-				transcripts,
-				shouldContinue,
-				rootSessionFile,
-				owned,
-			);
-		}
+		await registerChildrenOf(id);
 	}
 }

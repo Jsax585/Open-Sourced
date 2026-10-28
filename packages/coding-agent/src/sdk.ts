@@ -4293,6 +4293,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			}
 		}
 
+		// This manager now belongs to a running agent loop, which will write its
+		// journal. The claim is taken here rather than at the first append, and
+		// before the registration below, so the journal is known to be open in
+		// this process from the moment anything can see this agent: a roster scan
+		// must not offer a session running here as a revivable transcript, and a
+		// revive must not reopen it. A resumed pane nobody has typed into yet is
+		// as protected as a busy one.
+		sessionManager.claimForWriting();
+
 		// Pre-register in the global agent registry BEFORE building the system prompt,
 		// so that subagents launched in the same parallel batch can see each other in
 		// their initial `# IRC Peers` block (rendered inside `rebuildSystemPrompt`).

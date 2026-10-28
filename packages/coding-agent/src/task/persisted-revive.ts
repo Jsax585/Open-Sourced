@@ -21,6 +21,7 @@ import {
 	type PersistedSessionInit,
 	SessionManager,
 } from "../session/session-manager";
+import { isSessionWrittenHere } from "../session/session-storage";
 import type { EventBus } from "../utils/event-bus";
 import {
 	attachIrcWakeTurnMonitor,
@@ -97,6 +98,15 @@ export function createPersistedSubagentReviverFactory(
 	return async ref => {
 		const sessionFile = ref.sessionFile;
 		if (!sessionFile) return undefined;
+		// Reviving reopens the journal, and this process already writes it: the
+		// transcript belongs to a session running here (a pane resumed on a
+		// subagent's file), not to a parked agent. Rebuilding it would run a
+		// second agent loop on one journal. Peers reach that session through
+		// its live ref instead (IrcBus.send).
+		if (isSessionWrittenHere(sessionFile)) {
+			logger.warn("Refused to revive a session this process is running", { id: ref.id, sessionFile });
+			return undefined;
+		}
 		const peek = await SessionManager.peekSessionInit(sessionFile);
 		// No persisted contract (pre-session_init file) or the recorded workspace
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
@@ -294,6 +304,10 @@ export function createPersistedSubagentReviverFactory(
 				}));
 			} catch (error) {
 				mcpFollower?.dispose();
+				// The session claimed this journal as its writer before it failed.
+				// Leaving it claimed would divert the next revive of this
+				// transcript to a sibling file instead of rebuilding it in place.
+				await reopened.close();
 				throw error;
 			}
 			mcpFollower?.bind(session);

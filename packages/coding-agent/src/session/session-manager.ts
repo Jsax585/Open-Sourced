@@ -1021,6 +1021,12 @@ export class SessionManager {
 	 */
 	#sessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
 	/**
+	 * Set once a running agent loop took this manager over
+	 * ({@link claimForWriting}). Every session it switches to afterwards is
+	 * claimed as that loop writes it, rather than waiting for the first append.
+	 */
+	#writerOwned = false;
+	/**
 	 * The background artifact copy a move or branch to `sessionFile` started (see
 	 * {@link #moveOffSessionFile}, {@link createBranchedSession}). Never rejects.
 	 */
@@ -1110,6 +1116,10 @@ export class SessionManager {
 	 * session owns it and inspection (`omp share`, `--export`, `render`) never
 	 * does. A failed claim is retried on the next write, so a writer takes over
 	 * once the owner closed the session or exited.
+	 *
+	 * The claim is a writer's: a second manager on one journal — this process
+	 * reopening a session it already runs — is refused here and moved to a
+	 * sibling, the same way a second process is.
 	 */
 	#claimSession(): void {
 		const sessionId = this.#sessionId;
@@ -1121,15 +1131,34 @@ export class SessionManager {
 		// The storage also checks that the path still holds this session: if
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
-		this.#sessionClaim = { sessionId, release: this.#storage.claimSession(sessionId, sessionFile) ?? undefined };
+		this.#sessionClaim = {
+			sessionId,
+			release: this.#storage.claimSession(sessionId, sessionFile, { writer: true }) ?? undefined,
+		};
 	}
 
 	/**
-	 * Whether another live omp process owns this session, claiming it first
-	 * when it is free. A non-owner never writes the session's file: its next
-	 * write moves this session to a sibling with a new id instead, so two
-	 * processes never mix their entries in one journal and the owner's full
-	 * rewrites never race the other process's appends.
+	 * Take this process's writer claim on the session now, instead of at the
+	 * first append, and keep taking it for every session this manager switches
+	 * to afterwards. A session handed to a running agent loop writes its
+	 * journal, and the claim is what tells the rest of the process that this
+	 * journal is open here — a roster scan must not offer it as a revivable
+	 * transcript, and a revive must not reopen it, before the agent's first
+	 * entry lands. Inspection paths (`omp share`, `--export`, `render`) never
+	 * call it, so reading a session still claims nothing.
+	 */
+	claimForWriting(): void {
+		this.#writerOwned = true;
+		this.#claimSession();
+	}
+
+	/**
+	 * Whether another writer owns this session, claiming it first when it is
+	 * free. Another writer is a live omp process, or a second manager in this
+	 * process that opened the same journal. A non-owner never writes the
+	 * session's file: its next write moves this session to a sibling with a new
+	 * id instead, so two writers never mix their entries in one journal and the
+	 * owner's full rewrites never race the other writer's appends.
 	 */
 	#sessionOwnedElsewhere(): boolean {
 		if (this.#released || this.#sessionFileRelocating) return false;
@@ -2311,6 +2340,8 @@ export class SessionManager {
 		this.#adoptedArtifactManager = null;
 
 		if (this.#sessionFile) this.#rememberBreadcrumb(this.#cwd, this.#sessionFile);
+		// The restored session is the one this manager's agent loop now writes.
+		if (this.#writerOwned) this.#claimSession();
 	}
 
 	/**
@@ -2365,7 +2396,8 @@ export class SessionManager {
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
 		// A switch gives up the previous file. Opening claims nothing: the first
-		// write does, so inspecting a session never counts as owning it.
+		// write does, so inspecting a session never counts as owning it. A
+		// manager a running agent loop owns re-claims the new file below.
 		this.#sessionClaim?.release?.();
 		this.#sessionClaim = undefined;
 
@@ -2444,6 +2476,10 @@ export class SessionManager {
 		this.#artifactManagerSessionFile = null;
 
 		if (this.sanitizeLoadedOpenAIResponsesReplayMetadata()) this.#rewriteRequired = true;
+		// The agent loop that owns this manager now writes this journal: claim it
+		// here rather than at its first append, so a roster scan cannot offer the
+		// adopted transcript as revivable in between.
+		if (this.#writerOwned) this.#claimSession();
 	}
 
 	/**

@@ -248,6 +248,26 @@ afterEach(async () => {
 });
 
 describe("persisted subagent revival", () => {
+	it("refuses a transcript this process is running, and revives it once that session closes", async () => {
+		const cwd = makeTempDir("@pi-revive-live-journal-");
+		const sessionFile = await createPersistedSession(cwd);
+		const ref = createRef(sessionFile);
+		// `omp --resume <subagent>.jsonl`: this process runs that transcript as
+		// its own session, so reviving it would be a second loop on one journal.
+		const live = await SessionManager.open(sessionFile, cwd, undefined, {
+			suppressBreadcrumb: true,
+			throwIfMissing: true,
+		});
+		live.appendMessage({ role: "user", content: "resumed here", timestamp: Date.now() });
+		await live.flush();
+		try {
+			expect(await createFactory(cwd)(ref)).toBeUndefined();
+		} finally {
+			await live.close();
+		}
+		expect(await createFactory(cwd)(ref)).toBeDefined();
+	});
+
 	it("initializes the extension runtime on cold revival so tool_call handlers are not fail-closed blocked", async () => {
 		const cwd = makeTempDir("@pi-revive-ext-init-");
 		const sessionFile = await createPersistedSession(cwd);

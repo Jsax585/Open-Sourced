@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a session resumed from a subagent's transcript (`omp --resume <name>.jsonl`) starting a second agent loop on that same transcript when a peer messaged it by that name; the message now reaches the running session instead of reviving a copy of it
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

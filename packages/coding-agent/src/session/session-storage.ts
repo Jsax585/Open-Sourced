@@ -148,6 +148,16 @@ export interface WriteTextAtomicOptions extends SessionStorageWriteOptions {
 	commitGuard?: () => boolean;
 }
 
+/** How a caller holds a session's ownership claim; see {@link SessionStorage.claimSession}. */
+export interface SessionClaimOptions {
+	/**
+	 * The caller appends to the journal for as long as it holds the claim, so
+	 * it is the journal's one writer: a second writer in this process is
+	 * refused rather than admitted beside the first.
+	 */
+	writer?: boolean;
+}
+
 export interface SessionStorage {
 	/**
 	 * `true` when synchronous writes ({@link writeTextSync} and a writer's
@@ -234,10 +244,17 @@ export interface SessionStorage {
 	 * holds a different session (another session was moved onto it), so the
 	 * caller's appends would land in that session's journal; `SessionManager`
 	 * then moves its session to a sibling instead of writing that file.
+	 *
+	 * `options.writer` claims as the journal's one writer: it is refused while
+	 * another writer in THIS process holds the session, so two session managers
+	 * can never append to one journal. Claims without it (a transfer guard held
+	 * across an operation that then opens the session) keep sharing the
+	 * process's lease.
+	 *
 	 * Optional because only backends with a process-owned lock can tell that
 	 * another process writes a session.
 	 */
-	claimSession?(sessionId: string, sessionPath: string): (() => void) | null;
+	claimSession?(sessionId: string, sessionPath: string, options?: SessionClaimOptions): (() => void) | null;
 	/**
 	 * Atomically delete a session and its artifacts only when `shouldDelete`
 	 * accepts the current session content. Optional because backends without a
@@ -542,11 +559,16 @@ function isPidAlive(pid: number): boolean {
 
 /**
  * This process's ownership leases by session id, shared by every
- * `FileSessionStorage` instance: managers in one process share one lease per
- * session and only ever contend with other processes. The OS reclaims a lease
- * when its process exits, so a crashed owner never blocks a later claim.
+ * `FileSessionStorage` instance: one lease per session, so this process only
+ * ever contends with other processes for it. The OS reclaims a lease when its
+ * process exits, so a crashed owner never blocks a later claim.
+ *
+ * `writers` counts the holders that append to the journal while they hold it
+ * (see {@link SessionClaimOptions.writer}). The lease is shared, the writer
+ * slot is not: one journal has one writer in this process, exactly as it has
+ * one across processes.
  */
-const sessionLeases = new Map<string, { lease: FileLockHandle; holders: number }>();
+const sessionLeases = new Map<string, { lease: FileLockHandle; holders: number; writers: number }>();
 
 const TEST_SESSION_OWNERS_DIR_ENV = "PI_TEST_SESSION_OWNERS_DIR";
 
@@ -603,6 +625,34 @@ function readSessionHeaderIdSync(sessionPath: string): string | undefined {
 		}
 	} catch {}
 	return undefined;
+}
+
+/**
+ * Whether both paths name one journal, by the identity the ownership lease is
+ * keyed by: the session id in the header. Two paths reach one journal through
+ * a symlinked session directory, a `--session-dir` that points into the same
+ * tree, a hard link, or a file moved while it is open — a path comparison
+ * alone reads those as two journals. The path check stays as the cheap answer
+ * for the usual case, and as the answer when no header can be read.
+ */
+export function isSameSessionJournal(sessionPath: string, otherPath: string): boolean {
+	if (path.resolve(sessionPath) === path.resolve(otherPath)) return true;
+	const id = readSessionHeaderIdSync(sessionPath);
+	return id !== undefined && id === readSessionHeaderIdSync(otherPath);
+}
+
+/**
+ * Whether a session this process already has open for writing lives in the
+ * journal at `sessionPath`. Reopening such a file as a second session forks
+ * the journal: two sessions append to it, each blind to the other's entries.
+ * Keyed by the header id rather than the path, for the aliases above.
+ */
+export function isSessionWrittenHere(sessionPath: string): boolean {
+	// Nothing is claimed in a process that writes no session (`omp --export`,
+	// `render`, a read-only resume), so no header is read there.
+	if (sessionLeases.size === 0) return false;
+	const id = readSessionHeaderIdSync(sessionPath);
+	return id !== undefined && (sessionLeases.get(id)?.writers ?? 0) > 0;
 }
 
 /**
@@ -1297,12 +1347,20 @@ export class FileSessionStorage implements SessionStorage {
 	 * under ~/.omp/run/session-owners), so the kernel drops a dead owner's claim.
 	 * Never throws: a lock that cannot be taken for another reason counts as
 	 * owned, so it never moves a session off its file.
+	 *
+	 * A writer claim is refused while this process already has a writer on the
+	 * journal, so the caller is diverted to a sibling file exactly as a second
+	 * process is, instead of appending into a journal another session here is
+	 * writing.
 	 */
-	claimSession(sessionId: string, sessionPath: string): (() => void) | null {
+	claimSession(sessionId: string, sessionPath: string, options?: SessionClaimOptions): (() => void) | null {
 		const onDisk = readSessionHeaderIdSync(sessionPath);
 		if (onDisk !== undefined && onDisk !== sessionId) return null;
+		const writer = options?.writer === true;
 		let held = sessionLeases.get(sessionId);
-		if (!held) {
+		if (held) {
+			if (writer && held.writers > 0) return null;
+		} else {
 			let lease: FileLockHandle | null;
 			try {
 				lease = tryAcquireSessionLease(sessionId);
@@ -1311,15 +1369,17 @@ export class FileSessionStorage implements SessionStorage {
 				return () => {};
 			}
 			if (!lease) return null;
-			held = { lease, holders: 0 };
+			held = { lease, holders: 0, writers: 0 };
 			sessionLeases.set(sessionId, held);
 		}
 		const claim = held;
 		claim.holders++;
+		if (writer) claim.writers++;
 		let released = false;
 		return () => {
 			if (released) return;
 			released = true;
+			if (writer) claim.writers--;
 			if (--claim.holders > 0) return;
 			sessionLeases.delete(sessionId);
 			claim.lease.release();

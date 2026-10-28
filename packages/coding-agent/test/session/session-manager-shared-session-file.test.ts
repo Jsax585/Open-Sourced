@@ -399,3 +399,36 @@ describe("SessionManager on a session file another omp process writes", () => {
 		}
 	}, 30_000);
 });
+
+describe("SessionManager on a session file this process already writes", () => {
+	it("moves a second manager in this process off the journal the first one writes", async () => {
+		using tempDir = TempDir.createSync("@omp-same-process-session-file-");
+		const original = await createSession(tempDir);
+		const owner = await SessionManager.open(original, tempDir.path(), new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		owner.appendMessage(userTurn("owner 1"));
+		await owner.flush();
+		// What reviving a session this process already runs does: reopen the
+		// same journal here and write through it.
+		const second = await SessionManager.open(original, tempDir.path(), new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		const notices: SessionPersistenceNotice[] = [];
+		second.onPersistenceNotice(notice => notices.push(notice));
+		second.appendMessage(userTurn("second 1"));
+		await second.flush();
+		const sibling = second.getSessionFile();
+		if (!sibling) throw new Error("Expected the second manager to save somewhere");
+		owner.appendMessage(userTurn("owner 2"));
+		await owner.flush();
+		await second.close();
+		await owner.close();
+
+		expect(owner.getSessionFile()).toBe(original);
+		expect(sibling).not.toBe(original);
+		expect(notices).toEqual([{ reason: "open-elsewhere", from: original, to: sibling }]);
+		expect(await userTurnsIn(original, tempDir.path())).toEqual(["before", "owner 1", "owner 2"]);
+		expect(await userTurnsIn(sibling, tempDir.path())).toContain("second 1");
+	}, 30_000);
+});
