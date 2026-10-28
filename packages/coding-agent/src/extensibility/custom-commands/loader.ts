@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import * as zod from "@oh-my-pi/omptype/zod";
 import { getAgentDir, getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isProjectCodeTrusted } from "../../capability";
 import { getConfigDirs } from "../../config";
 
 import { execCommand } from "../../exec/exec";
@@ -73,6 +74,8 @@ export interface DiscoverCustomCommandsOptions {
 	cwd?: string;
 	/** Agent config directory. Default: from getAgentDir() */
 	agentDir?: string;
+	/** Include project commands even when the project is not trusted (trust prompt preview). */
+	includeUntrusted?: boolean;
 }
 
 export interface DiscoverCustomCommandsResult {
@@ -107,8 +110,10 @@ export async function discoverCustomCommands(
 		}
 	}
 
+	const projectTrusted = options.includeUntrusted || (await isProjectCodeTrusted(cwd));
 	for (const entry of getConfigDirs("commands", { cwd, existingOnly: true })) {
 		const source = entry.level === "user" ? "user" : "project";
+		if (source === "project" && !projectTrusted) continue;
 		if (!commandDirs.some(d => d.path === entry.path)) {
 			commandDirs.push({ path: entry.path, source });
 		}

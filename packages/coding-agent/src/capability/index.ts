@@ -6,8 +6,10 @@
  * - Registering providers (where to find it)
  * - Loading items for a capability across all providers
  */
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
@@ -64,20 +66,48 @@ const FOREIGN_USER_PROVIDERS: Record<string, true> = {
  * embedding, tests) loads it ungated; the CLI installs one at startup.
  */
 let projectTrustCheck: ((projectRoot: string) => boolean) | undefined;
+/** Roots trusted for this process only because a trusted project created them (task isolations). */
+const inheritedTrustRoots = new Set<string>();
 
 /** Install or clear the gate for project-level items of {@link Capability.executesCode} capabilities. */
 export function setProjectTrustCheck(check: ((projectRoot: string) => boolean) | undefined): void {
 	projectTrustCheck = check;
 }
 
-/** The directory trust is granted to: the enclosing repo root, else `cwd` itself. */
+/**
+ * The directory trust is granted to: the enclosing repo root, else `cwd` itself,
+ * as a real path. A linked worktree resolves to its main checkout, so worktrees
+ * share the repo's trust.
+ */
 export async function projectTrustRoot(cwd: string): Promise<string> {
-	return (await findRepoRoot(cwd)) ?? path.resolve(cwd);
+	const repoRoot = await findRepoRoot(cwd);
+	let root = repoRoot ?? path.resolve(cwd);
+	if (repoRoot) {
+		const gitEntry = await fs.lstat(path.join(repoRoot, ".git")).catch(() => undefined);
+		const commonDir = gitEntry?.isFile() ? vcs.gitInfo(repoRoot)?.commonDir : undefined;
+		const mainGitDir = commonDir ? path.resolve(repoRoot, commonDir) : undefined;
+		if (mainGitDir && path.basename(mainGitDir) === ".git") root = path.dirname(mainGitDir);
+	}
+	// git records real paths in worktree pointers (macOS /var -> /private/var).
+	return fs.realpath(root).catch(() => root);
+}
+
+function isTrustRootAllowed(projectRoot: string): boolean {
+	return projectTrustCheck === undefined || inheritedTrustRoots.has(projectRoot) || projectTrustCheck(projectRoot);
 }
 
 /** Whether project-level code under `cwd` may run; true while no gate is installed. */
 export async function isProjectCodeTrusted(cwd: string): Promise<boolean> {
-	return projectTrustCheck === undefined || projectTrustCheck(await projectTrustRoot(cwd));
+	return projectTrustCheck === undefined || isTrustRootAllowed(await projectTrustRoot(cwd));
+}
+
+/**
+ * Let `childCwd` (a copy of the project at `parentCwd`, such as a task isolation)
+ * run project code for the rest of this process when `parentCwd` may.
+ */
+export async function inheritProjectTrust(parentCwd: string, childCwd: string): Promise<void> {
+	if (projectTrustCheck === undefined || !(await isProjectCodeTrusted(parentCwd))) return;
+	inheritedTrustRoots.add(await projectTrustRoot(childCwd));
 }
 
 /** Outstanding {@link initializeWithSettings} holds, oldest first; the newest one is bound. */
@@ -179,7 +209,7 @@ async function loadImpl<T>(
 		capability.executesCode === true &&
 		!options.includeUntrusted &&
 		projectTrustCheck !== undefined &&
-		!projectTrustCheck(ctx.repoRoot ?? path.resolve(ctx.cwd));
+		!isTrustRootAllowed(await projectTrustRoot(ctx.cwd));
 
 	const results = await Promise.all(
 		providers.map(async provider => {
@@ -596,6 +626,7 @@ export function resetCapabilityForTests(): void {
 	unboundDisabledProviders = new Set();
 	unboundEnabledProviders = new Set();
 	projectTrustCheck = undefined;
+	inheritedTrustRoots.clear();
 	clearFsCache();
 }
 

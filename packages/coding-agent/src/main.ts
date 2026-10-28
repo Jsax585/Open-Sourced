@@ -26,7 +26,8 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
 import chalk from "@oh-my-pi/pi-utils/chalk";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { sanitizeDisplayLine } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
 import { projectTrustRoot, reset as resetCapabilities, setProjectTrustCheck } from "./capability";
 import {
 	listProjectCodeSources,
@@ -860,13 +861,16 @@ const TRUST_PROMPT_MAX_SOURCES = 10;
 
 async function promptTrustProject(projectRoot: string, sources: ProjectCodeSource[]): Promise<boolean> {
 	const width = Math.max(...sources.map(source => source.kind.length));
+	// File names come from the project itself: strip control bytes and newlines
+	// so a hostile name cannot repaint or hide lines of this prompt.
 	const displayPath = (sourcePath: string) => {
 		const relative = path.relative(projectRoot, sourcePath);
-		return relative.startsWith("..") || path.isAbsolute(relative) ? shortenPath(sourcePath) : relative;
+		const shown = relative.startsWith("..") || path.isAbsolute(relative) ? shortenPath(sourcePath) : relative;
+		return truncateToWidth(sanitizeDisplayLine(shown), TRUNCATE_LENGTHS.LONG);
 	};
 	const lines = [
 		`${chalk.yellow("⚠")} ${chalk.bold("Trust this project?")}`,
-		chalk.dim(shortenPath(projectRoot)),
+		chalk.dim(truncateToWidth(sanitizeDisplayLine(shortenPath(projectRoot)), TRUNCATE_LENGTHS.LONG)),
 		"",
 		"It can run code on your machine as soon as it loads:",
 		...sources
@@ -907,18 +911,19 @@ async function resolveProjectTrust(
 	trustedProjects: Set<string>,
 	parsedArgs: Pick<Args, "trustProject">,
 	isInteractive: boolean,
+	settings: Settings,
 ): Promise<void> {
 	const root = await projectTrustRoot(cwd);
 	if (trustedProjects.has(root)) return;
 	if (parsedArgs.trustProject) {
 		trustedProjects.add(root);
 	} else {
-		const sources = await listProjectCodeSources(cwd);
+		const sources = await listProjectCodeSources(cwd, settings);
 		if (sources.length === 0) return;
 		if (!isInteractive) {
 			const kinds = [...new Set(sources.map(source => source.kind))].join(", ");
 			process.stderr.write(
-				`${chalk.yellow(`Skipped untrusted project code in ${shortenPath(root)} (${kinds}). Pass --trust-project to load it.`)}\n`,
+				`${chalk.yellow(`Skipped untrusted project code in ${sanitizeDisplayLine(shortenPath(root))} (${kinds}). Pass --trust-project to load it.`)}\n`,
 			);
 			return;
 		}
@@ -927,7 +932,10 @@ async function resolveProjectTrust(
 		trustedProjects.add(root);
 	}
 	// Plugin lookups cached while untrusted would keep hiding the project's plugins.
+	// The clear only starts an unawaited re-warm; await a fresh preload so sync
+	// readers (plugin LSP/DAP config) see the roots during session creation.
 	clearPluginRootsAndCaches();
+	await preloadPluginRoots(os.homedir(), cwd);
 }
 
 /**
@@ -2339,7 +2347,7 @@ export async function runRootCommand(
 			}
 		}
 		await pluginPreloadPromise;
-		if (trustedProjects) await resolveProjectTrust(cwd, trustedProjects, parsedArgs, isInteractive);
+		if (trustedProjects) await resolveProjectTrust(cwd, trustedProjects, parsedArgs, isInteractive, settingsInstance);
 		// Pure file I/O: overlap it with session-option building, but land it before
 		// extensions load or the session can start project daemons.
 		const daemonPresencePromise =

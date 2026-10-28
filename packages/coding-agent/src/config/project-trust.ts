@@ -6,7 +6,11 @@ import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { getCapability, listCapabilities, loadCapability } from "../capability";
 import type { SourceMeta } from "../capability/types";
 import { resolveActiveProjectRegistryPath } from "../discovery/helpers";
+import { discoverCustomCommands } from "../extensibility/custom-commands/loader";
+import { cfgExtensions } from "../extensibility/settings";
+import { resolvePath } from "../extensibility/utils";
 import { replaceFileAtomically } from "../utils/atomic-file";
+import type { Settings } from "./settings";
 
 const TRUSTED_PROJECTS_FILENAME = "trusted-projects.json";
 
@@ -58,9 +62,10 @@ export interface ProjectCodeSource {
 
 /**
  * List the project-level files under `cwd` that run code at startup, regardless
- * of trust, so the trust prompt can show what the user is agreeing to.
+ * of trust, so the trust prompt can show what the user is agreeing to. With
+ * `settings`, a project-owned `extensions:` list counts too.
  */
-export async function listProjectCodeSources(cwd: string): Promise<ProjectCodeSource[]> {
+export async function listProjectCodeSources(cwd: string, settings?: Settings): Promise<ProjectCodeSource[]> {
 	const sources: ProjectCodeSource[] = [];
 	const seen = new Set<string>();
 	const add = (kind: string, sourcePath: string) => {
@@ -77,6 +82,11 @@ export async function listProjectCodeSources(cwd: string): Promise<ProjectCodeSo
 			filter: item => item._source.level === "project",
 		});
 		for (const item of result.items) add(capability.displayName, item._source.path);
+	}
+	const { paths: commandPaths } = await discoverCustomCommands({ cwd, includeUntrusted: true });
+	for (const command of commandPaths) if (command.source === "project") add("Commands", command.path);
+	if (settings?.extensionsSourceLevel() === "project") {
+		for (const entry of cfgExtensions.get(settings)) add("Extensions", resolvePath(entry, cwd));
 	}
 	const registryPath = await resolveActiveProjectRegistryPath(cwd);
 	if (registryPath && (await Bun.file(registryPath).exists())) add("Plugins", registryPath);
