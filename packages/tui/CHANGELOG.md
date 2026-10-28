@@ -18,6 +18,7 @@
 ### Fixed
 
 - Fixed the LSP diagnostics view showing "No issues" for files whose language server had not reported yet; they now show as unverified ([#17293](https://github.com/can1357/oh-my-pi/pull/17293) by [@JustasMasiulis](https://github.com/JustasMasiulis))
+- Fixed charts and other inline images in WezTerm and Warp keeping only their bottom row in scrollback once they scrolled off the top of the screen ([#17320](https://github.com/can1357/oh-my-pi/pull/17320) by [@Sandvoxel](https://github.com/Sandvoxel))
 
 ## [18.13.3] - 2026-10-28
 
