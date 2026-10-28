@@ -686,6 +686,9 @@ export class UiHelpers {
 								content.id,
 							);
 							erroredTools.set(content.id, readGroup);
+							if (assistantComponent) {
+								readToolCallAssistantComponents.set(content.id, assistantComponent);
+							}
 						} else if (afterToolSegment) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -786,6 +789,7 @@ export class UiHelpers {
 				erroredTools.delete(message.toolCallId);
 				if (!pendingTool && errored && isSyntheticToolResultMessage(message)) continue;
 				const resultComponent = pendingTool ?? errored;
+				if (!pendingTool && errored) this.ctx.pendingTools.set(message.toolCallId, errored);
 				const isReadGroupResult =
 					message.toolName === "read" && (!resultComponent || resultComponent instanceof ReadToolGroupComponent);
 				if (isReadGroupResult) {
