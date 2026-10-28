@@ -542,8 +542,11 @@ export class ChatTranscriptBuilder {
 		// A real result replaces an error row; the agent loop's synthetic placeholder for a call that never ran keeps it.
 		const errored = this.#erroredTools.get(message.toolCallId);
 		this.#erroredTools.delete(message.toolCallId);
-		if (!this.#pendingTools.has(message.toolCallId) && errored && isSyntheticToolResultMessage(message)) return;
-		const pending = this.#pendingTools.get(message.toolCallId) ?? errored;
+		if (errored && !this.#pendingTools.has(message.toolCallId)) {
+			if (isSyntheticToolResultMessage(message)) return;
+			this.#pendingTools.set(message.toolCallId, errored);
+		}
+		const pending = this.#pendingTools.get(message.toolCallId);
 		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
 		if (isReadGroupResult) {
 			let component = pending;
