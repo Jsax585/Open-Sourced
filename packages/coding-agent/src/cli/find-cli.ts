@@ -96,7 +96,7 @@ export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 	}
 	const scopePath = root.type === "multiple" ? root.scopePath : formatPathRelativeToCwd(root.path, cwd);
 	if (root.type === "multiple" && root.missingPaths.length > 0) {
-		log(`Skipped missing paths: ${root.missingPaths.join(", ")}`);
+		console.error(chalk.yellow(`Skipped missing paths: ${root.missingPaths.join(", ")}`));
 	}
 
 	// Settings and extensions belong to the searched project; a file or URL

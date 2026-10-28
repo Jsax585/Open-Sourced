@@ -51,8 +51,10 @@ export async function resolveSearchRoot(
 ): Promise<SearchRoot> {
 	const router = InternalUrlRouter.instance();
 	const inputs =
-		(await splitMixedUrlPathList(input, cwd, value => router.canHandle(router.normalize(value)))) ??
-		(await expandDelimitedPathEntries([input], cwd));
+		(await splitMixedUrlPathList(input, cwd, value => router.canHandle(router.normalize(value)), {
+			allowMissingPaths: true,
+			filesystem,
+		})) ?? (await expandDelimitedPathEntries([input], cwd));
 	if (inputs.length === 1) return resolveSearchTarget(filesystem, inputs[0]!, cwd);
 	for (const entry of inputs) {
 		if (router.split(entry).sel !== undefined) {

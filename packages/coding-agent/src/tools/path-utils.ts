@@ -771,16 +771,27 @@ export async function splitDelimitedPathEntry(
  * normal image/sqlite/archive/literal ordering. Every part must be a URL (per
  * `isUrl`) or an existing literal path without glob characters, so a URL that
  * merely contains `;` (`https://a/x;v=1`) and a literal file named with `;`
- * (including `a;b.md:1-2`, issue #4618) stay whole.
+ * (including `a;b.md:1-2`, issue #4618) stay whole. A caller that reports
+ * missing scopes separately may opt in to missing host parts. With its URL
+ * filesystem supplied, an existing literal URL is returned as one target so
+ * subsequent delimiter parsers cannot split it again.
  */
 export async function splitMixedUrlPathList(
 	entry: string,
 	cwd: string,
 	isUrl: (part: string) => boolean,
+	options: { allowMissingPaths?: boolean; filesystem?: InternalUrlFilesystem } = {},
 ): Promise<string[] | null> {
 	const normalizedEntry = normalizePathLikeInput(entry);
 	if (!normalizedEntry.includes(";") || !isUrl(normalizedEntry)) return null;
-	if (!isInternalUrlPath(normalizedEntry)) {
+	if (isInternalUrlPath(normalizedEntry) && options.filesystem) {
+		try {
+			await options.filesystem.stat(InternalUrlRouter.instance().normalize(normalizedEntry));
+			return [normalizedEntry];
+		} catch (error) {
+			if (!(error instanceof UrlFsError) || error.code !== "ENOENT") throw error;
+		}
+	} else if (!isInternalUrlPath(normalizedEntry)) {
 		if ((await probeLiteralPathExists(normalizedEntry, cwd)) !== "missing") return null;
 		const selectorSplit = splitPathAndSel(normalizedEntry);
 		if (selectorSplit.sel !== undefined && (await probeLiteralPathExists(selectorSplit.path, cwd)) !== "missing") {
@@ -792,7 +803,8 @@ export async function splitMixedUrlPathList(
 	for (const part of parts) {
 		if (isUrl(part)) continue;
 		const partPath = splitPathAndSel(part).path;
-		if (hasGlobPathChars(partPath) || (await probeLiteralPathExists(partPath, cwd)) !== "exists") return null;
+		if (hasGlobPathChars(partPath)) return null;
+		if (!options.allowMissingPaths && (await probeLiteralPathExists(partPath, cwd)) !== "exists") return null;
 	}
 	return parts;
 }

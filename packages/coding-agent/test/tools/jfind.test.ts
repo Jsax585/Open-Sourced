@@ -4,10 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Judge, JudgmentRequest, JudgmentResult, NoulAnswer, Questions } from "@oh-my-pi/pi-ai";
 import { tokenUsage } from "@oh-my-pi/pi-ai";
+import { runFindCommand } from "@oh-my-pi/pi-coding-agent/cli/find-cli";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
 import { ChainJudge } from "@oh-my-pi/pi-coding-agent/judgment";
+import * as standaloneJudge from "@oh-my-pi/pi-coding-agent/judgment/standalone";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/jfind";
 import { runCascade } from "@oh-my-pi/pi-coding-agent/tools/jfind/cascade";
 import { keywordsFromQuery } from "@oh-my-pi/pi-coding-agent/tools/jfind/keywords";
@@ -575,6 +577,93 @@ describe("jfind cascade", () => {
 			expect(result.hits.map(hit => resolveSearchResultPath(root.path, hit.rel)).sort()).toEqual(
 				[path.join(dir, "token.ts"), "omp://tools/read.md"].sort(),
 			);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("searches URL-first scopes with a missing host target instead of treating the list as one URL", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-url-first-missing-"));
+		try {
+			await Bun.write(path.join(dir, "token.ts"), "export function readToken() { return 1; }\n");
+			const filesystem = urlFs(dir);
+			const root = await resolveSearchRoot(filesystem, "omp://tools/read.md; token.ts; missing-find-target", dir);
+			const result = await runCascade({
+				root,
+				filesystem,
+				query: "reading content",
+				extraKeywords: [],
+				judge: new FakeJudge(() => 0.9),
+				includeHidden: false,
+			});
+			expect(result.hits.map(hit => resolveSearchResultPath(root.path, hit.rel)).sort()).toEqual(
+				[path.join(dir, "token.ts"), "omp://tools/read.md"].sort(),
+			);
+			expect(root).toMatchObject({ missingPaths: ["missing-find-target"] });
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it("prefers an existing session-local URL containing a semicolon over a mixed list", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-literal-url-"));
+		try {
+			const artifactsDir = path.join(dir, "artifacts");
+			await Bun.write(path.join(artifactsDir, "local", "notes;draft.md"), "the intended literal resource\n");
+			await Bun.write(path.join(artifactsDir, "local", "notes"), "a competing URL resource\n");
+			await Bun.write(path.join(dir, "draft.md"), "a competing host file\n");
+			const filesystem = new InternalUrlFilesystem({
+				context: { cwd: dir, localProtocolOptions: { getArtifactsDir: () => artifactsDir } },
+				tier: "read",
+			});
+			const root = await resolveSearchRoot(filesystem, "local://notes;draft.md", dir);
+			const result = await runCascade({
+				root,
+				filesystem,
+				query: "literal resource",
+				extraKeywords: [],
+				judge: new FakeJudge(() => 0.9),
+				includeHidden: false,
+			});
+			expect(result.hits.map(hit => resolveSearchResultPath(root.path, hit.rel))).toEqual([
+				"local://notes;draft.md",
+			]);
+		} finally {
+			await removeWithRetries(dir);
+		}
+	});
+
+	it.each([false, true])("keeps missing-scope warnings under --quiet with JSON output %s", async json => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "jfind-quiet-warning-"));
+		try {
+			const file = path.join(dir, "token.ts");
+			const missing = path.join(dir, "missing-find-target");
+			await Bun.write(file, "export function readToken() { return 1; }\n");
+			const judge = new FakeJudge(() => 0.9);
+			vi.spyOn(ChainJudge.prototype, "judge").mockImplementation(request => judge.judge(request));
+			vi.spyOn(standaloneJudge, "openStandaloneJudge").mockResolvedValue({
+				judge: new ChainJudge({ settings: Settings.isolated(), registry: {} as never, purpose: "find" }),
+				close: () => {},
+			});
+			const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
+			const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+			await runFindCommand({
+				query: "reading content",
+				path: `${file}; ${missing}`,
+				keywords: [],
+				hidden: false,
+				json,
+				quiet: true,
+			});
+			expect(stderr.mock.calls.flat().join("\n")).toContain(missing);
+			const output = stdout.mock.calls.flat().join("\n");
+			if (json) {
+				const result = JSON.parse(output);
+				expect(result.missingPaths).toEqual([missing]);
+				expect(result.hits.map((hit: { rel: string }) => hit.rel)).toEqual([file]);
+			} else {
+				expect(output).toContain(file);
+			}
 		} finally {
 			await removeWithRetries(dir);
 		}

@@ -20,6 +20,8 @@ The cascade follows the semantic-search strategy of [jegrep](https://github.com/
 ## CLI
 `omp find "<query>" [path] [-k keyword]... [--hidden] [--json] [-q]` runs the same cascade from the shell (`packages/coding-agent/src/cli/find-cli.ts`): progress goes to stderr and the ranked digest (or JSON with hits and stats) to stdout. A host-directory scope supplies the settings/extensions used to resolve the `judge` role; file/URL scopes use the caller's cwd. Hits are cwd-relative within the cwd, absolute outside it, or internal URLs. Exits 1 for an invalid query/root or when every judgment request failed.
 
+`-q` suppresses progress only; warnings about skipped missing targets still go to stderr, including with `--json`.
+
 ## Inputs
 
 | Field | Type | Required | Description |
