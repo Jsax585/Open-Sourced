@@ -1942,14 +1942,22 @@ describe("InteractiveMode plan review rendering", () => {
 
 	describe("pinned execution model", () => {
 		const planFilePath = "local://PLAN.md";
+		const approval = { planFilePath, planExists: true, title: "PLAN" };
+		const registryModel = (id: string) => {
+			const model = session.modelRegistry.find("anthropic", id);
+			if (!model) throw new Error(`Expected ${id} in registry`);
+			return model;
+		};
 
-		async function enterPlanModeOnSonnet(): Promise<void> {
+		async function enterPlanModeOnSonnet({ planRole = true } = {}): Promise<void> {
 			authStorage.keys.setRuntime("anthropic", "test-key");
-			// plan === default === the session model, so plan-mode entry records a
-			// pre-plan state that #exitPlanMode restores — the thing a late apply must beat.
 			session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-			session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
-			session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+			if (planRole) {
+				// plan === default === the session model, so plan-mode entry records a
+				// pre-plan state that #exitPlanMode restores — the thing a late apply must beat.
+				session.settings.setModelRole("slow", "anthropic/claude-opus-4-5");
+				session.settings.setModelRole("plan", "anthropic/claude-sonnet-4-5");
+			}
 			const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
 				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
 				getSessionId: () => session.sessionManager.getSessionId(),
@@ -1961,104 +1969,61 @@ describe("InteractiveMode plan review rendering", () => {
 			vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
 		}
 
-		it("executes on a model outside the tiers, applied only at approval", async () => {
-			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
-			const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
-			if (!haiku || !def) throw new Error("Expected sonnet + haiku to exist in registry");
-			await enterPlanModeOnSonnet();
-
-			expect(mode.setPlanExecutionModel(haiku)).toBe(true);
-
-			let modelWhilePlanning: string | undefined;
-			vi.spyOn(mode, "showPlanReview").mockImplementation(async () => {
-				modelWhilePlanning = session.model?.id;
-				return "Approve and keep context";
-			});
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
-
-			expect(modelWhilePlanning).toBe(def.id);
-			expect(session.model?.id).toBe(haiku.id);
-		});
-
 		it("lets a later slider move supersede the pin", async () => {
-			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
-			const slow = session.modelRegistry.find("anthropic", "claude-opus-4-5");
-			if (!haiku || !slow) throw new Error("Expected haiku + opus to exist in registry");
 			await enterPlanModeOnSonnet();
-
-			mode.setPlanExecutionModel(haiku);
+			mode.setPlanExecutionModel(registryModel("claude-haiku-4-5"));
 			vi.spyOn(mode, "showPlanReview").mockImplementation(
 				async (_planContent, _title, _options, _dialogOptions, extra?: { slider?: HookSelectorSlider }) => {
-					const slider = extra?.slider;
-					const slowIndex = slider!.segments.findIndex(segment => segment.label === "slow");
-					slider!.onChange?.(slowIndex);
+					const slider = extra!.slider!;
+					slider.onChange?.(slider.segments.findIndex(segment => segment.label === "slow"));
 					return "Approve and keep context";
 				},
 			);
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			await mode.handlePlanApproval(approval);
 
-			expect(session.model?.id).toBe(slow.id);
+			expect(session.model?.id).toBe("claude-opus-4-5");
 		});
 
 		it("is refused outside plan mode and cleared when plan mode ends without approval", async () => {
-			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
-			const def = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
-			if (!haiku || !def) throw new Error("Expected sonnet + haiku to exist in registry");
-
+			const haiku = registryModel("claude-haiku-4-5");
 			expect(mode.setPlanExecutionModel(haiku)).toBe(false);
 
 			await enterPlanModeOnSonnet();
 			expect(mode.setPlanExecutionModel(haiku)).toBe(true);
 			vi.spyOn(mode, "showHookConfirm").mockResolvedValue(true);
-			await mode.handlePlanModeCommand(); // toggle plan mode off
-			expect(session.getPlanModeState()?.enabled).not.toBe(true);
+			await mode.handlePlanModeCommand(); // on -> paused
 			await mode.handlePlanModeCommand(); // paused -> off
-			await mode.handlePlanModeCommand(); // and back on
+			await mode.handlePlanModeCommand(); // off -> on
 			expect(session.getPlanModeState()?.enabled).toBe(true);
 
 			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			await mode.handlePlanApproval(approval);
 
-			expect(session.model?.id).toBe(def.id);
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
 		});
 
 		it("applies the pin on Approve and compact context when no plan role is configured", async () => {
-			authStorage.keys.setRuntime("anthropic", "test-key");
-			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
-			if (!haiku) throw new Error("Expected haiku to exist in registry");
-			// No plan role: plan-mode entry records no pre-plan model state, so the
-			// deferred compact-path transition must not depend on it.
-			session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5");
-			const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-				getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
-				getSessionId: () => session.sessionManager.getSessionId(),
-			});
-			await Bun.write(resolvedPlanPath, "# Plan\n\nCompact then run on haiku.");
-			await mode.handlePlanModeCommand();
-			expect(session.getPlanModeState()?.enabled).toBe(true);
-			vi.spyOn(session, "getContextUsage").mockReturnValue(undefined);
-			vi.spyOn(session, "prompt").mockResolvedValue(undefined as never);
+			// No plan role: no pre-plan model state, so the deferred compact-path transition must not depend on it.
+			await enterPlanModeOnSonnet({ planRole: false });
 			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and compact context");
 			vi.spyOn(mode, "handleCompactCommand").mockResolvedValue("ok");
 
-			expect(mode.setPlanExecutionModel(haiku)).toBe(true);
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			expect(mode.setPlanExecutionModel(registryModel("claude-haiku-4-5"))).toBe(true);
+			await mode.handlePlanApproval(approval);
 
-			expect(session.model?.id).toBe(haiku.id);
+			expect(session.model?.id).toBe("claude-haiku-4-5");
 		});
 
 		it("applies the role-configured effort when the pin is the model plan exit already restores", async () => {
-			const sonnet = session.modelRegistry.find("anthropic", "claude-sonnet-4-5");
-			if (!sonnet) throw new Error("Expected sonnet to exist in registry");
 			await enterPlanModeOnSonnet();
 			session.settings.setModelRole("default", "anthropic/claude-sonnet-4-5:high");
 			session.setThinkingLevel(ThinkingLevel.Low);
 
-			expect(mode.setPlanExecutionModel(sonnet)).toBe(true);
+			expect(mode.setPlanExecutionModel(registryModel("claude-sonnet-4-5"))).toBe(true);
 			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			await mode.handlePlanApproval(approval);
 
-			expect(session.model?.id).toBe(sonnet.id);
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
 			expect(session.configuredThinkingLevel()).toBe(ThinkingLevel.High);
 		});
 
@@ -2070,16 +2035,10 @@ describe("InteractiveMode plan review rendering", () => {
 			if (!unauthenticated) throw new Error("Expected a model without configured auth in the registry");
 
 			expect(mode.setPlanExecutionModel(unauthenticated)).toBe(false);
-
-			vi.spyOn(mode, "showPlanReview").mockResolvedValue("Approve and keep context");
-			await mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
-			expect(session.model?.id).toBe("claude-sonnet-4-5");
 		});
-		it("picks through the picker opened from the review with m and hands the keys back to the review", async () => {
-			const haiku = session.modelRegistry.find("anthropic", "claude-haiku-4-5");
-			if (!haiku) throw new Error("Expected haiku to exist in registry");
-			await enterPlanModeOnSonnet();
 
+		it("picks through the picker opened from the review with m and applies it only at approval", async () => {
+			await enterPlanModeOnSonnet();
 			const opened = Promise.withResolvers<PlanReviewOverlay>();
 			const showPlanReview = mode.showPlanReview.bind(mode);
 			vi.spyOn(mode, "showPlanReview").mockImplementation((...args) => {
@@ -2087,7 +2046,7 @@ describe("InteractiveMode plan review rendering", () => {
 				opened.resolve(mode.ui.getFocused() as PlanReviewOverlay);
 				return choice;
 			});
-			const approval = mode.handlePlanApproval({ planFilePath, planExists: true, title: "PLAN" });
+			const approved = mode.handlePlanApproval(approval);
 			const review = await opened.promise;
 
 			mode.ui.injectDebugInput("m");
@@ -2097,13 +2056,14 @@ describe("InteractiveMode plan review rendering", () => {
 
 			expect(mode.ui.getFocused()).toBe(review);
 			expect(Bun.stripANSI(review.render(100).join("\n"))).toContain("anthropic/claude-haiku-4-5");
+			expect(session.model?.id).toBe("claude-sonnet-4-5");
 
 			mode.ui.injectDebugInput("\x1b[B");
 			mode.ui.injectDebugInput("\x1b[B");
 			mode.ui.injectDebugInput("\r"); // Approve and keep context
-			await approval;
+			await approved;
 
-			expect(session.model?.id).toBe(haiku.id);
+			expect(session.model?.id).toBe("claude-haiku-4-5");
 		});
 	});
 

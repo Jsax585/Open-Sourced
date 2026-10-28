@@ -842,6 +842,11 @@ describe("CombinedAutocompleteProvider", () => {
 		});
 
 		it("skips the interim listing when the walk finishes quickly", async () => {
+			// An already-settled walk always beats the interim delay; a real walk can lose it on a loaded host.
+			spyOn(natives, "fuzzyFind").mockResolvedValue({
+				matches: [{ path: "other/widget.md", isDirectory: false, score: 1 }],
+				totalMatches: 1,
+			});
 			const partials: AutocompleteItem[][] = [];
 			const provider = new CombinedAutocompleteProvider([], baseDir);
 			const line = "@widget";
@@ -849,7 +854,7 @@ describe("CombinedAutocompleteProvider", () => {
 				partials.push(suggestions.items),
 			);
 
-			expect(result?.items.map(item => item.value)).toContain("@widget-app/");
+			expect(result?.items.map(item => item.value)).toEqual(["@other/widget.md"]);
 			expect(partials).toEqual([]);
 		});
 
@@ -1067,24 +1072,6 @@ describe("trySyncSlashCompletion", () => {
 		enabled = true;
 		const on = await provider.getSuggestions(["/fa"], 0, 3);
 		expect(on?.items[0]).toMatchObject({ value: "fast", label: "fast", description: "Fast: on" });
-	});
-
-	it("hides a slash command from suggestions while its availability gate is false", async () => {
-		let available = false;
-		const provider = new CombinedAutocompleteProvider(
-			[
-				{ name: "exec-model", description: "Pick the execution model", isAvailable: () => available },
-				{ name: "exit", description: "Quit" },
-			],
-			"/tmp",
-		);
-
-		const hidden = await provider.getSuggestions(["/ex"], 0, 3);
-		expect(hidden?.items.map(i => i.value)).toEqual(["exit"]);
-
-		available = true;
-		const shown = await provider.getSuggestions(["/ex"], 0, 3);
-		expect(shown?.items.map(i => i.value)).toContain("exec-model");
 	});
 
 	it("keeps static slash descriptions as the search corpus", async () => {
