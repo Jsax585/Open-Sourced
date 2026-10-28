@@ -343,7 +343,7 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 }
 
 function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
-	if (!entry.phase) {
+	if (entry.phase === "") {
 		errors.push("Missing phase name for append operation");
 		return phases;
 	}
@@ -365,9 +365,14 @@ function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: strin
 	}
 	if (hasDuplicate) return phases;
 
-	let phase = findPhaseByName(phases, entry.phase);
+	const active = entry.phase === undefined ? nextActionableTask(phases) : undefined;
+	const name =
+		entry.phase ??
+		(active ? phases.find(phase => phase.tasks.includes(active))?.name : phases.at(-1)?.name) ??
+		DEFAULT_INIT_PHASE;
+	let phase = findPhaseByName(phases, name);
 	if (!phase) {
-		phase = { name: entry.phase, tasks: [] };
+		phase = { name, tasks: [] };
 		phases.push(phase);
 	}
 
