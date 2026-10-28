@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- A classifier refusal no longer walks `retry.fallbackChains` at full price: the refusal ends the turn and is handed back to the agent, except for the one sanctioned retry Anthropic's fallback credit grants (redeemed only on the credit's target models). A refusal that did switch records a cooldown on the refusing model instead of pinning the fallback, so `retry.fallbackRevertPolicy: cooldown-expiry` restores the primary once that window ends — before, one refusal could leave a session on its fallback model for the rest of the run.
+- A provider content-filter stop, including Amazon Bedrock `content_filtered` message stops and Anthropic's "Output blocked by content filtering policy", is now classified as a content block and neither retries the same model nor walks the fallback chain; the next chain entry re-filters identical content, and one unattended run spent $2.19 on seven such filtered retries of a single refused request. Bedrock `guardrail_intervened` stops keep their distinct wording.
 - Fixed cached approvals offering a directory grant that would not cover every target in the call ([#17309](https://github.com/can1357/oh-my-pi/pull/17309) by [@iliaal](https://github.com/iliaal)).
 - Fixed `pr://` metadata and diffs staying stale after successful `git push` calls through `bash` ([#17183](https://github.com/can1357/oh-my-pi/pull/17183) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
