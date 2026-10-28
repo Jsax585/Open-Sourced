@@ -48,6 +48,7 @@
 - Log records written during a session's turns and compaction now carry its `sessionId`, so a subagent's records are told apart from its parent's in the same process log; records that named another kind of id `sessionId` now call it `titleSessionId`, `debugSessionId`, `kernelSessionId`, `acpSessionId` or `providerSessionId` ([#16587](https://github.com/can1357/oh-my-pi/pull/16587) by [@will-bogusz](https://github.com/will-bogusz))
 - Sessions started with computer use enabled receive the desktop guide before their first call, avoiding a separate documentation read before starting a desktop task ([#16918](https://github.com/can1357/oh-my-pi/pull/16918) by [@will-bogusz](https://github.com/will-bogusz))
 - `ask` questions open with their long titles and option descriptions already expanded when tool output expansion (`Ctrl+O`, or `ctx.ui.setToolsExpanded(true)`) is on
+- `ask` questions open with their long titles and option descriptions already expanded when tool output expansion (`Ctrl+O`, or `ctx.ui.setToolsExpanded(true)`) is on ([#17308](https://github.com/can1357/oh-my-pi/pull/17308) by [@Poyoman39](https://github.com/Poyoman39))
 
 ### Changed
 
