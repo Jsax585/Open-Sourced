@@ -971,6 +971,57 @@ describe("AgentSession auto-prewalk", () => {
 			},
 		);
 
+		it("a manual arm during target reconciliation clamps the source Max effort to the actual target", async () => {
+			stubJudge([PREWALK, DIRECT]);
+			const opus = modelOrThrow("claude-opus-4-6");
+			const f = createFixture([...cycle(), done("read only")], { auto: "on", primary: opus });
+			f.session.setThinkingLevel(Effort.Max);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Max);
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			let held = false;
+			const reconcile = SessionTools.prototype.reconcileThinkTool;
+			vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+				this: SessionTools,
+				...args
+			) {
+				if (!held && f.session.model?.id === f.target.id) {
+					held = true;
+					entered.resolve();
+					await release.promise;
+				}
+				return reconcile.apply(this, args);
+			});
+			const task = f.session.prompt(TASK);
+			await entered.promise;
+			const automaticArm = f.session.getPrewalkState();
+			let manualArm = automaticArm;
+			try {
+				expect(f.session.armPrewalk(opus, Effort.Max)).toBe(true);
+				manualArm = f.session.getPrewalkState();
+			} finally {
+				release.resolve();
+				await task;
+			}
+
+			expect(f.efforts[0]).toBe(Effort.Max);
+			expect(f.session.model?.id).toBe(f.target.id);
+			expect(f.requested.at(-1)).toBe(f.target.id);
+			expect(f.efforts.at(-1)).toBe(Effort.High);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
+			expect(f.session.getPrewalkState()).toBe(manualArm);
+			expect(manualArm).toMatchObject({ target: opus, thinkingLevel: Effort.Max });
+			expect(manualArm).not.toBe(automaticArm);
+			expect(f.notices.some(notice => notice.startsWith("Prewalk: switched"))).toBe(false);
+			expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+
+			await f.session.prompt("explain the cursor without changing any files");
+
+			expect(f.requested.at(-1)).toBe(f.target.id);
+			expect(f.efforts.at(-1)).toBe(Effort.High);
+			expect(f.session.getPrewalkState()).toBe(manualArm);
+		});
+
 		it("a rejected restart leaves a pending automatic arm and its steering unchanged", async () => {
 			stubJudge([PREWALK]);
 			let checked = false;

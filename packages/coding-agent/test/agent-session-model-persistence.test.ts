@@ -147,13 +147,14 @@ describe("AgentSession model persistence", () => {
 	async function createStartupResumeSession(
 		targetSessionFile: string,
 		settings: Settings = Settings.isolated(),
+		modelRegistry: ModelRegistry = sharedModelRegistry,
 	): Promise<CreateAgentSessionResult> {
 		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir.path(), "startup"));
 		const result = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
 			authStorage: sharedAuthStorage,
-			modelRegistry: sharedModelRegistry,
+			modelRegistry,
 			sessionManager,
 			settings,
 			disableExtensionDiscovery: true,
@@ -465,6 +466,39 @@ describe("AgentSession model persistence", () => {
 			expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
 		},
 	);
+
+	it("startup resume preserves configured routing fields for an already pinned upstream", async () => {
+		const selector = "openrouter/anthropic/claude-sonnet-4.5";
+		const modelsPath = path.join(tempDir.path(), "models.yml");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					openrouter: {
+						modelOverrides: {
+							"anthropic/claude-sonnet-4.5": {
+								compat: { openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] } },
+							},
+						},
+					},
+				},
+			}),
+		);
+		const modelRegistry = new ModelRegistry(sharedAuthStorage, modelsPath);
+		const configured = modelRegistry.find("openrouter", "anthropic/claude-sonnet-4.5");
+		if (!configured) throw new Error("Expected configured OpenRouter model");
+		expect(configured.compat).toMatchObject({
+			openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] },
+		});
+		const sessionFile = await writeRoleModelSession(`${selector}@anthropic`, `${selector}@anthropic`, "temporary");
+
+		const resumed = await createStartupResumeSession(sessionFile, Settings.isolated(), modelRegistry);
+
+		expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+		expect(resumed.session.model?.compat).toMatchObject({
+			openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] },
+		});
+	});
 
 	it("activates auto thinking on startup resume when modelRoles.default carries an explicit :auto suffix", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");

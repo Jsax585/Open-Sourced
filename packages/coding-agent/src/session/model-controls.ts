@@ -322,6 +322,8 @@ export class ModelControls {
 			} else {
 				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 			}
+		} else {
+			this.setThinkingLevel(this.configuredThinkingLevel());
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
 		return true;

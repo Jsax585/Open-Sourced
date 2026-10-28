@@ -1674,7 +1674,10 @@ export function resolveSessionModelSelector(
 		const routing = splitUpstreamRouting(parsed.id);
 		if (routing) {
 			const base = modelRegistry.find(parsed.provider, routing.base);
-			if (base && supportsUpstreamRouting(base)) model = applyUpstreamRouting(base, routing.upstream);
+			if (base && supportsUpstreamRouting(base)) {
+				model =
+					getSingleUpstreamRoute(base) === routing.upstream ? base : applyUpstreamRouting(base, routing.upstream);
+			}
 		}
 	}
 	if (!model || !modelRegistry.hasConfiguredAuth(model)) return undefined;
