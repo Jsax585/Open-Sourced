@@ -168,7 +168,10 @@ export const seanceTaskSchemaFields = {
 	"sourceSession?": type("string"),
 	"model?": type("string"),
 } satisfies Required<SeanceTaskSchemaFields>;
-export const seanceTaskGuidance = seanceTaskGuidanceTemplate;
+/** Task-tool seance guidance; mentions per-call `model` only while `task.perCallModel` allows task calls. */
+export function seanceTaskGuidance(perCallModelEnabled: boolean): string {
+	return prompt.render(seanceTaskGuidanceTemplate, { perCallModelEnabled });
+}
 
 function validateSeanceFields(
 	item: TaskItem | TaskParams,

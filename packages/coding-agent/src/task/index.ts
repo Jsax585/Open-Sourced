@@ -248,7 +248,8 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		hasStructuredAgents: renderedAgents.some(agent => agent.structured),
 		hasModelMentions: options.sessionAgents.length > 0,
-		seanceGuidance: seanceAgent && isBundledSeance(seanceAgent) ? seanceTaskGuidance : "",
+		seanceGuidance:
+			seanceAgent && isBundledSeance(seanceAgent) ? seanceTaskGuidance(options.perCallModelEnabled) : "",
 		ircEnabled: options.ircEnabled,
 		asyncGuidance: options.asyncGuidance,
 	});

@@ -200,6 +200,30 @@ Custom prompt.`,
 		expect(ordinary.description).toContain("`seance`");
 		expect(ordinary.description).toContain("Historical consults");
 	});
+
+	it("mentions a seance `model` only while per-call models are on, pointing at the approved list", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [bundledSeance],
+			projectAgentsDir: null,
+		});
+		const off = (await TaskTool.create(createSession({ parentSpawns: "task,seance" }))).description;
+		expect(off).toContain("Historical consults");
+		expect(off).toContain("Omit `model`: per-call models are off for task calls.");
+		expect(off).not.toContain("Approved roles");
+		expect(off).not.toContain("@role");
+
+		const on = (
+			await TaskTool.create(
+				createSession({
+					parentSpawns: "task,seance",
+					settings: { "task.perCallModel": "on", modelRoles: { smol: "anthropic/claude-haiku-4-5" } },
+				}),
+			)
+		).description;
+		expect(on).toContain("Optional `model` follows the `model` rules below: only Approved roles");
+		expect(on).toContain("Approved roles: `@smol` (`anthropic/claude-haiku-4-5`).");
+		expect(on).not.toContain("Omit `model`");
+	});
 	afterEach(() => vi.restoreAllMocks());
 });
 
