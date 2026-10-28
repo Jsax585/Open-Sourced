@@ -2593,9 +2593,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		setTerminalTitleSpinnerStyle(cfgTuiTitleSpinner.get(this.settings));
 		initProgramStatus();
 		setProgramStatusEnabled(cfgTerminalProgramStatus.get(this.settings));
-		// OSC 133;A starts a shell prompt and invalidates working/blocked records.
-		// Only a frame that actually writes the mark needs a replacement; diff
-		// paints that keep the user bubble must not resend on every update.
+		// OSC 133;A starts a shell prompt, which may drop an idle record.
+		// Direct Rex bubbles omit the mark while a working/blocked record is
+		// reported (see run-status `syncPromptZones`), so this re-sends idle
+		// there at most. Only frames that write the mark need a replacement.
 		this.#eventBusUnsubscribers.push(
 			this.ui.addFrameWriteListener(frame => {
 				if (frame.includes("\x1b]133;A\x07")) resendProgramStatus();
