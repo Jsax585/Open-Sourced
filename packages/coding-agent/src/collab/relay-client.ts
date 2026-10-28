@@ -57,8 +57,17 @@ export const HOST_RECLAIM_CONFIRM_MS = 1_000;
 export const RELAY_PING_INTERVAL_MS = 15_000;
 /** A socket that has heard nothing, not even a pong, for this long is dropped and retried. */
 export const RELAY_SILENCE_LIMIT_MS = 40_000;
-const MAX_PENDING_SENDS = 256;
+/**
+ * The send queue's single admission budget. Entries are charged their payload
+ * plus {@link PENDING_SEND_OVERHEAD_BYTES}, so a flood of tiny frames is bounded
+ * by the same number as a few large ones. There is deliberately no separate
+ * entry-count cap: a welcome snapshot holds the queue head for as long as the
+ * relay takes to drain it, and a count cap would end the room for every live
+ * frame a busy agent emits meanwhile, however little memory they hold (#17286).
+ */
 const MAX_PENDING_SEND_BYTES = 16 * 1024 * 1024;
+/** Budget charged per queued entry on top of its payload: the entry record, its iterator, and its seal promise. */
+const PENDING_SEND_OVERHEAD_BYTES = 1024;
 /**
  * Settled retirement records kept, as a memory backstop only. Correctness is an
  * *ordering* obligation, not a count: a record must outlive the frames that were
@@ -77,6 +86,7 @@ const WS_BACKPRESSURE_DRAIN_RETRY_MS = 25;
 interface PendingSend {
 	frames: Iterator<CollabFrame | string>;
 	targetPeer: number;
+	/** Budget charged while queued: payload plus overhead; a batch's chunks are charged one at a time as they are sealed. */
 	bytes: number;
 	cancelled: boolean;
 	eager: boolean;
@@ -322,18 +332,15 @@ export class CollabSocket {
 			onPrepared?.();
 			return;
 		}
-		if (this.#overCapacity(bytes)) {
+		const charge = bytes + PENDING_SEND_OVERHEAD_BYTES;
+		if (this.#pendingSendBytes + charge > MAX_PENDING_SEND_BYTES) {
 			onPrepared?.();
 			this.#failOverload();
 			return;
 		}
-		this.#pendingSends.push({ frames, targetPeer, bytes, cancelled: false, eager, onPrepared, key });
-		this.#pendingSendBytes += bytes;
+		this.#pendingSends.push({ frames, targetPeer, bytes: charge, cancelled: false, eager, onPrepared, key });
+		this.#pendingSendBytes += charge;
 		this.#pumpSends();
-	}
-
-	#overCapacity(bytes: number): boolean {
-		return this.#pendingSends.length >= MAX_PENDING_SENDS || this.#pendingSendBytes + bytes > MAX_PENDING_SEND_BYTES;
 	}
 
 	#failOverload(): void {
@@ -382,7 +389,7 @@ export class CollabSocket {
 				value = next.value;
 			}
 			const serialized = typeof value === "string" ? value : JSON.stringify(value);
-			const bytes = pending.bytes === 0 ? Buffer.byteLength(serialized) : 0;
+			const bytes = pending.eager ? 0 : Buffer.byteLength(serialized);
 			if (this.#pendingSendBytes + bytes > MAX_PENDING_SEND_BYTES) {
 				this.#failOverload();
 				return;

@@ -103,7 +103,8 @@ describe("CollabSocket send backpressure", () => {
 			socket.connect();
 			const ws = BackpressuredWebSocket.instances[0]!;
 			ws.open();
-			for (let i = 0; i < 300; i++) socket.send({ t: "prompt", text: `effect ${i}` });
+			// Tiny frames: each entry's fixed overhead charge, not its payload, is what fills the budget.
+			for (let i = 0; i < 20_000; i++) socket.send({ t: "prompt", text: `effect ${i}` });
 			const result = await Promise.race([closed.promise, Bun.sleep(250).then(() => undefined)]);
 			expect(result).toMatchObject({ reconnect: false });
 			expect(result?.reason).toContain("resync");

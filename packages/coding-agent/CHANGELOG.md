@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed collab ending the room with "collab send backlog exceeded its limit" when a guest joins a large session while the agent is running tools ([#17286](https://github.com/can1357/oh-my-pi/issues/17286))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
