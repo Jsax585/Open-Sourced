@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the task tool prompt so the `effort` hint (when `task.enableEffort` is on) defaults to `lo` for lookups, mechanical edits and known fixes, `med` for ordinary implementation, and `hi` only when `solutionSpace` names genuinely open choices ([#16664](https://github.com/can1357/oh-my-pi/pull/16664) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
