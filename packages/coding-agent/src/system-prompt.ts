@@ -39,7 +39,13 @@ import { combine } from "./config/registry";
 import { cfgBashAutoBackgroundEnabled } from "./exec/settings";
 import { cfgEvalAutoBackgroundEnabled } from "./eval/settings";
 import { cfgTtsrBuiltinRules, cfgTtsrDisabledRules, cfgTtsrEnabled } from "./export/ttsr-settings";
-import { cfgTuiAutoGraph, cfgTuiReactions, cfgTuiRenderMermaid, cfgTuiRenderSvg } from "./modes/settings";
+import {
+	cfgTuiAutoGraph,
+	cfgTuiReactions,
+	cfgTuiRenderImages,
+	cfgTuiRenderMermaid,
+	cfgTuiRenderSvg,
+} from "./modes/settings";
 import { cfgSecretsEnabled } from "./secrets/settings";
 import { cfgToolsFormat } from "./session/context-settings";
 import {
@@ -75,6 +81,7 @@ export const cfgSystemPromptInputs = combine({
 	vaultEnabled: cfgVaultEnabled,
 	renderMermaid: cfgTuiRenderMermaid,
 	renderSvg: cfgTuiRenderSvg,
+	renderImages: cfgTuiRenderImages,
 	autoGraph: cfgTuiAutoGraph,
 	reactions: cfgTuiReactions,
 	// Rendered into the bash/eval/task tool descriptions (inline catalog) or read by
@@ -581,6 +588,8 @@ export interface BuildSystemPromptOptions {
 	renderMermaid?: boolean;
 	/** Whether the reader's UI draws ```svg fences as themed images, so the prompt invites figures. Default: false */
 	renderSvg?: boolean;
+	/** Whether the reader's UI draws a local image file (`![alt](/path.png)`) as a picture, so the prompt says how. Default: false */
+	renderImages?: boolean;
 	/** Whether the reader's UI charts numeric Markdown tables, so the prompt routes data to tables and forbids duplicate charts. Default: false */
 	autoGraph?: boolean;
 	/** Whether the TUI lifts an opening emoji into a reaction badge on the user's message. Default: false */
@@ -679,6 +688,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeWorkspaceTree = false,
 		renderMermaid = true,
 		renderSvg = false,
+		renderImages = false,
 		autoGraph = false,
 		reactions = false,
 		xdevTools = [],
@@ -1008,6 +1018,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		includeWorkspaceTree,
 		renderMermaid,
 		renderSvg,
+		renderImages,
 		autoGraph,
 		reactions,
 		xdevTools,
