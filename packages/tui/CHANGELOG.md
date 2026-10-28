@@ -14,6 +14,10 @@
 - In Tern, `omp setup` is a native page: a step bar over searchable Sign in and default model sheets (the highlighted model stays in view as you arrow), and it skips the glyph, composer shape and theme steps, which Tern draws itself
 - Signing in during `omp setup` uses the same sign-in dialog as `/login`
 
+### Fixed
+
+- Fixed the thinking block's streaming-speed badge: the accent-color ceiling no longer clamps the number it prints — 200 tok/s was a hard cap no faster stream could exceed — and the rate is now the window's streamed tokens over their decode time instead of the mean of per-sample ratios, so bursty usage reporting no longer skews it low
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
