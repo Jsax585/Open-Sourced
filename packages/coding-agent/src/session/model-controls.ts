@@ -323,7 +323,10 @@ export class ModelControls {
 				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 			}
 		} else {
+			// Re-clamping for a stale switch must not advance the generation owned by the newer one.
+			const owner = this.#selectionGeneration;
 			this.setThinkingLevel(this.configuredThinkingLevel());
+			this.#selectionGeneration = owner;
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
 		return true;

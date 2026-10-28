@@ -1255,6 +1255,39 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.efforts.at(-1)).toBe(Effort.Medium);
 		});
 
+		it("an older switch finishing first does not stop a newer explicit switch from applying its effort", async () => {
+			const f = createFixture([], { auto: "on" });
+			const opus = modelOrThrow("claude-opus-4-6");
+			const gates = new Map([
+				[f.target.id, { entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }],
+				[opus.id, { entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }],
+			]);
+			const reconcile = SessionTools.prototype.reconcileThinkTool;
+			vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+				this: SessionTools,
+				...args
+			) {
+				const gate = gates.get(f.session.model?.id ?? "");
+				if (gate) {
+					gate.entered.resolve();
+					await gate.release.promise;
+				}
+				return reconcile.apply(this, args);
+			});
+			const older = f.session.setModelTemporary(f.target, Effort.Low);
+			await gates.get(f.target.id)!.entered.promise;
+			const newer = f.session.setModelTemporary(opus, Effort.Max);
+			await gates.get(opus.id)!.entered.promise;
+
+			gates.get(f.target.id)!.release.resolve();
+			await older;
+			gates.get(opus.id)!.release.resolve();
+			await newer;
+
+			expect(f.session.model?.id).toBe(opus.id);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Max);
+		});
+
 		it("preserves an explicit pick and replacement manual arm when an obsolete auto handoff resumes after persistence", async () => {
 			const f = createFixture([], { auto: "on" });
 			const entered = Promise.withResolvers<void>();
