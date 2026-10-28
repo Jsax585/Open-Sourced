@@ -12,13 +12,14 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "@oh-my-pi/pi-coding-agent/session/prewalk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgPrewalkAuto } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { EAGER_TODO_PRELUDE_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/todo-tracker";
 import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { createAssistantMessage, createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { asGlobalFetch } from "./helpers/fetch-mock";
 
 /**
@@ -677,6 +678,137 @@ describe("AgentSession auto-prewalk", () => {
 			await f.session.prompt(TASK);
 
 			expect(f.requested.slice(boundary)).toEqual([f.primary.id, f.primary.id, f.target.id]);
+		});
+
+		it.each(["same model", "other model", "thinking"] as const)(
+			"an explicit %s pick after a task armed drops its pending auto handoff",
+			async selection => {
+				stubJudge([PREWALK]);
+				const manual = modelOrThrow("claude-opus-4-6");
+				let picked = false;
+				const f = createFixture(cycle(), {
+					auto: "on",
+					beforeStream: async () => {
+						if (picked) return;
+						picked = true;
+						if (selection === "thinking") f.session.setThinkingLevel(Effort.Medium);
+						else await f.session.setModelTemporary(selection === "same model" ? f.primary : manual);
+						// The first request delivered the plan; cancellation drops pending arm/steering, not in-flight history.
+						expect(f.session.getPrewalkState()).toBeUndefined();
+						expect(
+							f.session.agent
+								.peekSteeringQueue()
+								.some(
+									message =>
+										message.role === "custom" &&
+										(message.customType === "prewalk-plan" || message.customType === "prewalk-continue"),
+								),
+						).toBe(false);
+					},
+				});
+
+				await f.session.prompt(TASK);
+
+				const selected = selection === "other model" ? manual : f.primary;
+				expect(f.nudges[0]).toContain("prewalk-plan");
+				expect(f.requested).toEqual([f.primary.id, selected.id, selected.id]);
+				expect(f.efforts).toEqual([
+					Effort.High,
+					selection === "thinking" ? Effort.Medium : Effort.High,
+					selection === "thinking" ? Effort.Medium : Effort.High,
+				]);
+				expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+				expect(f.session.getPrewalkState()).toBeUndefined();
+				expect(f.session.model?.id).toBe(selected.id);
+			},
+		);
+
+		it("preserves an explicit pick and replacement manual arm when an obsolete auto handoff resumes after persistence", async () => {
+			const f = createFixture([], { auto: "on" });
+			const entered = Promise.withResolvers<void>();
+			const persistence = Promise.withResolvers<void>();
+			const unused = (): never => {
+				throw new Error("Unexpected plan-mode capability");
+			};
+			const host: PrewalkCoordinatorHost = {
+				agent: f.session.agent,
+				sessionManager: f.session.sessionManager,
+				settings: f.settings,
+				model: () => f.session.model,
+				configuredThinkingLevel: () => f.session.configuredThinkingLevel(),
+				restoreThinkingLevel: level => f.session.setThinkingLevel(level),
+				resolveDefaultPrewalk: () => undefined,
+				resolveAutoPrewalkTarget: () => ({ target: f.target, thinkingLevel: Effort.Low }),
+				classifyAutoPrewalk: async () => undefined,
+				emitNotice: () => {},
+				setModelTemporary: (model, level, options) => f.session.setModelTemporary(model, level, options),
+				setActiveToolsByName: unused,
+				restoreNonMCPToolPresentation: unused,
+				getAllToolNames: () => ["todo", "write"],
+				getActiveToolNames: () => ["todo", "write"],
+				getEnabledToolNames: () => ["todo", "write"],
+				getMountedXdevToolNames: () => [],
+				hasBuiltInTool: () => false,
+				getPlanModeState: () => undefined,
+				setPlanModeState: unused,
+				getPlanReferencePath: unused,
+				setPlanProposalHandler: unused,
+				waitForSessionMessagePersistence: async () => {
+					entered.resolve();
+					await persistence.promise;
+				},
+				localProtocolOptions: unused,
+			};
+			const coordinator = new PrewalkCoordinator(host);
+			const plan = coordinator.applyAuto({
+				route: "prewalk",
+				probabilities: { prewalk: 0.9, primary: 0.07, direct: 0.03 },
+				confidence: 0.9,
+				arm: true,
+			});
+			expect(plan).toBeDefined();
+			const liveMessages = [plan!];
+			f.session.agent.appendMessage(plan!);
+			const turn = coordinator.advanceAtTurnEnd(liveMessages, {
+				message: createAssistantMessage("implementing"),
+				toolResults: ["todo", "write"].map(toolName => ({
+					role: "toolResult" as const,
+					toolCallId: toolName,
+					toolName,
+					content: [{ type: "text" as const, text: "ok" }],
+					isError: false,
+					timestamp: Date.now(),
+				})),
+				additionalMessages: [],
+				willContinue: false,
+			});
+			await entered.promise;
+			let replacementArm;
+			let replacementSteering;
+			try {
+				f.session.setThinkingLevel(Effort.Medium);
+				coordinator.releaseHandoff();
+				expect(coordinator.state).toBeUndefined();
+				expect(coordinator.arm(modelOrThrow("claude-opus-4-6"), Effort.Medium)).toBe(true);
+				replacementArm = coordinator.state;
+				replacementSteering = f.session.agent.peekSteeringQueue();
+			} finally {
+				persistence.resolve();
+			}
+			await turn;
+
+			expect(f.session.model).toBe(f.primary);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.Medium);
+			expect(coordinator.state).toBe(replacementArm);
+			expect(f.session.agent.peekSteeringQueue()).toEqual(replacementSteering);
+			expect(
+				replacementSteering?.some(message => message.role === "custom" && message.customType === "prewalk-plan"),
+			).toBe(true);
+			expect(
+				f.session.agent
+					.peekSteeringQueue()
+					.some(message => message.role === "custom" && message.customType === "prewalk-checklist"),
+			).toBe(false);
 		});
 	});
 

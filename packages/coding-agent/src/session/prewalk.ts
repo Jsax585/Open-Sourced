@@ -3,6 +3,7 @@ import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AutoPrewalkDecision } from "../auto-prewalk/classifier";
+import { formatModelStringWithRouting } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { resolveApprovedPlan } from "../plan-mode/approved-plan";
@@ -165,12 +166,9 @@ export class PrewalkCoordinator {
 	}
 
 	#isNoop(prewalk: Prewalk): boolean {
-		return prewalkWouldBeNoop(
-			this.#host.model(),
-			this.#host.configuredThinkingLevel(),
-			prewalk.target,
-			prewalk.thinkingLevel,
-		);
+		const model = this.#host.model();
+		if (model && formatModelStringWithRouting(model) !== formatModelStringWithRouting(prewalk.target)) return false;
+		return prewalkWouldBeNoop(model, this.#host.configuredThinkingLevel(), prewalk.target, prewalk.thinkingLevel);
 	}
 
 	#clearPrewalkState(): void {
@@ -183,6 +181,10 @@ export class PrewalkCoordinator {
 
 	/** A later model/effort selection owns the active model, even if its identity is unchanged. */
 	releaseHandoff(): void {
+		if (this.#autoArm && this.#autoArm === this.#prewalk) {
+			this.#scrubPlanNudge(undefined, true);
+			this.#clearPrewalkState();
+		}
 		this.#handoff = undefined;
 	}
 
@@ -366,6 +368,7 @@ export class PrewalkCoordinator {
 		for (const toolResult of context.toolResults) {
 			await this.#host.waitForSessionMessagePersistence(toolResult);
 		}
+		if (this.#prewalk !== prewalk) return;
 		this.#scrubPlanNudge(liveMessages);
 		const target = prewalk.target;
 		if (this.#isNoop(prewalk)) {
@@ -424,8 +427,7 @@ export class PrewalkCoordinator {
 				"prewalk",
 			);
 			const matches =
-				active.target.provider === target.provider &&
-				active.target.id === target.id &&
+				formatModelStringWithRouting(active.target) === formatModelStringWithRouting(target) &&
 				active.thinkingLevel === thinkingLevel;
 			if (matches) this.#autoArm = undefined;
 			return matches;
@@ -475,8 +477,7 @@ export class PrewalkCoordinator {
 		const active = this.#prewalk;
 		if (
 			active &&
-			(active.target.provider !== target.provider ||
-				active.target.id !== target.id ||
+			(formatModelStringWithRouting(active.target) !== formatModelStringWithRouting(target) ||
 				active.thinkingLevel !== targetThinkingLevel)
 		) {
 			this.arm(target, targetThinkingLevel);

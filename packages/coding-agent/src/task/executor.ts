@@ -4651,7 +4651,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						pattern: prewalkPattern,
 						warning: resolvedPrewalk.warning,
 					});
-				} else if (prewalkWouldBeNoop(model, effectiveThinkingLevel, target, resolvedPrewalk.thinkingLevel)) {
+				} else if (
+					model &&
+					formatModelStringWithRouting(model) === formatModelStringWithRouting(target) &&
+					prewalkWouldBeNoop(model, effectiveThinkingLevel, target, resolvedPrewalk.thinkingLevel)
+				) {
 					// Same model AND same effective thinking level: switching would only
 					// inject the plan/checklist nudges for no gain — skip. An effort-only
 					// delta on the same model still arms (it is a real cheapening hand-off).

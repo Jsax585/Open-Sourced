@@ -87,6 +87,7 @@ export class ModelControls {
 	readonly #thinkingLevelCeiling: Effort | undefined;
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
+	#thinkingSelectionGeneration = 0;
 	#serviceTierByFamily: ServiceTierByFamily;
 
 	constructor(
@@ -173,6 +174,7 @@ export class ModelControls {
 
 	/** Restores thinking state from a transcript without persisting a new entry. */
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void {
+		this.#thinkingSelectionGeneration++;
 		this.#autoThinking = level === AUTO_THINKING;
 		this.#autoResolvedLevel = undefined;
 		this.#thinkingLevel =
@@ -191,6 +193,7 @@ export class ModelControls {
 
 	/** Restores an exact thinking snapshot after a failed session switch. */
 	restoreThinkingSnapshot(level: ThinkingLevel | undefined, auto: boolean, resolved: Effort | undefined): void {
+		this.#thinkingSelectionGeneration++;
 		this.#thinkingLevel = level;
 		this.#autoThinking = auto;
 		this.#autoResolvedLevel = resolved;
@@ -248,6 +251,7 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
+		this.#thinkingSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(targetModel);
 		this.#host.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
 		if (options?.persist) {
@@ -294,6 +298,7 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
+		this.#thinkingSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
@@ -454,6 +459,7 @@ export class ModelControls {
 		// Apply model
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
+		this.#thinkingSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(next.model);
 		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
@@ -485,6 +491,7 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
+		this.#thinkingSelectionGeneration++;
 		await this.#host.setModelWithProviderSessionReset(nextModel);
 		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
@@ -522,6 +529,7 @@ export class ModelControls {
 	 * user turn. Later classifications persist only changed concrete resolutions.
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
+		this.#thinkingSelectionGeneration++;
 		if (level === AUTO_THINKING) {
 			const provisional = clampThinkingLevelToCeiling(
 				this.#model,
@@ -631,6 +639,7 @@ export class ModelControls {
 	 */
 	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
 		const model = this.#model;
+		const thinkingSelectionGeneration = this.#thinkingSelectionGeneration;
 		if (!model?.reasoning || model.thinking?.unverified) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
 		// Cascade routes effort via sibling model ids, not a wire param) have
@@ -676,8 +685,15 @@ export class ModelControls {
 			}
 		}
 
-		// Drop the result if the turn was aborted/superseded while classifying.
-		if (this.#host.promptGeneration() !== generation || !this.#autoThinking) return;
+		// Drop judgments superseded by a turn, model, or effort selection.
+		if (
+			this.#host.promptGeneration() !== generation ||
+			!this.#autoThinking ||
+			!modelsAreEqual(this.#model, model) ||
+			this.#thinkingSelectionGeneration !== thinkingSelectionGeneration
+		) {
+			return;
+		}
 
 		const effort = clampThinkingLevelToCeiling(
 			model,
