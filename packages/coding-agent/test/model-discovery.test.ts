@@ -3,15 +3,23 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-ai";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import { createNativeJudge } from "@oh-my-pi/pi-ai/judgment";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
-import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
+import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
+import {
+	buildModelReferenceIndex,
+	getBundledModelReferenceIndex,
+	resolveModelReference,
+} from "@oh-my-pi/pi-catalog/identity";
+import * as bundledModelReferences from "@oh-my-pi/pi-catalog/identity/bundled";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
 	cursorModelManagerOptions,
@@ -20,10 +28,12 @@ import {
 } from "@oh-my-pi/pi-catalog/provider-models";
 import type { ModelKind, ModelSpec, OpenAICompat } from "@oh-my-pi/pi-catalog/types";
 import { CODEX_CLIENT_VERSION } from "@oh-my-pi/pi-catalog/wire/codex";
+import { finalizeCustomModel } from "@oh-my-pi/pi-coding-agent/config/custom-models";
 import {
 	discoverLiteLLMModels,
 	discoverOllamaModels,
 	discoverOpenAIModelsList,
+	discoverProxyModels,
 	discoveryProbeTimeoutMs,
 } from "@oh-my-pi/pi-coding-agent/config/model-discovery";
 import { RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS } from "@oh-my-pi/pi-coding-agent/config/model-provider-discovery";
@@ -3162,6 +3172,732 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(unknown?.reasoning).toBe(false);
 	});
 
+	test("openai-models-list discovery keeps borrowed non-OpenAI efforts usable below target compatibility gates", async () => {
+		const id = "tenant/catalog-bedrock-effort-fixture";
+		const ids = [id, "tenant/catalog-wire-effort-fixture"];
+		const efforts = [Effort.Low, Effort.High, Effort.Max];
+		const reference = buildModel({
+			id: "catalog-bedrock-effort-fixture",
+			name: "Bedrock effort fixture",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock.example",
+			requestModelId: "source-only-deployment",
+			headers: { "X-Source": "source-only" },
+			reasoning: true,
+			thinking: { mode: "effort", efforts, defaultLevel: Effort.Max, requiresEffort: true },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		expect(reference.compat).not.toHaveProperty("supportsReasoningEffort");
+		const wireReference = buildModel({
+			id: "catalog-wire-effort-fixture",
+			name: "Source wire effort fixture",
+			api: "openai-completions",
+			provider: "source-wire-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		// Catalog rows can carry a pure ladder independently of source wire
+		// controls; those controls are not target compatibility overrides.
+		const sourceWireReference: Model<"openai-completions"> = {
+			...wireReference,
+			compat: {
+				...wireReference.compat,
+				supportsReasoningEffort: false,
+				omitReasoningEffort: true,
+				reasoningEffortMap: { [Effort.Max]: "source-max" },
+			},
+		};
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference, sourceWireReference]));
+		try {
+			const apis = ["openai-completions", "openai-responses"] as const;
+			const configuredProviders: Record<string, unknown> = {};
+			for (const api of apis) {
+				const providerConfig = {
+					api,
+					baseUrl: "https://proxy.example/v1",
+					auth: "none",
+					headers: { "X-Proxy": "local" },
+					discovery: { type: "openai-models-list" },
+				};
+				configuredProviders[`provider-disabled-${api}`] = {
+					...providerConfig,
+					compat: { supportsReasoningEffort: false },
+				};
+				configuredProviders[`model-disabled-${api}`] = {
+					...providerConfig,
+					modelOverrides: { [id]: { compat: { supportsReasoningEffort: false } } },
+				};
+			}
+			writeRawModelsJson(configuredProviders);
+			const discoveryFetch: FetchImpl = async input => {
+				expect(String(input)).toBe("https://proxy.example/v1/models");
+				return Response.json({ data: ids.map(id => ({ id })) });
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: discoveryFetch });
+			await registry.refresh();
+			for (const api of apis) {
+				const models: Model[] = [];
+				for (const provider of ["list-effort-fixture", "commandcode"]) {
+					const discovered = await discoverOpenAIModelsList(
+						{
+							provider,
+							api,
+							baseUrl: "https://proxy.example",
+							headers: { "X-Proxy": "local" },
+							discovery: { type: "openai-models-list" },
+						},
+						{ fetch: discoveryFetch, getBearerApiKeyResolver: async () => undefined },
+					);
+					expect(discovered.map(model => model.id)).toEqual(ids);
+					models.push(...discovered);
+				}
+				for (const provider of [`provider-disabled-${api}`, `model-disabled-${api}`]) {
+					const model = registry.find(provider, id);
+					if (!model) throw new Error(`Missing configured model: ${provider}/${id}`);
+					models.push(model);
+				}
+				for (const model of models) {
+					const enabled = model.provider === "list-effort-fixture";
+					expect(ids).toContain(model.id);
+					expect(model).toMatchObject({
+						api,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						compat: { supportsReasoningEffort: enabled, omitReasoningEffort: !enabled },
+					});
+					expect(model.requestModelId).toBeUndefined();
+					expect(Object.hasOwn(model, "referenceThinkingEfforts")).toBe(false);
+					if (enabled) {
+						expect(model.thinking).toEqual({ mode: "effort", efforts });
+						expect(model.compatConfig).not.toHaveProperty("supportsReasoningEffort");
+						expect(model.compatConfig).not.toHaveProperty("reasoningEffortMap");
+						expect(model.compatConfig).not.toHaveProperty("omitReasoningEffort");
+					} else if (api === "openai-responses") {
+						expect(model.thinking).toBeUndefined();
+					}
+
+					let body: Record<string, unknown> | undefined;
+					let requestUrl: string | undefined;
+					let requestHeaders: Headers | undefined;
+					const requestFetch: FetchImpl = async (input, init) => {
+						requestUrl = String(input);
+						requestHeaders = new Headers(init?.headers);
+						body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+						if (api === "openai-completions") {
+							return new Response(
+								'data: {"id":"borrowed-effort","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+								{ headers: { "Content-Type": "text/event-stream" } },
+							);
+						}
+						const events = [
+							{
+								type: "response.output_item.added",
+								output_index: 0,
+								item: { type: "message", id: "msg_effort", role: "assistant", content: [] },
+							},
+							{ type: "response.output_text.delta", item_id: "msg_effort", content_index: 0, delta: "ok" },
+							{
+								type: "response.completed",
+								response: {
+									id: "resp_effort",
+									status: "completed",
+									usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+								},
+							},
+						];
+						return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+							headers: { "Content-Type": "text/event-stream" },
+						});
+					};
+					const context = { messages: [{ role: "user" as const, content: "hi", timestamp: 0 }] };
+					const options = { apiKey: "local-secret", reasoning: "max" as const, fetch: requestFetch };
+					const result = await stream(model, context, options).result();
+					expect(result.stopReason).toBe("stop");
+					const path = api === "openai-completions" ? "chat/completions" : "responses";
+					expect(requestUrl).toBe(`https://proxy.example/v1/${path}`);
+					expect(requestHeaders?.get("X-Proxy")).toBe("local");
+					expect(requestHeaders?.get("X-Source")).toBeNull();
+					expect(requestHeaders?.get("Authorization")).toBe("Bearer local-secret");
+					expect(body?.model).toBe(model.id);
+					expect(body?.thinking).toBeUndefined();
+					expect(body?.additionalModelRequestFields).toBeUndefined();
+					if (api === "openai-completions") {
+						expect(body?.reasoning_effort).toBe(enabled ? "max" : undefined);
+					} else if (enabled) {
+						expect(body?.reasoning).toMatchObject({ effort: "max" });
+					} else {
+						expect(body?.reasoning).toBeUndefined();
+					}
+				}
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+	});
+
+	test("openai-models-list discovery preserves same-provider effort compatibility disables", async () => {
+		const reference = buildModel({
+			id: "catalog-local-effort-fixture",
+			name: "Local effort fixture",
+			api: "openai-completions",
+			provider: "list-effort-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High], defaultLevel: Effort.Low },
+			compat: { supportsReasoningEffort: false },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		try {
+			for (const api of ["openai-completions", "openai-responses"] as const) {
+				const [sameProvider] = await discoverOpenAIModelsList(
+					{
+						provider: reference.provider,
+						api,
+						baseUrl: "https://proxy.example",
+						discovery: { type: "openai-models-list" },
+					},
+					{
+						fetch: async () => Response.json({ data: [{ id: reference.id }] }),
+						getBearerApiKeyResolver: async () => undefined,
+					},
+				);
+				expect(sameProvider?.compatConfig).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider?.compat).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider?.thinking).toEqual(api === "openai-completions" ? reference.thinking : undefined);
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+	});
+
+	test("model-list and proxy advertisements distinguish unavailable controls from silent catalog fallback", async () => {
+		const ids = {
+			advertised: "tenant/catalog-advertised-surface-fixture",
+			denied: "tenant/catalog-denied-surface-fixture",
+			silent: "tenant/catalog-silent-surface-fixture",
+			empty: "tenant/catalog-empty-surface-fixture",
+			offOnly: "tenant/catalog-off-only-surface-fixture",
+			nestedOffOnly: "tenant/catalog-nested-off-only-surface-fixture",
+			filtered: "tenant/catalog-filtered-surface-fixture",
+			malformed: "tenant/catalog-malformed-surface-fixture",
+		};
+		const reference = buildModel({
+			id: "catalog-advertisement-fixture",
+			name: "Catalog advertisement fixture",
+			api: "openai-completions",
+			provider: "source-advertisement-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+			compat: { supportsReasoningEffort: false, omitReasoningEffort: true },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const orphanId = "tenant/uncontrolled-no-reference-fixture";
+		const rows = [
+			{
+				id: ids.advertised,
+				supported_reasoning_levels: [{ effort: "none" }, { effort: "low" }, { effort: "high" }],
+				default_reasoning_level: "high",
+			},
+			{
+				id: ids.denied,
+				reasoning: true,
+				metadata: {
+					reasoning: false,
+					supported_reasoning_levels: [{ effort: "low" }, { effort: "max" }],
+				},
+			},
+			{ id: ids.silent },
+			{
+				id: ids.empty,
+				supported_reasoning_levels: ["low", "high"],
+				metadata: { supported_reasoning_levels: [] },
+			},
+			{ id: ids.offOnly, supported_reasoning_levels: ["none"] },
+			{ id: ids.nestedOffOnly, metadata: { supported_reasoning_levels: [{ effort: "NONE" }] } },
+			{ id: ids.filtered, supported_reasoning_levels: ["minimal", "ultra"], default_reasoning_level: "high" },
+			{ id: ids.malformed, supported_reasoning_levels: { effort: "high" } },
+			{
+				id: orphanId,
+				reasoning: false,
+				metadata: { reasoning: true, supported_reasoning_levels: [] },
+			},
+		];
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(
+				buildModelReferenceIndex(
+					Object.values(ids).map(id => ({ ...reference, id: id.slice(id.lastIndexOf("/") + 1) })),
+				),
+			);
+		try {
+			const fetch: FetchImpl = async () => Response.json({ data: rows });
+			const ctx = { fetch, getBearerApiKeyResolver: async () => undefined };
+			for (const type of ["openai-models-list", "proxy"] as const) {
+				const discover = type === "proxy" ? discoverProxyModels : discoverOpenAIModelsList;
+				for (const api of ["openai-completions", "openai-responses"] as const) {
+					const config = {
+						provider: "advertisement-fixture",
+						api,
+						baseUrl: "https://proxy.example/v1",
+						discovery: { type },
+					};
+					const models = await discover(config, ctx);
+					expect(models.find(model => model.id === ids.advertised)).toMatchObject({
+						reasoning: true,
+						thinking: {
+							mode: "effort",
+							efforts: [Effort.Low, Effort.High],
+							defaultLevel: Effort.High,
+						},
+						compat: {
+							supportsReasoningEffort: true,
+							omitReasoningEffort: false,
+							reasoningDisableMode: "none-effort",
+						},
+					});
+					const denied = models.find(model => model.id === ids.denied);
+					expect(denied).toMatchObject({
+						reasoning: false,
+						compat: { supportsReasoningEffort: false },
+					});
+					expect(denied?.thinking).toBeUndefined();
+					for (const id of [ids.silent, ids.malformed]) {
+						expect(models.find(model => model.id === id)).toMatchObject({
+							reasoning: true,
+							thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+							compat: { supportsReasoningEffort: true, omitReasoningEffort: false },
+						});
+					}
+					for (const id of [ids.empty, ids.offOnly, ids.nestedOffOnly, ids.filtered, orphanId]) {
+						const model = models.find(model => model.id === id);
+						if (!model) throw new Error(`Missing advertised model: ${id}`);
+						expect(model.reasoning).toBe(true);
+						expect(getSupportedEfforts(model)).toEqual([]);
+					}
+
+					const optedOut = await discover({ ...config, discovery: { type, advertisedReasoning: false } }, ctx);
+					for (const model of optedOut) {
+						if (model.id === orphanId) {
+							expect(model.reasoning).toBe(false);
+							expect(getSupportedEfforts(model)).toEqual([]);
+							continue;
+						}
+						expect(model).toMatchObject({
+							reasoning: true,
+							thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+							compat: { supportsReasoningEffort: true, omitReasoningEffort: false },
+						});
+					}
+				}
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+	});
+
+	test("cached advertised no-control surfaces keep reasoning history without leaking fallback efforts on any proxy wire", async () => {
+		const ids = {
+			empty: "tenant/catalog-cached-empty-fixture",
+			offOnly: "tenant/catalog-cached-off-only-fixture",
+			filtered: "tenant/catalog-cached-filtered-fixture",
+			overridden: "tenant/catalog-cached-override-fixture",
+			silent: "tenant/catalog-cached-silent-fixture",
+			mandatory: "tenant/catalog-cached-mandatory-fixture",
+		};
+		const configurations = [
+			{ provider: "list-no-controls-fixture", api: "openai-responses", type: "openai-models-list" },
+			{ provider: "proxy-no-controls-fixture", api: "openai-completions", type: "proxy" },
+			{ provider: "anthropic-no-controls-fixture", api: "anthropic-messages", type: "proxy" },
+		] as const;
+		const providers: Record<string, unknown> = {};
+		for (const { provider, api, type } of configurations) {
+			providers[provider] = {
+				api,
+				baseUrl: "https://proxy.example/v1",
+				auth: "none",
+				discovery: { type },
+				modelOverrides: {
+					[ids.overridden]: {
+						thinking: {
+							mode: api === "anthropic-messages" ? "anthropic-adaptive" : "effort",
+							efforts: [Effort.Low, Effort.High],
+							defaultLevel: Effort.High,
+						},
+						compat:
+							api === "anthropic-messages"
+								? { supportsOutputEffort: true }
+								: { supportsReasoningEffort: true, omitReasoningEffort: false },
+					},
+					...(api === "anthropic-messages"
+						? { [ids.mandatory]: { compat: { requiresThinkingEnabled: true } } }
+						: {}),
+				},
+			};
+		}
+		writeRawModelsJson(providers);
+		const reference = buildModel({
+			id: "catalog-cached-surface-fixture",
+			name: "Catalog cached surface fixture",
+			api: "openai-completions",
+			provider: "source-cached-surface-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max], requiresEffort: true },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const rows = [
+			{ id: ids.empty, supported_reasoning_levels: [] },
+			{ id: ids.offOnly, metadata: { supported_reasoning_levels: [{ effort: "none" }] } },
+			{ id: ids.filtered, supported_reasoning_levels: ["minimal", "ultra"] },
+			{ id: ids.overridden, metadata: { supported_reasoning_levels: [] } },
+			{ id: ids.silent },
+			{ id: ids.mandatory, supported_reasoning_levels: [] },
+		];
+		const cachedModels: Model[] = [];
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(
+				buildModelReferenceIndex(
+					Object.values(ids).map(id => ({ ...reference, id: id.slice(id.lastIndexOf("/") + 1) })),
+				),
+			);
+		try {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => Response.json({ data: rows }),
+			});
+			for (const { provider } of configurations) await registry.refreshProvider(provider, "online");
+			const assertSurfaces = (current: ModelRegistry) => {
+				for (const { provider, api } of configurations) {
+					for (const id of [ids.empty, ids.offOnly, ids.filtered, ids.mandatory]) {
+						const model = current.find(provider, id);
+						if (!model) throw new Error(`Missing no-control model: ${provider}/${id}`);
+						expect(model.reasoning).toBe(true);
+						expect(getSupportedEfforts(model)).toEqual([]);
+					}
+					const overridden = current.find(provider, ids.overridden);
+					if (!overridden) throw new Error(`Missing overridden model: ${provider}`);
+					expect(getSupportedEfforts(overridden)).toEqual([Effort.Low, Effort.High]);
+					if (api !== "anthropic-messages") {
+						const silent = current.find(provider, ids.silent);
+						if (!silent) throw new Error(`Missing silent model: ${provider}`);
+						expect(getSupportedEfforts(silent)).toEqual([Effort.High, Effort.Max]);
+					}
+				}
+			};
+			assertSurfaces(registry);
+			await registry.refresh("offline");
+			assertSurfaces(registry);
+			let cacheProbeCalls = 0;
+			const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => {
+					cacheProbeCalls++;
+					throw new Error("Cached surface must not need an online discovery probe");
+				},
+			});
+			// A fresh registry prepares runtime managers asynchronously, including
+			// custom discovery providers; hydrate their persisted rows offline.
+			await cachedRegistry.refresh("offline");
+			expect(cacheProbeCalls).toBe(0);
+			assertSurfaces(cachedRegistry);
+			for (const { provider, api } of configurations) {
+				expect(cachedRegistry.getProviderDiscoveryState(provider)?.status).toBe("cached");
+				const requestIds = [ids.empty, ids.offOnly, ids.filtered, ids.overridden];
+				requestIds.push(api === "anthropic-messages" ? ids.mandatory : ids.silent);
+				for (const id of requestIds) {
+					const model = cachedRegistry.find(provider, id);
+					if (!model) throw new Error(`Missing cached model: ${provider}/${id}`);
+					cachedModels.push(model);
+				}
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+
+		const replayItem = { type: "reasoning", id: "rs_kept", summary: [], encrypted_content: "encrypted-replay" };
+		for (const model of cachedModels) {
+			const context: Context = {
+				messages: [
+					{ role: "user", content: "First turn.", timestamp: 0 },
+					{
+						role: "assistant",
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						content: [
+							{
+								type: "thinking",
+								thinking: "Prior reasoning.",
+								thinkingSignature: model.api === "openai-responses" ? JSON.stringify(replayItem) : "",
+							},
+							{ type: "text", text: "Prior answer." },
+						],
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: 1,
+					},
+					{ role: "user", content: "Continue.", timestamp: 2 },
+				],
+			};
+			const controlled = model.id === ids.overridden || model.id === ids.silent;
+			const requests: { reasoning?: Effort; disableReasoning?: boolean }[] = controlled
+				? [{ reasoning: Effort.High }]
+				: [{}, { disableReasoning: true }, { reasoning: Effort.Max }];
+			let mandatoryBudget: number | undefined;
+			for (const request of requests) {
+				let body: Record<string, unknown> | undefined;
+				const fetch: FetchImpl = async (_input, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					if (model.api === "openai-completions") {
+						return new Response(
+							'data: {"id":"no-control-chat","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					}
+					const events =
+						model.api === "anthropic-messages"
+							? [
+									{
+										type: "message_start",
+										message: {
+											id: "no-control-anthropic",
+											type: "message",
+											role: "assistant",
+											model: model.id,
+											content: [],
+											stop_reason: null,
+											stop_sequence: null,
+											usage: { input_tokens: 1, output_tokens: 0 },
+										},
+									},
+									{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+									{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+									{ type: "content_block_stop", index: 0 },
+									{
+										type: "message_delta",
+										delta: { stop_reason: "end_turn", stop_sequence: null },
+										usage: { output_tokens: 1 },
+									},
+									{ type: "message_stop" },
+								]
+							: [
+									{
+										type: "response.output_item.added",
+										output_index: 0,
+										item: { type: "message", id: "msg_no_control", role: "assistant", content: [] },
+									},
+									{
+										type: "response.output_text.delta",
+										item_id: "msg_no_control",
+										content_index: 0,
+										delta: "ok",
+									},
+									{
+										type: "response.completed",
+										response: {
+											id: "resp_no_control",
+											status: "completed",
+											usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+										},
+									},
+								];
+					return new Response(
+						`${events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}`).join("\n\n")}\n\n`,
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				};
+				const options = { apiKey: "local-secret", fetch, ...request };
+				const result =
+					model.api !== "anthropic-messages" && request.reasoning === Effort.Max
+						? await stream(model, context, options).result()
+						: await streamSimple(model, context, options).result();
+				expect(result.stopReason).toBe("stop");
+				expect(body?.model).toBe(model.id);
+				if (model.api === "anthropic-messages") {
+					expect(body?.output_config).toEqual(
+						controlled ? expect.objectContaining({ effort: "high" }) : undefined,
+					);
+					expect(body?.messages).toContainEqual(
+						expect.objectContaining({
+							role: "assistant",
+							content: expect.arrayContaining([
+								expect.objectContaining({ type: "thinking", thinking: "Prior reasoning." }),
+							]),
+						}),
+					);
+					if (model.id === ids.mandatory) {
+						expect(body?.thinking).toMatchObject({ type: "enabled" });
+						const thinking = body?.thinking as { budget_tokens?: number } | undefined;
+						if (request.reasoning === undefined && !request.disableReasoning) {
+							mandatoryBudget = thinking?.budget_tokens;
+							expect(mandatoryBudget).toBeGreaterThan(0);
+						} else {
+							expect(thinking?.budget_tokens).toBe(mandatoryBudget);
+						}
+					} else if (!controlled) {
+						expect(body?.thinking).toBeUndefined();
+					}
+				} else if (model.api === "openai-responses") {
+					expect(body?.reasoning).toEqual(controlled ? expect.objectContaining({ effort: "high" }) : undefined);
+					expect(body?.include).toContain("reasoning.encrypted_content");
+					expect(body?.input).toContainEqual(expect.objectContaining(replayItem));
+				} else {
+					expect(body?.reasoning_effort).toBe(
+						controlled ? "high" : model.id === ids.offOnly && request.disableReasoning ? "none" : undefined,
+					);
+				}
+			}
+		}
+	});
+
+	test("special-provider Anthropic shims preserve no-controls discovery without reviving stale budgets", async () => {
+		const sourceModel = (provider: "kimi-code" | "synthetic", id = "tenant/no-controls-shim-fixture") =>
+			buildModel({
+				id,
+				name: "No-controls shim fixture",
+				api: "openai-completions",
+				provider,
+				baseUrl:
+					provider === "kimi-code" ? "https://api.kimi.com/coding/v1" : "https://api.synthetic.new/openai/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 96_000,
+				maxTokens: 12_000,
+				compat: {
+					trustExplicitThinkingOnly: true,
+					supportsReasoningEffort: false,
+					omitReasoningEffort: true,
+					kimiApiFormat: "anthropic",
+				},
+			});
+		interface ShimPayload {
+			model?: string;
+			thinking?: { type: string; budget_tokens?: number };
+			output_config?: { effort?: string };
+		}
+		const payloadFor = async (
+			model: Model<"openai-completions">,
+			request: { reasoning?: Effort; disableReasoning?: boolean },
+		): Promise<ShimPayload> => {
+			let body: ShimPayload | undefined;
+			const result = await streamSimple(
+				model,
+				{ messages: [{ role: "user", content: "Continue.", timestamp: 0 }] },
+				{
+					apiKey: "local-secret",
+					kimiApiFormat: "anthropic",
+					syntheticApiFormat: "anthropic",
+					...request,
+					fetch: async (_input, init) => {
+						body = JSON.parse(String(init?.body)) as ShimPayload;
+						const events = [
+							{
+								type: "message_start",
+								message: {
+									id: "msg_shim_no_controls",
+									type: "message",
+									role: "assistant",
+									model: model.id,
+									content: [],
+									stop_reason: null,
+									stop_sequence: null,
+									usage: { input_tokens: 1, output_tokens: 0 },
+								},
+							},
+							{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+							{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+							{ type: "content_block_stop", index: 0 },
+							{
+								type: "message_delta",
+								delta: { stop_reason: "end_turn", stop_sequence: null },
+								usage: { output_tokens: 1 },
+							},
+							{ type: "message_stop" },
+						];
+						return new Response(
+							`${events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}`).join("\n\n")}\n\n`,
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					},
+				},
+			).result();
+			expect(result.stopReason).toBe("stop");
+			if (!body) throw new Error(`No shim request captured: ${model.provider}/${model.id}`);
+			expect(body.model).toBe(model.id);
+			return body;
+		};
+
+		for (const provider of ["kimi-code", "synthetic"] as const) {
+			const model = sourceModel(provider);
+			expect(getSupportedEfforts(model)).toEqual([]);
+			for (const request of [{}, { disableReasoning: true }, { reasoning: Effort.High }]) {
+				const body = await payloadFor(model, request);
+				expect(body.thinking).toBeUndefined();
+				expect(body.output_config?.effort).toBeUndefined();
+			}
+			// A configured thinking surface restores controls even though the
+			// discovery trust flag persists and the shim changes transport mode.
+			const restored = buildModel({
+				...model,
+				thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+				compat: {
+					...model.compatConfig,
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+					thinkingFormat: "kimi",
+				},
+			});
+			const restoredBody = await payloadFor(restored, { reasoning: Effort.High });
+			expect(restoredBody.thinking?.type).toBe(provider === "kimi-code" ? "adaptive" : "enabled");
+			if (provider === "kimi-code") {
+				expect(restoredBody.output_config?.effort).toBe("high");
+			} else {
+				expect(restoredBody.thinking?.budget_tokens).toBeGreaterThan(0);
+			}
+		}
+
+		const mandatory = sourceModel("kimi-code", "tenant/kimi-k3");
+		const nativeDefault = await payloadFor(mandatory, {});
+		expect(nativeDefault.thinking).toMatchObject({ type: "enabled" });
+		expect(nativeDefault.thinking?.budget_tokens).toBeGreaterThan(0);
+		for (const request of [{ disableReasoning: true }, { reasoning: Effort.High }]) {
+			const body = await payloadFor(mandatory, request);
+			expect(body.thinking).toMatchObject({ type: "enabled" });
+			expect(body.thinking?.budget_tokens).toBe(nativeDefault.thinking?.budget_tokens);
+			expect(body.output_config?.effort).toBeUndefined();
+		}
+	});
+
 	test("openai-models-list discovery marks advertised reasoning ladders reasoning-capable (codex-lb metadata shape)", async () => {
 		writeRawModelsJson({
 			"openai-test": {
@@ -3185,6 +3921,7 @@ describe("ModelRegistry runtime discovery", () => {
 								id: "acme-think-1",
 								object: "model",
 								owned_by: "codex-lb",
+								limits: { max_input_tokens: 100_000, max_output_tokens: 16_384 },
 								metadata: {
 									display_name: "Acme Think 1",
 									context_window: 272000,
@@ -3198,6 +3935,17 @@ describe("ModelRegistry runtime discovery", () => {
 										{ effort: "ultra" },
 									],
 									default_reasoning_level: "medium",
+								},
+							},
+							{
+								id: "metadata/deepseek-v4-1-flash-261017",
+								max_output_tokens: 8_192,
+								metadata: {
+									display_name: "Routed Flash",
+									context_window: 64_000,
+									input_modalities: ["text"],
+									supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
+									default_reasoning_level: "low",
 								},
 							},
 						],
@@ -3214,6 +3962,7 @@ describe("ModelRegistry runtime discovery", () => {
 		// bundled-catalog fallback must not shadow what the server advertises.
 		expect(advertised?.name).toBe("Acme Think 1");
 		expect(advertised?.contextWindow).toBe(272_000);
+		expect(advertised?.maxTokens).toBe(16_384);
 		expect(advertised?.input).toEqual(["text", "image"]);
 		expect(advertised?.reasoning).toBe(true);
 		expect(advertised?.thinking?.mode).toBe("effort");
@@ -3221,6 +3970,17 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(advertised?.thinking?.defaultLevel).toBe(Effort.Medium);
 		const advertisedCompat = advertised?.compat as OpenAICompat | undefined;
 		expect(advertisedCompat?.supportsReasoningEffort).toBe(true);
+		expect(registry.find("openai-test", "metadata/deepseek-v4-1-flash-261017")).toMatchObject({
+			name: "Routed Flash",
+			contextWindow: 64_000,
+			maxTokens: 8_192,
+			input: ["text"],
+			thinking: {
+				mode: "effort",
+				efforts: [Effort.Low, Effort.High],
+				defaultLevel: Effort.Low,
+			},
+		});
 		if (!advertised || advertised.api !== "openai-completions") {
 			throw new Error("expected the discovered model to use OpenAI Completions");
 		}
@@ -3509,7 +4269,493 @@ describe("ModelRegistry runtime discovery", () => {
 		expect(answers.urgent).toEqual({ type: "noul", noul: 0.9 });
 	});
 
-	test("proxy discovery honors API-reported context_length and endpoint routing", async () => {
+	test("proxy discovery recovers thin namespaced capabilities without changing the wire model or local transport", async () => {
+		const ids = ["nku/deepseek-v4-1-flash-261017", "magpie/deepseek-flash", "custom/gpt-5.4"] as const;
+		const references = getBundledModelReferenceIndex();
+		const referenceMetadata = (id: string) => {
+			const reference = resolveModelReference(id, references);
+			if (!reference || reference.contextWindow == null || reference.maxTokens == null) {
+				throw new Error(`Missing chat catalog reference: ${id}`);
+			}
+			return {
+				name: reference.name,
+				contextWindow: reference.contextWindow,
+				maxTokens: Math.min(reference.maxTokens, reference.contextWindow),
+				input: reference.input,
+			};
+		};
+		let discoveryUrl: string | undefined;
+		let discoveryHeaders: Headers | undefined;
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				headers: { "X-Proxy": "local" },
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async (input, init) => {
+					discoveryUrl = String(input);
+					discoveryHeaders = new Headers(init?.headers);
+					return Response.json({ data: ids.map(id => ({ id, supported_endpoint_types: ["openai"] })) });
+				},
+				getBearerApiKeyResolver: async () => "local-secret",
+			},
+		);
+		expect(discoveryUrl).toBe("https://proxy.example/v1/models");
+		expect(discoveryHeaders?.get("Authorization")).toBe("Bearer local-secret");
+		const byId = new Map(models.map(model => [model.id, model]));
+		expect(byId.get(ids[0])).toMatchObject({
+			...referenceMetadata("deepseek-v4.1-flash-1017"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] },
+		});
+		expect(byId.get(ids[1])).toMatchObject({
+			...referenceMetadata("deepseek-flash"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High, Effort.Max] },
+		});
+		expect(byId.get(ids[2])).toMatchObject({
+			...referenceMetadata("gpt-5.4"),
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh] },
+		});
+
+		for (const id of ids) {
+			const model = byId.get(id);
+			if (!model || model.api !== "openai-completions") throw new Error(`Missing proxy model: ${id}`);
+			expect(model).toMatchObject({
+				id,
+				provider: "proxy-test",
+				baseUrl: "https://proxy.example/v1",
+				reasoning: true,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				headers: { "X-Proxy": "local" },
+				compat: {
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+					stripImageInput: false,
+					thinkingFormat: "openai",
+					isOpenRouterHost: false,
+				},
+			});
+			expect(new Headers(model.headers).has("Authorization")).toBe(false);
+			expect(model.requestModelId).toBeUndefined();
+			expect(model.thinking?.effortRouting).toBeUndefined();
+			const effort = model.thinking?.efforts.at(-1);
+			if (!effort) throw new Error(`Missing recovered effort ladder: ${id}`);
+			let requestUrl: string | undefined;
+			let requestHeaders: Headers | undefined;
+			let requestBody: string | undefined;
+			const result = await streamOpenAICompletions(
+				model as Model<"openai-completions">,
+				{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+				{
+					apiKey: "local-secret",
+					reasoning: effort,
+					fetch: async (input, init) => {
+						requestUrl = String(input);
+						requestHeaders = new Headers(init?.headers);
+						requestBody = typeof init?.body === "string" ? init.body : undefined;
+						return new Response(
+							'data: {"id":"proxy-recovery","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					},
+				},
+			).result();
+			expect(result.stopReason).toBe("stop");
+			expect(requestUrl).toBe("https://proxy.example/v1/chat/completions");
+			expect(requestHeaders?.get("X-Proxy")).toBe("local");
+			expect(requestHeaders?.get("Authorization")).toBe("Bearer local-secret");
+			expect(requestBody).toBeDefined();
+			const body = JSON.parse(requestBody ?? "{}") as Record<string, unknown>;
+			expect(body.model).toBe(id);
+			expect(body.reasoning_effort).toBe(effort);
+			expect(body.thinking).toBeUndefined();
+		}
+	});
+
+	test("public proxy streaming preserves images for every case of the reviewed DeepSeek alias", async () => {
+		const ids = [
+			"deepseek-v4-1-flash-261017",
+			"DEEPSEEK-V4-1-FLASH-261017",
+			"DeepSeek-v4-1-Flash-261017",
+			"team/deepseek-v4-1-flash-261017",
+			"TEAM/DEEPSEEK-V4-1-FLASH-261017",
+			"Team/DeepSeek-v4-1-Flash-261017",
+		];
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async () => Response.json({ data: ids.map(id => ({ id, supported_endpoint_types: ["openai"] })) }),
+				getBearerApiKeyResolver: async () => "local-secret",
+			},
+		);
+		const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Describe this image." },
+						{ type: "image", data: png, mimeType: "image/png" },
+					],
+					timestamp: 0,
+				},
+			],
+		};
+		for (const id of ids) {
+			const model = models.find(candidate => candidate.id === id);
+			if (!model || model.api !== "openai-completions") throw new Error(`Missing proxy image model: ${id}`);
+			let body: Record<string, unknown> | undefined;
+			const result = await streamSimple(model, context, {
+				apiKey: "local-secret",
+				fetch: async (_input, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return new Response(
+						'data: {"id":"proxy-image","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				},
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(model.input).toContain("image");
+			expect(body?.model).toBe(id);
+			expect(body?.messages).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: expect.arrayContaining([
+						expect.objectContaining({
+							type: "image_url",
+							image_url: expect.objectContaining({ url: `data:image/png;base64,${png}` }),
+						}),
+					]),
+				}),
+			);
+		}
+	});
+
+	test("proxy discovery leaves unreviewed and opaque ids unknown and does not inherit routed effort siblings", async () => {
+		const unknownIds = [
+			"nku/deepseek-v4-1-flash-261018",
+			"@nku/deepseek-v4-1-flash-261017",
+			"opaque-deployment-261017",
+		];
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async () =>
+					Response.json({
+						data: [...unknownIds, "custom/giga-potato"].map(id => ({
+							id,
+							supported_endpoint_types: ["openai"],
+						})),
+					}),
+				getBearerApiKeyResolver: async () => undefined,
+			},
+		);
+		for (const id of unknownIds) {
+			expect(models.find(model => model.id === id)).toMatchObject({
+				contextWindow: 128_000,
+				maxTokens: 32_768,
+				reasoning: false,
+				input: ["text"],
+				compat: { supportsReasoningEffort: false },
+			});
+		}
+		const routed = models.find(model => model.id === "custom/giga-potato");
+		expect(routed).toBeDefined();
+		expect(routed?.requestModelId).toBeUndefined();
+		expect(routed?.thinking?.effortRouting).toBeUndefined();
+		expect(routed?.compat).toMatchObject({ supportsReasoningEffort: false });
+		const unknownRelease = models.find(model => model.id === unknownIds[0]);
+		expect(unknownRelease?.compat).toMatchObject({ stripImageInput: true });
+	});
+
+	test("custom OpenRouter transport borrows effort controls without rewriting a namespaced model id", () => {
+		const reference = buildModel({
+			id: "catalog-effort-fixture",
+			name: "Catalog effort fixture",
+			api: "openai-completions",
+			provider: "catalog-fixture",
+			baseUrl: "https://catalog.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 32_768,
+		});
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		let model: Model;
+		try {
+			model = finalizeCustomModel(
+				{
+					id: "group/catalog-effort-fixture",
+					provider: "custom-router",
+					api: "openrouter",
+					baseUrl: "https://router.example/v1",
+				},
+				{ useDefaults: true },
+			);
+		} finally {
+			referenceLookup.mockRestore();
+		}
+		expect(model).toMatchObject({
+			id: "group/catalog-effort-fixture",
+			provider: "custom-router",
+			api: "openrouter",
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+		});
+		expect(model.requestModelId).toBeUndefined();
+	});
+
+	test("custom portable effort recovery excludes source wire compat while preserving target gates", async () => {
+		const id = "tenant/catalog-custom-wire-effort-fixture";
+		const efforts = [Effort.High, Effort.Max];
+		const reference = buildModel({
+			id: "catalog-custom-wire-effort-fixture",
+			name: "Custom source wire fixture",
+			api: "openai-completions",
+			provider: "custom-source-fixture",
+			baseUrl: "https://source.example/v1",
+			requestModelId: "source-only-deployment",
+			headers: { "X-Source": "source-only" },
+			reasoning: true,
+			thinking: { mode: "effort", efforts, defaultLevel: Effort.High, requiresEffort: true },
+			compat: {
+				supportsReasoningEffort: false,
+				omitReasoningEffort: true,
+				supportsReasoningParams: false,
+				trustExplicitThinkingOnly: true,
+				thinkingFormat: "openrouter",
+				reasoningEffortMap: { [Effort.Low]: "source-low" },
+				extraBody: { source_only: true },
+				whenThinking: {
+					supportsReasoningEffort: false,
+					omitReasoningEffort: true,
+					extraBody: { source_nested: true },
+				},
+			},
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const apis = ["openai-completions", "openai-responses"] as const;
+		const cases: { model: Model; enabled: boolean }[] = [];
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(buildModelReferenceIndex([reference]));
+		try {
+			const providers: Record<string, unknown> = {};
+			for (const api of apis) {
+				const providerConfig = {
+					api,
+					baseUrl: "https://custom.example/v1",
+					auth: "none",
+					headers: { "X-Target": "local" },
+					models: [{ id }],
+				};
+				providers[`custom-effort-${api}`] = providerConfig;
+				providers[`custom-provider-disabled-${api}`] = {
+					...providerConfig,
+					compat: { supportsReasoningEffort: false },
+				};
+				providers[`custom-model-disabled-${api}`] = {
+					...providerConfig,
+					models: [{ id, compat: { supportsReasoningEffort: false } }],
+				};
+			}
+			writeRawModelsJson(providers);
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			for (const api of apis) {
+				for (const kind of ["effort", "provider-disabled", "model-disabled"]) {
+					const provider = `custom-${kind}-${api}`;
+					const model = registry.find(provider, id);
+					if (!model) throw new Error(`Missing custom model: ${provider}/${id}`);
+					cases.push({ model, enabled: kind === "effort" });
+				}
+				for (const provider of ["commandcode", "custom-explicit-disabled"]) {
+					cases.push({
+						model: finalizeCustomModel(
+							{
+								id,
+								provider,
+								api,
+								baseUrl: "https://custom.example/v1",
+								headers: { "X-Target": "local" },
+								...(provider === "custom-explicit-disabled"
+									? { compat: { supportsReasoningEffort: false } }
+									: {}),
+							},
+							{ useDefaults: true },
+						),
+						enabled: false,
+					});
+				}
+
+				const sameProvider = finalizeCustomModel(
+					{ id, provider: reference.provider, api, baseUrl: "https://custom.example/v1" },
+					{ useDefaults: true },
+				);
+				expect(sameProvider.compat).toMatchObject({ supportsReasoningEffort: false });
+				expect(sameProvider.thinking).toEqual(api === "openai-completions" ? reference.thinking : undefined);
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+
+		for (const { model, enabled } of cases) {
+			expect(model).toMatchObject({
+				id,
+				compat: { supportsReasoningEffort: enabled, omitReasoningEffort: !enabled },
+			});
+			expect(model.requestModelId).toBeUndefined();
+			expect(model.compatConfig ?? {}).not.toHaveProperty("whenThinking");
+			expect(model.compatConfig ?? {}).not.toHaveProperty("extraBody");
+			if (enabled) {
+				expect(model.thinking).toEqual({ mode: "effort", efforts });
+				expect(model.compat).toMatchObject({ supportsReasoningParams: true, thinkingFormat: "openai" });
+			} else if (model.api === "openai-responses") {
+				expect(model.thinking).toBeUndefined();
+			}
+
+			let requestUrl: string | undefined;
+			let requestHeaders: Headers | undefined;
+			let requestBody: string | undefined;
+			const requestFetch: FetchImpl = async (input, init) => {
+				requestUrl = String(input);
+				requestHeaders = new Headers(init?.headers);
+				requestBody = typeof init?.body === "string" ? init.body : undefined;
+				if (model.api === "openai-completions") {
+					return new Response(
+						'data: {"id":"custom-effort","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				}
+				const events = [
+					{
+						type: "response.output_item.added",
+						output_index: 0,
+						item: { type: "message", id: "msg_custom_effort", role: "assistant", content: [] },
+					},
+					{ type: "response.output_text.delta", item_id: "msg_custom_effort", content_index: 0, delta: "ok" },
+					{
+						type: "response.completed",
+						response: {
+							id: "resp_custom_effort",
+							status: "completed",
+							usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+						},
+					},
+				];
+				return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+					headers: { "Content-Type": "text/event-stream" },
+				});
+			};
+			const result = await stream(
+				model,
+				{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+				{ apiKey: "local-secret", reasoning: "max", fetch: requestFetch },
+			).result();
+			expect(result.stopReason).toBe("stop");
+			const path = model.api === "openai-completions" ? "chat/completions" : "responses";
+			expect(requestUrl).toBe(`https://custom.example/v1/${path}`);
+			expect(requestHeaders?.get("X-Target")).toBe("local");
+			expect(requestHeaders?.get("X-Source")).toBeNull();
+			expect(requestHeaders?.get("Authorization")).toBe("Bearer local-secret");
+			expect(requestBody).toBeDefined();
+			const body = JSON.parse(requestBody ?? "{}") as Record<string, unknown>;
+			expect(body.model).toBe(id);
+			expect(body.source_only).toBeUndefined();
+			expect(body.source_nested).toBeUndefined();
+			if (model.api === "openai-completions") {
+				expect(body.reasoning_effort).toBe(enabled ? "max" : undefined);
+			} else if (enabled) {
+				expect(body.reasoning).toMatchObject({ effort: "max" });
+			} else {
+				expect(body.reasoning).toBeUndefined();
+			}
+		}
+	});
+
+	test("custom model recovery keeps borrowed efforts below target policy and authored thinking", () => {
+		const custom = {
+			id: "deepseek/deepseek-v4-pro",
+			provider: "openrouter",
+			api: "openai-completions",
+			baseUrl: "https://proxy.example/v1",
+		} as const;
+		const model = finalizeCustomModel(custom, { useDefaults: true });
+		expect(model.thinking?.efforts).toEqual([Effort.High]);
+		expect(Object.hasOwn(model, "referenceThinkingEfforts")).toBe(false);
+
+		const explicit = {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.High, Effort.Max],
+		} as const;
+		expect(finalizeCustomModel({ ...custom, thinking: explicit }, { useDefaults: true }).thinking).toMatchObject(
+			explicit,
+		);
+	});
+
+	test("proxy and OpenAI-list recovery respect target-provider ladders while modelOverrides remain explicit", async () => {
+		const id = "deepseek/deepseek-v4-pro";
+		const fetchMock: FetchImpl = async input => {
+			if (String(input) !== "https://proxy.example/v1/models") {
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			}
+			return Response.json({ data: [{ id, supported_endpoint_types: ["openai"] }] });
+		};
+		for (const type of ["proxy", "openai-models-list"] as const) {
+			const discover = type === "proxy" ? discoverProxyModels : discoverOpenAIModelsList;
+			const models = await discover(
+				{
+					provider: "openrouter",
+					api: "openai-completions",
+					baseUrl: "https://proxy.example",
+					discovery: { type },
+				},
+				{ fetch: fetchMock, getBearerApiKeyResolver: async () => undefined },
+			);
+			const model = models.find(model => model.id === id);
+			// Other hosts expose low/high/max; this OpenRouter deployment only
+			// accepts high. Borrowed catalog metadata is not user configuration.
+			expect(model?.thinking?.efforts).toEqual([Effort.High]);
+			expect(Object.hasOwn(model ?? {}, "referenceThinkingEfforts")).toBe(false);
+		}
+
+		const explicit: ModelSpec<"openai-completions">["thinking"] = {
+			mode: "effort",
+			efforts: [Effort.Low, Effort.High, Effort.Max],
+		};
+		writeRawModelsJson({
+			openrouter: {
+				baseUrl: "https://proxy.example",
+				api: "openai-completions",
+				auth: "none",
+				discovery: { type: "proxy" },
+				modelOverrides: { [id]: { thinking: explicit } },
+			},
+		});
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+		expect(registry.find("openrouter", id)?.thinking).toMatchObject(explicit);
+	});
+
+	test("proxy discovery honors reported token caps, input modalities, and endpoint routing", async () => {
 		writeRawModelsJson({
 			"proxy-test": {
 				baseUrl: "http://127.0.0.1:9998",
@@ -3524,7 +4770,41 @@ describe("ModelRegistry runtime discovery", () => {
 					JSON.stringify({
 						data: [
 							{ id: "anthropic-model", supported_endpoint_types: ["anthropic"], context_length: 200000 },
-							{ id: "openai-model", supported_endpoint_types: ["openai"], context_length: 65536 },
+							{ id: "anthropic/gpt-5.4", supported_endpoint_types: ["anthropic"] },
+							{
+								id: "limited/gpt-5.4",
+								supported_endpoint_types: ["openai"],
+								context_length: 64_000,
+								max_output_tokens: 8_192,
+								input: ["text"],
+							},
+							{
+								id: "nested/deepseek-v4-1-flash-261017",
+								supported_endpoint_types: ["openai"],
+								context_length: 16_000,
+								max_model_len: "24000",
+								limits: { max_input_tokens: 100_000, max_output_tokens: 30_000 },
+								max_tokens: 4_000,
+								architecture: { input_modalities: ["text"] },
+							},
+							{
+								id: "nested-limits-only",
+								supported_endpoint_types: ["openai"],
+								limits: { max_input_tokens: 12_288, max_output_tokens: 4_096 },
+								input_modalities: ["text", "image"],
+							},
+							{
+								id: "malformed-output",
+								supported_endpoint_types: ["openai"],
+								max_output_tokens: 1.5,
+								max_completion_tokens: 6_000,
+							},
+							{
+								id: "output-over-context",
+								supported_endpoint_types: ["openai"],
+								context_length: 4_096,
+								max_tokens: 8_192,
+							},
 							{ id: "zero-context-model", supported_endpoint_types: ["openai"], context_length: 0 },
 						],
 					}),
@@ -3538,14 +4818,95 @@ describe("ModelRegistry runtime discovery", () => {
 		const anthropic = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "anthropic-model");
 		expect(anthropic?.api).toBe("anthropic-messages");
 		expect(anthropic?.contextWindow).toBe(200000);
-		const openai = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "openai-model");
-		expect(openai?.api).toBe("openai-completions");
-		expect(openai?.contextWindow).toBe(65536);
+		expect(registry.find("proxy-test", "anthropic/gpt-5.4")).toMatchObject({
+			api: "anthropic-messages",
+			thinking: { mode: "budget" },
+		});
+		expect(registry.find("proxy-test", "limited/gpt-5.4")).toMatchObject({
+			api: "openai-completions",
+			contextWindow: 64_000,
+			maxTokens: 8_192,
+			input: ["text"],
+		});
+		expect(registry.find("proxy-test", "nested/deepseek-v4-1-flash-261017")).toMatchObject({
+			contextWindow: 24_000,
+			maxTokens: 24_000,
+			input: ["text"],
+		});
+		expect(registry.find("proxy-test", "nested-limits-only")).toMatchObject({
+			contextWindow: 16_384,
+			maxTokens: 4_096,
+			input: ["text", "image"],
+		});
+		expect(registry.find("proxy-test", "malformed-output")?.maxTokens).toBe(6_000);
+		expect(registry.find("proxy-test", "output-over-context")?.maxTokens).toBe(4_096);
 		// A non-positive upstream context_length must be rejected by the guard and
 		// fall through to the bundled reference (absent here) then the default,
 		// never pinning the model at a broken `0` window.
 		const zeroCtx = registry.getAll().find(m => m.provider === "proxy-test" && m.id === "zero-context-model");
 		expect(zeroCtx?.contextWindow).toBe(128000);
+	});
+
+	test("proxy discovery keeps modelOverrides stronger than recovered and provider-reported capabilities", async () => {
+		writeRawModelsJson({
+			"proxy-test": {
+				baseUrl: "http://127.0.0.1:9998",
+				auth: "none",
+				discovery: { type: "proxy" },
+				compat: { supportsReasoningEffort: false },
+				modelOverrides: {
+					"nku/deepseek-v4-1-flash-261017": {
+						reasoning: false,
+						input: ["text"],
+						contextWindow: 48_000,
+						maxTokens: 6_000,
+					},
+					"custom/gpt-5.4": {
+						thinking: { mode: "effort", efforts: [Effort.Low] },
+						input: ["text", "image"],
+						contextWindow: 40_000,
+						maxTokens: 3_000,
+						cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+						compat: { supportsReasoningEffort: true },
+					},
+				},
+			},
+		});
+		const fetchMock: FetchImpl = async input => {
+			if (String(input) !== "http://127.0.0.1:9998/v1/models") {
+				throw new Error(`Unexpected URL: ${String(input)}`);
+			}
+			return Response.json({
+				data: ["nku/deepseek-v4-1-flash-261017", "custom/gpt-5.4"].map(id => ({
+					id,
+					supported_endpoint_types: ["openai"],
+					context_length: 64_000,
+					max_output_tokens: 8_192,
+					input: ["text"],
+				})),
+			});
+		};
+		const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+		await registry.refresh();
+
+		const disabled = registry.find("proxy-test", "nku/deepseek-v4-1-flash-261017");
+		expect(disabled).toMatchObject({
+			reasoning: false,
+			input: ["text"],
+			contextWindow: 48_000,
+			maxTokens: 6_000,
+			compat: { supportsReasoningEffort: false },
+		});
+		expect(disabled?.thinking).toBeUndefined();
+		expect(registry.find("proxy-test", "custom/gpt-5.4")).toMatchObject({
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low] },
+			input: ["text", "image"],
+			contextWindow: 40_000,
+			maxTokens: 3_000,
+			cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+			compat: { supportsReasoningEffort: true },
+		});
 	});
 
 	test("proxy discovery uses proxy-reported name over bundled placeholder", async () => {

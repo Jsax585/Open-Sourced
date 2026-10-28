@@ -38,11 +38,11 @@ interface RuleScope {
 	models?: CompiledSelector[];
 }
 
-/** `priority=` (and `token=` on `models`) are the only named entries selectors accept. */
+/** `priority=` (plus `token=` / `glob=` on `models`) are the only named entries selectors accept. */
 function nodePriority(node: KdlNodeView): number {
 	let priority: number | undefined;
 	for (const prop of node.props) {
-		if (node.name === "models" && prop.name === "token") continue;
+		if (node.name === "models" && (prop.name === "token" || prop.name === "glob")) continue;
 		if (prop.name !== "priority" || priority !== undefined) malformed(node);
 		if (typeof prop.value !== "number" || !Number.isSafeInteger(prop.value)) malformed(node);
 		priority = prop.value;
@@ -63,8 +63,10 @@ function selectorArguments(node: KdlNodeView): CompiledSelector[] {
 	}
 	for (const prop of node.props) {
 		if (prop.name === "priority") continue;
-		if (prop.name !== "token" || typeof prop.value !== "string" || !prop.value) malformed(node);
-		selectors.push({ kind: "token", value: prop.value.toLowerCase() });
+		if ((prop.name !== "token" && prop.name !== "glob") || typeof prop.value !== "string" || !prop.value) {
+			malformed(node);
+		}
+		selectors.push({ kind: prop.name, value: prop.value.toLowerCase() });
 	}
 	if (selectors.length === 0) malformed(node);
 	return selectors;

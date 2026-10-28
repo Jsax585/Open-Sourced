@@ -908,6 +908,7 @@ function resolveAnthropicPolicy(
 		firstPartyProvider: false,
 		honorsClaudeCodeBetaKillSwitch: false,
 		supportsOutputEffort: true,
+		trustExplicitThinkingOnly: undefined,
 		disableStrictTools: rejectsStrictTools,
 		// Present as a key so models.yml `compat` can set it; unset unless detected.
 		bedrockMessagesApi: bedrockMessagesApi || undefined,
@@ -1205,9 +1206,17 @@ function resolveThinkingPolicy<TApi extends Api>(
 		return undefined;
 	}
 	if (rule.efforts?.length === 0) return undefined;
+	const mode = rule.mode ?? defaultThinkingMode(spec, facts);
+	// Cross-provider catalog efforts fill only the generic effort fallback.
+	// Reviewed target rules (including an empty ladder) and caller thinking
+	// always win, and a budget/adaptive target cannot acquire an effort wire mode.
+	const referenceEfforts =
+		!unverified && mode === "effort" && spec.referenceThinkingEfforts?.length
+			? spec.referenceThinkingEfforts
+			: undefined;
 	const config: ThinkingConfig = {
-		mode: rule.mode ?? defaultThinkingMode(spec, facts),
-		efforts: rule.efforts ?? fallbackEfforts(spec, compat),
+		mode,
+		efforts: rule.efforts ?? referenceEfforts ?? fallbackEfforts(spec, compat),
 	};
 	if (config.efforts.length === 0) {
 		throw new Error(`Model ${spec.provider}/${spec.id} resolved to an empty thinking range`);

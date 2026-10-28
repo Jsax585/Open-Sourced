@@ -17,6 +17,9 @@ class "deepseek" {
 
     revision prefix="deepseek-v" anywhere=#true
 
+    // NKU's reviewed spelling includes the release year and hyphenates 4.1.
+    // Keep it exact: adjacent dates and other V4 releases are not aliases.
+    override id="deepseek-v4-1-flash-261017-release-alias" model="deepseek-v4-1-flash-261017" logical="deepseek-v4.1-flash-1017" class="deepseek" family="flash" revision="4.1" rationale="The reviewed 2026-10-17 proxy identifier names the dated DeepSeek V4.1 Flash 1017 release" provenance="reviewed NKU proxy catalog; bundled deepseek/deepseek-v4.1-flash-1017"
     override id="deepseek-bare-flash-v4-1" provider="deepseek" model="deepseek-flash" class="deepseek" family="flash" revision="4.1" rationale="The first-party bare Flash alias serves DeepSeek V4.1 Flash, not V4 Flash" provenance="providers/deepseek.kdl"
     override id="opencode-go-bare-flash-v4-1" provider="opencode-go" model="deepseek-flash" class="deepseek" family="flash" revision="4.1" rationale="OpenCode Go's bare Flash lane shares the reviewed V4.1 Flash deployment contract" provenance="providers/opencode-go.kdl"
     override id="vercel-deepseek-v3-2-thinking-product" provider="vercel-ai-gateway" model="deepseek-v3.2-thinking" logical="deepseek/deepseek-v3.2-thinking" class="deepseek" rationale="Oracle exposes this independently priced product rather than an effort route" provenance="fixtures/llm-oracle/catalog/models.normalized.json"

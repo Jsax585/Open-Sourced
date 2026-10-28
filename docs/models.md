@@ -212,7 +212,7 @@ Loading models.yml checks a `modelOverrides` `kind` only against an api the file
 - `auth`: `apiKey` (default), `none`, or `oauth`. `none` and `oauth` waive the custom-provider `apiKey` requirement, but `oauth` does not create credentials or register a login flow. It forces OAuth-style request shaping; a usable credential must come from stored auth, environment, or a configured key. Custom `anthropic-messages` models also use OAuth-style shaping when `auth` is omitted; set `auth: apiKey` for plain API-key shaping.
 - `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, `litellm`, or `apple-foundation-models`. Apple's transport is registered implicitly on supported Macs; `apple-foundation-models` is not an allowed `api` value in this YAML schema.
 - `discovery.injectV1`: optional boolean, default `true`, for `openai-models-list`. Set `false` to fetch the model list from `{baseUrl}/models` without injecting `/v1` — for gateways that root their OpenAI-compatible surface at a versioned path (e.g. `https://api.opper.ai/v3/compat`) where the forced `/v1/models` returns a different, smaller model list. Query strings in `baseUrl` are ignored, matching the default mode.
-- `discovery.advertisedReasoning`: optional boolean, default `true`, for `openai-models-list`, `lm-studio`, and `proxy`. Discovery reads what a `/v1/models` row states about its own reasoning surface (`supported_reasoning_levels` / `default_reasoning_level` / `reasoning`, top-level or under `metadata`) and lets it outrank the bundled-reference guess, so a gateway that dispatches with its own catalog offers exactly the tiers its route accepts. A row that lists `none` gets `reasoningDisableMode: none-effort`, so a thinking-off request sends the off-switch instead of being clamped to the lowest tier. An advertised ladder also pins `defaultLevel` inside itself, so catalog policy cannot inject a tier the row omits. A row reporting `reasoning: false` overrides a reasoning-enabled reference for that id. Set the flag to `false` when an endpoint advertises levels its route rejects: discovery then builds each model's thinking surface from the bundled reference alone. A row that says nothing about reasoning is unaffected either way. Explicit `modelOverrides.<id>.thinking` and `compat.supportsReasoningEffort` still win over both. `litellm` does not accept the flag: its authoritative reasoning metadata comes from `/model_group/info`, so the setting would only apply to its `/v1/models` fallback.
+- `discovery.advertisedReasoning`: optional boolean, default `true`, for `openai-models-list`, `lm-studio`, and `proxy`. Discovery reads what a `/v1/models` row states about its own reasoning surface (`supported_reasoning_levels` / `default_reasoning_level` / `reasoning`, top-level or under `metadata`) and lets it outrank the bundled-reference guess, so a gateway that dispatches with its own catalog offers exactly the tiers its route accepts. An advertised ladder that lists `none` gets `reasoningDisableMode: none-effort`, so a thinking-off request sends the off-switch instead of being clamped to the lowest tier. An advertised ladder also pins `defaultLevel` inside itself, so catalog policy cannot inject a tier the row omits. A valid array with no usable active tiers (including `[]`, `["none"]`, or only unsupported tiers such as `minimal` / `ultra`) exposes no active thinking controls and blocks both borrowed and inferred effort ladders, including after cache reloads. Independently known reasoning capability and its history are preserved; unavailable controls do not mean `reasoning: false`. Off-only requests send only the advertised off-switch or omit the optional effort field; empty and unsupported-only arrays never invent `none`. A row reporting `reasoning: false` overrides a reasoning-enabled reference for that id. Set the flag to `false` when an endpoint advertises levels its route rejects: discovery then builds each model's thinking surface from the bundled reference alone. Absent or malformed non-array surfaces retain the normal reference fallback. Explicit `modelOverrides.<id>.thinking` and compatibility overrides still win over discovery. `litellm` does not accept the flag: its authoritative reasoning metadata comes from `/model_group/info`, so the setting would only apply to its `/v1/models` fallback.
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 - `imageInputDecoder`: `stb` only. Set this on a custom model or `modelOverrides` entry when the serving backend uses an STB-compatible image decoder that cannot accept WebP; OMP converts attached and historical WebP images before provider dispatch.
 - `imageCountBudget`: positive integer. Set this on a custom model or `modelOverrides` entry to state how many images one request to its host may carry. It replaces the catalog budget, which is 5 for a provider no catalog rule names. A gateway in front of a vendor with a higher limit needs it: once a session holds more images than the budget, OMP drops the oldest ones, which changes the cached prompt prefix.
@@ -508,8 +508,10 @@ discard a valid output limit. Without it, a valid top-level `max_output_tokens`,
 sets the cap, ahead of any bundled-reference limit. Each spelling is validated on its own, so an
 unusable value on one never suppresses a usable sibling. Otherwise, context and output follow the
 existing native/reference/default fallback.
-Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
-use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
+Silent endpoints can inherit bundled-reference limits, reasoning, input modalities, and portable effort
+ladders on OpenAI effort transports. Reference matching follows the same namespace and reviewed-alias
+rules as [proxy discovery](#proxy-discovery-discoverytype-proxy). Unknown models use 128,000 context and
+32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
 Anthropic-routed models use an 8,192-token fallback output cap.
 
 A row advertising only image output becomes an image-generation runner; embedding-only output
@@ -566,6 +568,33 @@ Provider-level `api` is **optional** with `discovery.type: proxy` because the
 per-model wire is auto-detected. The Anthropic SDK strips a trailing `/v1`
 from `baseUrl` before appending `/v1/messages`, so a single discovery `baseUrl`
 (ending in `/v1`) round-trips correctly to both wires.
+
+Missing capability metadata is recovered from the bundled catalog: full-ID matches take precedence,
+then the final slash-separated component is matched (for example, `reseller/gpt-5.4`).
+Reviewed KDL logical aliases are a last fallback, classified from the original full model ID,
+including `nku/deepseek-v4-1-flash-261017` → `deepseek-v4.1-flash-1017`; namespace wrappers such
+as `org/team/deepseek-v4-1-flash-261017` also work. This does not extend reviewed aliases to
+unreviewed marked variants: `nku/deepseek-v4-1-flash-261017-free` does not inherit that alias's
+capabilities. Existing marker stripping still recovers direct canonical references, such as
+`claude-opus-4-6-free` → `claude-opus-4-6`. Arbitrary dates and version suffixes are not stripped,
+and unknown releases are not guessed. The original full model ID, provider, endpoint, headers,
+and local pricing remain unchanged.
+
+Provider-reported input modalities and token limits outrank catalog fallbacks, using the same
+limit fields and precedence as `openai-models-list` above. Output limits are capped at the resolved
+context window. Explicit `modelOverrides` remain authoritative after discovery.
+
+Cross-provider thinking recovery is limited to plain effort ladders on compatible OpenAI effort
+transports. It does not copy provider-specific wire-ID routing, effort remaps, token budgets,
+defaults, or mandatory/off behavior. Reviewed target-provider thinking rules take precedence over
+borrowed efforts; explicitly configured thinking remains highest priority. Target API policy and
+configured compatibility flags still control whether effort is sent; set
+`compat.supportsReasoningEffort: false` if the gateway rejects it. Catalog recovery describes the
+expected model capabilities, not a live validation of a proxy's implementation.
+
+For custom model definitions that borrow a cross-provider effort ladder, the reference's `compat`
+is not inherited. Target provider/model compatibility remains authoritative; same-provider and
+non-borrowing custom references keep their existing compatibility merge behavior.
 
 ```yaml
 providers:

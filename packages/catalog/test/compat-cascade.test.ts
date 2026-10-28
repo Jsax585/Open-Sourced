@@ -37,6 +37,60 @@ describe("cascade rank precedence", () => {
 		expect(resolveCascadeRules(cascade, target({ model: "model-2" })).wire.supportsStore).toBe(true);
 	});
 
+	test("named literal globs match whole ids case-insensitively while positional exact selectors stay raw", () => {
+		const alias = "deepseek-v4-1-flash-261017";
+		const mixed = "DeepSeek-v4-1-Flash-261017";
+		const cascade = compile(
+			`class "cls" {
+				strip-image-input #true
+				models glob="DeEpSeEk-v4-1-FlAsH-261017" {
+					strip-image-input #false
+				}
+				models "${mixed}" {
+					supports-store #true
+				}
+			}`,
+		);
+		for (const model of [alias, mixed, alias.toUpperCase()]) {
+			const resolved = resolveCascadeRules(cascade, target({ model }));
+			expect(resolved.wire.stripImageInput).toBe(false);
+			expect(resolved.wire.supportsStore).toBe(model === mixed ? true : undefined);
+		}
+		for (const model of [
+			`prefix-${alias}`,
+			`team/${alias}`,
+			`${alias}-suffix`,
+			`${alias}-free`,
+			`${alias}:cloud`,
+			"deepseek-v4-1-flash-261016",
+			"deepseek-v4-1-flash-261018",
+		]) {
+			expect(resolveCascadeRules(cascade, target({ model })).wire.stripImageInput).toBe(true);
+		}
+	});
+
+	test("named globs retain glob rank and combine with positional, token and priority arguments", () => {
+		const cascade = compile(
+			`class "cls" {
+				models "*" priority=-2 {
+					supports-store #false
+				}
+				models "Exact" "VENDOR/*" glob="LiTeRaL" glob="SeCoNd" token="PrEvIeW" priority=-1 {
+					supports-store #true
+				}
+				models "LiTeRaL" priority=-10 {
+					supports-store #false
+				}
+			}`,
+		);
+		for (const model of ["Exact", "vendor/sibling", "literal", "LITERAL", "SECOND", "acme-PREVIEW-v2"]) {
+			expect(resolveCascadeRules(cascade, target({ model })).wire.supportsStore).toBe(true);
+		}
+		for (const model of ["EXACT", "prefix-literal", "literal-suffix", "previews", "other", "LiTeRaL"]) {
+			expect(resolveCascadeRules(cascade, target({ model })).wire.supportsStore).toBe(false);
+		}
+	});
+
 	test("more constrained dimensions win at equal exactness", () => {
 		const cascade = compile(
 			`class "cls" {

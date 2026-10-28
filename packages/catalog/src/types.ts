@@ -608,6 +608,8 @@ export interface OpenAICompat {
  * that proxy gateways (Vertex AI, AWS Bedrock-style fronts, etc.) reject.
  */
 export interface AnthropicCompat {
+	/** Do not infer a thinking dial when discovery supplies no explicit thinking configuration. */
+	trustExplicitThinkingOnly?: boolean;
 	/** Whether thinking requests may include `context_management` and its beta header. Default: true. */
 	supportsContextManagement?: boolean;
 	/**
@@ -1201,6 +1203,7 @@ export type ResolvedAnthropicCompat = Required<
 	Omit<
 		AnthropicCompat,
 		| "streamIdleTimeoutMs"
+		| "trustExplicitThinkingOnly"
 		| "thinkingLoopGuard"
 		| "bedrockMessagesApi"
 		| "effortBeta"
@@ -1213,6 +1216,8 @@ export type ResolvedAnthropicCompat = Required<
 		| "maxImagePayloadBytes"
 	>
 > & {
+	/** Preserve a discovery-declared absence of controllable thinking efforts. */
+	trustExplicitThinkingOnly?: AnthropicCompat["trustExplicitThinkingOnly"];
 	/** Effort-beta override; undefined keeps the transport's legacy heuristic. */
 	effortBeta?: AnthropicCompat["effortBeta"];
 	/** Extended-cache-ttl beta opt-out; undefined sends it where a 1h breakpoint needs it. */
@@ -1862,8 +1867,8 @@ export interface Model<TApi extends Api = Api> {
 
 /**
  * A model as authored by configs, bundled catalogs, and discovery — the input
- * vocabulary of `buildModel`. Identical to `Model` except `compat` carries the
- * sparse override shape and nothing is resolved yet.
+ * vocabulary of `buildModel`. Compat carries sparse overrides, discovery may
+ * supply reference fallbacks, and derived policy fields are not resolved yet.
  */
 export interface ModelSpec<TApi extends Api = Api> extends Omit<
 	Model<TApi>,
@@ -1879,6 +1884,11 @@ export interface ModelSpec<TApi extends Api = Api> extends Omit<
 > {
 	/** Sparse compatibility overrides; resolved into `Model.compat` by `buildModel`. */
 	compat?: CompatConfigOf<TApi>;
+	/**
+	 * Internal cross-provider catalog fallback, below target thinking policy
+	 * and explicit `thinking`. Consumed and removed by `buildModel`.
+	 */
+	referenceThinkingEfforts?: readonly Effort[];
 }
 
 /**
