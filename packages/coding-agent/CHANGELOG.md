@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed a session resumed from a subagent's transcript (`omp --resume <name>.jsonl`) starting a second agent loop on that same transcript when a peer messaged it by that name; the message now reaches the running session instead of reviving a copy of it
+- Fixed a session resumed from a subagent's transcript (`omp --resume <name>.jsonl`) starting a second agent loop on that same transcript when a peer messaged it by that name; the message now reaches the running session instead of reviving a copy of it ([#17257](https://github.com/can1357/oh-my-pi/pull/17257) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.13.2] - 2026-10-27
 
