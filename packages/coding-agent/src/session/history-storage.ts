@@ -1,14 +1,12 @@
 import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getHistoryDbPath, logger, openSqliteDatabaseSync, postmortem, readSalvageableRows } from "@oh-my-pi/pi-utils";
 import {
-	checkpointWal,
-	getHistoryDbPath,
-	logger,
-	openSqliteDatabaseSync,
-	postmortem,
-	readSalvageableRows,
-} from "@oh-my-pi/pi-utils";
+	type HistoryDatabaseRegistration,
+	prepareHistoryDatabaseOpen,
+	registerHistoryDatabase,
+} from "./history-database";
 import { closeSessionIndex, salvageSessionIndex } from "./session-index";
 
 /** A unique prompt with provenance from its most recent submission. */
@@ -110,7 +108,8 @@ let cancelExitCleanup: (() => void) | undefined;
 
 /** Stores searchable prompts with only their latest project and session metadata. */
 export class HistoryStorage {
-	#db: Database;
+	#db!: Database;
+	#registration!: HistoryDatabaseRegistration;
 	static #instance?: HistoryStorage;
 	#sessionResolver?: () => string | undefined;
 	#addListener?: () => void;
@@ -118,13 +117,17 @@ export class HistoryStorage {
 	#writeFailureReported = false;
 
 	// Prepared statements
-	#upsertRowStmt: Statement;
-	#recentStmt: Statement;
-	#searchStmt: Statement;
+	#upsertRowStmt!: Statement;
+	#recentStmt!: Statement;
+	#searchStmt!: Statement;
 	// Cache substring-fallback prepared statements keyed by token count.
 	#substringStmts = new Map<number, Statement>();
 
 	private constructor(db: Database) {
+		this.#initialize(db);
+	}
+
+	#initialize(db: Database): void {
 		this.#db = db;
 
 		// One-shot statements go through the query cache, which close() finalizes; a
@@ -172,6 +175,16 @@ ON CONFLICT(prompt) DO UPDATE SET
 	session_id = excluded.session_id,
 	use_count = history.use_count + 1
 		`);
+		this.#registration = registerHistoryDatabase({
+			db,
+			finalize: () => this.#finalizeStatements(),
+			reopen: () => {
+				HistoryStorage.#openDatabase(db.filename, replacement => {
+					this.#initialize(replacement);
+					return this;
+				});
+			},
+		});
 	}
 
 	/**
@@ -186,27 +199,28 @@ ON CONFLICT(prompt) DO UPDATE SET
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		// Windows cannot move history.db aside while the session index holds it open.
 		closeSessionIndex();
+		if (!prepareHistoryDatabaseOpen(dbPath)) throw new Error("History writes are disabled for this database");
+		return HistoryStorage.#openDatabase(dbPath, db => {
+			const instance = new HistoryStorage(db);
+			// Exit-only: a keep-alive cleanup leaves the handle valid so the editor can
+			// keep submitting prompts; the real exit closes. Register before publishing
+			// so a real-exit-in-progress late registration cannot close this instance.
+			cancelExitCleanup = postmortem.register("history-storage", () => HistoryStorage.close(), {
+				exitOnly: true,
+			});
+			HistoryStorage.#instance = instance;
+			return instance;
+		});
+	}
+
+	static #openDatabase(dbPath: string, initialize: (db: Database) => HistoryStorage): HistoryStorage {
 		let backupPath = undefined as string | undefined;
-		const instance = openSqliteDatabaseSync(
-			dbPath,
-			db => {
-				const instance = new HistoryStorage(db);
-				// Exit-only: a keep-alive cleanup leaves the handle valid so the editor can
-				// keep submitting prompts; the real exit closes. Register before publishing
-				// so a real-exit-in-progress late registration cannot close this instance.
-				cancelExitCleanup = postmortem.register("history-storage", () => HistoryStorage.close(), {
-					exitOnly: true,
-				});
-				HistoryStorage.#instance = instance;
-				return instance;
+		const instance = openSqliteDatabaseSync(dbPath, initialize, {
+			recoverCorruption: true,
+			onCorruptionPreserved: preserved => {
+				backupPath = preserved;
 			},
-			{
-				recoverCorruption: true,
-				onCorruptionPreserved: preserved => {
-					backupPath = preserved;
-				},
-			},
-		);
+		});
 		if (backupPath) instance.#salvage(backupPath);
 		return instance;
 	}
@@ -221,21 +235,25 @@ ON CONFLICT(prompt) DO UPDATE SET
 	}
 
 	#close(): void {
-		checkpointWal(this.#db);
+		this.#registration.close(true);
+	}
+
+	#finalizeStatements(): void {
 		for (const stmt of this.#substringStmts.values()) stmt.finalize();
 		this.#substringStmts.clear();
 		this.#upsertRowStmt.finalize();
 		this.#recentStmt.finalize();
 		this.#searchStmt.finalize();
-		this.#db.close();
 	}
 
-	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {
+	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): boolean {
+		if (!this.#registration.beforeWrite()) return false;
 		this.#db.transaction((rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>) => {
 			for (const row of rows) {
 				this.#upsertRowStmt.run(row.prompt, row.cwd ?? null, row.sessionId ?? null);
 			}
 		})(rows);
+		return true;
 	}
 
 	/**
@@ -270,7 +288,9 @@ ON CONFLICT(prompt) DO UPDATE SET
 		if (!trimmed) return Promise.resolve();
 		const session = sessionId ?? this.#sessionResolver?.();
 		try {
-			this.#insertBatch([{ prompt: trimmed, cwd: cwd ?? undefined, sessionId: session || undefined }]);
+			if (!this.#insertBatch([{ prompt: trimmed, cwd: cwd ?? undefined, sessionId: session || undefined }])) {
+				return Promise.resolve();
+			}
 		} catch (error) {
 			logger.error("HistoryStorage add failed", { error: String(error) });
 			if (!this.#writeFailureReported) {
@@ -490,6 +510,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 					.query<{ seq: number }, []>("SELECT seq FROM sqlite_sequence WHERE name = 'history'")
 					.get()?.seq;
 			} catch {}
+			if (!this.#registration.beforeWrite()) return;
 			const target = this.#db;
 			const counts = target.transaction(() => {
 				using insert = target.prepare(`

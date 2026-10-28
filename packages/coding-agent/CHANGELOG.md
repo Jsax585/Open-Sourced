@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed prompt history, session titles, and recaps being lost after another session removes a journal following lost POSIX locks; writers now reconnect only when safe, or stop with a warning instead of risking a stale checkpoint ([#15586](https://github.com/can1357/oh-my-pi/issues/15586))
+
 ## [18.13.2] - 2026-10-27
 
 ### Added
