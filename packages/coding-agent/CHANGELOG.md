@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Cursor models failing to ask questions: their native `AskQuestion` now opens the `ask` dialog instead of being rejected with "Interactive questions are not implemented by this client", one question at a time (including `ask` called over MCP), each closing when the turn is aborted. Sessions without `ask` (subagents, headless) still reject it ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added

@@ -2,7 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { clearCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
-import type { AssistantMessage, Context, CursorExecHandlers, ToolCall, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	Context,
+	CursorExecHandlers,
+	CursorMcpCall,
+	ToolCall,
+	ToolResultMessage,
+} from "@oh-my-pi/pi-ai/types";
 import { getStreamingPartialJson, setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { applyGlyphCodec, decodeGlyphText, encodeGlyphText } from "@oh-my-pi/pi-ai/utils/glyph-codec";
@@ -305,6 +312,68 @@ describe("glyph stream decode", () => {
 		expect(localResult?.content[0]).toEqual({ type: "text", text: `new ${newGlyph}` });
 		if (!("role" in result) || result.role !== "toolResult") throw new Error("expected encoded tool result");
 		expect(result.content[0]).toEqual({ type: "text", text: "new ⟦Uf0000⟧" });
+	});
+
+	it("shows AskQuestion glyphs decoded and returns answers in Cursor's encoded labels", async () => {
+		const glyph = "\ue0a0";
+		const codec = applyGlyphCodec({ messages: [{ role: "user", content: glyph, timestamp: 1 }] });
+		let shown: unknown;
+		const handlers: CursorExecHandlers = {
+			async askQuestion(call) {
+				shown = call.args;
+				return {
+					toolResult: {
+						role: "toolResult",
+						toolCallId: call.toolCallId,
+						toolName: "ask",
+						content: [{ type: "text", text: "answered" }],
+						isError: false,
+						timestamp: 0,
+					},
+					answers: [{ selectedOptions: [glyph], customInput: `${glyph} too` }],
+				};
+			},
+		};
+		const wrapped = codec.wrapCursorExecHandlers(handlers);
+		if (wrapped.askQuestion === undefined) throw new Error("expected wrapped askQuestion handler");
+		const result = await wrapped.askQuestion({
+			toolCallId: "tool-1",
+			args: { questions: [{ question: "Icon ⟦Ue0a0⟧?", options: [{ label: "⟦Ue0a0⟧" }] }] },
+		});
+
+		expect(shown).toEqual({ questions: [{ question: `Icon ${glyph}?`, options: [{ label: glyph }] }] });
+		expect(result.answers).toEqual([{ selectedOptions: ["⟦Ue0a0⟧"], customInput: "⟦Ue0a0⟧ too" }]);
+	});
+
+	it("keeps class handlers with private fields callable through the wrapper", async () => {
+		class PrivateStateHandlers implements CursorExecHandlers {
+			#prefix = "via private field";
+			async mcp(call: CursorMcpCall): Promise<ToolResultMessage> {
+				return {
+					role: "toolResult",
+					toolCallId: call.toolCallId,
+					toolName: "ask",
+					content: [{ type: "text", text: this.#prefix }],
+					isError: false,
+					timestamp: 0,
+				};
+			}
+		}
+		const codec = applyGlyphCodec({ messages: [{ role: "user", content: "\ue0a0", timestamp: 1 }] });
+		const wrapped = codec.wrapCursorExecHandlers(new PrivateStateHandlers());
+		const mcp = wrapped.mcp?.bind(wrapped);
+		if (mcp === undefined) throw new Error("expected wrapped mcp handler");
+
+		const result = await mcp({
+			name: "ask",
+			toolName: "ask",
+			providerIdentifier: "omp",
+			toolCallId: "tool-1",
+			args: {},
+			rawArgs: {},
+		});
+
+		expect(result).toMatchObject({ content: [{ type: "text", text: "via private field" }] });
 	});
 });
 describe("streamSimple glyph boundary", () => {

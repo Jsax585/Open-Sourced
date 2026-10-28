@@ -34,7 +34,7 @@ export interface GlyphCodec {
 	context: Context;
 	/** Decodes glyph tokens live: text and tool-call deltas, partial snapshots, completed tool calls, and the terminal message. */
 	wrap(inner: AssistantMessageEventStream): AssistantMessageEventStream;
-	/** Decodes Cursor Pi calls and encodes their provider-bound results. */
+	/** Decodes Cursor Pi and `AskQuestion` calls and encodes their provider-bound results. */
 	wrapCursorExecHandlers(handlers: CursorExecHandlers): CursorExecHandlers;
 	/** Whether this request has encoded at least one glyph or literal token prefix. */
 	active: boolean;
@@ -624,6 +624,15 @@ function createCursorExecHandlersCodec(handlers: CursorExecHandlers, onEncoded: 
 				return encodeCursorResult(result, onEncoded);
 			}
 		: undefined;
+	const sourceAskQuestion = handlers.askQuestion;
+	const askQuestion: CursorExecHandlers["askQuestion"] = sourceAskQuestion
+		? async call => {
+				const args = decodeCursorArgs(call.args);
+				const result = await sourceAskQuestion.call(handlers, args === call.args ? call : { ...call, args });
+				// Cursor maps selected labels back to option ids by its encoded labels; the tool result stays local.
+				return result.answers ? { ...result, answers: encodeCursorResult(result.answers, onEncoded) } : result;
+			}
+		: undefined;
 
 	// Preserve class-backed handler objects; object spread drops prototype methods.
 	return new Proxy(handlers, {
@@ -643,8 +652,13 @@ function createCursorExecHandlersCodec(handlers: CursorExecHandlers, onEncoded: 
 					return piFind;
 				case "piLs":
 					return piLs;
-				default:
-					return Reflect.get(target, property, receiver);
+				case "askQuestion":
+					return askQuestion;
+				default: {
+					const value = Reflect.get(target, property, receiver);
+					// A method called on the proxy cannot reach the class's `#private` fields.
+					return typeof value === "function" ? value.bind(target) : value;
+				}
 			}
 		},
 	});

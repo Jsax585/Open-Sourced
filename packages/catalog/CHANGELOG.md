@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `freeformText` to the generated Cursor `AskQuestionSuccess_Answer`, carrying typed "Other" answers ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
