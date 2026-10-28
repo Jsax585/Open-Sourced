@@ -1072,6 +1072,54 @@ describe("persisted subagent revival", () => {
 		},
 	);
 
+	it("revives on the saved model once a manual switch replaced the runtime fallback", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const models = ["primary", "backup", "switched"].map(id => perCallModelFixture(id));
+		let options: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+			options = created;
+			return {
+				session: Object.assign(createRevivedSession([]).session, {
+					model: created?.model,
+					dispose: async () => {},
+				}),
+			} as CreateAgentSessionResult;
+		});
+		const cwd = makeTempDir("@pi-revive-per-call-fallback-switched-");
+		const sessionFile = await createPersistedSession(cwd, undefined, "review", undefined, {
+			agent: "task",
+			perCallModel: true,
+			resolvedModel: "mock/primary",
+			perCallModelIdentity: "mock/primary",
+			perCallThinkingLevel: Effort.Low,
+			fallbackModel: "mock/backup",
+		});
+		// `/switch` after the fallback clears it; the switch itself never moves a per-call worker.
+		const manager = await SessionManager.open(sessionFile);
+		manager.appendModelChange("mock/switched", "temporary");
+		await manager.close();
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			settings: Settings.isolated({
+				modelRoles: { review: "mock/primary" },
+				"retry.fallbackChains": { review: ["mock/backup"] },
+				"task.perCallModelFallbacks": "runtime",
+			}),
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAll: () => models,
+				getAvailable: () => models,
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		await expect(reviver(ref)).resolves.toBeDefined();
+		expect(options?.model?.id).toBe("primary");
+		expect(options?.modelPattern).toBeUndefined();
+		expect(options?.thinkingLevel).toBe(Effort.Low);
+	});
+
 	it("grants a revived per-call worker its real live parent's model, never the root session's", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
 		const parentModel = perCallModelFixture("parent-model");
