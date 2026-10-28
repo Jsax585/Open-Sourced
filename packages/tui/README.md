@@ -113,6 +113,8 @@ interface Component {
 | `invalidate?()`          | Called to clear any cached render state. Components should re-render from scratch on the next `render()` call.                                                     |
 | `releaseRenderCaches?()` | Drops only derived render caches. The next `render()` must return the same rows without eager rebuilds, renderer callbacks, image conversions, or child replacement. |
 
+`SvgFigure`, `FenceFigure`, `TableChartFigure`, and `FigureMarkdown` accept a `maxRows` option (a number or a callback returning a number or `undefined`) and expose `setMaxRows()` for resizing. Zero hides a figure; table charts include their leading separator in the limit. `FigureMarkdown` applies the limit to each child figure, so callers must reserve space for prose, headers, footers, and separators themselves. Overlay height is not forwarded automatically.
+
 ## Built-in Components
 
 ### Composition

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- SVG figures and table charts now respect caller-provided row limits, including zero; hidden charts no longer delay transcript completion ([#15661](https://github.com/can1357/oh-my-pi/issues/15661), [#15853](https://github.com/can1357/oh-my-pi/pull/15853) by [@KunoLu](https://github.com/KunoLu)).
+
 ### Added
 
 - Added `PI_LINK_SCHEME` and `PI_LINK_HOST` for host-qualified file links with optional line and column positions in remote sessions ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu)).
