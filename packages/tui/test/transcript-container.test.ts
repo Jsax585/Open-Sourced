@@ -207,6 +207,8 @@ describe("TranscriptContainer row split", () => {
 		[ImageProtocol.Kitty]: "\x1b7\x1b[3A\x1b_Ga=p,q=2,C=1,i=7,c=10,r=4\x1b\\\x1b8",
 		[ImageProtocol.Sixel]: "\x1b7\x1b[3A\x1bPq#0~\x1b\\\x1b8",
 	};
+	// A Kitty image without a budget id carries its data inline instead (`a=T`).
+	const kittyInlineRow = "\x1b7\x1b[3A\x1b_Ga=T,f=100,q=2,C=1,c=10,r=4;AAAA\x1b\\\x1b8";
 	const imageBlock = (imageRow: string = imageRows[ImageProtocol.Iterm2]): Block =>
 		new Block(["above 1", "above 2", "\x1b[0m", "\x1b[0m", "\x1b[0m", imageRow, "below 1", "below 2"], true);
 
@@ -263,6 +265,11 @@ describe("TranscriptContainer row split", () => {
 			ImageProtocol.Kitty,
 			(columns: number) => `\x1b7\x1b[3A\x1b_Ga=p,q=2,C=1,i=7,c=${columns},r=4\x1b\\\x1b8`,
 		],
+		[
+			"Kitty a=T",
+			ImageProtocol.Kitty,
+			(columns: number) => `\x1b7\x1b[3A\x1b_Ga=T,f=100,q=2,C=1,c=${columns},r=4;AAAA\x1b\\\x1b8`,
+		],
 	] as const) {
 		it(`keeps an archived whole image in scrollback when a width change resizes it (${name})`, () => {
 			const previous = TERMINAL.imageProtocol;
@@ -297,15 +304,16 @@ describe("TranscriptContainer row split", () => {
 		});
 	}
 
-	for (const [name, protocol, original, replacement] of [
-		["iTerm2", ImageProtocol.Iterm2, ":AAAA", ":BBBB"],
-		["Kitty", ImageProtocol.Kitty, "i=7,", "i=8,"],
+	for (const [name, protocol, imageRow, original, replacement] of [
+		["iTerm2", ImageProtocol.Iterm2, imageRows[ImageProtocol.Iterm2], ":AAAA", ":BBBB"],
+		["Kitty", ImageProtocol.Kitty, imageRows[ImageProtocol.Kitty], "i=7,", "i=8,"],
+		["Kitty a=T", ImageProtocol.Kitty, kittyInlineRow, ";AAAA", ";BBBB"],
 	] as const) {
 		it(`keeps a replacement image live when the archived one is swapped before a width change (${name})`, () => {
 			const previous = TERMINAL.imageProtocol;
 			setTerminalImageProtocol(protocol);
 			try {
-				const block = imageBlock(imageRows[protocol]);
+				const block = imageBlock(imageRow);
 				const transcript = new TranscriptContainer();
 				transcript.addChild(block);
 				transcript.addChild(new Block(["tail"], true));

@@ -8,6 +8,7 @@
 - Added `PI_LINK_SCHEME` and `PI_LINK_HOST` for host-qualified file links with optional line and column positions in remote sessions ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu)).
 - `AssistantMessageComponent` accepts display-only assistant text renderers and redraws one reply with `rerenderMessage(timestamp)`; `splitAssistantMessageToolTimeline` reports each segment's `contentOffsets` ([#16238](https://github.com/can1357/oh-my-pi/pull/16238) by [@materemias](https://github.com/materemias))
 - `setExtensionLinks()` makes markdown draw links of registered schemes as a dotted-underlined label without URL suffix or terminal hyperlink; `Composer.viewportLinkAt()` and `Composer.startLinkHints()` / `typeLinkHint()` pick them by click or keyboard tag (new `app.links.hint` keybinding, Alt+O) ([#16239](https://github.com/can1357/oh-my-pi/pull/16239) by [@materemias](https://github.com/materemias))
+- Added `imagePayload()`, which identifies the image an iTerm2 or Kitty image line draws regardless of its size; `iterm2ImagePayload()` is deprecated in its favor ([#17320](https://github.com/can1357/oh-my-pi/pull/17320) by [@Sandvoxel](https://github.com/Sandvoxel))
 ### Changed
 
 - Improved view placement for JSON trees when output lines are column‑capped
