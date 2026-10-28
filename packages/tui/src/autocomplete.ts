@@ -422,7 +422,7 @@ function buildSlashCommandCompletions(
 						: namespace
 							? Math.max(
 									scoreCommandTextMatch(lowerPrefix, name.toLowerCase()),
-									bareNameBreakoutTier(lowerPrefix, name.slice(namespace.prefix.length).toLowerCase()),
+									bareNameBreakoutTier(lowerPrefix, name.slice(namespace.length).toLowerCase()),
 								)
 							: scoreCommandTextMatch(lowerPrefix, name.toLowerCase());
 				const lowerDesc = staticDesc.toLowerCase();
@@ -496,18 +496,15 @@ export const SKILL_NAMESPACE = "skill:";
  * Command-name namespaces: their commands collapse into one `/<prefix>` row until the typed
  * prefix commits to the namespace, but still break out on a bare-name match.
  */
-const COMMAND_NAMESPACES: ReadonlyArray<{ prefix: string; noun: string }> = [
-	{ prefix: SKILL_NAMESPACE, noun: "skill" },
-	{ prefix: "snippet:", noun: "snippet" },
-];
+const COMMAND_NAMESPACES = [SKILL_NAMESPACE, "snippet:"] as const;
 
-function commandNamespaceOf(name: string): { prefix: string; noun: string } | undefined {
-	return COMMAND_NAMESPACES.find(ns => name.startsWith(ns.prefix));
+function commandNamespaceOf(name: string): string | undefined {
+	return COMMAND_NAMESPACES.find(prefix => name.startsWith(prefix));
 }
 
 /** Whether `value` is a collapsed namespace row (`skill:`), which is not itself a runnable command. */
-export function isCommandNamespaceRow(value: string): boolean {
-	return COMMAND_NAMESPACES.some(ns => ns.prefix === value);
+export function isCommandNamespaceRow(value: string | undefined): boolean {
+	return COMMAND_NAMESPACES.some(prefix => prefix === value);
 }
 
 /** Exact/leading-prefix tier for ordinary command names and aliases. */
@@ -578,7 +575,7 @@ function ordinaryCommandTier(commands: CommandEntry[], lowerPrefix: string): num
 function collapseCommandNamespaces(commands: CommandEntry[], lowerPrefix: string): CommandEntry[] {
 	const commandTier = ordinaryCommandTier(commands, lowerPrefix);
 	let result = commands;
-	for (const { prefix, noun } of COMMAND_NAMESPACES) {
+	for (const prefix of COMMAND_NAMESPACES) {
 		if (lowerPrefix.startsWith(prefix)) continue;
 		const approachesNamespace = prefix.startsWith(lowerPrefix);
 		let count = 0;
@@ -599,7 +596,7 @@ function collapseCommandNamespaces(commands: CommandEntry[], lowerPrefix: string
 		if (approachesNamespace) {
 			rest.push({
 				name: prefix,
-				description: `${count} ${noun}${count === 1 ? "" : "s"}`,
+				description: `${count} ${prefix.slice(0, -1)}${count === 1 ? "" : "s"}`,
 				...(icon && { icon }),
 				...(iconName && { iconName }),
 			});

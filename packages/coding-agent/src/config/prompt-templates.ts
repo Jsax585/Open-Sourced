@@ -23,10 +23,7 @@ export interface PromptTemplate {
 
 const discoveredTemplates = new WeakSet<PromptTemplate>();
 
-/**
- * Whether `template` was produced by {@link loadPromptTemplates} (as opposed to supplied by an SDK
- * caller). Lets a reload replace discovered templates without discarding supplied ones.
- */
+/** Reload disk templates without discarding templates supplied by an SDK caller. */
 export function isDiscoveredPromptTemplate(template: PromptTemplate): boolean {
 	return discoveredTemplates.has(template);
 }
@@ -192,10 +189,8 @@ export async function loadPromptTemplates(options: LoadPromptTemplatesOptions = 
 	return templates;
 }
 
-/** Slash-command namespace under which prompt templates (snippets) are advertised: `/snippet:<name>`. */
 export const SNIPPET_COMMAND_PREFIX = "snippet:";
 
-/** Slash-command name (without the leading `/`) that invokes `template`. */
 export function promptTemplateCommandName(template: Pick<PromptTemplate, "name">): string {
 	return `${SNIPPET_COMMAND_PREFIX}${template.name}`;
 }

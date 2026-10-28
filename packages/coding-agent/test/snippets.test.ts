@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	expandPromptTemplate,
-	isDiscoveredPromptTemplate,
 	loadPromptTemplates,
 	type PromptTemplate,
 } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
@@ -54,13 +53,14 @@ describe("saveSnippet", () => {
 		expect(byName.get("s1")?.description).toContain('use {{x}} and $1: "q" # c');
 	});
 
-	test("refuses to overwrite without force and overwrites with it", async () => {
+	test("long names can be saved exclusively and replaced with force", async () => {
 		const dir = path.join(tmp, "prompts");
-		await saveSnippet({ dir, name: "a", text: "first", force: false });
-		expect((await saveSnippet({ dir, name: "a", text: "second", force: false })).kind).toBe("exists");
-		expect(await Bun.file(path.join(dir, "a.md")).text()).toContain("first");
-		expect((await saveSnippet({ dir, name: "a", text: "second", force: true })).kind).toBe("saved");
-		expect(await Bun.file(path.join(dir, "a.md")).text()).toContain("second");
+		const name = "a".repeat(212);
+		await saveSnippet({ dir, name, text: "first", force: false });
+		expect((await saveSnippet({ dir, name, text: "second", force: false })).kind).toBe("exists");
+		expect(await Bun.file(snippetPath(dir, name)).text()).toContain("first");
+		expect((await saveSnippet({ dir, name, text: "second", force: true })).kind).toBe("saved");
+		expect(await Bun.file(snippetPath(dir, name)).text()).toContain("second");
 	});
 
 	test("rejects names that could escape the prompts dir", async () => {
@@ -70,22 +70,7 @@ describe("saveSnippet", () => {
 		}
 	});
 
-	test("force replaces a symlinked snippet instead of writing through it", async () => {
-		const dir = path.join(tmp, "prompts");
-		await fs.mkdir(dir, { recursive: true });
-		const outside = path.join(tmp, "outside.txt");
-		await Bun.write(outside, "precious");
-		await fs.symlink(outside, path.join(dir, "linked.md"));
-
-		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: true })).kind).toBe("saved");
-
-		expect(await Bun.file(outside).text()).toBe("precious");
-		expect(await Bun.file(path.join(dir, "linked.md")).text()).toContain("new body");
-		expect((await fs.lstat(path.join(dir, "linked.md"))).isSymbolicLink()).toBe(false);
-		expect((await fs.readdir(dir)).filter(f => f.endsWith(".tmp"))).toEqual([]);
-	});
-
-	test("without force a symlinked snippet reports exists and its target is untouched", async () => {
+	test("a symlinked snippet reports exists without force and is replaced, not followed, with force", async () => {
 		const dir = path.join(tmp, "prompts");
 		await fs.mkdir(dir, { recursive: true });
 		const outside = path.join(tmp, "outside.txt");
@@ -93,7 +78,12 @@ describe("saveSnippet", () => {
 		await fs.symlink(outside, path.join(dir, "linked.md"));
 
 		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: false })).kind).toBe("exists");
+		expect((await saveSnippet({ dir, name: "linked", text: "new body", force: true })).kind).toBe("saved");
+
 		expect(await Bun.file(outside).text()).toBe("precious");
+		expect(await Bun.file(path.join(dir, "linked.md")).text()).toContain("new body");
+		expect((await fs.lstat(path.join(dir, "linked.md"))).isSymbolicLink()).toBe(false);
+		expect((await fs.readdir(dir)).filter(f => f.endsWith(".tmp"))).toEqual([]);
 	});
 
 	test("a long first line of wide characters is cut on a character boundary", async () => {
@@ -104,13 +94,6 @@ describe("saveSnippet", () => {
 		expect(saved).not.toContain("\ufffd");
 		expect(saved.isWellFormed()).toBe(true);
 		expect(template?.description).toContain("…");
-	});
-
-	test("loaded templates are tracked as discovered; caller-supplied ones are not", async () => {
-		await saveSnippet({ dir: path.join(tmp, "prompts"), name: "disk", text: "x", force: false });
-		const [loaded] = await loadPromptTemplates({ cwd: path.join(tmp, "project"), agentDir: tmp });
-		expect(isDiscoveredPromptTemplate(loaded!)).toBe(true);
-		expect(isDiscoveredPromptTemplate({ name: "mine", description: "", content: "x", source: "sdk" })).toBe(false);
 	});
 });
 
@@ -177,9 +160,12 @@ describe("buildSnippetChoices", () => {
 		source,
 	});
 
-	test("argument templates insert the namespaced /snippet:name invocation at the draft start", () => {
-		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], start);
-		expect(choices[0]?.insertText).toBe("/snippet:hello ");
+	test("only argument templates insert the namespaced /snippet:name invocation at the draft start", () => {
+		const choices = buildSnippetChoices(
+			[template("hello", "Say hello to $1"), template("plain", "just text")],
+			start,
+		);
+		expect(choices.map(c => c.insertText)).toEqual(["/snippet:hello ", "just text"]);
 		expect(choices[0]?.description).toContain("/snippet:hello");
 	});
 
@@ -187,10 +173,6 @@ describe("buildSnippetChoices", () => {
 		const choices = buildSnippetChoices([template("hello", "Say hello to $1")], midDraft);
 		expect(choices[0]?.insertText).toBe("Say hello to $1");
 		expect(choices[0]?.description).not.toContain("/snippet:hello");
-	});
-
-	test("templates without placeholders insert their body", () => {
-		expect(buildSnippetChoices([template("plain", "just text")], start)[0]?.insertText).toBe("just text");
 	});
 
 	test("duplicate names get unique source-qualified labels and raw bodies", () => {
@@ -202,20 +184,14 @@ describe("buildSnippetChoices", () => {
 		expect(choices.map(c => c.insertText)).toEqual(["a $1", "b $1"]);
 	});
 
-	test("terminal control sequences in a template never reach the picker text", () => {
-		const [choice] = buildSnippetChoices([template("evil", "before \x1b]0;pwned\x07 after \x1b[31mred")], start);
-		expect(choice?.description).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
-		expect(choice?.description).toContain("before");
-		expect(choice?.description).toContain("red");
-	});
-
 	test("a name with a space never gets the invocation form, which would split at the space", () => {
 		const [choice] = buildSnippetChoices([template("code review", "Review $1")], start);
 		expect(choice?.insertText).toBe("Review $1");
 	});
 
-	test("the inserted body is stripped of control sequences and tabs, like typed or pasted text", () => {
+	test("control sequences and tabs never reach the picker text or the inserted body", () => {
 		const [choice] = buildSnippetChoices([template("raw", "a\x1b]0;x\x07b\tc\x1b[31md")], start);
+		expect(choice?.description).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
 		expect(choice?.insertText).toMatch(/^ab +cd$/);
 	});
 

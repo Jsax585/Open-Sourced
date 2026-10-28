@@ -605,11 +605,6 @@ export class SelectorController {
 		});
 	}
 
-	/**
-	 * Fuzzy-pick a saved snippet (prompt template) and insert it into the editor at the cursor.
-	 * Reloads the session's templates first, so a picked `/snippet:<name>` invocation expands the
-	 * same body the picker previewed. `reservedCommands` are the command tokens other commands own.
-	 */
 	async showSnippetPicker(reservedCommands: ReadonlySet<string>): Promise<void> {
 		await this.ctx.refreshPromptTemplates();
 		const { line, col } = this.ctx.editor.getCursor();

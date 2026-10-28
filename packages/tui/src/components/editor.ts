@@ -4940,8 +4940,7 @@ export class Editor implements Component, Focusable {
 	 * the popup) instead of submitting, since the bare namespace is not a command.
 	 */
 	#selectedCompletionIsCommandNamespace(): boolean {
-		const value = this.#autocompleteList?.getSelectedItem()?.value;
-		return value !== undefined && isCommandNamespaceRow(value);
+		return isCommandNamespaceRow(this.#autocompleteList?.getSelectedItem()?.value);
 	}
 
 	/**

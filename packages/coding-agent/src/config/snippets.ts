@@ -1,8 +1,10 @@
-import { getProjectPromptsDir, getPromptsDir, isEnoent, sanitizeText } from "@oh-my-pi/pi-utils";
+import { getProjectPromptsDir, getPromptsDir, isEexist, isEnoent } from "@oh-my-pi/pi-utils";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
-import { replaceFileAtomically } from "../utils/atomic-file";
+import { sanitizeStatusText } from "@oh-my-pi/pi-tui/chrome/shared";
+import { sanitizeDisplayText } from "@oh-my-pi/pi-tui/overlays/extensions/display-text";
+import { TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { writeFileAtomically } from "../utils/atomic-file";
 import { type PromptTemplate, promptTemplateCommandName, templateUsesInlineArgPlaceholders } from "./prompt-templates";
 
 /** Where a snippet file lives: the user's agent dir (global) or the project's `.omp/prompts`. */
@@ -10,19 +12,18 @@ export type SnippetScope = "user" | "project";
 
 /** Letter, then letters/digits/_/-. Doubles as the path-traversal guard. */
 const SNIPPET_NAME_PATTERN = /^[a-zA-Z][\w-]*$/;
-/** Status shown by the picker when no prompt templates exist. */
 export const NO_SNIPPETS_MESSAGE = "No snippets saved. Use /snippets save <name> [text] to create one.";
-/** Usage text for `/snippets`, shown after an unknown subcommand. */
 export const SNIPPETS_USAGE =
 	"Usage: /snippets [save <name> [--scope user|project] [--force] [text] | delete <name> [--scope user|project]]";
 
 const SAVE_USAGE = "Usage: /snippets save <name> [--scope user|project] [--force] [text]";
 const DELETE_USAGE = "Usage: /snippets delete <name> [--scope user|project]";
 const SCOPE_ERROR = "--scope must be user or project";
-const INVALID_NAME_HINT = "use a letter, then letters, digits, - or _";
 
-function isValidSnippetName(name: string): boolean {
-	return SNIPPET_NAME_PATTERN.test(name);
+function invalidNameError(name: string): { error: string } | undefined {
+	return SNIPPET_NAME_PATTERN.test(name)
+		? undefined
+		: { error: `Invalid snippet name "${name}": use a letter, then letters, digits, - or _` };
 }
 
 /**
@@ -35,7 +36,7 @@ export function snippetsDir(scope: SnippetScope, cwd: string, agentDir: string):
 
 /** `<dir>/<name>.md`; throws on a name that is not a plain identifier, so it cannot escape `dir`. */
 export function snippetPath(dir: string, name: string): string {
-	if (!isValidSnippetName(name)) throw new Error(`Invalid snippet name "${name}"`);
+	if (!SNIPPET_NAME_PATTERN.test(name)) throw new Error(`Invalid snippet name "${name}"`);
 	return path.join(dir, `${name}.md`);
 }
 
@@ -59,7 +60,8 @@ export function parseSaveArgs(rest: string): SaveArgs {
 
 	const name = next();
 	if (!name) return { error: SAVE_USAGE };
-	if (!isValidSnippetName(name)) return { error: `Invalid snippet name "${name}": ${INVALID_NAME_HINT}` };
+	const invalid = invalidNameError(name);
+	if (invalid) return invalid;
 
 	let scope: SnippetScope = "user";
 	let force = false;
@@ -88,7 +90,8 @@ export function parseDeleteArgs(rest: string): DeleteArgs {
 	const tokens = rest.split(/\s+/).filter(Boolean);
 	const name = tokens[0];
 	if (!name) return { error: DELETE_USAGE };
-	if (!isValidSnippetName(name)) return { error: `Invalid snippet name "${name}": ${INVALID_NAME_HINT}` };
+	const invalid = invalidNameError(name);
+	if (invalid) return invalid;
 
 	let scope: SnippetScope | undefined;
 	for (let i = 1; i < tokens.length;) {
@@ -106,8 +109,7 @@ export function parseDeleteArgs(rest: string): DeleteArgs {
 export function resolveSnippetText(inline: string, userMessages: ReadonlyArray<{ text: string }>): string | undefined {
 	const trimmed = inline.trim();
 	if (trimmed) return trimmed;
-	const last = userMessages.at(-1)?.text.trim();
-	return last ? last : undefined;
+	return userMessages.at(-1)?.text.trim() || undefined;
 }
 
 function deriveDescription(text: string): string {
@@ -138,19 +140,11 @@ export async function saveSnippet(options: {
 		try {
 			await fs.writeFile(file, content, { flag: "wx" });
 		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code === "EEXIST") return { kind: "exists", path: file };
+			if (isEexist(err)) return { kind: "exists", path: file };
 			throw err;
 		}
-		return { kind: "saved", path: file };
-	}
-	// Short hidden sibling name: `<name>.md` can already sit at the filesystem's component limit.
-	const temp = path.join(options.dir, `.snippet-${crypto.randomUUID().slice(0, 8)}.tmp`);
-	try {
-		await fs.writeFile(temp, content, { flag: "wx" });
-		await replaceFileAtomically(temp, file);
-	} catch (err) {
-		await fs.rm(temp, { force: true });
-		throw err;
+	} else {
+		await writeFileAtomically(file, content, 0o666 & ~process.umask());
 	}
 	return { kind: "saved", path: file };
 }
@@ -192,17 +186,6 @@ export interface SnippetInsertContext {
 	reservedCommands: ReadonlySet<string>;
 }
 
-/** Display text: control sequences stripped and every whitespace run (tabs, newlines) collapsed to one space. */
-function displayText(text: string): string {
-	return sanitizeText(text).replace(/\s+/g, " ").trim();
-}
-
-/**
- * Picker rows for `templates`. An argument-taking template (`$1`, `$ARGUMENTS`, …) inserts its
- * `/snippet:<name> ` invocation only where that command would expand (`context`) and the name is unique
- * (a duplicated name resolves to the first-loaded template at send time); otherwise it inserts the raw
- * body. Everything shown is sanitized: template files are untrusted and the picker renders ANSI-aware text.
- */
 export function buildSnippetChoices(
 	templates: readonly PromptTemplate[],
 	context: SnippetInsertContext,
@@ -215,8 +198,8 @@ export function buildSnippetChoices(
 	const usedLabels = new Set<string>();
 	return sorted.map(template => {
 		const { content } = template;
-		const name = displayText(template.name);
-		const source = displayText(template.source);
+		const name = sanitizeStatusText(template.name);
+		const source = sanitizeStatusText(template.source);
 		const duplicated = (counts.get(template.name) ?? 0) > 1;
 		const commandName = promptTemplateCommandName(template);
 		// A name the display cleanup altered, or one with whitespace, cannot be typed back as a command token.
@@ -230,7 +213,7 @@ export function buildSnippetChoices(
 			!context.reservedCommands.has(commandName) &&
 			templateUsesInlineArgPlaceholders(content);
 		const command = `/${commandName}`;
-		const preview = truncateToWidth(displayText(content), TRUNCATE_LENGTHS.RECAP);
+		const preview = truncateToWidth(sanitizeStatusText(content), TRUNCATE_LENGTHS.RECAP);
 		const hint = invocation ? `takes arguments, inserts ${command} · ` : "";
 		const baseLabel = duplicated ? `${name} ${source}` : name;
 		let label = baseLabel;
@@ -240,7 +223,7 @@ export function buildSnippetChoices(
 			label,
 			description: `${source} · ${hint}${preview}`,
 			// The editor's programmatic insert does not strip controls or tabs the way typing and paste do.
-			insertText: invocation ? `${command} ` : replaceTabs(sanitizeText(content)),
+			insertText: invocation ? `${command} ` : sanitizeDisplayText(content),
 		};
 	});
 }

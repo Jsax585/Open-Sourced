@@ -2952,17 +2952,12 @@ export class InteractiveMode implements InteractiveModeContext {
 				getInlineHint: argumentHint ? buildStaticInlineHint(argumentHint) : undefined,
 			};
 		});
-		// Prompt templates (snippets) live under `/snippet:<name>`, like `/skill:<name>`, so they cannot
-		// collide with ordinary command names. A hook, custom, or file command that itself claims a
-		// `snippet:<name>` token runs before template expansion, so that token is not advertised for the template.
-		// The bare `/<name>` form still expands at submit but is no longer advertised.
+		// Namespaced templates cannot shadow commands; explicitly claimed `snippet:` tokens still win.
 		const reservedNames = this.#reservedSlashCommandNames();
 		const promptTemplateCommands: SlashCommand[] = this.session.promptTemplates
 			.filter(template => !reservedNames.has(promptTemplateCommandName(template)))
 			.map(template => ({
 				name: promptTemplateCommandName(template),
-				// `PromptTemplate.description` from `loadTemplatesFromDir` already includes the
-				// source suffix (e.g. "Review code (project)"), so pass it through verbatim.
 				description: template.description,
 				icon: promptIcon,
 				iconName: "prompt",

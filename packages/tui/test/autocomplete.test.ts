@@ -333,20 +333,6 @@ describe("CombinedAutocompleteProvider", () => {
 			expect(bare?.items.map(item => item.value)).toEqual(["snippet:testing"]);
 		});
 
-		it("completes the snippet: row without a trailing space", () => {
-			const provider = new CombinedAutocompleteProvider([], "/tmp");
-
-			const result = provider.applyCompletion(
-				["/snip"],
-				0,
-				"/snip".length,
-				{ value: "snippet:", label: "snippet:" },
-				"/snip",
-			);
-
-			expect(result.lines[0]).toBe("/snippet:");
-		});
-
 		it("completes the namespace row without a trailing space so completion can continue", () => {
 			const provider = new CombinedAutocompleteProvider([], "/tmp");
 
