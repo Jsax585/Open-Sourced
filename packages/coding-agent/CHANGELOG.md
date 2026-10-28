@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Extensions can call `ctx.getContextBreakdown()` to read the session's per-category context usage, including free space, the auto-compaction buffer, and the snapcompact wire savings ([#14208](https://github.com/can1357/oh-my-pi/pull/14208) by [@listellm](https://github.com/listellm)).
+
+### Fixed
+
+- Fixed `/context` crashing instead of degrading when a malformed system-prompt section makes the snapcompact savings estimate throw ([#9331](https://github.com/can1357/oh-my-pi/issues/9331)).
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
