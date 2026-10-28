@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+
+- Automatic continuation after compaction now restores the todo list with task statuses and blocker notes when work remains, skipping retained todo tool results ([#16753](https://github.com/can1357/oh-my-pi/pull/16753) by [@Bensonluo](https://github.com/Bensonluo))
 ## [18.13.2] - 2026-10-27
 
 ### Added
