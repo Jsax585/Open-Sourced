@@ -608,6 +608,8 @@ export interface OpenAICompat {
  * that proxy gateways (Vertex AI, AWS Bedrock-style fronts, etc.) reject.
  */
 export interface AnthropicCompat {
+	/** Do not infer a thinking dial when discovery supplies no explicit thinking configuration. */
+	trustExplicitThinkingOnly?: boolean;
 	/** Whether thinking requests may include `context_management` and its beta header. Default: true. */
 	supportsContextManagement?: boolean;
 	/**
@@ -1201,6 +1203,7 @@ export type ResolvedAnthropicCompat = Required<
 	Omit<
 		AnthropicCompat,
 		| "streamIdleTimeoutMs"
+		| "trustExplicitThinkingOnly"
 		| "thinkingLoopGuard"
 		| "bedrockMessagesApi"
 		| "effortBeta"
@@ -1213,6 +1216,8 @@ export type ResolvedAnthropicCompat = Required<
 		| "maxImagePayloadBytes"
 	>
 > & {
+	/** Preserve a discovery-declared absence of controllable thinking efforts. */
+	trustExplicitThinkingOnly?: AnthropicCompat["trustExplicitThinkingOnly"];
 	/** Effort-beta override; undefined keeps the transport's legacy heuristic. */
 	effortBeta?: AnthropicCompat["effortBeta"];
 	/** Extended-cache-ttl beta opt-out; undefined sends it where a 1h breakpoint needs it. */

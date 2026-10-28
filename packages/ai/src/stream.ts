@@ -1836,19 +1836,28 @@ function mapOptionsForApi<TApi extends Api>(
 			// support it. These SimpleStreamOptions flags never reach AnthropicOptions
 			// on their own, so fold them into thinkingEnabled here (mandatory-reasoning
 			// models already clamp them away in normalizeMandatoryReasoningOptions).
-			const reasoning = options?.reasoning;
+			// An endpoint can retain native reasoning without exposing controls.
+			// Do not turn a stale effort into a fabricated budget or a capability
+			// denial; an actual mandatory target protocol still owns its default.
+			const compat = model.compat;
+			const noThinkingControls =
+				model.thinking === undefined &&
+				compat !== undefined &&
+				"trustExplicitThinkingOnly" in compat &&
+				compat.trustExplicitThinkingOnly === true;
+			const reasoning = noThinkingControls ? undefined : options?.reasoning;
 			if (!reasoning || !model.reasoning || options?.disableReasoning || options?.forceReasoningOff) {
 				return castApi<"anthropic-messages">({
 					...base,
 					requestModelId: resolveWireModelId(model, undefined),
-					thinkingEnabled: false,
+					thinkingEnabled: noThinkingControls ? undefined : false,
 					toolChoice: mapAnthropicToolChoice(options?.toolChoice),
 					thinkingDisplay: options?.hideThinkingSummary ? "omitted" : undefined,
 					serviceTier: options?.serviceTier,
 				});
 			}
 
-			let thinkingBudget = options.thinkingBudgets?.[reasoning] ?? ANTHROPIC_THINKING[reasoning];
+			let thinkingBudget = options?.thinkingBudgets?.[reasoning] ?? ANTHROPIC_THINKING[reasoning];
 			if (thinkingBudget <= 0) {
 				return castApi<"anthropic-messages">({
 					...base,

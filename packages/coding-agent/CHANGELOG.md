@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Proxy-discovered models now recover catalog-backed thinking controls and respect server-reported output limits and input modalities instead of silently using incompatible catalog defaults ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+- Proxy-discovered models now recover catalog-backed thinking controls and respect server-reported output limits, input modalities, and empty or off-only reasoning advertisements instead of silently using incompatible catalog defaults ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
 - Fixed `/goal pause` leaving the `goal` tool active; pausing now restores the toolset from before the goal started ([#15753](https://github.com/can1357/oh-my-pi/pull/15753) by [@Shadorain](https://github.com/Shadorain))
 - Fixed `/live` flipping between `listening` and `speaking` at every pause in the assistant's speech; `speaking` now holds through short pauses ([#17114](https://github.com/can1357/oh-my-pi/issues/17114))
 - Fixed the `workflowz` notice showing Python call forms in JS-only sessions and describing keep-alive workers when `eval.workpool.freshAgents` is on ([#17152](https://github.com/can1357/oh-my-pi/pull/17152) by [@bigHippoZz](https://github.com/bigHippoZz))

@@ -908,6 +908,7 @@ function resolveAnthropicPolicy(
 		firstPartyProvider: false,
 		honorsClaudeCodeBetaKillSwitch: false,
 		supportsOutputEffort: true,
+		trustExplicitThinkingOnly: undefined,
 		disableStrictTools: rejectsStrictTools,
 		// Present as a key so models.yml `compat` can set it; unset unless detected.
 		bedrockMessagesApi: bedrockMessagesApi || undefined,

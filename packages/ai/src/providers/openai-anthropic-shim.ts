@@ -61,6 +61,7 @@ export function streamOpenAIAnthropicShim(
 			};
 
 			if (format === "anthropic") {
+				const noThinkingControls = model.compat.trustExplicitThinkingOnly === true && model.thinking === undefined;
 				const anthropicModel = buildModel({
 					id: model.id,
 					name: model.name,
@@ -76,10 +77,19 @@ export function streamOpenAIAnthropicShim(
 						: {}),
 					input: model.input,
 					cost: model.cost,
+					// This is a control-surface restriction, not an absence of native
+					// reasoning. Preserve it across the protocol rebuild only while
+					// the source has no explicit thinking; restored controls may use
+					// a different mode on the Anthropic wire.
+					...(noThinkingControls
+						? { compat: { trustExplicitThinkingOnly: true, supportsOutputEffort: false } }
+						: {}),
 				} as ModelSpec<"anthropic-messages">);
 
-				const reasoningEffort = options?.reasoning;
-				const thinkingEnabled = !!reasoningEffort && model.reasoning && !options?.disableReasoning;
+				const reasoningEffort = noThinkingControls ? undefined : options?.reasoning;
+				const thinkingEnabled = noThinkingControls
+					? undefined
+					: !!reasoningEffort && model.reasoning && !options?.disableReasoning;
 				const thinkingBudget = reasoningEffort
 					? (options?.thinkingBudgets?.[reasoningEffort] ?? ANTHROPIC_THINKING[reasoningEffort])
 					: undefined;

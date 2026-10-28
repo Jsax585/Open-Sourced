@@ -989,7 +989,6 @@ function extractReasoningLevels(value: unknown): Effort[] | undefined {
 		const effort = isRecord(entry) ? advertisedReasoningEffort(entry.effort) : advertisedReasoningEffort(entry);
 		if (effort !== undefined && !efforts.includes(effort)) efforts.push(effort);
 	}
-	if (efforts.length === 0) return undefined;
 	// Report the canonical least-to-most order regardless of wire order.
 	efforts.sort(
 		(left, right) => ADVERTISED_REASONING_EFFORTS.indexOf(left) - ADVERTISED_REASONING_EFFORTS.indexOf(right),
@@ -1011,6 +1010,8 @@ function advertisedReasoningEnabled(providerConfig: DiscoveryProviderConfig): bo
 type AdvertisedReasoning =
 	/** The row states it does not reason. */
 	| { kind: "none" }
+	/** The row declares a surface, but none of its active tiers are representable. */
+	| { kind: "no-controls"; acceptsNone: boolean; reasoning?: true }
 	/** The row advertises an effort ladder, and whether it also accepts `none`. */
 	| { kind: "ladder"; efforts: Effort[]; acceptsNone: boolean; defaultLevel?: Effort };
 
@@ -1019,13 +1020,13 @@ type AdvertisedReasoning =
  * `/v1/models` row. codex-lb nests the Codex registry fields under `metadata`
  * (`supported_reasoning_levels: [{ effort }]`, `default_reasoning_level`);
  * other gateways may advertise the same fields top-level. Returns undefined
- * when the row says nothing usable about reasoning.
+ * only when the surface is absent or malformed; an empty array or a ladder
+ * filtered to zero usable active efforts still blocks fallback controls.
  *
- * An explicit non-reasoning declaration is reported as `{ kind: "none" }`
- * rather than `undefined`: the caller must be able to tell "this endpoint says
- * the model does not reason" (which outranks a reasoning-enabled bundled
- * reference) from "the endpoint is silent" (which leaves the reference in
- * charge). A stray ladder beside `reasoning: false` is ignored.
+ * An explicit non-reasoning declaration is reported as `{ kind: "none" }`:
+ * unavailable controls do not prove the model cannot reason, whereas
+ * `reasoning: false` overrides even a reasoning-enabled reference. A stray
+ * ladder beside that denial is ignored.
  */
 function extractAdvertisedReasoning(item: {
 	metadata?: unknown;
@@ -1041,6 +1042,14 @@ function extractAdvertisedReasoning(item: {
 	const raw = metadata?.supported_reasoning_levels ?? item.supported_reasoning_levels;
 	const efforts = extractReasoningLevels(raw);
 	if (efforts === undefined) return undefined;
+	const acceptsNone = advisoryEffortEntries(raw).includes("none");
+	if (efforts.length === 0) {
+		return {
+			kind: "no-controls",
+			acceptsNone,
+			...((metadata?.reasoning ?? item.reasoning) === true ? { reasoning: true as const } : {}),
+		};
+	}
 	const rawDefault = metadata?.default_reasoning_level ?? item.default_reasoning_level;
 	const defaultLevel = advertisedReasoningEffort(rawDefault);
 	return {
@@ -1050,7 +1059,7 @@ function extractAdvertisedReasoning(item: {
 		// `efforts`; remembering that the endpoint listed it is what lets a
 		// thinking-off request send `reasoning_effort: "none"` instead of being
 		// clamped to the lowest tier.
-		acceptsNone: advisoryEffortEntries(raw).includes("none"),
+		acceptsNone,
 		...(defaultLevel !== undefined && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
 	};
 }
@@ -1086,6 +1095,32 @@ function withAdvertisedEfforts(
 ): ModelSpec<Api> {
 	if (advertised === undefined) return spec;
 	if (advertised.kind === "none") return withoutReasoning(spec, isAnthropic);
+	if (advertised.kind === "no-controls") {
+		// Keep capability/history independent of the absent dial. The trust gate
+		// also survives JSON caching, where `thinking: undefined` alone would
+		// disappear and let a rebuild infer another catalog or generic ladder.
+		return {
+			...spec,
+			reasoning: spec.reasoning || advertised.reasoning === true,
+			thinking: undefined,
+			referenceThinkingEfforts: undefined,
+			compat: isAnthropic
+				? {
+						...spec.compat,
+						trustExplicitThinkingOnly: true,
+						supportsOutputEffort: false,
+					}
+				: {
+						...stripBorrowedEffortCompat(spec),
+						trustExplicitThinkingOnly: true,
+						supportsReasoningEffort: false,
+						omitReasoningEffort: true,
+						// Only an advertised off-switch may be sent. In particular,
+						// [] and unsupported-only arrays must not invent `none`.
+						reasoningDisableMode: advertised.acceptsNone ? "none-effort" : "omit",
+					},
+		} as ModelSpec<Api>;
+	}
 	// `defaultLevel` is not decoration: `pickInitialThinkingLevel` (sdk.ts) and
 	// the model switcher read it ahead of the user's `defaultThinkingLevel`
 	// setting, so pinning it to the ladder's first tier would start every gateway

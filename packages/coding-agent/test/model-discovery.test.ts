@@ -3,12 +3,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { FetchImpl, Model } from "@oh-my-pi/pi-ai";
+import type { Context, FetchImpl, Model } from "@oh-my-pi/pi-ai";
 import { createNativeJudge } from "@oh-my-pi/pi-ai/judgment";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { streamOpenAICompletions } from "@oh-my-pi/pi-ai/providers/openai-completions";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { stream } from "@oh-my-pi/pi-ai/stream";
+import { stream, streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import {
@@ -19,6 +19,7 @@ import {
 import * as bundledModelReferences from "@oh-my-pi/pi-catalog/identity/bundled";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
 import {
 	cursorModelManagerOptions,
@@ -3385,11 +3386,16 @@ describe("ModelRegistry runtime discovery", () => {
 		}
 	});
 
-	test("model-list and proxy advertisements override borrowed efforts while opt-out restores target-owned fallback", async () => {
+	test("model-list and proxy advertisements distinguish unavailable controls from silent catalog fallback", async () => {
 		const ids = {
 			advertised: "tenant/catalog-advertised-surface-fixture",
 			denied: "tenant/catalog-denied-surface-fixture",
 			silent: "tenant/catalog-silent-surface-fixture",
+			empty: "tenant/catalog-empty-surface-fixture",
+			offOnly: "tenant/catalog-off-only-surface-fixture",
+			nestedOffOnly: "tenant/catalog-nested-off-only-surface-fixture",
+			filtered: "tenant/catalog-filtered-surface-fixture",
+			malformed: "tenant/catalog-malformed-surface-fixture",
 		};
 		const reference = buildModel({
 			id: "catalog-advertisement-fixture",
@@ -3405,6 +3411,7 @@ describe("ModelRegistry runtime discovery", () => {
 			contextWindow: 96_000,
 			maxTokens: 12_000,
 		});
+		const orphanId = "tenant/uncontrolled-no-reference-fixture";
 		const rows = [
 			{
 				id: ids.advertised,
@@ -3420,6 +3427,20 @@ describe("ModelRegistry runtime discovery", () => {
 				},
 			},
 			{ id: ids.silent },
+			{
+				id: ids.empty,
+				supported_reasoning_levels: ["low", "high"],
+				metadata: { supported_reasoning_levels: [] },
+			},
+			{ id: ids.offOnly, supported_reasoning_levels: ["none"] },
+			{ id: ids.nestedOffOnly, metadata: { supported_reasoning_levels: [{ effort: "NONE" }] } },
+			{ id: ids.filtered, supported_reasoning_levels: ["minimal", "ultra"], default_reasoning_level: "high" },
+			{ id: ids.malformed, supported_reasoning_levels: { effort: "high" } },
+			{
+				id: orphanId,
+				reasoning: false,
+				metadata: { reasoning: true, supported_reasoning_levels: [] },
+			},
 		];
 		const referenceLookup = vi
 			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
@@ -3460,14 +3481,27 @@ describe("ModelRegistry runtime discovery", () => {
 						compat: { supportsReasoningEffort: false },
 					});
 					expect(denied?.thinking).toBeUndefined();
-					expect(models.find(model => model.id === ids.silent)).toMatchObject({
-						reasoning: true,
-						thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
-						compat: { supportsReasoningEffort: true, omitReasoningEffort: false },
-					});
+					for (const id of [ids.silent, ids.malformed]) {
+						expect(models.find(model => model.id === id)).toMatchObject({
+							reasoning: true,
+							thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
+							compat: { supportsReasoningEffort: true, omitReasoningEffort: false },
+						});
+					}
+					for (const id of [ids.empty, ids.offOnly, ids.nestedOffOnly, ids.filtered, orphanId]) {
+						const model = models.find(model => model.id === id);
+						if (!model) throw new Error(`Missing advertised model: ${id}`);
+						expect(model.reasoning).toBe(true);
+						expect(getSupportedEfforts(model)).toEqual([]);
+					}
 
 					const optedOut = await discover({ ...config, discovery: { type, advertisedReasoning: false } }, ctx);
 					for (const model of optedOut) {
+						if (model.id === orphanId) {
+							expect(model.reasoning).toBe(false);
+							expect(getSupportedEfforts(model)).toEqual([]);
+							continue;
+						}
 						expect(model).toMatchObject({
 							reasoning: true,
 							thinking: { mode: "effort", efforts: [Effort.High, Effort.Max] },
@@ -3478,6 +3512,389 @@ describe("ModelRegistry runtime discovery", () => {
 			}
 		} finally {
 			referenceLookup.mockRestore();
+		}
+	});
+
+	test("cached advertised no-control surfaces keep reasoning history without leaking fallback efforts on any proxy wire", async () => {
+		const ids = {
+			empty: "tenant/catalog-cached-empty-fixture",
+			offOnly: "tenant/catalog-cached-off-only-fixture",
+			filtered: "tenant/catalog-cached-filtered-fixture",
+			overridden: "tenant/catalog-cached-override-fixture",
+			silent: "tenant/catalog-cached-silent-fixture",
+			mandatory: "tenant/catalog-cached-mandatory-fixture",
+		};
+		const configurations = [
+			{ provider: "list-no-controls-fixture", api: "openai-responses", type: "openai-models-list" },
+			{ provider: "proxy-no-controls-fixture", api: "openai-completions", type: "proxy" },
+			{ provider: "anthropic-no-controls-fixture", api: "anthropic-messages", type: "proxy" },
+		] as const;
+		const providers: Record<string, unknown> = {};
+		for (const { provider, api, type } of configurations) {
+			providers[provider] = {
+				api,
+				baseUrl: "https://proxy.example/v1",
+				auth: "none",
+				discovery: { type },
+				modelOverrides: {
+					[ids.overridden]: {
+						thinking: {
+							mode: api === "anthropic-messages" ? "anthropic-adaptive" : "effort",
+							efforts: [Effort.Low, Effort.High],
+							defaultLevel: Effort.High,
+						},
+						compat:
+							api === "anthropic-messages"
+								? { supportsOutputEffort: true }
+								: { supportsReasoningEffort: true, omitReasoningEffort: false },
+					},
+					...(api === "anthropic-messages"
+						? { [ids.mandatory]: { compat: { requiresThinkingEnabled: true } } }
+						: {}),
+				},
+			};
+		}
+		writeRawModelsJson(providers);
+		const reference = buildModel({
+			id: "catalog-cached-surface-fixture",
+			name: "Catalog cached surface fixture",
+			api: "openai-completions",
+			provider: "source-cached-surface-fixture",
+			baseUrl: "https://source.example/v1",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High, Effort.Max], requiresEffort: true },
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 96_000,
+			maxTokens: 12_000,
+		});
+		const rows = [
+			{ id: ids.empty, supported_reasoning_levels: [] },
+			{ id: ids.offOnly, metadata: { supported_reasoning_levels: [{ effort: "none" }] } },
+			{ id: ids.filtered, supported_reasoning_levels: ["minimal", "ultra"] },
+			{ id: ids.overridden, metadata: { supported_reasoning_levels: [] } },
+			{ id: ids.silent },
+			{ id: ids.mandatory, supported_reasoning_levels: [] },
+		];
+		const cachedModels: Model[] = [];
+		const referenceLookup = vi
+			.spyOn(bundledModelReferences, "getBundledModelReferenceIndex")
+			.mockReturnValue(
+				buildModelReferenceIndex(
+					Object.values(ids).map(id => ({ ...reference, id: id.slice(id.lastIndexOf("/") + 1) })),
+				),
+			);
+		try {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => Response.json({ data: rows }),
+			});
+			for (const { provider } of configurations) await registry.refreshProvider(provider, "online");
+			const assertSurfaces = (current: ModelRegistry) => {
+				for (const { provider, api } of configurations) {
+					for (const id of [ids.empty, ids.offOnly, ids.filtered, ids.mandatory]) {
+						const model = current.find(provider, id);
+						if (!model) throw new Error(`Missing no-control model: ${provider}/${id}`);
+						expect(model.reasoning).toBe(true);
+						expect(getSupportedEfforts(model)).toEqual([]);
+					}
+					const overridden = current.find(provider, ids.overridden);
+					if (!overridden) throw new Error(`Missing overridden model: ${provider}`);
+					expect(getSupportedEfforts(overridden)).toEqual([Effort.Low, Effort.High]);
+					if (api !== "anthropic-messages") {
+						const silent = current.find(provider, ids.silent);
+						if (!silent) throw new Error(`Missing silent model: ${provider}`);
+						expect(getSupportedEfforts(silent)).toEqual([Effort.High, Effort.Max]);
+					}
+				}
+			};
+			assertSurfaces(registry);
+			await registry.refresh("offline");
+			assertSurfaces(registry);
+			let cacheProbeCalls = 0;
+			const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath, {
+				fetch: async () => {
+					cacheProbeCalls++;
+					throw new Error("Cached surface must not need an online discovery probe");
+				},
+			});
+			// A fresh registry prepares runtime managers asynchronously, including
+			// custom discovery providers; hydrate their persisted rows offline.
+			await cachedRegistry.refresh("offline");
+			expect(cacheProbeCalls).toBe(0);
+			assertSurfaces(cachedRegistry);
+			for (const { provider, api } of configurations) {
+				expect(cachedRegistry.getProviderDiscoveryState(provider)?.status).toBe("cached");
+				const requestIds = [ids.empty, ids.offOnly, ids.filtered, ids.overridden];
+				requestIds.push(api === "anthropic-messages" ? ids.mandatory : ids.silent);
+				for (const id of requestIds) {
+					const model = cachedRegistry.find(provider, id);
+					if (!model) throw new Error(`Missing cached model: ${provider}/${id}`);
+					cachedModels.push(model);
+				}
+			}
+		} finally {
+			referenceLookup.mockRestore();
+		}
+
+		const replayItem = { type: "reasoning", id: "rs_kept", summary: [], encrypted_content: "encrypted-replay" };
+		for (const model of cachedModels) {
+			const context: Context = {
+				messages: [
+					{ role: "user", content: "First turn.", timestamp: 0 },
+					{
+						role: "assistant",
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						content: [
+							{
+								type: "thinking",
+								thinking: "Prior reasoning.",
+								thinkingSignature: model.api === "openai-responses" ? JSON.stringify(replayItem) : "",
+							},
+							{ type: "text", text: "Prior answer." },
+						],
+						usage: {
+							input: 1,
+							output: 1,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 2,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: 1,
+					},
+					{ role: "user", content: "Continue.", timestamp: 2 },
+				],
+			};
+			const controlled = model.id === ids.overridden || model.id === ids.silent;
+			const requests: { reasoning?: Effort; disableReasoning?: boolean }[] = controlled
+				? [{ reasoning: Effort.High }]
+				: [{}, { disableReasoning: true }, { reasoning: Effort.Max }];
+			let mandatoryBudget: number | undefined;
+			for (const request of requests) {
+				let body: Record<string, unknown> | undefined;
+				const fetch: FetchImpl = async (_input, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					if (model.api === "openai-completions") {
+						return new Response(
+							'data: {"id":"no-control-chat","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					}
+					const events =
+						model.api === "anthropic-messages"
+							? [
+									{
+										type: "message_start",
+										message: {
+											id: "no-control-anthropic",
+											type: "message",
+											role: "assistant",
+											model: model.id,
+											content: [],
+											stop_reason: null,
+											stop_sequence: null,
+											usage: { input_tokens: 1, output_tokens: 0 },
+										},
+									},
+									{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+									{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+									{ type: "content_block_stop", index: 0 },
+									{
+										type: "message_delta",
+										delta: { stop_reason: "end_turn", stop_sequence: null },
+										usage: { output_tokens: 1 },
+									},
+									{ type: "message_stop" },
+								]
+							: [
+									{
+										type: "response.output_item.added",
+										output_index: 0,
+										item: { type: "message", id: "msg_no_control", role: "assistant", content: [] },
+									},
+									{
+										type: "response.output_text.delta",
+										item_id: "msg_no_control",
+										content_index: 0,
+										delta: "ok",
+									},
+									{
+										type: "response.completed",
+										response: {
+											id: "resp_no_control",
+											status: "completed",
+											usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+										},
+									},
+								];
+					return new Response(
+						`${events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}`).join("\n\n")}\n\n`,
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				};
+				const options = { apiKey: "local-secret", fetch, ...request };
+				const result =
+					model.api !== "anthropic-messages" && request.reasoning === Effort.Max
+						? await stream(model, context, options).result()
+						: await streamSimple(model, context, options).result();
+				expect(result.stopReason).toBe("stop");
+				expect(body?.model).toBe(model.id);
+				if (model.api === "anthropic-messages") {
+					expect(body?.output_config).toEqual(
+						controlled ? expect.objectContaining({ effort: "high" }) : undefined,
+					);
+					expect(body?.messages).toContainEqual(
+						expect.objectContaining({
+							role: "assistant",
+							content: expect.arrayContaining([
+								expect.objectContaining({ type: "thinking", thinking: "Prior reasoning." }),
+							]),
+						}),
+					);
+					if (model.id === ids.mandatory) {
+						expect(body?.thinking).toMatchObject({ type: "enabled" });
+						const thinking = body?.thinking as { budget_tokens?: number } | undefined;
+						if (request.reasoning === undefined && !request.disableReasoning) {
+							mandatoryBudget = thinking?.budget_tokens;
+							expect(mandatoryBudget).toBeGreaterThan(0);
+						} else {
+							expect(thinking?.budget_tokens).toBe(mandatoryBudget);
+						}
+					} else if (!controlled) {
+						expect(body?.thinking).toBeUndefined();
+					}
+				} else if (model.api === "openai-responses") {
+					expect(body?.reasoning).toEqual(controlled ? expect.objectContaining({ effort: "high" }) : undefined);
+					expect(body?.include).toContain("reasoning.encrypted_content");
+					expect(body?.input).toContainEqual(expect.objectContaining(replayItem));
+				} else {
+					expect(body?.reasoning_effort).toBe(
+						controlled ? "high" : model.id === ids.offOnly && request.disableReasoning ? "none" : undefined,
+					);
+				}
+			}
+		}
+	});
+
+	test("special-provider Anthropic shims preserve no-controls discovery without reviving stale budgets", async () => {
+		const sourceModel = (provider: "kimi-code" | "synthetic", id = "tenant/no-controls-shim-fixture") =>
+			buildModel({
+				id,
+				name: "No-controls shim fixture",
+				api: "openai-completions",
+				provider,
+				baseUrl:
+					provider === "kimi-code" ? "https://api.kimi.com/coding/v1" : "https://api.synthetic.new/openai/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 96_000,
+				maxTokens: 12_000,
+				compat: {
+					trustExplicitThinkingOnly: true,
+					supportsReasoningEffort: false,
+					omitReasoningEffort: true,
+					kimiApiFormat: "anthropic",
+				},
+			});
+		interface ShimPayload {
+			model?: string;
+			thinking?: { type: string; budget_tokens?: number };
+			output_config?: { effort?: string };
+		}
+		const payloadFor = async (
+			model: Model<"openai-completions">,
+			request: { reasoning?: Effort; disableReasoning?: boolean },
+		): Promise<ShimPayload> => {
+			let body: ShimPayload | undefined;
+			const result = await streamSimple(
+				model,
+				{ messages: [{ role: "user", content: "Continue.", timestamp: 0 }] },
+				{
+					apiKey: "local-secret",
+					kimiApiFormat: "anthropic",
+					syntheticApiFormat: "anthropic",
+					...request,
+					fetch: async (_input, init) => {
+						body = JSON.parse(String(init?.body)) as ShimPayload;
+						const events = [
+							{
+								type: "message_start",
+								message: {
+									id: "msg_shim_no_controls",
+									type: "message",
+									role: "assistant",
+									model: model.id,
+									content: [],
+									stop_reason: null,
+									stop_sequence: null,
+									usage: { input_tokens: 1, output_tokens: 0 },
+								},
+							},
+							{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+							{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+							{ type: "content_block_stop", index: 0 },
+							{
+								type: "message_delta",
+								delta: { stop_reason: "end_turn", stop_sequence: null },
+								usage: { output_tokens: 1 },
+							},
+							{ type: "message_stop" },
+						];
+						return new Response(
+							`${events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}`).join("\n\n")}\n\n`,
+							{ headers: { "Content-Type": "text/event-stream" } },
+						);
+					},
+				},
+			).result();
+			expect(result.stopReason).toBe("stop");
+			if (!body) throw new Error(`No shim request captured: ${model.provider}/${model.id}`);
+			expect(body.model).toBe(model.id);
+			return body;
+		};
+
+		for (const provider of ["kimi-code", "synthetic"] as const) {
+			const model = sourceModel(provider);
+			expect(getSupportedEfforts(model)).toEqual([]);
+			for (const request of [{}, { disableReasoning: true }, { reasoning: Effort.High }]) {
+				const body = await payloadFor(model, request);
+				expect(body.thinking).toBeUndefined();
+				expect(body.output_config?.effort).toBeUndefined();
+			}
+			// A configured thinking surface restores controls even though the
+			// discovery trust flag persists and the shim changes transport mode.
+			const restored = buildModel({
+				...model,
+				thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+				compat: {
+					...model.compatConfig,
+					supportsReasoningEffort: true,
+					omitReasoningEffort: false,
+					thinkingFormat: "kimi",
+				},
+			});
+			const restoredBody = await payloadFor(restored, { reasoning: Effort.High });
+			expect(restoredBody.thinking?.type).toBe(provider === "kimi-code" ? "adaptive" : "enabled");
+			if (provider === "kimi-code") {
+				expect(restoredBody.output_config?.effort).toBe("high");
+			} else {
+				expect(restoredBody.thinking?.budget_tokens).toBeGreaterThan(0);
+			}
+		}
+
+		const mandatory = sourceModel("kimi-code", "tenant/kimi-k3");
+		const nativeDefault = await payloadFor(mandatory, {});
+		expect(nativeDefault.thinking).toMatchObject({ type: "enabled" });
+		expect(nativeDefault.thinking?.budget_tokens).toBeGreaterThan(0);
+		for (const request of [{ disableReasoning: true }, { reasoning: Effort.High }]) {
+			const body = await payloadFor(mandatory, request);
+			expect(body.thinking).toMatchObject({ type: "enabled" });
+			expect(body.thinking?.budget_tokens).toBe(nativeDefault.thinking?.budget_tokens);
+			expect(body.output_config?.effort).toBeUndefined();
 		}
 	});
 
