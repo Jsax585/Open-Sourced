@@ -148,6 +148,27 @@ export async function waitForRelayExtension(cdpUrl: string, signal?: AbortSignal
 /** The steps that replace an out-of-date relay extension. */
 export const UPDATE_RELAY_EXTENSION = "Run `omp browser-relay install` and reload the extension in Chrome.";
 
+const SKIP_RELAY = "A page that needs no sign-in can skip the relay with `app: { relay: false }`.";
+
+/** Wait outcomes that stop an open through the relay. */
+export type RelayFailure = Exclude<RelayWaitOutcome, "ready" | "idle-older-relay">;
+
+/** The error an open shows for a relay that cannot serve it, with the step that recovers. */
+export function relayFailureMessage(outcome: RelayFailure, cdpUrl: string): string {
+	switch (outcome) {
+		case "unreachable":
+			return `omp browser relay is not reachable at ${cdpUrl}. Start it with \`omp browser-relay\` (or check the endpoint), and make sure the OMP Browser Relay extension is loaded in Chrome. ${SKIP_RELAY}`;
+		case "no-extension":
+			return `omp browser relay is serving at ${cdpUrl} but its extension never connected. Chrome may be closed, or the OMP Browser Relay extension turned off or not installed. Open Chrome and check the extension's toolbar badge shows "on"; run \`omp browser-relay install\` only if the extension is missing. ${SKIP_RELAY}`;
+		case "extension-gone":
+			return `omp browser relay is serving at ${cdpUrl} but its extension disconnected and has not come back, usually because Chrome quit. Open Chrome with the OMP Browser Relay extension and check the toolbar badge shows "on". ${SKIP_RELAY}`;
+		case "outdated-relay":
+			return `The browser relay at ${cdpUrl} is out of date. Restart the relay under this OMP version, then retry. ${SKIP_RELAY}`;
+		case "outdated-extension":
+			return `The OMP Browser Relay extension is out of date. ${UPDATE_RELAY_EXTENSION} ${SKIP_RELAY}`;
+	}
+}
+
 /**
  * Notice for an open through a ready relay where a connected extension was
  * installed by an older omp, or null. The extension still speaks the relay
