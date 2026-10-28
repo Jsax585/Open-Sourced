@@ -276,17 +276,11 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 	const hasResourceExhaustedStatus = lower !== lowerWithStatus;
 
 	// Antigravity / Cloud Code Assist surface multi-hour daily-quota exhaustion as
-	// "You have exhausted your capacity on this model. Your quota will reset after …" or
-	// "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in …".
+	// "You have exhausted your capacity on this model. Your quota will reset after …".
 	// The literal "capacity" used to pre-empt the QUOTA branch even though "quota
 	// will reset" is the long-wait signal — short-circuit here before the
 	// MODEL_CAPACITY fallthrough so credential rotation (not 60s backoff) kicks in.
-	if (
-		lower.includes("quota will reset") ||
-		lower.includes("exhausted your capacity") ||
-		lower.includes("individual quota reached") ||
-		lower.includes("individual quota")
-	) {
+	if (lower.includes("quota will reset") || lower.includes("exhausted your capacity")) {
 		return "QUOTA_EXHAUSTED";
 	}
 

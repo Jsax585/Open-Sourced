@@ -215,6 +215,18 @@ describe("extractRetryHint", () => {
 		).toBe(((71 * 60 + 48) * 60 + 47) * 1000);
 	});
 
+	it("parses Cloud Code Assist compound quotaResetDelay field", () => {
+		expect(extractRetryHint(undefined, '{"metadata":{"quotaResetDelay":"17h48m25.5s"}}')).toBe(64105500);
+	});
+
+	it("parses Cloud Code Assist quotaResetTimeStamp field", () => {
+		const future = new Date(Date.now() + 3_600_000).toISOString();
+		const hint = extractRetryHint(undefined, `{"metadata":{"quotaResetTimeStamp":"${future}"}}`);
+		expect(hint).toBeDefined();
+		expect(hint).toBeGreaterThan(3_500_000);
+		expect(hint).toBeLessThanOrEqual(3_600_000);
+	});
+
 	// A quota body can carry both a generic retry hint and the account reset
 	// window ("Please retry in 5s. Your limit will reset in 13 minutes"). The
 	// account-reset hint must take precedence so the exhausted credential stays
