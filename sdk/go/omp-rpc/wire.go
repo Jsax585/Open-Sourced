@@ -3177,6 +3177,10 @@ type SubagentSnapshot struct {
 	// Raw `AgentProgress` record.
 	Progress         map[string]json.RawMessage `json:"progress,omitempty"`
 	ParentToolCallID *string                    `json:"parentToolCallId,omitempty"`
+	// Id of the subagent that spawned this one; null when the root session spawned it.
+	ParentID *string `json:"parentId"`
+	// Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on.
+	Depth int64 `json:"depth"`
 }
 
 func (v *SubagentSnapshot) UnmarshalJSON(data []byte) error {
@@ -3198,6 +3202,8 @@ func (v *SubagentSnapshot) decodeFrom(raw map[string]json.RawMessage) error {
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("progress", &out.Progress)
 	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.defaulted("parentId", &out.ParentID, `null`)
+	d.defaulted("depth", &out.Depth, `0`)
 	if d.err != nil {
 		return d.err
 	}
@@ -4827,6 +4833,10 @@ type SubagentLifecyclePayload struct {
 	Description      *string                 `json:"description,omitempty"`
 	SessionFile      *string                 `json:"sessionFile,omitempty"`
 	ParentToolCallID *string                 `json:"parentToolCallId,omitempty"`
+	// Id of the subagent that spawned this one; null when the root session spawned it.
+	ParentID *string `json:"parentId"`
+	// Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on.
+	Depth int64 `json:"depth"`
 	// The subagent runs as a detached background job.
 	Detached *bool `json:"detached,omitempty"`
 }
@@ -4846,6 +4856,8 @@ func (v *SubagentLifecyclePayload) decodeFrom(raw map[string]json.RawMessage) er
 	d.optional("description", &out.Description)
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.defaulted("parentId", &out.ParentID, `null`)
+	d.defaulted("depth", &out.Depth, `0`)
 	d.optional("detached", &out.Detached)
 	if d.err != nil {
 		return d.err
@@ -4862,9 +4874,13 @@ type SubagentProgressPayload struct {
 	// Raw `AgentProgress` record.
 	Progress         map[string]json.RawMessage `json:"progress"`
 	ParentToolCallID *string                    `json:"parentToolCallId,omitempty"`
-	Assignment       *string                    `json:"assignment,omitempty"`
-	SessionFile      *string                    `json:"sessionFile,omitempty"`
-	Detached         *bool                      `json:"detached,omitempty"`
+	// Id of the subagent that spawned this one; null when the root session spawned it.
+	ParentID *string `json:"parentId"`
+	// Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on.
+	Depth       int64   `json:"depth"`
+	Assignment  *string `json:"assignment,omitempty"`
+	SessionFile *string `json:"sessionFile,omitempty"`
+	Detached    *bool   `json:"detached,omitempty"`
 }
 
 func (v *SubagentProgressPayload) UnmarshalJSON(data []byte) error {
@@ -4880,6 +4896,8 @@ func (v *SubagentProgressPayload) decodeFrom(raw map[string]json.RawMessage) err
 	d.required("task", &out.Task)
 	d.required("progress", &out.Progress)
 	d.optional("parentToolCallId", &out.ParentToolCallID)
+	d.defaulted("parentId", &out.ParentID, `null`)
+	d.defaulted("depth", &out.Depth, `0`)
 	d.optional("assignment", &out.Assignment)
 	d.optional("sessionFile", &out.SessionFile)
 	d.optional("detached", &out.Detached)
@@ -4893,6 +4911,10 @@ func (v *SubagentProgressPayload) decodeFrom(raw map[string]json.RawMessage) err
 type SubagentEventPayload struct {
 	ID    string        `json:"id"`
 	Event RpcAgentEvent `json:"event"`
+	// Id of the subagent that spawned this one; null when the root session spawned it.
+	ParentID *string `json:"parentId"`
+	// Subagent ancestors above this one: 0 when the root session spawned it, 1 for its children, and so on.
+	Depth int64 `json:"depth"`
 }
 
 func (v *SubagentEventPayload) UnmarshalJSON(data []byte) error {
@@ -4904,6 +4926,8 @@ func (v *SubagentEventPayload) decodeFrom(raw map[string]json.RawMessage) error 
 	d := fieldDecoder{raw: raw, owner: "SubagentEventPayload"}
 	d.required("id", &out.ID)
 	d.fallback("event", &out.Event, "type")
+	d.defaulted("parentId", &out.ParentID, `null`)
+	d.defaulted("depth", &out.Depth, `0`)
 	if d.err != nil {
 		return d.err
 	}
@@ -7206,6 +7230,25 @@ func (v *CancelSubagentResult) decodeFrom(raw map[string]json.RawMessage) error 
 	return nil
 }
 
+type ReviveSubagentResult struct {
+	Revived bool `json:"revived"`
+}
+
+func (v *ReviveSubagentResult) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ReviveSubagentResult", v.decodeFrom)
+}
+
+func (v *ReviveSubagentResult) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ReviveSubagentResult
+	d := fieldDecoder{raw: raw, owner: "ReviveSubagentResult"}
+	d.required("revived", &out.Revived)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
 type LiveStartResult struct {
 	Voice string `json:"voice"`
 }
@@ -7861,6 +7904,19 @@ type SteerSubagentCommand struct {
 // SteerSubagent sends "steer_subagent": Send a message to a running subagent as its user.
 func (c Commands) SteerSubagent(ctx context.Context, p SteerSubagentCommand) error {
 	return c.call(ctx, "steer_subagent", p, 0, nil)
+}
+
+// ReviveSubagentCommand holds the parameters of "revive_subagent".
+type ReviveSubagentCommand struct {
+	SubagentID string  `json:"subagentId"`
+	Message    *string `json:"message,omitempty"`
+}
+
+// ReviveSubagent sends "revive_subagent": Bring a finished, parked or killed subagent back from its transcript, optionally sending it a message; false when it was already live.
+func (c Commands) ReviveSubagent(ctx context.Context, p ReviveSubagentCommand) (bool, error) {
+	var out ReviveSubagentResult
+	err := c.call(ctx, "revive_subagent", p, 0, &out)
+	return out.Revived, err
 }
 
 // LiveStartCommand holds the parameters of "live_start".

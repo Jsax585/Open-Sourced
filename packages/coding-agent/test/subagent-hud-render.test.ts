@@ -78,6 +78,8 @@ function makeLifecycle(id: string, index: number, description: string, detached?
 		description,
 		status: "started",
 		parentToolCallId: "tool-call",
+		parentId: null,
+		depth: 0,
 		detached,
 	};
 }
@@ -94,6 +96,8 @@ function makeProgressPayload(
 		agentSource: "bundled",
 		task: description,
 		parentToolCallId: "tool-call",
+		parentId: null,
+		depth: 0,
 		detached,
 		progress: makeProgress({ id, index, description, task: description }),
 	};

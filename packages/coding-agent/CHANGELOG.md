@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- RPC subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`, including the subagent's own tool events) and `get_subagents` entries carry `parentId` (the spawning subagent, `null` for the root session) and `depth` (0 for a subagent the root session spawned), so an RPC host can draw the spawn tree
+- RPC command `revive_subagent` brings a finished, parked or killed subagent this session reported back from its transcript, as Agent Hub revive does, and optionally sends it a message as its user
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

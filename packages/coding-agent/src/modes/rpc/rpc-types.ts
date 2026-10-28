@@ -25,7 +25,12 @@ import type { FileEntry, SessionEntry, SessionTreeNode } from "../../session/ses
 import type { UsageLimitState } from "../../session/usage-limit";
 import type { AvailableSlashCommandSource } from "../../slash-commands/available-commands";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import type { SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "../../task";
+import type {
+	SubagentEventPayload,
+	SubagentLifecyclePayload,
+	SubagentLineage,
+	SubagentProgressPayload,
+} from "../../task";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { LogoutAccount } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import type { LivePhase } from "@oh-my-pi/pi-tui/apps/live-visualizer";
@@ -84,6 +89,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
+	| { id?: string; type: "revive_subagent"; subagentId: string; message?: string }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string; instructions?: string }
 	| { id?: string; type: "live_stop" }
@@ -393,7 +399,7 @@ export interface RpcHandoffResult {
 
 export type RpcSubagentSubscriptionLevel = "off" | "progress" | "events";
 
-export interface RpcSubagentSnapshot {
+export interface RpcSubagentSnapshot extends SubagentLineage {
 	id: string;
 	index: number;
 	agent: string;
@@ -528,6 +534,13 @@ export type RpcResponse =
 			data: { cancelled: boolean };
 	  }
 	| { id?: string; type: "response"; command: "steer_subagent"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "revive_subagent";
+			success: true;
+			data: { revived: boolean };
+	  }
 
 	// Model
 	| {

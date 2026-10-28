@@ -161,6 +161,7 @@ Important edge behavior from runtime:
 - `{ id?, type: "get_subagent_messages", subagentId?: string, sessionFile?: string, fromByte?: number }`
 - `{ id?, type: "cancel_subagent", subagentId: string }`
 - `{ id?, type: "steer_subagent", subagentId: string, message: string }`
+- `{ id?, type: "revive_subagent", subagentId: string, message?: string }`
 
 ### Model
 
@@ -1037,6 +1038,26 @@ Subagent forwarding defaults to `"off"`. `set_subagent_subscription` selects:
 - `"progress"`: lifecycle and progress frames
 - `"events"`: lifecycle, progress, and full subagent event frames
 
+Every `subagent_lifecycle`, `subagent_progress`, and `subagent_event` payload,
+and every `get_subagents` entry, places the subagent in its spawn tree:
+
+- `parentId`: the id of the subagent that spawned it, or `null` when the root
+  session (the one the RPC host drives) spawned it.
+- `depth`: how many subagents sit above it. A subagent the root session spawned
+  has `depth: 0`, its children `depth: 1`, and so on.
+
+A subagent's own tool calls reach the host only as `subagent_event` frames
+(`event.type` `tool_execution_start`, `tool_execution_update`,
+`tool_execution_end`), so they carry the same `parentId` and `depth`. Frames of
+the root session itself are not subagent frames and carry neither field.
+Older servers omit both fields; read a missing field as `parentId: null` and
+`depth: 0`.
+
+```json
+{ "type": "subagent_lifecycle", "payload": { "id": "Scout", "parentId": null, "depth": 0, "agent": "scout", "agentSource": "bundled", "status": "started", "index": 0 } }
+{ "type": "subagent_event", "payload": { "id": "Scout.Reader", "parentId": "Scout", "depth": 1, "event": { "type": "tool_execution_start", "toolCallId": "call_1", "toolName": "read", "args": { "path": "README.md" } } } }
+```
+
 `get_subagents` returns the registry snapshot sorted by subagent index and id.
 `get_subagent_messages` selects a transcript by `subagentId` or a registered
 `sessionFile` (`subagentId` takes precedence); arbitrary file paths are rejected.
@@ -1103,6 +1124,45 @@ Failure responses:
 - the subagent drops or rejects the message before accepting it (for example
   an abort or a usage-limit preflight denial lands first) →
   `error: "Subagent refused the message: <reason>"`
+
+### Reviving subagents
+
+`revive_subagent` brings a subagent this session reported back to a live
+session, the same way Agent Hub revive does. A finished subagent parked after
+its idle TTL (or restored from disk) is rebuilt from its transcript; a subagent
+killed by `cancel_subagent` or Agent Hub is reopened as a fresh generation on
+the same transcript. A subagent that is still live is left as is. Older servers
+answer `Unknown command: revive_subagent`.
+
+With `message`, the message is then sent to the subagent as its user, exactly
+as `steer_subagent` does, and the response arrives once it is accepted. The
+revived subagent's turns emit `subagent_lifecycle` and `subagent_progress`
+frames (at the current `set_subagent_subscription` level) like any other run,
+so it is listed by `get_subagents` while it works and its transcript keeps
+growing in the same `sessionFile` for `get_subagent_messages`.
+
+```json
+{ "id": "req_1", "type": "revive_subagent", "subagentId": "OmpWorker", "message": "Also cover the Windows path." }
+{ "id": "req_1", "type": "response", "command": "revive_subagent", "success": true, "data": { "revived": true } }
+```
+
+`revived` is `false` when the subagent was already live, so nothing had to be
+rebuilt. Like `steer_subagent`, the command starts in queue order and finishes
+in the background.
+
+Failure responses:
+
+- missing/empty `subagentId`, or a blank `message` → validation error
+- `subagentId` this session never reported, reported before the last
+  `new_session`/`switch_session`, or now owned by another session's same-name
+  agent → `error: "Unknown subagent: <id>"`
+- the transcript cannot be revived (no persisted session contract, an isolated
+  worktree run, its workspace is gone, or no reviver is installed) → the
+  reason, for example `Agent "<id>" was killed and its transcript cannot be resumed …`
+- the revived subagent refuses `message` → `error: "Subagent refused the message: <reason>"`
+
+Only the most recent 256 finished subagents are remembered for `revive_subagent`
+and `get_subagent_messages`.
 
 ### Side questions (`/btw`)
 
