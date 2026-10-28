@@ -1,4 +1,3 @@
-import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { useMemo, useState } from "react";
 import { getGainDashboardStats } from "../api";
 import { Chart, type ChartSeries, Legend } from "../charts";
@@ -30,7 +29,7 @@ const DAY_MS = 86_400_000;
 const SOURCE_LABEL: Record<GainSource, string> = { snapcompact: "Snapcompact" };
 
 /** The server buckets gain by UTC calendar day (`YYYY-MM-DD`). */
-const DAY_LABEL = new Intl.DateTimeFormat((getLanguage() === "ko" ? "ko-KR" : "en-US"), { month: "short", day: "numeric", timeZone: "UTC" });
+const DAY_LABEL = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 
 interface SourceRow extends GainSourceTotals {
 	source: GainSource;
@@ -72,13 +71,13 @@ export function GainRoute({ active, range }: GainRouteProps) {
 	const projects = data?.projects ?? [];
 	// Keep the chosen project selectable even when the current range never saw it.
 	const projectOptions = project !== null && !projects.includes(project) ? [project, ...projects] : projects;
-	const scope = project ? ` (${project})` : "";
+	const scope = project ? ` for ${project}` : "";
 
 	const chartSeries: ChartSeries[] = [
-		{ key: "daily", label: t("Saved per day"), color: "var(--chart-primary)", values: series.daily },
+		{ key: "daily", label: "Saved per day", color: "var(--chart-primary)", values: series.daily },
 		{
 			key: "cumulative",
-			label: t("Cumulative"),
+			label: "Cumulative",
 			color: "var(--chart-secondary)",
 			values: series.cumulative,
 			kind: "line",
@@ -89,18 +88,18 @@ export function GainRoute({ active, range }: GainRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title={t("Gain\u0004packages/stats/src/client/routes/GainRoute.tsx:GainRoute")}
-				description={t("Tokens snapcompact kept out of context{1} in {0}.", `${meta.windowLabel}`, `${scope}`)}
+				title="Gain"
+				description={`Tokens snapcompact kept out of context${scope} in ${meta.windowLabel}.`}
 				actions={
 					projectOptions.length > 0 && (
 						<select
 							className="input"
-							aria-label={t("Project")}
+							aria-label="Project"
 							value={project ?? ""}
 							onChange={e => setProject(e.target.value || null)}
 							style={{ maxWidth: 320 }}
 						>
-							<option value="">{t("All projects")}</option>
+							<option value="">All projects</option>
 							{projectOptions.map(p => (
 								<option key={p} value={p}>
 									{p}
@@ -118,11 +117,11 @@ export function GainRoute({ active, range }: GainRouteProps) {
 				empty={
 					<Card>
 						<EmptyState
-							title={t("No savings recorded{1} in {0}", `${meta.windowLabel}`, `${scope}`)}
+							title={`No savings recorded${scope} in ${meta.windowLabel}`}
 							hint={
 								range === "all"
-									? t("Savings appear here once snapcompact compacts tool output.")
-									: t("Try a longer range.")
+									? "Savings appear here once snapcompact compacts tool output."
+									: "Try a longer range."
 							}
 						/>
 					</Card>
@@ -133,31 +132,31 @@ export function GainRoute({ active, range }: GainRouteProps) {
 						<div data-stale={gain.stale}>
 							<StatGrid min={180}>
 								<Stat
-									label={t("Saved tokens")}
+									label="Saved tokens"
 									value={formatCompact(overall.savedTokens)}
 									hint={formatInteger(overall.savedTokens)}
 									spark={series.daily}
 								/>
-								<Stat label={t("Saved bytes")} value={formatBytes(overall.savedBytes)} />
+								<Stat label="Saved bytes" value={formatBytes(overall.savedBytes)} />
 								<Stat
-									label={t("Reduction")}
-									title={t("Saved bytes ÷ original bytes, when the original size is known")}
+									label="Reduction"
+									title="Saved bytes ÷ original bytes, when the original size is known"
 									value={overall.reductionPercent !== null ? formatPercent(overall.reductionPercent) : "–"}
-									hint={overall.reductionPercent === null ? t("original size not recorded") : undefined}
+									hint={overall.reductionPercent === null ? "original size not recorded" : undefined}
 								/>
-								<Stat label={t("Hits")} value={formatInteger(overall.hits)} />
+								<Stat label="Hits" value={formatInteger(overall.hits)} />
 								<Stat
-									label={t("Saved per hit")}
+									label="Saved per hit"
 									value={overall.hits > 0 ? formatCompact(overall.savedTokens / overall.hits) : "–"}
-									hint={t("tokens")}
+									hint="tokens"
 								/>
 							</StatGrid>
 						</div>
 
 						<Card
 							index={1}
-							title={t("Savings over time")}
-							description={t("Tokens saved per UTC day, with the running total")}
+							title="Savings over time"
+							description="Tokens saved per UTC day, with the running total"
 							actions={<Legend items={chartSeries.map(s => ({ key: s.key, label: s.label, color: s.color }))} />}
 							stale={gain.stale}
 						>
@@ -171,7 +170,7 @@ export function GainRoute({ active, range }: GainRouteProps) {
 							/>
 						</Card>
 
-						<Card index={2} title={t("By source")} description={t("Savings per subsystem")} flush stale={gain.stale}>
+						<Card index={2} title="By source" description="Savings per subsystem" flush stale={gain.stale}>
 							<Table rows={sourceRows} rowKey={row => row.source} columns={SOURCE_COLUMNS} />
 						</Card>
 					</>
@@ -184,13 +183,13 @@ export function GainRoute({ active, range }: GainRouteProps) {
 const SOURCE_COLUMNS: Column<SourceRow>[] = [
 	{
 		key: "source",
-		header: t("Source"),
+		header: "Source",
 		sort: row => row.source,
 		render: row => <span className="cell-primary">{SOURCE_LABEL[row.source]}</span>,
 	},
 	{
 		key: "tokens",
-		header: t("Saved tokens"),
+		header: "Saved tokens",
 		align: "right",
 		sort: row => row.savedTokens,
 		render: row => (
@@ -201,28 +200,28 @@ const SOURCE_COLUMNS: Column<SourceRow>[] = [
 	},
 	{
 		key: "share",
-		header: t("Share"),
+		header: "Share",
 		align: "right",
 		sort: row => row.share,
 		render: row => <span className="num muted">{formatPercent(row.share)}</span>,
 	},
 	{
 		key: "bytes",
-		header: t("Saved bytes"),
+		header: "Saved bytes",
 		align: "right",
 		sort: row => row.savedBytes,
 		render: row => <span className="num">{formatBytes(row.savedBytes)}</span>,
 	},
 	{
 		key: "hits",
-		header: t("Hits"),
+		header: "Hits",
 		align: "right",
 		sort: row => row.hits,
 		render: row => <span className="num">{formatInteger(row.hits)}</span>,
 	},
 	{
 		key: "reduction",
-		header: t("Reduction"),
+		header: "Reduction",
 		align: "right",
 		sort: row => row.reductionPercent ?? -1,
 		render: row => (

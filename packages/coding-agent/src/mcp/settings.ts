@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { setMcpRenderMarkdownResults } from "@oh-my-pi/pi-tui/tools/mcp";
 import { effect, register } from "../config/registry";
 
@@ -14,8 +13,8 @@ export const cfgMcpEnableProjectConfig = register({
 	ui: {
 		tab: "tools",
 		group: "Discovery & MCP",
-		label: t("MCP Project Config"),
-		description: t("Load .mcp.json/mcp.json from project root"),
+		label: "MCP Project Config",
+		description: "Load .mcp.json/mcp.json from project root",
 	},
 });
 
@@ -26,8 +25,8 @@ export const cfgMcpStartupTimeoutMs = register({
 	ui: {
 		tab: "tools",
 		group: "Discovery & MCP",
-		label: t("MCP Startup Window"),
-		description: t("Wait this many milliseconds for initial MCP tool discovery; 0 waits until connections settle"),
+		label: "MCP Startup Window",
+		description: "Wait this many milliseconds for initial MCP tool discovery; 0 waits until connections settle",
 	},
 });
 
@@ -38,8 +37,8 @@ export const cfgMcpRenderMarkdownResults = register({
 	ui: {
 		tab: "tools",
 		group: "Discovery & MCP",
-		label: t("MCP Markdown Results"),
-		description: t("Render non-JSON MCP text results as Markdown in the transcript"),
+		label: "MCP Markdown Results",
+		description: "Render non-JSON MCP text results as Markdown in the transcript",
 	},
 });
 effect(cfgMcpRenderMarkdownResults, setMcpRenderMarkdownResults);
@@ -51,8 +50,8 @@ export const cfgMcpNotifications = register({
 	ui: {
 		tab: "tools",
 		group: "Discovery & MCP",
-		label: t("MCP Update Injection"),
-		description: t("Inject MCP resource updates into the agent conversation"),
+		label: "MCP Update Injection",
+		description: "Inject MCP resource updates into the agent conversation",
 	},
 });
 
@@ -63,8 +62,8 @@ export const cfgMcpNotificationDebounceMs = register({
 	ui: {
 		tab: "tools",
 		group: "Discovery & MCP",
-		label: t("MCP Notification Debounce"),
+		label: "MCP Notification Debounce",
 		description:
-			t("Debounce window in milliseconds for MCP resource updates before injecting them into the conversation"),
+			"Debounce window in milliseconds for MCP resource updates before injecting them into the conversation",
 	},
 });

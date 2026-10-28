@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Focusable,
 	Editor,
@@ -56,8 +55,8 @@ function fit(text: string, width: number): string {
 	return truncatedWidth < width ? truncated + padding(width - truncatedWidth) : truncated;
 }
 
-export const CONTINUE_CODE_REVIEW_ACTION = t("Continue with LLM review");
-export const PASTE_CODE_REVIEW_ACTION = t("Paste annotations into prompt");
+export const CONTINUE_CODE_REVIEW_ACTION = "Continue with LLM review";
+export const PASTE_CODE_REVIEW_ACTION = "Paste annotations into prompt";
 
 export interface AnnotationOverlayCallbacks {
 	onComplete(result: CodeReviewOverlayResult | TextReviewOverlayResult | undefined): void;
@@ -120,8 +119,8 @@ interface NativeBody {
 
 const SOURCE_SELECTION_GUTTER_WIDTH = 2;
 
-const OVERLAY_TITLE = t("Code Review");
-const TEXT_OVERLAY_TITLE = t("Annotate Text");
+const OVERLAY_TITLE = "Code Review";
+const TEXT_OVERLAY_TITLE = "Annotate Text";
 const MIN_BODY_ROWS = 3;
 const SIDEBAR_MIN_TOTAL_WIDTH = 64;
 const SIDEBAR_MIN_BODY_WIDTH = 40;
@@ -158,10 +157,10 @@ interface NativeSheet {
 	readonly size: "full";
 	readonly head: TspSpan[];
 }
-const DIFF_SHEET_TITLE = t("Code review");
-const TEXT_SHEET_TITLE = t("Annotate text");
+const DIFF_SHEET_TITLE = "Code review";
+const TEXT_SHEET_TITLE = "Annotate text";
 
-const NOTE_PLACEHOLDER = t("Write a note…");
+const NOTE_PLACEHOLDER = "Write a note…";
 
 type FileStatus = "added" | "deleted" | "renamed" | "modified";
 const FILE_STATUS_ICON: Record<FileStatus, string> = {
@@ -201,6 +200,10 @@ function splitPath(path: string): { dir: string; leaf: string } {
 	return slash < 0 ? { dir: "", leaf: path } : { dir: path.slice(0, slash), leaf: path.slice(slash + 1) };
 }
 
+/** `3 files`, `1 note`. */
+function plural(count: number, noun: string): string {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
 
 /** A review mode line, muted, with its `backticked` refs as code chips. */
 function modeSpans(mode: string): TspSpan[] {
@@ -283,7 +286,7 @@ export class AnnotationOverlay implements Focusable {
 		if (isTextSource(filesOrSource)) {
 			this.#files = [];
 			this.#actions = TEXT_REVIEW_ACTIONS;
-			this.#mode = t("Annotating text");
+			this.#mode = "Annotating text";
 			this.#callbacks = modeOrCallbacks as TextReviewOverlayCallbacks;
 			this.#textSource = { ...filesOrSource };
 			this.#textLines = splitTextLines(filesOrSource.text);
@@ -696,7 +699,7 @@ export class AnnotationOverlay implements Focusable {
 		const file = this.#currentFile();
 		const source = this.#currentSourceRows()[this.#sourceIndex];
 		if (!file || (scope === "line" && (file.isBinary || !source))) {
-			this.#callbacks.onWarning?.(t("This file has no annotatable diff rows"));
+			this.#callbacks.onWarning?.("This file has no annotatable diff rows");
 			return;
 		}
 		const existing = existingIndex === undefined ? undefined : this.#annotations[existingIndex];
@@ -902,13 +905,13 @@ export class AnnotationOverlay implements Focusable {
 	}
 
 	#annotationLocation(entry: CommittedAnnotation): string {
-		if (entry.annotation.scope === "file") return t("{0} · file", `${displayFileLabel(this.#files[entry.fileIndex]!)}`);
+		if (entry.annotation.scope === "file") return `${displayFileLabel(this.#files[entry.fileIndex]!)} · file`;
 		return `${displayFileLabel(this.#files[entry.fileIndex]!)} · ${entry.annotation.oldLine ?? "-"}/${entry.annotation.newLine ?? "-"}`;
 	}
 
 	#textAnnotationLocation(entry: CommittedTextAnnotation): string {
-		if (entry.annotation.scope === "text") return t("{0} · text", `${sanitizeStatusText(this.#textSource?.label ?? t("text"))}`);
-		return t("{0} · line {1}", `${sanitizeStatusText(this.#textSource?.label ?? t("text"))}`, `${entry.annotation.line}`);
+		if (entry.annotation.scope === "text") return `${sanitizeStatusText(this.#textSource?.label ?? "text")} · text`;
+		return `${sanitizeStatusText(this.#textSource?.label ?? "text")} · line ${entry.annotation.line}`;
 	}
 
 	#pushUndo(): void {
@@ -929,7 +932,7 @@ export class AnnotationOverlay implements Focusable {
 		if (this.#externalOperation || !this.#annotating) return;
 		const openEditor = this.#callbacks.onAnnotationExternalEditor;
 		if (!openEditor) {
-			this.#callbacks.onWarning?.(t("External editor is unavailable in this UI host."));
+			this.#callbacks.onWarning?.("External editor is unavailable in this UI host.");
 			return;
 		}
 		const draft = this.#editor.getExpandedText();
@@ -940,7 +943,7 @@ export class AnnotationOverlay implements Focusable {
 			});
 		} catch (error) {
 			this.#callbacks.onWarning?.(
-				t("Failed to open external editor: {0}\u0004packages/coding-agent/src/modes/controllers/todo-command-controller.ts:TodoCommandController.#editInExternalEditor", `${error instanceof Error ? error.message : String(error)}`),
+				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		} finally {
 			this.#externalOperation = false;
@@ -956,7 +959,7 @@ export class AnnotationOverlay implements Focusable {
 			await openEditor();
 		} catch (error) {
 			this.#callbacks.onWarning?.(
-				t("Failed to open external editor: {0}\u0004packages/coding-agent/src/modes/controllers/todo-command-controller.ts:TodoCommandController.#editInExternalEditor", `${error instanceof Error ? error.message : String(error)}`),
+				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		} finally {
 			this.#externalOperation = false;
@@ -975,7 +978,7 @@ export class AnnotationOverlay implements Focusable {
 		const file = this.#currentFile();
 		if (!file)
 			return {
-				lines: [this.#theme.fg("dim", t("No reviewable files"))],
+				lines: [this.#theme.fg("dim", "No reviewable files")],
 				renderedRowBySource: [],
 			};
 		const staticBody = this.#getStaticRenderedBody(file, contentWidth);
@@ -986,7 +989,7 @@ export class AnnotationOverlay implements Focusable {
 		// status rows (including binary and rename-only files).
 		for (const entry of this.#annotations) {
 			if (entry.fileIndex === this.#fileIndex && entry.annotation.scope === "file") {
-				this.#appendAnnotationCallout(lines, entry.annotation.note, contentWidth, t("file note"));
+				this.#appendAnnotationCallout(lines, entry.annotation.note, contentWidth, "file note");
 			}
 		}
 
@@ -1023,7 +1026,7 @@ export class AnnotationOverlay implements Focusable {
 
 		for (const entry of this.#textAnnotations) {
 			if (entry.annotation.scope === "text") {
-				this.#appendAnnotationCallout(lines, entry.annotation.note, contentWidth, t("text note"));
+				this.#appendAnnotationCallout(lines, entry.annotation.note, contentWidth, "text note");
 			}
 		}
 
@@ -1063,9 +1066,9 @@ export class AnnotationOverlay implements Focusable {
 			selectedSourceLines.push(undefined);
 		};
 		if (file.isBinary) {
-			pushStaticLine(this.#theme.fg("dim", t("Binary diff; no annotatable source rows")));
+			pushStaticLine(this.#theme.fg("dim", "Binary diff; no annotatable source rows"));
 		} else if (file.rows.length === 0) {
-			pushStaticLine(this.#theme.fg("dim", t("No diff hunks; this may be a rename-only change")));
+			pushStaticLine(this.#theme.fg("dim", "No diff hunks; this may be a rename-only change"));
 		} else {
 			let sourceIndex = 0;
 			for (const diffRow of file.rows) {
@@ -1109,7 +1112,7 @@ export class AnnotationOverlay implements Focusable {
 		return body;
 	}
 
-	#appendAnnotationCallout(lines: string[], note: string, width: number, label = t("note")): void {
+	#appendAnnotationCallout(lines: string[], note: string, width: number, label = "note"): void {
 		const gutter = this.#theme.fg("warning", "▎ ");
 		const labelText = this.#theme.fg("dim", `${label}: `);
 		const continuation = `${gutter}${" ".repeat(visibleWidth(labelText))}`;
@@ -1132,7 +1135,7 @@ export class AnnotationOverlay implements Focusable {
 			);
 		}
 		const file = this.#currentFile();
-		if (!file) return this.#theme.fg("dim", t("No reviewable files"));
+		if (!file) return this.#theme.fg("dim", "No reviewable files");
 		const count = this.#annotationCount(this.#fileIndex);
 		const suffix = `  +${file.linesAdded}/-${file.linesRemoved}${count ? `  ✎${count}` : ""}`;
 		return truncateToWidth(
@@ -1177,11 +1180,11 @@ export class AnnotationOverlay implements Focusable {
 		const options = chooser.entries
 			.slice(start, start + optionLimit)
 			.map((index, windowIndex) => this.#renderAnnotationChooserEntry(chooser, index, start + windowIndex, width));
-		const keysHint = t("{0}/{1} choose · {2} edit · {3} cancel", `${this.#key("tui.select.up")}`, `${this.#key("tui.select.down")}`, `${this.#key("tui.select.confirm")}`, `${this.#key("tui.select.cancel")}`);
+		const keysHint = `${this.#key("tui.select.up")}/${this.#key("tui.select.down")} choose · ${this.#key("tui.select.confirm")} edit · ${this.#key("tui.select.cancel")} cancel`;
 		const lines =
 			availableRows === 2
-				? [this.#theme.fg("dim", t("Edit annotation · {0}", `${keysHint}`)), ...options.slice(0, 1)]
-				: [this.#theme.fg("dim", t("Edit annotation · {0}", `${keysHint}`)), ...options, this.#theme.fg("dim", keysHint)];
+				? [this.#theme.fg("dim", `Edit annotation · ${keysHint}`), ...options.slice(0, 1)]
+				: [this.#theme.fg("dim", `Edit annotation · ${keysHint}`), ...options, this.#theme.fg("dim", keysHint)];
 		return Number.isFinite(availableRows) ? lines.slice(0, availableRows) : lines;
 	}
 
@@ -1219,11 +1222,11 @@ export class AnnotationOverlay implements Focusable {
 				Ellipsis.Unicode,
 			);
 			const hints = [
-				t("{0} save", `${editorKey("tui.input.submit")}`),
-				t("{0} newline", `${editorKey("tui.input.newLine")}`),
-				t("{0} cancel", `${this.#key("tui.select.cancel")}`),
+				`${editorKey("tui.input.submit")} save`,
+				`${editorKey("tui.input.newLine")} newline`,
+				`${this.#key("tui.select.cancel")} cancel`,
 			];
-			hints.push(t("{0} editor", `${formatKeyHint(appExternalEditorKey())}`));
+			hints.push(`${formatKeyHint(appExternalEditorKey())} editor`);
 			return [caption, ...this.#editor.render(width), this.#theme.fg("dim", hints.join(" · "))];
 		}
 		return [this.#theme.fg("dim", this.#helpText())];
@@ -1235,30 +1238,30 @@ export class AnnotationOverlay implements Focusable {
 		let action: string;
 		if (this.#textSource) {
 			const label = sanitizeStatusText(this.#textSource.label);
-			location = this.#annotationScope === "text" ? t("{0} · text", `${label}`) : t("{0} · line {1}", `${label}`, `${this.#sourceIndex + 1}`);
+			location = this.#annotationScope === "text" ? `${label} · text` : `${label} · line ${this.#sourceIndex + 1}`;
 			action =
 				this.#editingAnnotationIndex === undefined
 					? this.#annotationScope === "text"
-						? t("Annotate text")
-						: t("Annotate line")
-					: t("Edit annotation");
+						? "Annotate text"
+						: "Annotate line"
+					: "Edit annotation";
 		} else {
 			const file = this.#currentFile();
 			const source = this.#currentSourceRows()[this.#sourceIndex];
 			location =
 				this.#annotationScope === "file"
 					? file
-						? t("{0} · file", `${displayFileLabel(file)}`)
-						: t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body")
+						? `${displayFileLabel(file)} · file`
+						: "file"
 					: source && file
 						? `${displayFileLabel(file)} · ${source.oldLine ?? "-"}/${source.newLine ?? "-"}`
-						: t("diff row");
+						: "diff row";
 			action =
 				this.#editingAnnotationIndex === undefined
 					? this.#annotationScope === "file"
-						? t("Annotate file")
-						: t("Annotate line")
-					: t("Edit annotation");
+						? "Annotate file"
+						: "Annotate line"
+					: "Edit annotation";
 		}
 		return { action, location: sanitizeStatusText(location) };
 	}
@@ -1267,15 +1270,15 @@ export class AnnotationOverlay implements Focusable {
 	#helpText(): string {
 		const upDown = `${this.#key("tui.select.up")}/${this.#key("tui.select.down")}`;
 		const confirm = this.#key("tui.select.confirm");
-		const editNote = t("{0} edit note", `${formatKeyHint("e")}`);
+		const editNote = `${formatKeyHint("e")} edit note`;
 		const focusHelp =
 			this.#focus === "files"
-				? t("{0} file · {1} diff · {2} file note · {3}", `${upDown}`, `${confirm}`, `${formatKeyHints(["a", "shift+a"])}`, `${editNote}`)
+				? `${upDown} file · ${confirm} diff · ${formatKeyHints(["a", "shift+a"])} file note · ${editNote}`
 				: this.#focus === "diff"
-					? t("{0} line · {1} faster · {2}/{3} · {4} ends · {5} line note · {6} {7} note · {8}", `${upDown}`, `${formatKeyHint("shift")}`, `${this.#key("tui.select.pageUp")}`, `${this.#key("tui.select.pageDown")}`, `${formatKeyHints(["g", "shift+g"])}`, `${formatKeyHint("a")}`, `${formatKeyHint("shift+a")}`, `${this.#textSource ? t("text") : t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body")}`, `${editNote}`)
-					: t("{0} select · {1} confirm", `${upDown}`, `${confirm}`);
-		const editorHint = this.#callbacks.onExternalEditor ? t(" · {0} editor", `${formatKeyHint(appExternalEditorKey())}`) : "";
-		return t("{0} · {1} undo · {2} regions{3} · {4} cancel", `${focusHelp}`, `${formatKeyHint("u")}`, `${formatKeyHint("tab")}`, `${editorHint}`, `${this.#key("tui.select.cancel")}`);
+					? `${upDown} line · ${formatKeyHint("shift")} faster · ${this.#key("tui.select.pageUp")}/${this.#key("tui.select.pageDown")} · ${formatKeyHints(["g", "shift+g"])} ends · ${formatKeyHint("a")} line note · ${formatKeyHint("shift+a")} ${this.#textSource ? "text" : "file"} note · ${editNote}`
+					: `${upDown} select · ${confirm} confirm`;
+		const editorHint = this.#callbacks.onExternalEditor ? ` · ${formatKeyHint(appExternalEditorKey())} editor` : "";
+		return `${focusHelp} · ${formatKeyHint("u")} undo · ${formatKeyHint("tab")} regions${editorHint} · ${this.#key("tui.select.cancel")} cancel`;
 	}
 
 	#ensureCursorVisible(renderedRowBySource: readonly number[]): boolean {
@@ -1434,7 +1437,7 @@ export class AnnotationOverlay implements Focusable {
 			selected: rowCount > 0 ? `l${this.#sourceIndex}` : null,
 			// Past 200 rows the terminal virtualizes the list itself (fixed one-line rows).
 			max: { lines: this.#bodyHeight },
-			empty: [span(this.#textSource ? t("This text is empty") : t("Nothing to review"), "muted")],
+			empty: [span(this.#textSource ? "This text is empty" : "Nothing to review", "muted")],
 			role: this.#textSource ? "omp.review.text" : "omp.review.diff",
 			tone: this.#focus === "diff" && !editing ? "accent" : undefined,
 		});
@@ -1534,7 +1537,7 @@ export class AnnotationOverlay implements Focusable {
 			items.push(item(key, { label: [span(label, "muted")], icon, disabled: true, tone: "muted" }));
 		if (this.#textSource) {
 			for (const [index, entry] of this.#textAnnotations.entries()) {
-				if (entry.annotation.scope === "text") note(`n${index}`, entry.annotation.note, t("Whole text"));
+				if (entry.annotation.scope === "text") note(`n${index}`, entry.annotation.note, "Whole text");
 			}
 			const mono = this.#textSource.kind !== "message" && this.#textSource.kind !== "prompt";
 			const width = String(this.#textLines.length).length;
@@ -1556,13 +1559,13 @@ export class AnnotationOverlay implements Focusable {
 			if (file) {
 				for (const [index, entry] of this.#annotations.entries()) {
 					if (entry.fileIndex === this.#fileIndex && entry.annotation.scope === "file") {
-						note(`n${index}`, entry.annotation.note, t("File note"));
+						note(`n${index}`, entry.annotation.note, "File note");
 					}
 				}
 				if (file.isBinary) {
-					notice("binary", t("Binary file: no lines to annotate, but a file note works"), "binary");
+					notice("binary", "Binary file: no lines to annotate, but a file note works", "binary");
 				} else if (file.rows.length === 0) {
-					notice("empty", t("No hunks: this looks like a rename-only change"), "forward");
+					notice("empty", "No hunks: this looks like a rename-only change", "forward");
 				}
 				let lineWidth = 1;
 				for (const diffRow of file.isBinary ? [] : file.rows) {
@@ -1587,7 +1590,7 @@ export class AnnotationOverlay implements Focusable {
 						} else {
 							items.push(
 								item(`r${rowIndex}`, {
-									label: [span(t("No newline at end of file"), "muted")],
+									label: [span("No newline at end of file", "muted")],
 									value: blankGutter,
 									disabled: true,
 									tone: "muted",
@@ -1637,9 +1640,9 @@ export class AnnotationOverlay implements Focusable {
 			added += file.linesAdded;
 			removed += file.linesRemoved;
 		}
-		const total: NativeChild[] = [text([span(t("{0} file{1}", `${(this.#files.length)}`, `${(this.#files.length === 1 ? "" : "s")}`))], { grow: 1, wrap: "none" })];
+		const total: NativeChild[] = [text([span(plural(this.#files.length, "file"))], { grow: 1, wrap: "none" })];
 		if (this.#annotations.length > 0) {
-			total.push(text([span(t("{0} note{1}", `${(this.#annotations.length)}`, `${(this.#annotations.length === 1 ? "" : "s")}`))], { role: "omp.review.count", wrap: "none" }));
+			total.push(text([span(plural(this.#annotations.length, "note"))], { role: "omp.review.count", wrap: "none" }));
 		}
 		total.push(
 			text([span(`+${added}`, "toolDiffAdded mono"), span(" "), span(`−${removed}`, "toolDiffRemoved mono")], {
@@ -1672,7 +1675,7 @@ export class AnnotationOverlay implements Focusable {
 			{
 				selected: this.#files.length > 0 ? `f${this.#fileIndex}` : null,
 				max: { lines: this.#bodyHeight },
-				empty: [span(t("No files"), "muted")],
+				empty: [span("No files", "muted")],
 				role: "omp.review.files",
 				tone: this.#focus === "files" && !editing ? "accent" : undefined,
 			},
@@ -1693,24 +1696,24 @@ export class AnnotationOverlay implements Focusable {
 		const children: NativeChild[] = [];
 		const props = { role: "omp.review.head", gap: "sm", align: "center" } as const;
 		if (this.#textSource) {
-			children.push(text([span(t("{0} line{1}", `${(this.#textLines.length)}`, `${(this.#textLines.length === 1 ? "" : "s")}`))], { grow: 1, wrap: "none" }));
+			children.push(text([span(plural(this.#textLines.length, "line"))], { grow: 1, wrap: "none" }));
 			const notes = this.#textAnnotations.length;
-			if (notes) children.push(text([span(t("{0} note{1}", `${(notes)}`, `${(notes === 1 ? "" : "s")}`))], { role: "omp.review.count", wrap: "none" }));
+			if (notes) children.push(text([span(plural(notes, "note"))], { role: "omp.review.count", wrap: "none" }));
 			return node("row", props, children, "head");
 		}
 		const file = this.#currentFile();
-		if (!file) return node("row", props, [text([span(t("No reviewable files"), "muted")])], "head");
+		if (!file) return node("row", props, [text([span("No reviewable files", "muted")])], "head");
 		const status = fileStatus(file);
 		children.push(
 			text([span(sanitizeStatusText(displayFileLabel(file)), "path")], { truncate: "middle", min: { w: 0 } }),
 		);
 		const what =
 			status === "renamed" && file.oldPath
-				? t("Renamed from {0}", `${sanitizeStatusText(file.oldPath)}`)
+				? `Renamed from ${sanitizeStatusText(file.oldPath)}`
 				: status === "added"
-					? t("New file")
+					? "New file"
 					: status === "deleted"
-						? t("Deleted")
+						? "Deleted"
 						: file.isBinary
 							? "Binary"
 							: undefined;
@@ -1726,7 +1729,7 @@ export class AnnotationOverlay implements Focusable {
 		}
 		children.push(node("spacer", { grow: 1 }));
 		const count = this.#annotationCount(this.#fileIndex);
-		if (count) children.push(text([span(t("{0} note{1}", `${(count)}`, `${(count === 1 ? "" : "s")}`))], { role: "omp.review.count", wrap: "none" }));
+		if (count) children.push(text([span(plural(count, "note"))], { role: "omp.review.count", wrap: "none" }));
 		if (!file.isBinary) {
 			children.push(
 				text(
@@ -1753,14 +1756,14 @@ export class AnnotationOverlay implements Focusable {
 				const location = !annotation
 					? ""
 					: annotation.scope === "file"
-						? t("File note")
+						? "File note"
 						: annotation.scope === "text"
-							? t("Whole text")
+							? "Whole text"
 							: "line" in annotation
-								? t("Line {0}", `${annotation.line}`)
+								? `Line ${annotation.line}`
 								: annotation.newLine !== undefined
-									? t("Line {0}", `${annotation.newLine}`)
-									: t("Removed line {0}", `${annotation.oldLine ?? ""}`).trim();
+									? `Line ${annotation.newLine}`
+									: `Removed line ${annotation.oldLine ?? ""}`.trim();
 				return item(`c${i}`, {
 					label: sanitizeStatusText(annotation?.note.split(/\r?\n/, 1)[0] ?? ""),
 					value: location,
@@ -1771,7 +1774,7 @@ export class AnnotationOverlay implements Focusable {
 				"col",
 				{ role: "omp.review.composer" },
 				[
-					keyed(text([span(t("Edit which note?"), "strong")]), "caption"),
+					keyed(text([span("Edit which note?", "strong")]), "caption"),
 					selectList("chooser", entries, { selected: `c${chooser.selected}`, tone: "accent" }),
 				],
 				"chooser",
@@ -1788,21 +1791,21 @@ export class AnnotationOverlay implements Focusable {
 
 	/** Where the open note lands: `Note on line 42 in src/app.ts`, `Edit note on src/app.ts`, `Note on the whole text`. */
 	#noteCaption(): TspSpan[] {
-		const verb = span(this.#editingAnnotationIndex === undefined ? t("Note on ") : t("Edit note on "), "muted");
+		const verb = span(this.#editingAnnotationIndex === undefined ? "Note on " : "Edit note on ", "muted");
 		if (this.#textSource) {
 			return this.#annotationScope === "text"
-				? [verb, span(t("the whole text"), "strong")]
-				: [verb, span(t("line {0}\u0004packages/tui/src/overlays/annotation-overlay.ts:AnnotationOverlay.#noteCaption", `${this.#sourceIndex + 1}`), "strong")];
+				? [verb, span("the whole text", "strong")]
+				: [verb, span(`line ${this.#sourceIndex + 1}`, "strong")];
 		}
 		const file = this.#currentFile();
-		const path = file ? sanitizeStatusText(displayFileLabel(file)) : t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body");
+		const path = file ? sanitizeStatusText(displayFileLabel(file)) : "file";
 		if (this.#annotationScope === "file") return [verb, span(path, "path")];
 		const source = this.#currentSourceRows()[this.#sourceIndex];
 		const where =
 			source?.kind === "removed"
-				? t("removed line {0}", `${source.oldLine ?? ""}`)
-				: t("line {0}\u0004packages/tui/src/overlays/annotation-overlay.ts:AnnotationOverlay.#noteCaption", `${source?.newLine ?? source?.oldLine ?? ""}`);
-		return [verb, span(path, "path"), span(t(" in "), "muted"), span(where.trim(), "strong")];
+				? `removed line ${source.oldLine ?? ""}`
+				: `line ${source?.newLine ?? source?.oldLine ?? ""}`;
+		return [verb, span(where.trim(), "strong"), span(" in ", "muted"), span(path, "path")];
 	}
 
 	/**
@@ -1820,17 +1823,17 @@ export class AnnotationOverlay implements Focusable {
 		const marked = (button: NativeNode, mark: "pick" | "drop" | undefined): NativeNode =>
 			mark ? ({ ...button, p: { ...button.p, mark } } as NativeNode) : button;
 		const hasNotes = this.#textSource ? this.#textAnnotations.length > 0 : this.#annotations.length > 0;
-		const pasteTitle = hasNotes ? PASTE_CODE_REVIEW_ACTION : t("Add a note to paste it into the prompt");
-		const buttons: NativeNode[] = [actionButton(t("Cancel"), "close", { keys: "escape" })];
+		const pasteTitle = hasNotes ? PASTE_CODE_REVIEW_ACTION : "Add a note to paste it into the prompt";
+		const buttons: NativeNode[] = [actionButton("Cancel", "close", { keys: "escape" })];
 		if (this.#textSource) {
 			buttons.push(
-				marked(actionButton(t("Paste into prompt"), "paste", { tone: "accent", title: pasteTitle }), pick(0)),
+				marked(actionButton("Paste into prompt", "paste", { tone: "accent", title: pasteTitle }), pick(0)),
 			);
 		} else {
 			buttons.push(
-				marked(actionButton(t("Paste into prompt"), "paste", { title: pasteTitle }), pick(1)),
+				marked(actionButton("Paste into prompt", "paste", { title: pasteTitle }), pick(1)),
 				marked(
-					actionButton(t("Review with LLM"), "review", { tone: "accent", title: CONTINUE_CODE_REVIEW_ACTION }),
+					actionButton("Review with LLM", "review", { tone: "accent", title: CONTINUE_CODE_REVIEW_ACTION }),
 					pick(0),
 				),
 			);
@@ -1851,37 +1854,37 @@ export class AnnotationOverlay implements Focusable {
 		});
 		const upDown = (label: string) => this.#hint(["tui.select.up", "tui.select.down"], label);
 		if (this.#annotationChooser) {
-			return [upDown(t("choose")), this.#hint("tui.select.confirm", t("edit")), this.#hint("tui.select.cancel", t("back"))];
+			return [upDown("choose"), this.#hint("tui.select.confirm", "edit"), this.#hint("tui.select.cancel", "back")];
 		}
 		if (this.#annotating) {
 			return [
-				this.#hint("tui.input.submit", t("save")),
-				this.#hint("tui.input.newLine", t("new line")),
-				this.#hint("tui.select.cancel", t("discard\u0004packages/coding-agent/src/export/ttsr-settings.ts:cfgTtsrContextMode.ui.options.label")),
-				this.#callbacks.onAnnotationExternalEditor ? key(appExternalEditorKey(), t("editor")) : undefined,
+				this.#hint("tui.input.submit", "save"),
+				this.#hint("tui.input.newLine", "new line"),
+				this.#hint("tui.select.cancel", "discard"),
+				this.#callbacks.onAnnotationExternalEditor ? key(appExternalEditorKey(), "editor") : undefined,
 			];
 		}
-		const undo = this.#undoStack.length > 0 ? key("u", t("undo")) : undefined;
+		const undo = this.#undoStack.length > 0 ? key("u", "undo") : undefined;
 		if (this.#focus === "files") {
 			return [
-				upDown(t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body")),
-				this.#hint("tui.select.confirm", t("open")),
-				key("a", t("file note")),
+				upDown("file"),
+				this.#hint("tui.select.confirm", "open"),
+				key("a", "file note"),
 				undo,
-				key("tab", t("pane")),
+				key("tab", "pane"),
 			];
 		}
 		if (this.#focus === "diff") {
 			return [
-				upDown(t("line")),
-				key("a", t("note")),
-				key("shift+a", this.#textSource ? t("note on all") : t("file note")),
-				this.#annotationCandidates().length > 0 ? key("e", t("edit note")) : undefined,
+				upDown("line"),
+				key("a", "note"),
+				key("shift+a", this.#textSource ? "note on all" : "file note"),
+				this.#annotationCandidates().length > 0 ? key("e", "edit note") : undefined,
 				undo,
-				key("tab", this.#textSource ? t("actions\u0004packages/tui/src/overlays/annotation-overlay.ts:AnnotationOverlay.#footerHints") : t("pane")),
+				key("tab", this.#textSource ? "actions" : "pane"),
 			];
 		}
-		return [upDown(t("choose")), this.#hint("tui.select.confirm", t("run")), key("tab", t("pane"))];
+		return [upDown("choose"), this.#hint("tui.select.confirm", "run"), key("tab", "pane")];
 	}
 
 	/** Keycap hint for the primary keys this overlay's keybindings bind to `actions`. */

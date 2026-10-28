@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Ellipsis, matchesKey, ScrollView, Text, truncateToWidth } from "../index";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel } from "../keybinding-matchers";
@@ -51,20 +50,6 @@ function parseKvReport(report: string): KvReportSection[] {
 		else current.entries.push({ line: styledSpans(raw) });
 	}
 	return sections.filter(section => section.head !== undefined || section.entries.length > 0);
-}
-
-/** Semantic report keys stay English; only their presentation crosses the language seam. */
-function localizeReportKey(key: string): string {
-	return localize(`${key}:`).replace(/:$/, "");
-}
-
-function localizeReport(report: string): string {
-	return report.split("\n").map(raw => {
-		const pair = KV_LINE.exec(raw);
-		if (pair) return raw.replace(`${pair[1]}:`, () => localize(`${pair[1]}:`));
-		const head = HEAD_LINE.exec(raw);
-		return head ? raw.replace(head[1], () => localize(head[1])) : raw;
-	}).join("\n");
 }
 
 /** The plain text of `spans`. */
@@ -135,7 +120,7 @@ export class SessionInfoOverlay implements Component {
 		role: "omp.overlay.sessionInfo",
 		size: "md",
 		anchor: "center",
-		head: localize("Session info"),
+		head: "Session info",
 	} as const;
 	readonly #host: SessionInfoOverlayHost;
 	readonly #onClose: () => void;
@@ -156,7 +141,7 @@ export class SessionInfoOverlay implements Component {
 		this.#onClose = onClose;
 		this.#context = context;
 		this.#infoSource = info;
-		this.#info = new Text(localizeReport(info), 0, 0);
+		this.#info = new Text(info, 0, 0);
 		this.#scrollView = new ScrollView([], {
 			height: 0,
 			scrollbar: "auto",
@@ -168,7 +153,7 @@ export class SessionInfoOverlay implements Component {
 		});
 		this.#footer = new PanelRows();
 		this.#footer.setHeight(1);
-		this.#panel = new OverlayPanel(localize("Session Info"));
+		this.#panel = new OverlayPanel("Session Info");
 		this.#panel.addChild(this.#scrollView);
 		this.#panel.addChild(new PanelDivider());
 		this.#panel.addChild(this.#footer);
@@ -240,15 +225,15 @@ export class SessionInfoOverlay implements Component {
 				for (const entry of entries) {
 					if (!("k" in entry)) rest.push(text(entry.line, { wrap: "word", role: "omp.info.note" }));
 					else if (entry.k === "ID")
-						identity.unshift(identityField("ID", [span(joined(entry.v), "mono")], "id", localize("Copy session ID")));
+						identity.unshift(identityField("ID", [span(joined(entry.v), "mono")], "id", "Copy session ID"));
 					else if (entry.k === "File") {
 						const path = joined(entry.v);
 						identity.push(
 							path.includes("/")
-								? identityField(localize("File"), [span(path, "path")], "file", localize("Copy {0}", `${path}`))
-								: identityField(localize("File"), [span(path, "muted")], "file"),
+								? identityField("File", [span(path, "path")], "file", `Copy ${path}`)
+								: identityField("File", [span(path, "muted")], "file"),
 						);
-					} else rest.push(node("kv", { items: [{ k: localizeReportKey(entry.k), v: entry.v }], role: "omp.info.kv" }));
+					} else rest.push(node("kv", { items: [{ k: entry.k, v: entry.v }], role: "omp.info.kv" }));
 				}
 				if (identity.length > 0) body.push(node("col", { role: "omp.info.identity" }, identity, "identity"));
 				body.push(...rest);
@@ -267,7 +252,7 @@ export class SessionInfoOverlay implements Component {
 					head,
 					key: `s${index}`,
 					items: pairs.map(p => ({
-						k: p.k,
+						k: sentenceCase(p.k),
 						v: [span(cost && p.k === "Total" ? `$${joined(p.v).trim()}` : joined(p.v).trim(), "mono")],
 					})),
 				});
@@ -277,14 +262,14 @@ export class SessionInfoOverlay implements Component {
 			body.push(
 				node(
 					"section",
-					{ head: sentenceCase(localize(head)), role: "omp.info.group" },
+					{ head: sentenceCase(head), role: "omp.info.group" },
 					this.#describeEntries(entries, head === "Provider"),
 					`s${index}`,
 				),
 			);
 		}
 		flushStats();
-		body.push(actionBar([null, actionButton(localize("Close"), "close", { keys: "escape" })]));
+		body.push(actionBar([null, actionButton("Close", "close", { keys: "escape" })]));
 		const described = col(body, { gap: "md" });
 		this.#nativeNode = { meter, node: described };
 		return described;
@@ -310,7 +295,7 @@ export class SessionInfoOverlay implements Component {
 				continue;
 			}
 			const v = mono ? entry.v.map(part => ({ ...part, s: part.s ? `${part.s} mono` : "mono" })) : entry.v;
-			items.push({ k: mono ? sentenceCase(localizeReportKey(entry.k)) : entry.k, v });
+			items.push({ k: mono ? sentenceCase(entry.k) : entry.k, v });
 		}
 		flush();
 		return children;
@@ -329,20 +314,12 @@ export class SessionInfoOverlay implements Component {
 		for (const g of groups) {
 			const total = g.items.length > 1 ? g.items.find(item => item.k === "Total") : undefined;
 			const items = total ? g.items.filter(item => item !== total) : g.items;
-			const children: NativeChild[] = [node("kv", {
-				items: items.map(item => ({ ...item, k: sentenceCase(localizeReportKey(item.k)) })),
-				layout: "grid",
-				role: "omp.info.nums",
-			})];
-			if (total) children.push(node("kv", {
-				items: [{ ...total, k: sentenceCase(localizeReportKey(total.k)) }],
-				layout: "grid",
-				role: "omp.info.total",
-			}));
+			const children: NativeChild[] = [node("kv", { items, layout: "grid", role: "omp.info.nums" })];
+			if (total) children.push(node("kv", { items: [total], layout: "grid", role: "omp.info.total" }));
 			// Ties go right, so the stacked order (left, then right) stays the report's.
 			const column = columns[0].lines === 0 || columns[0].lines < columns[1].lines ? columns[0] : columns[1];
 			column.lines += g.items.length + 2;
-			column.children.push(node("section", { head: sentenceCase(localize(g.head)), role: "omp.info.group" }, children, g.key));
+			column.children.push(node("section", { head: sentenceCase(g.head), role: "omp.info.group" }, children, g.key));
 		}
 		return node(
 			"row",
@@ -366,7 +343,7 @@ export class SessionInfoOverlay implements Component {
 					"row",
 					{ align: "baseline", role: "omp.info.contextHead" },
 					[
-						text([span(localize("Context window"))], { grow: 1, shrink: 1, truncate: "end" }),
+						text([span("Context window")], { grow: 1, shrink: 1, truncate: "end" }),
 						text(
 							[
 								span(`${formatNumber(context.tokens)} / ${formatNumber(context.contextWindow)}`, "mono muted"),

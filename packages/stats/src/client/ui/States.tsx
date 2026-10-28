@@ -1,8 +1,7 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Inbox, RotateCw, TriangleAlert } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 
-export function EmptyState({ title = t("Nothing here yet"), hint }: { title?: ReactNode; hint?: ReactNode }) {
+export function EmptyState({ title = "Nothing here yet", hint }: { title?: ReactNode; hint?: ReactNode }) {
 	return (
 		<div className="empty">
 			<Inbox size={20} />
@@ -19,7 +18,8 @@ export function ErrorState({ error, onRetry }: { error: Error | string; onRetry?
 			<span className="error-state-message">{typeof error === "string" ? error : error.message}</span>
 			{onRetry && (
 				<button type="button" className="btn" data-size="sm" data-variant="ghost" onClick={onRetry}>
-					<RotateCw size={13} />{t(" Retry")}</button>
+					<RotateCw size={13} /> Retry
+				</button>
 			)}
 		</div>
 	);

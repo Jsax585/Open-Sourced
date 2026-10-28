@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 
 // Exa
@@ -14,7 +13,7 @@ export const cfgExaEnabled = register({
 		tab: "providers",
 		group: "Services",
 		label: "Exa",
-		description: t("Enable the Exa web search provider"),
+		description: "Enable the Exa web search provider",
 	},
 });
 
@@ -25,8 +24,8 @@ export const cfgExaSearchDelayMs = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Exa Search Delay"),
-		description: t("Minimum delay between Exa web search requests in milliseconds; set 0 to disable pacing"),
+		label: "Exa Search Delay",
+		description: "Minimum delay between Exa web search requests in milliseconds; set 0 to disable pacing",
 	},
 });
 
@@ -39,8 +38,8 @@ export const cfgSearxngEndpoint = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("SearXNG Endpoint"),
-		description: t("Base URL of a self-hosted SearXNG instance used for web search"),
+		label: "SearXNG Endpoint",
+		description: "Base URL of a self-hosted SearXNG instance used for web search",
 	},
 });
 

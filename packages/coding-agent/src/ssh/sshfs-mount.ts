@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { $which, getRemoteDir, postmortem } from "@oh-my-pi/pi-utils";
@@ -134,7 +133,7 @@ export async function mountRemote(host: SSHConnectionTarget, remotePath = "/"): 
 	if (result.exitCode !== 0) {
 		const detail = result.stderr.toString().trim();
 		const suffix = detail ? `: ${detail}` : "";
-		throw new Error(t("Failed to mount {0}{1}", `${target}`, `${suffix}`));
+		throw new Error(`Failed to mount ${target}${suffix}`);
 	}
 
 	mountedPaths.add(mountPath);

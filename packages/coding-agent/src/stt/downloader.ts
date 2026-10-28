@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
@@ -118,11 +117,11 @@ export async function downloadSttModel(
 		},
 	});
 	if (!result.ok) {
-		const detail = result.error ? `: ${result.error}` : t(". Check your network connection.");
-		throw new Error(t("Failed to download speech model ({0}){1}", `${spec.repo}`, `${detail}`));
+		const detail = result.error ? `: ${result.error}` : ". Check your network connection.";
+		throw new Error(`Failed to download speech model (${spec.repo})${detail}`);
 	}
 	if (!(await isSttModelCached(spec.key))) {
-		throw new Error(t("Speech model download finished without required files ({0}).", `${spec.repo}`));
+		throw new Error(`Speech model download finished without required files (${spec.repo}).`);
 	}
 }
 
@@ -134,8 +133,8 @@ export async function ensureSTTDependencies(options?: EnsureOptions): Promise<vo
 		progress => {
 			const stage =
 				progress.status === "ready" || progress.status === "done"
-					? t("Speech model {0} ready", `${progress.label}`)
-					: t("Downloading speech model {0}", `${progress.label}`);
+					? `Speech model ${progress.label} ready`
+					: `Downloading speech model ${progress.label}`;
 			options?.onProgress?.({ stage, percent: progress.percent });
 		},
 		{ signal: options?.signal },

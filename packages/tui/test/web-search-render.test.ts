@@ -33,8 +33,16 @@ function buildResult(answer: string): {
 	return { content: [{ type: "text", text: answer }], details: { response } };
 }
 
-function renderedText(lines: readonly string[]): string {
-	return lines.map(line => sanitizeText(line)).join("\n");
+/** Slice the sanitized lines belonging to the framed "Answer" section. */
+function answerSection(lines: string[]): string {
+	const start = lines.findIndex(l => / Answer /.test(l));
+	const end = lines.findIndex((l, i) => i > start && / Sources /.test(l));
+	expect(start).toBeGreaterThanOrEqual(0);
+	expect(end).toBeGreaterThan(start);
+	return lines
+		.slice(start + 1, end)
+		.join("\n")
+		.trim();
 }
 
 describe("renderSearchResult", () => {
@@ -47,7 +55,7 @@ describe("renderSearchResult", () => {
 		const component = renderSearchResult(buildResult(ANSWER), { expanded: true, isPartial: false }, uiTheme, {
 			query: "test query",
 		});
-		const answer = renderedText(component.render(120));
+		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
 		// Heading hashes and bold asterisks are consumed by the markdown renderer.
 		expect(answer).not.toContain("##");
 		expect(answer).not.toContain("**");
@@ -61,8 +69,10 @@ describe("renderSearchResult", () => {
 		const component = renderSearchResult(buildResult(ANSWER), { expanded: true, isPartial: false }, uiTheme, {
 			query: "test query",
 		});
-		const answer = renderedText(component.render(120));
+		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
+		// The final paragraph is present and there is no "… N more lines" cap inside the Answer section.
 		expect(answer).toContain("FINAL_UNIQUE_MARKER");
+		expect(answer).not.toMatch(/more line/);
 	});
 
 	it("shows the full answer when collapsed by default", async () => {
@@ -70,9 +80,10 @@ describe("renderSearchResult", () => {
 		const component = renderSearchResult(buildResult(ANSWER), { expanded: false, isPartial: false }, uiTheme, {
 			query: "test query",
 		});
-		const answer = renderedText(component.render(120));
+		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
 		// TUI collapsed view keeps the answer intact; only explicit compact mode caps it.
 		expect(answer).toContain("FINAL_UNIQUE_MARKER");
+		expect(answer).not.toMatch(/more line/);
 	});
 
 	it("truncates the answer only when compact mode provides maxAnswerLines", async () => {
@@ -81,9 +92,9 @@ describe("renderSearchResult", () => {
 			query: "test query",
 			maxAnswerLines: 3,
 		});
-		const answer = renderedText(component.render(120));
-		expect(answer).toContain("first");
+		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
 
+		expect(answer).toMatch(/more line/);
 		expect(answer).not.toContain("FINAL_UNIQUE_MARKER");
 	});
 });

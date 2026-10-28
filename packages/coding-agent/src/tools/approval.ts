@@ -6,7 +6,6 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { isRecord, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { replaceTabs } from "@oh-my-pi/pi-tui";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -202,7 +201,7 @@ function resolveCachedModeApproval(
 	const candidates = targets.map(target => coveringGrantKeys(target, decision.tier));
 	const present = grants?.present(candidates.flat());
 	if (present && candidates.every(keys => keys.some(key => present.has(key)))) return { ...base, policy: "allow" };
-	return { ...base, policy: "prompt", reason: decision.reason ?? t("target not yet approved") };
+	return { ...base, policy: "prompt", reason: decision.reason ?? "target not yet approved" };
 }
 
 /**
@@ -602,11 +601,11 @@ export function sessionApprovalScope(
 export function denyError(resolved: ResolvedApproval, toolName: string): Error {
 	const { source, reason, policyKey } = resolved;
 	if (source === "tool") {
-		return new Error(t("Tool \"{0}\" is blocked by tool policy.{1}", `${toolName}`, `${reason ? t("\nReason: {0}", `${reason}`) : ""}`));
+		return new Error(`Tool "${toolName}" is blocked by tool policy.${reason ? `\nReason: ${reason}` : ""}`);
 	}
 	return new Error(
-		t("Tool \"{0}\" is blocked by user policy.\n", `${policyKey ?? toolName}`) +
-			t("To allow: remove \"tools.approval.{0}: deny\" from config.", `${policyKey ?? toolName}`),
+		`Tool "${policyKey ?? toolName}" is blocked by user policy.\n` +
+			`To allow: remove "tools.approval.${policyKey ?? toolName}: deny" from config.`,
 	);
 }
 
@@ -636,7 +635,7 @@ export function requiresApproval(
 export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNCATE_CHARS): string {
 	if (value.length <= maxChars) return value;
 	const omitted = value.length - maxChars;
-	return t("{0}[…{1}ch elided…]", `${value.slice(0, maxChars)}`, `${omitted}`);
+	return `${value.slice(0, maxChars)}[…${omitted}ch elided…]`;
 }
 
 function formatPayloadValue(value: unknown, indent: number): string {
@@ -697,19 +696,19 @@ export function formatApprovalArguments(args: unknown, options?: { showEmpty?: b
 		return [];
 	}
 	const formatted = formatPayloadValue(args, 0);
-	return [t("Arguments:\n{0}", `${truncateForPrompt(formatted)}`)];
+	return [`Arguments:\n${truncateForPrompt(formatted)}`];
 }
 
 /** The prompt's header rows: tool name, MCP origin, and the reason it asks. */
 function approvalHeader(tool: ApprovalSubject, reason?: string): string[] {
-	const lines = [t("Allow tool: {0}", `${tool.name}`)];
+	const lines = [`Allow tool: ${tool.name}`];
 
 	if (tool.name.startsWith("mcp__") && tool.approval === undefined) {
-		lines.push(t("Origin: MCP server tool"));
+		lines.push("Origin: MCP server tool");
 	}
 
 	if (reason) {
-		lines.push(t("Reason: {0}", `${reason}`));
+		lines.push(`Reason: ${reason}`);
 	}
 	return lines;
 }
@@ -775,13 +774,13 @@ function approvalFolderPromptBlock(
 		listing === undefined
 			? undefined
 			: listing.truncated
-				? t("{0}+ entries", `${listing.total}`)
-				: `${count(listing.total, t("entry"), t("entries"))} (${count(listing.folders, t("folder"), t("folders"))}, ${count(listing.files, t("file"), t("files"))})`;
+				? `${listing.total}+ entries`
+				: `${count(listing.total, "entry", "entries")} (${count(listing.folders, "folder", "folders")}, ${count(listing.files, "file", "files")})`;
 	const block = prompt.render(approvalFolderTemplate, {
 		folder: sanitizeText(folder),
 		summary,
 		entries,
-		more: hidden > 0 ? count(hidden, t("more"), t("more")) : undefined,
+		more: hidden > 0 ? count(hidden, "more", "more") : undefined,
 	});
 	return block.trimEnd() || undefined;
 }
@@ -800,8 +799,8 @@ function approvalGrantChoices(
 	if (folder) {
 		grants.push({
 			scope: "folder",
-			label: t("Approve Directory: {0}", `${folder.label}`),
-			alwaysLabel: t("Always Approve Directory: {0}", `${folder.label}`),
+			label: `Approve Directory: ${folder.label}`,
+			alwaysLabel: `Always Approve Directory: ${folder.label}`,
 		});
 	}
 	const targets = approvalCacheTargets(tool, args);
@@ -809,8 +808,8 @@ function approvalGrantChoices(
 		const files = targets.every(approvalTargetNamesFile);
 		grants.push({
 			scope: "target",
-			label: files ? t("Approve File") : t("Approve"),
-			alwaysLabel: files ? t("Always Approve File") : t("Always Approve"),
+			label: files ? "Approve File" : "Approve",
+			alwaysLabel: files ? "Always Approve File" : "Always Approve",
 		});
 	}
 	return grants;
@@ -834,7 +833,7 @@ export async function requestApproval(
 	const { reason, appendix = [], sessionSubject } = options;
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
-	const session = sessionSubject === undefined ? undefined : t("Approve {0} for this session", `${sessionSubject}`);
+	const session = sessionSubject === undefined ? undefined : `Approve ${sessionSubject} for this session`;
 	const folder = options.grants ? approvalFolderCandidate(tool, args) : undefined;
 	const grants = options.grants ? approvalGrantChoices(tool, args, folder) : [];
 	// A directory answer names what it covers: the folder's own entries, listed in the prompt.
@@ -868,7 +867,7 @@ export async function requestApproval(
 
 /** The approve-this-call-only label: "Approve", or "Approve Once" beside grants that remember more. */
 export function approvalOnceLabel(prompt: Pick<ExtensionApprovalPrompt, "grants">): string {
-	return prompt.grants?.length ? t("Approve Once") : t("Approve");
+	return prompt.grants?.length ? "Approve Once" : "Approve";
 }
 
 /**
@@ -883,7 +882,7 @@ export function approvalChoiceLabels(prompt: Pick<ExtensionApprovalPrompt, "sess
 		...grants.map(grant => grant.alwaysLabel),
 		approvalOnceLabel(prompt),
 		...(prompt.session ? [prompt.session] : []),
-		t("Deny"),
+		"Deny",
 	];
 }
 

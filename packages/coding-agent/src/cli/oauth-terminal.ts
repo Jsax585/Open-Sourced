@@ -7,7 +7,6 @@
  * every step: readline buffers whole input chunks, so a second interface on
  * piped stdin never sees lines the first one already consumed.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as readline from "node:readline";
 import {
 	type AuthStorage,
@@ -50,7 +49,7 @@ export function promptLine(rl: readline.Interface, question: string, signal?: Ab
 	};
 
 	const cancel = () => {
-		finish(() => reject(new Error(t("Login cancelled\u0004packages/coding-agent/src/cli/oauth-terminal.ts:promptLine.cancel"))));
+		finish(() => reject(new Error("Login cancelled")));
 	};
 
 	const onSigint = () => {
@@ -58,7 +57,7 @@ export function promptLine(rl: readline.Interface, question: string, signal?: Ab
 	};
 
 	const onAbort = () => {
-		finish(() => reject(signal?.reason instanceof Error ? signal.reason : new Error(t("Login input cancelled"))));
+		finish(() => reject(signal?.reason instanceof Error ? signal.reason : new Error("Login input cancelled")));
 	};
 
 	const onKeypress = (_str: string, key: readline.Key) => {
@@ -91,7 +90,7 @@ export function promptLine(rl: readline.Interface, question: string, signal?: Ab
 		}
 	} catch {
 		// `rl.question` throws ERR_USE_AFTER_CLOSE once piped stdin hit EOF.
-		finish(() => reject(new Error(t("Login cancelled: stdin closed"))));
+		finish(() => reject(new Error("Login cancelled: stdin closed")));
 	}
 	return promise;
 }
@@ -107,10 +106,10 @@ export async function pickIndex(rl: readline.Interface, title: string, labels: r
 		process.stdout.write(`  ${i + 1}. ${labels[i]}\n`);
 	}
 	process.stdout.write("\n");
-	const choice = await promptLine(rl, t("Enter number (1-{0}): ", `${labels.length}`));
+	const choice = await promptLine(rl, `Enter number (1-${labels.length}): `);
 	const index = Number.parseInt(choice, 10) - 1;
 	if (Number.isNaN(index) || index < 0 || index >= labels.length) {
-		throw new Error(t("Invalid selection: {0}", `${choice}`));
+		throw new Error(`Invalid selection: ${choice}`);
 	}
 	return index;
 }
@@ -125,11 +124,11 @@ export async function pickOAuthProvider(
 	providers: readonly OAuthProviderInfo[],
 ): Promise<string> {
 	if (providers.length === 0) {
-		throw new Error(t("No OAuth providers registered"));
+		throw new Error("No OAuth providers registered");
 	}
 	const index = await pickIndex(
 		rl,
-		t("Select a provider:"),
+		"Select a provider:",
 		providers.map(p => p.name),
 	);
 	return providers[index].id;
@@ -162,7 +161,7 @@ export async function runTerminalOAuthLogin(
 	const usesManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(provider);
 	return storage.oauth.login(provider, {
 		onAuth({ url, launchUrl, instructions }) {
-			process.stdout.write(t("\nOpen this URL in your browser:\n"));
+			process.stdout.write("\nOpen this URL in your browser:\n");
 			// Full URL first so the CLI works from any machine, including SSH
 			// sessions where a `launchUrl` (loopback `/launch` on the OMP
 			// host) would resolve against the caller's browser and fail.
@@ -172,7 +171,7 @@ export async function runTerminalOAuthLogin(
 				// Local shortcut for the machine running OMP. Terminals or
 				// screen-scrapers narrower than the full URL still get an
 				// unbroken copy target here.
-				process.stdout.write(t("Local shortcut (this machine only): {0}\n", `${launchUrl}`));
+				process.stdout.write(`Local shortcut (this machine only): ${launchUrl}\n`);
 			}
 			if (instructions) process.stdout.write(`${instructions}\n`);
 			process.stdout.write("\n");
@@ -187,7 +186,7 @@ export async function runTerminalOAuthLogin(
 		...(usesManualInput
 			? {
 					onManualCodeInput(signal) {
-						return ask(t("Paste the authorization code (or full redirect URL):\u0004packages/coding-agent/src/cli/oauth-terminal.ts:runTerminalOAuthLogin.onManualCodeInput"), signal);
+						return ask("Paste the authorization code (or full redirect URL):", signal);
 					},
 				}
 			: undefined),

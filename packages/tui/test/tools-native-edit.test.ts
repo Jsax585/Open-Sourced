@@ -46,7 +46,7 @@ function spanText(node: NativeNode, key: "spans" | "head"): string {
 }
 
 describe("edit native views", () => {
-	it("gives each edited file one section with one diff, never a card", () => {
+	it("heads a multi-file edit by file count and gives each file one section with one diff, never a card", () => {
 		const view = editToolRenderer.describeResult(
 			{
 				content: [{ type: "text", text: "ok" }],
@@ -61,7 +61,7 @@ describe("edit native views", () => {
 			done,
 			{ edits: [{ path: "/tmp/a.ts" }, { path: "/tmp/b.py" }] },
 		);
-		expect(view.tool).toMatchObject({ targetKind: "text", meta: ["+2 −2"] });
+		expect(view.tool).toMatchObject({ title: "Edit", target: "2 files", targetKind: "text", meta: ["+2 −2"] });
 		expect(collect(view.body, "card")).toHaveLength(0);
 		const sections = (view.body ?? []).filter(isNode).filter(child => child.k === "section");
 		expect(sections).toHaveLength(2);
@@ -218,7 +218,7 @@ describe("edit native views", () => {
 		expect(rendered).not.toContain("\x01");
 	});
 
-	it("caps diagnostics at five rows, most severe first", () => {
+	it("caps diagnostics at five rows, most severe first, with a +N more line", () => {
 		const messages = [
 			...Array.from({ length: 5 }, (_, i) => `src/a.ts:${i + 10}:1 [warning] unused ${i}`),
 			"src/a.ts:40:3 [error] [ts] Type mismatch (2322)",
@@ -230,5 +230,6 @@ describe("edit native views", () => {
 		expect(rows).toHaveLength(5);
 		expect(collect(rows[0]!.c, "icon")[0]!.p).toMatchObject({ name: "x-circle", tone: "error" });
 		expect(collect(rows[0]!.c, "text").map(t => spanText(t, "spans"))).toEqual(["40:3", "Type mismatch ts 2322"]);
+		expect(spanText(children.at(-1)!, "spans")).toBe("+2 more");
 	});
 });

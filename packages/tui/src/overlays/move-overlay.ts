@@ -5,7 +5,6 @@
  * The user types a path, Tab autocompletes the highlighted directory, and Enter
  * confirms — yielding the resolved directory string (or `undefined` on cancel).
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, type Focusable, Key, matchesKey } from "../index";
 import { theme } from "../theme/theme";
 import { matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
@@ -64,7 +63,7 @@ export class MoveOverlay implements Component, Focusable {
 		this.#done = done;
 		this.#field = new TextFormField({
 			theme: formTheme,
-			prompt: theme.fg("dim", t("Path: ")),
+			prompt: theme.fg("dim", "Path: "),
 			empty: "submit",
 			spaceBeforeControl: false,
 			spaceAfterControl: false,
@@ -145,14 +144,14 @@ export class MoveOverlay implements Component, Focusable {
 		}
 		const lines: string[] = [];
 
-		lines.push(topBorder(w, t("Move to directory")));
+		lines.push(topBorder(w, "Move to directory"));
 		for (const fieldLine of fieldLines) {
 			lines.push(row(fieldLine, w));
 		}
 		lines.push(row("", w));
 
 		if (this.#results.length === 0 && this.#field.getValue().length > 0) {
-			lines.push(row(theme.fg("dim", t("No matching directories")), w));
+			lines.push(row(theme.fg("dim", "No matching directories"), w));
 		} else {
 			for (let i = 0; i < Math.min(this.#results.length, MAX_RESULTS); i++) {
 				const item = this.#results[i]!;
@@ -165,7 +164,7 @@ export class MoveOverlay implements Component, Focusable {
 
 		lines.push(row("", w));
 		const nav = editorKeys("tui.select.up", "tui.select.down");
-		const hint = t("Type to filter · {0} navigate · {1} accept · {2} confirm · {3} cancel", `${nav}`, `${formatKeyHint("tab")}`, `${formatKeyHint("enter")}`, `${editorKey("tui.select.cancel")}`);
+		const hint = `Type to filter · ${nav} navigate · ${formatKeyHint("tab")} accept · ${formatKeyHint("enter")} confirm · ${editorKey("tui.select.cancel")} cancel`;
 		lines.push(row(theme.fg("dim", hint), w));
 		lines.push(bottomBorder(w));
 		this.#renderMemo = { width: w, fieldLines, revision: this.#revision, lines };
@@ -182,24 +181,24 @@ export class MoveOverlay implements Component, Focusable {
 			"list",
 			{
 				selected: this.#results[this.#selectedIndex]?.value ?? null,
-				empty: this.#field.getValue().length > 0 ? [span(t("No matching directories"), "dim")] : undefined,
+				empty: this.#field.getValue().length > 0 ? [span("No matching directories", "dim")] : undefined,
 			},
 			items,
 			"results",
 		);
 		const hints = statusHintsRow(
-			[span(t("Type to filter"), "dim")],
-			[actionHint(["tui.select.up", "tui.select.down"], t("navigate"))],
+			[span("Type to filter", "dim")],
+			[actionHint(["tui.select.up", "tui.select.down"], "navigate")],
 		);
 		// Accept, Confirm and Cancel run what Tab, Enter and Esc run.
 		const actions = actionBar([
-			actionButton(t("Accept"), "accept", { keys: "tab" }),
+			actionButton("Accept", "accept", { keys: "tab" }),
 			null,
 			// The bound cancel key; Esc also cancels when it is unbound.
-			actionButton(t("Cancel"), "cancel", { keys: getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape" }),
-			actionButton(t("Confirm"), "confirm", { keys: "enter", tone: "accent" }),
+			actionButton("Cancel", "cancel", { keys: getKeybindings().getKeys("tui.select.cancel")[0] ?? "escape" }),
+			actionButton("Confirm", "confirm", { keys: "enter", tone: "accent" }),
 		]);
-		const described = overlayCard("omp.dialog.move", t("Move to directory"), [this.#field, list, hints, actions]);
+		const described = overlayCard("omp.dialog.move", "Move to directory", [this.#field, list, hints, actions]);
 		this.#native = { revision: this.#revision, node: described };
 		return described;
 	}
@@ -232,7 +231,7 @@ export class MoveOverlay implements Component, Focusable {
 	}
 
 	invalidate(): void {
-		this.#field.input.prompt = theme.fg("dim", t("Path: "));
+		this.#field.input.prompt = theme.fg("dim", "Path: ");
 		this.#field.invalidate();
 		this.#revision++;
 		this.#renderMemo = undefined;

@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
@@ -54,7 +53,7 @@ export function Toasts({ notices }: { notices: readonly Notice[] }): ReactNode {
 				<div key={n.id} className={`sh-toast sh-toast-${n.level}`} role="status">
 					<span className="sh-toast-msg">{n.message}</span>
 					{n.level === "error" && (
-						<button type="button" className="sh-toast-close" onClick={() => close(n.id)} title={localize("dismiss")}>
+						<button type="button" className="sh-toast-close" onClick={() => close(n.id)} title="dismiss">
 							<X size={12} />
 						</button>
 					)}

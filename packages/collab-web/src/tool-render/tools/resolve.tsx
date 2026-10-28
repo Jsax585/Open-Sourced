@@ -9,7 +9,6 @@
  * details first and fall back to args. When neither is present yet (a running
  * card), the device name supplies the default action.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import type { Tone } from "../parts";
 import { Badge, Badges, Kv, KvGrid, Note, ResultText } from "../parts";
@@ -19,11 +18,11 @@ import { detailsRecord, isRecord, normalizeWs, str, truncate } from "../util";
 type ResolveKind = "apply" | "discard" | "propose";
 
 /** Short badge word (summary) and full transition badge (body) per card kind. */
-const KIND_WORD: Record<ResolveKind, string> = { apply: t("apply"), discard: t("discard"), propose: t("propose") };
+const KIND_WORD: Record<ResolveKind, string> = { apply: "apply", discard: "discard", propose: "propose" };
 const KIND_TRANSITION: Record<ResolveKind, string> = {
-	apply: t("proposed → resolved"),
-	discard: t("proposed → rejected"),
-	propose: t("plan proposed"),
+	apply: "proposed → resolved",
+	discard: "proposed → rejected",
+	propose: "plan proposed",
 };
 const KIND_TONE: Record<ResolveKind, Tone> = { apply: "ok", discard: "warn", propose: "accent" };
 
@@ -120,7 +119,7 @@ function Body(props: ToolRenderProps): ReactNode {
 			{card.kind !== "propose" && card.reason && <Note>{card.reason}</Note>}
 			{card.kind === "propose" && card.planFilePath && (
 				<KvGrid>
-					<Kv k={t("plan")}>{card.planFilePath}</Kv>
+					<Kv k="plan">{card.planFilePath}</Kv>
 				</KvGrid>
 			)}
 			{extraRows.length > 0 && <KvGrid>{extraRows}</KvGrid>}

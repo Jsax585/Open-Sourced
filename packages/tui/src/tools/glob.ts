@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type {
@@ -166,7 +165,7 @@ export const globToolRenderer = {
 		const linkPaths = globLinkPaths(details, options.renderContext?.rawDetails);
 
 		if (result.isError || details?.error) {
-			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || t("Unknown error");
+			const errorText = details?.error || result.content?.find(c => c.type === "text")?.text || "Unknown error";
 			return new Text(formatErrorMessage(errorText, uiTheme), 0, 0);
 		}
 
@@ -180,7 +179,7 @@ export const globToolRenderer = {
 				textContent.includes("No files found") ||
 				textContent.trim() === ""
 			) {
-				return new Text(formatEmptyMessage(t("No files found"), uiTheme), 0, 0);
+				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
 			}
 
 			const lines = textContent.split("\n").filter(l => l.trim());
@@ -224,7 +223,7 @@ export const globToolRenderer = {
 
 		const missingPaths = details?.missingPaths ?? [];
 		const missingNote =
-			missingPaths.length > 0 ? uiTheme.fg("warning", t("skipped missing: {0}\u0004packages/tui/src/tools/glob.ts:globToolRenderer.renderResult.missingNote", `${missingPaths.join(", ")}`)) : undefined;
+			missingPaths.length > 0 ? uiTheme.fg("warning", `skipped missing: ${missingPaths.join(", ")}`) : undefined;
 
 		if (fileCount === 0) {
 			// `truncated` on an empty result means the scan timed out mid-walk —
@@ -232,14 +231,14 @@ export const globToolRenderer = {
 			// states it outright; the inference stays for old transcripts that
 			// predate the field.
 			const emptyTimedOut = timedOut || truncated;
-			const emptyLabel = emptyTimedOut ? t("No matches before timeout (scan incomplete)") : t("No files found");
+			const emptyLabel = emptyTimedOut ? "No matches before timeout (scan incomplete)" : "No files found";
 			const header = renderStatusLine(
 				{
 					icon: "warning",
 					title: "Glob",
 					titleColor: "toolTitle",
 					description: formatGlobRenderPaths(args),
-					meta: emptyTimedOut ? [t("0 files"), uiTheme.fg("warning", t("timed out"))] : [t("0 files")],
+					meta: emptyTimedOut ? ["0 files", uiTheme.fg("warning", "timed out")] : ["0 files"],
 				},
 				uiTheme,
 			);
@@ -248,8 +247,8 @@ export const globToolRenderer = {
 			return new Text(lines.join("\n"), 0, 0);
 		}
 		const meta: string[] = [formatCount("file", fileCount)];
-		if (details?.scopePath) meta.push(t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${details.scopePath}`));
-		if (truncated) meta.push(uiTheme.fg("warning", timedOut ? t("timed out") : t("truncated\u0004packages/tui/src/tools/glob.ts:globToolRenderer.renderResult")));
+		if (details?.scopePath) meta.push(`in ${details.scopePath}`);
+		if (truncated) meta.push(uiTheme.fg("warning", timedOut ? "timed out" : "truncated"));
 		const header = renderStatusLine(
 			{
 				...(truncated ? { icon: "warning" as const } : { iconOverride: globStatusIcon(uiTheme) }),
@@ -262,15 +261,15 @@ export const globToolRenderer = {
 		);
 
 		const truncationReasons: string[] = [];
-		if (details?.resultLimitReached) truncationReasons.push(t("limit {0} results", `${details.resultLimitReached}`));
-		if (limits?.resultLimit) truncationReasons.push(t("limit {0} results", `${limits.resultLimit.reached}`));
-		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? t("line limit") : t("size limit"));
+		if (details?.resultLimitReached) truncationReasons.push(`limit ${details.resultLimitReached} results`);
+		if (limits?.resultLimit) truncationReasons.push(`limit ${limits.resultLimit.reached} results`);
+		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
 		const artifactId = truncation && "artifactId" in truncation ? truncation.artifactId : undefined;
 		if (artifactId) truncationReasons.push(formatFullOutputReference(artifactId));
 
 		const extraLines: string[] = [];
 		if (truncationReasons.length > 0) {
-			extraLines.push(uiTheme.fg("warning", t("truncated: {0}", `${truncationReasons.join(", ")}`)));
+			extraLines.push(uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`));
 		}
 		if (missingNote) extraLines.push(missingNote);
 
@@ -317,7 +316,7 @@ export const globToolRenderer = {
 		const details = result.details;
 		const linkPaths = globLinkPaths(details, options.renderContext?.rawDetails);
 		if (result.isError || details?.error) {
-			return inlineErrorView(globNativeHead(args), details?.error || resultText(result) || t("Unknown error"));
+			return inlineErrorView(globNativeHead(args), details?.error || resultText(result) || "Unknown error");
 		}
 		if (details?.fileCount === undefined) {
 			const textContent = resultText(result);
@@ -326,7 +325,7 @@ export const globToolRenderer = {
 				textContent.includes("No files matching") ||
 				textContent.includes("No files found")
 			) {
-				return { tool: globNativeHead(args, [t("0 files")]), tone: "warning", inline: true };
+				return { tool: globNativeHead(args, ["0 files"]), tone: "warning", inline: true };
 			}
 			const lines = textContent.split("\n").filter(l => l.trim());
 			return {
@@ -341,15 +340,15 @@ export const globToolRenderer = {
 		const truncated = Boolean(details.truncated || truncation || details.resultLimitReached || limits?.resultLimit);
 		const timedOut = Boolean(details.timedOut);
 		const missingPaths = details.missingPaths ?? [];
-		const missingNote = missingPaths.length > 0 ? t("skipped missing: {0}\u0004packages/tui/src/tools/glob.ts:globToolRenderer.renderResult.missingNote", `${missingPaths.join(", ")}`) : undefined;
-		const scope = details.scopePath ? t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${details.scopePath}`) : undefined;
+		const missingNote = missingPaths.length > 0 ? `skipped missing: ${missingPaths.join(", ")}` : undefined;
+		const scope = details.scopePath ? `in ${details.scopePath}` : undefined;
 		if (details.fileCount === 0) {
 			const foot = footnoteText(compact([missingNote]));
 			return {
 				// `truncated` on an empty result means the scan timed out mid-walk.
 				tool: {
-					...globNativeHead(args, compact([t("0 files"), scope])),
-					note: timedOut || truncated ? t("timed out") : undefined,
+					...globNativeHead(args, compact(["0 files", scope])),
+					note: timedOut || truncated ? "timed out" : undefined,
 				},
 				tone: "warning",
 				inline: true,
@@ -357,15 +356,15 @@ export const globToolRenderer = {
 			};
 		}
 		const reasons: string[] = [];
-		if (details.resultLimitReached) reasons.push(t("limit {0} results", `${details.resultLimitReached}`));
-		if (limits?.resultLimit) reasons.push(t("limit {0} results", `${limits.resultLimit.reached}`));
-		if (truncation) reasons.push(truncation.truncatedBy === "lines" ? t("line limit") : t("size limit"));
+		if (details.resultLimitReached) reasons.push(`limit ${details.resultLimitReached} results`);
+		if (limits?.resultLimit) reasons.push(`limit ${limits.resultLimit.reached} results`);
+		if (truncation) reasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
 		const artifactId = truncation && "artifactId" in truncation ? truncation.artifactId : undefined;
 		if (artifactId) reasons.push(formatFullOutputReference(artifactId));
 		const head = globNativeHead(args, compact([formatCount("file", details.fileCount), scope]));
 		return {
 			tool: truncated
-				? { ...head, badges: [{ text: timedOut ? t("timed out") : t("truncated\u0004packages/tui/src/tools/glob.ts:globToolRenderer.renderResult"), tone: "warning" }] }
+				? { ...head, badges: [{ text: timedOut ? "timed out" : "truncated", tone: "warning" }] }
 				: head,
 			inline: true,
 			body: compact<NativeChild>([

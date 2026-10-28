@@ -1,34 +1,33 @@
 # Prewalk
 
-Prewalk는 계획 단계가 구현 단계에 도달한 뒤 활성 모델에서 더 빠르거나 저렴한 모델로 한 번만 인계하는 기능입니다. 시작 모델이 저장소를 살펴보고, 할 일 목록을 만들고, 변경 작업을 시작한 다음 대상 모델이 세션을 이어가도록 합니다.
+Prewalk is a one-shot handoff from the active model to a faster or cheaper model after planning reaches implementation. It lets the starting model inspect the repository, create a todo list, and begin the change before the target model continues the session.
 
-Prewalk는 기본적으로 꺼져 있습니다. 기본 대상은 `@smol` 역할에 할당된 모델입니다. 프롬프트마다 Prewalk를 사용할 가치가 있는지 OMP가 작업별로 판단하도록 하려면 [자동 Prewalk](#auto-prewalk)를 참조하세요.
+Prewalk is off by default. Its default target is the model assigned to the `@smol` role. To have OMP decide per task whether a prompt is worth it, see [Auto-prewalk](#auto-prewalk).
 
-<a id="enable-prewalk"></a>
-## Prewalk 활성화
+## Enable prewalk
 
-전역 설정에서 Prewalk를 지속적으로 활성화합니다.
+Enable prewalk persistently in the global config:
 
 ```bash
 omp config set prewalk.enabled true
 ```
 
-`~/.omp/agent/config.yml` 또는 프로젝트의 `.omp/config.yml`에 해당하는 YAML 설정은 다음과 같습니다.
+The equivalent YAML in `~/.omp/agent/config.yml` or a project `.omp/config.yml` is:
 
 ```yaml
 prewalk:
   enabled: true
 ```
 
-이 설정은 새 세션에서 인계를 준비하며, 재개하거나 가져온 세션에는 적용되지 않습니다. 명시적인 세션 플래그를 사용하면 어느 쪽에서든 인계를 준비할 수 있습니다.
+The configured setting arms new sessions, not resumed/imported sessions. Explicit session flags can arm either:
 
-| 플래그 | 효과 |
+| Flag | Effect |
 | --- | --- |
-| `--prewalk` | 새 세션에서 Prewalk 인계를 준비합니다. |
-| `--no-prewalk` | `prewalk.enabled`가 `true`여도 시작 세션에서는 Prewalk를 비활성화하고, [자동 Prewalk](#auto-prewalk)도 개입하지 못하게 합니다. `/new`는 여전히 설정을 따릅니다. |
-| `--prewalk-into <model-or-role>` | Prewalk 인계를 준비하고 `@smol` 대신 지정한 모델 패턴이나 역할을 사용합니다. |
+| `--prewalk` | Arm prewalk for the new session. |
+| `--no-prewalk` | Leave prewalk disabled for the startup session, even when `prewalk.enabled` is `true`, and keep [auto-prewalk](#auto-prewalk) out of it. `/new` still follows the settings. |
+| `--prewalk-into <model-or-role>` | Arm prewalk and use the supplied model pattern or role instead of `@smol`. |
 
-예를 들면 다음과 같습니다.
+For example:
 
 ```bash
 omp --prewalk
@@ -36,33 +35,31 @@ omp --prewalk-into @smol
 omp --prewalk-into openai/gpt-5-mini
 ```
 
-OMP는 시작할 때 일반적인 모델 역할 및 모델 매칭 규칙으로 대상을 결정하며, 설정된 역할 후보를 순서대로 확인해 인증되었고 활성화된 제공업체를 찾습니다. 확장 기능이 제공하는 대상은 확장 기능 등록 후에 결정될 수 있습니다. 사용 가능한 대상이 하나도 남지 않으면 OMP는 경고를 출력하고 Prewalk 인계를 준비하지 않은 상태로 시작합니다.
+At startup, OMP resolves the target with the normal model-role and model-matching rules, trying configured role candidates in order for an authenticated, enabled provider. Extension-provided targets may resolve after extension registration. If no usable target remains, OMP prints a warning and starts with prewalk unarmed.
 
-`--no-prewalk`는 `--prewalk` 또는 `--prewalk-into`와 함께 사용할 수 없습니다. 명시적인 `--prewalk-into @default`는 `--model`이 덮어쓰기 전의 기본 역할을 기준으로 대상을 결정합니다.
+`--no-prewalk` cannot be combined with `--prewalk` or `--prewalk-into`. An explicit `--prewalk-into @default` resolves against the default role from before `--model` overrides it.
 
-`/new`는 이미 사용한 인계나 이전 할 일 게이트를 이어받는 대신, `prewalk.enabled`와 현재 `@smol` 할당을 사용해 새 주기를 시작합니다. 시작 플래그(`--prewalk`, `--no-prewalk`, `--prewalk-into`)는 시작 세션에만 적용되며, `/new`는 항상 설정값을 사용합니다. Prewalk가 활성화되어 있으면 인계 후 새 세션은 이전 계획 모델과 추론 수준을 복원합니다. 단, 이후의 선택으로 이 값들이 대체된 경우는 제외합니다. 계획 모델을 더 이상 사용할 수 없다면(예: 해당 자격 증명이 제거된 경우) `/new`는 경고를 표시하고 현재 모델을 유지합니다. 기존 세션을 재개해도 Prewalk 인계가 자동으로 다시 준비되지는 않습니다.
+`/new` starts a fresh cycle using `prewalk.enabled` and the current `@smol` assignment, rather than inheriting a consumed handoff or the previous todo gate. Startup flags (`--prewalk`, `--no-prewalk`, `--prewalk-into`) apply only to the startup session; `/new` always uses the configured setting. When prewalk is enabled, the new session restores the previous planning model and thinking level after a handoff unless a later selection replaced them. If the planning model can no longer be used (for example, its credentials were removed), `/new` warns and stays on the current model. Resuming an existing session does not automatically re-arm prewalk.
 
-인계 후에 이루어진 모델 또는 추론 수준 변경은 모두 대체로 간주되며, 계획 모드에 들어가거나 나올 때의 전환도 여기에 포함됩니다. 자동 재시도 폴백, 폴백 복원, 컨텍스트 승격은 여기에 해당하지 않습니다. `/new`를 실행할 때 세션이 인계 대상 모델과 추론 수준으로 돌아와 있다면 여전히 계획 모델을 복원합니다.
+Any model or thinking-level change made after the handoff counts as a replacement, including the switches plan mode makes on entry and exit. Automatic retry fallback, fallback restoration, and context promotion do not; if the session is back on the handoff model and thinking level when you run `/new`, it still restores the planning model.
 
-<a id="handoff-trigger"></a>
-## 인계 트리거
+## Handoff trigger
 
-인계가 준비된 Prewalk는 계획을 유도하는 지침을 삽입합니다. `todo` 도구가 활성화되어 있으면 읽기 전용 `view` 작업을 포함해 성공한 모든 `todo` 호출이 인계 게이트를 엽니다. 활성화된 `todo` 도구가 없으면 게이트는 처음부터 열려 있습니다.
+An armed prewalk injects a planning nudge. When the `todo` tool is active, any successful `todo` call—including the read-only `view` operation—opens the handoff gate. Without an active `todo` tool, the gate is already open.
 
-OMP는 조건에 맞는 첫 번째 `edit` 또는 `write` 결과가 포함된 어시스턴트 턴이 완료되는 경계에서 전환하며, 그 전에 해당 턴의 어시스턴트 메시지와 도구 결과를 저장합니다. 할 일 게이트와 달리 edit/write 트리거는 결과가 성공일 필요가 없습니다.
+OMP switches at the completed assistant-turn boundary containing the first eligible `edit` or `write` result, after persisting that turn's assistant message and tool results. Unlike the todo gate, the edit/write trigger does not require a successful result.
 
-다른 도구 호출은 인계를 트리거하지 않습니다. LSP 탐색처럼 `write`를 통해 라우팅되는 읽기 전용 `xd://` 장치 요청도 해당하지 않습니다. 워크스페이스 쓰기 또는 실행으로 분류되는 장치 작업만 해당합니다.
+Calls to other tools do not trigger the handoff. A read-only `xd://` device request routed through `write`, such as LSP navigation, also does not count; only device operations classified as workspace writes or execution count.
 
-전환은 한 번만 이루어집니다. 인계 후 Prewalk는 준비 상태를 해제하고, 계획 유도 지침을 제거하며, 구현 체크리스트로 대상 모델을 안내합니다. 모델 역할 할당을 다시 쓰지 않고 세션의 활성 모델과 선택적인 추론 수준을 변경합니다. 같은 모델로 인계하더라도 추론 설정은 바뀔 수 있습니다. 모델과 실제 적용되는 추론 설정이 이미 일치하면 Prewalk는 전환 없이 준비 상태만 해제합니다.
+The switch is one-shot: after the handoff, prewalk disarms itself, removes the planning nudge, and steers the target with an implementation checklist. It changes the session's active model and optional thinking level without rewriting model-role assignments. A same-model handoff can still change thinking; when the model and effective thinking configuration already match, prewalk disarms without switching.
 
-<a id="arm-from-an-active-session"></a>
-## 활성 세션에서 인계 준비
+## Arm from an active session
 
-최상위 세션에서는 실행 중에 `prewalk.enabled`를 변경해도 적용됩니다.
-켜면 준비된 인계가 없는 경우 현재 `@smol` 대상을 향한 인계를 준비하고, 끄면
-대기 중인 인계의 준비 상태를 해제합니다. 이는 하위 에이전트의 Prewalk를 제어하지 않습니다.
+In a top-level session, changing `prewalk.enabled` live also takes effect:
+turning it on arms the current `@smol` target when none is armed; turning it off
+disarms a pending handoff. This does not control subagent prewalk.
 
-OMP를 다시 시작하지 않고 다음 슬래시 명령을 실행할 수 있습니다.
+Run these slash commands without restarting OMP:
 
 ```text
 /prewalk
@@ -70,18 +67,17 @@ OMP를 다시 시작하지 않고 다음 슬래시 명령을 실행할 수 있�
 /prewalk off
 ```
 
-`/prewalk`는 활성 모델에서 현재 `@smol` 할당으로 한 번 인계하도록 준비합니다.
+`/prewalk` arms a one-shot handoff from the active model to the current `@smol` assignment.
 
-`/prewalk off`는 대기 중인 인계를 취소하고 계획 유도 지침을 지웁니다. 활성 모델, 저장된 설정, 이미 전달된 이어가기 기록은 변경하지 않습니다. 이미 꺼져 있거나 인계가 끝난 후에도 안전하게 실행할 수 있으며, 계획 모델로 다시 전환하지는 않습니다. 취소는 현재 세션에만 적용됩니다. 설정이 활성화되어 있으면 `/new`가 Prewalk 인계를 다시 준비합니다. 또한 `/new`를 실행할 때까지 [자동 Prewalk](#auto-prewalk)가 인계를 다시 준비하지 못하게 합니다.
+`/prewalk off` cancels a pending handoff and clears its planning steering without changing the active model, saved configuration, or already-delivered continuation history. It is safe to run when already off or after a handoff; it does not switch back to the planning model. Cancellation applies only to the current session: `/new` re-arms prewalk when the configured setting is enabled. It also keeps [auto-prewalk](#auto-prewalk) from arming again until `/new`.
 
-인계 후 `/prewalk restart`를 실행하면 즉시 세션을 현재 `@default` 할당으로 되돌리고 `@smol`로의 인계를 다시 준비합니다. 두 역할은 명령을 실행할 때 결정되므로, 이 주기는 구체적인 모델 이름과 무관하며 어느 역할의 저장된 설정도 변경하지 않습니다.
+After a handoff, `/prewalk restart` immediately returns the session to the current `@default` assignment and re-arms the handoff to `@smol`. Both roles are resolved when the command runs, so the cycle is independent of concrete model names and does not alter either role's persisted configuration.
 
-Prewalk 인계가 이미 준비되어 있으면 `/prewalk`는 기존 대상을 그대로 유지합니다. `/prewalk restart`도 일치하는 준비 상태를 유지합니다. 기존 대상이 현재 `@smol`로 결정되는 대상과 다르면 활성 모델을 변경하기 전에 재시작이 거부됩니다. 시작 시 다른 대상을 선택하려면 `--prewalk-into`를 사용하세요.
+If prewalk is already armed, `/prewalk` leaves the existing target in place. `/prewalk restart` also preserves a matching arm; if its existing target differs from the current `@smol` resolution, restart is rejected before changing the active model. To choose a different target at startup, use `--prewalk-into`.
 
-<a id="auto-prewalk"></a>
-## 자동 Prewalk
+## Auto-prewalk
 
-`prewalk.enabled`와 `/prewalk`는 조건 없이 한 번의 인계를 준비합니다. 자동 Prewalk는 작업마다 OMP의 네이티브 판정기에 Prewalk를 사용할 가치가 있는지 묻고, 가치가 있으면 활성 모델에서 동일한 인계를 준비합니다. 이는 Prewalk 적합성 검사이지, 난이도 평가나 범용 모델 라우터가 아닙니다. 다른 계획 모델을 선택하는 일은 없습니다.
+`prewalk.enabled` and `/prewalk` unconditionally arm a one-shot handoff. Auto-prewalk asks OMP's native judge, per task, whether prewalk is worthwhile, and arms the same handoff from the active model when it is. It is a prewalk-suitability check, not a difficulty rating or a general model router: it never picks a different planning model.
 
 ```yaml
 prewalk:
@@ -90,37 +86,35 @@ prewalk:
   autoTarget: "@smol"
 ```
 
-`prewalk.autoTarget`(기본값 `@smol`)은 모델 패턴이나 역할을 받으며, 인증을 포함한 일반적인 역할 및 모델 매칭 규칙으로 대상을 결정합니다.
+`prewalk.autoTarget` (default `@smol`) takes a model pattern or role, resolved with the normal role and model-matching rules, including authentication.
 
-| `prewalk.auto` | 동작 |
+| `prewalk.auto` | Behavior |
 | --- | --- |
-| `off`(기본값) | 분류하지 않으며, 아무것도 변경하지 않습니다. |
-| `suggest` | 새 작업마다 분류하고 결정만 보고합니다. Prewalk 인계를 준비하거나 모델을 전환하지 않습니다. |
-| `on` | 새 작업마다 분류합니다. 판정기가 작업이 적합하다고 확신하고 대상에 사용 가능한 자격 증명이 있으면 활성 모델에서 대상으로의 인계를 준비합니다. 그렇지 않으면 아무것도 변경하지 않습니다. |
+| `off` (default) | No classification; nothing changes. |
+| `suggest` | Classifies each new task and reports the decision only. Never arms prewalk or switches models. |
+| `on` | Classifies each new task. When the judge is confident the task fits and the target resolves with a usable credential, arms a handoff from the active model to the target; otherwise nothing changes. |
 
-한동안 `suggest`로 실행해 프롬프트를 어떻게 판단하는지 확인한 다음 `auto: on`을 설정하세요. 더 강력한 모델로 계획하려면 해당 모델을 활성(`@default`) 모델로 지정하세요. 자동 Prewalk는 현재 사용 중인 모델에서 인계합니다.
+Run `suggest` for a while to see how it judges your prompts, then set `auto: on`. To plan on a stronger model, make it your active (`@default`) model; auto-prewalk hands off from whatever you are on.
 
-`prewalk.enabled`의 의미는 그대로 유지됩니다. `prewalk.auto`와 무관하게 조건 없이 Prewalk를 적용합니다.
+`prewalk.enabled` keeps its meaning: unconditional prewalk, independent of `prewalk.auto`.
 
-<a id="requirements"></a>
-### 요구 사항
+### Requirements
 
-자동 Prewalk를 사용하려면 `judge` 모델 역할의 첫 번째 대상이 네이티브 판정 백엔드로 결정되어야 합니다. 이는 `find.enabled: auto`와 같은 조건입니다. TypeSafe `jev`, OpenRouter, OpenAI Decisions, Workers AI Clef를 포함한 기존 judge 역할의 제공업체 지원을 사용합니다. 보정된 확률에 의존하며, judge 역할 캐시가 로그인이나 검색 변경 이전에 만들어졌더라도 프롬프트 기반 온디바이스 판정기나 채팅 판정기는 실행하지 않습니다. 네이티브 판정기가 없으면 아무것도 분류하지 않고 아무것도 보고하지 않습니다.
+Auto-prewalk needs the `judge` model role to resolve first to a native judgment backend, the same condition as `find.enabled: auto`. It uses the existing judge-role provider support, including TypeSafe `jev`, OpenRouter, OpenAI Decisions, and Workers AI Clef. It relies on calibrated probabilities and never executes a prompted on-device or chat judge, even if the judge-role cache predates a login or discovery change. Without a native judge nothing is classified, and nothing is reported.
 
-<a id="what-it-decides"></a>
-### 판단 기준
+### What it decides
 
-판정기는 작업의 난이도나 규모가 아니라 비용이 많이 드는 추론이 어느 단계에 필요한지에 따라 각 작업을 분류합니다.
+The judge sorts each task by where its expensive reasoning belongs, not by how hard or large it is:
 
-| 경로 | 의미 | 일반적인 작업 |
+| Route | Meaning | Typical tasks |
 | --- | --- | --- |
-| `prewalk` | 어려운 추론이 먼저 필요하며, 접근 방식이 정해지면 남은 구현과 검증의 범위가 한정됩니다. | 국소적인 변경 전에 익숙하지 않은 하위 시스템을 추적하기, 명확한 설계를 구현하기 전에 상호작용하는 여러 파일을 읽기, 구체적인 수정 방법을 찾을 때까지 버그를 진단하기, 변환 방식과 그 영향을 받는 모든 부분을 찾아내는 것이 핵심 난관인 마이그레이션. |
-| `primary` | 구현, 디버깅 또는 검증 중에도 강력한 추론이 계속 필요하므로, 첫 수정 직후에 인계하기에는 너무 이릅니다. | 해결되지 않은 경쟁 상태나 불변 조건, 미묘한 수명 주기 변경, 처음 살펴본 뒤에도 원인이 불분명할 버그, 위험도가 높거나 알고리즘적으로 어려운 변경. |
-| `direct` | 인계할 만한 사전 단계가 없습니다. | 설명 및 읽기 전용 질문, 단순하거나 기계적이거나 완전히 명세된 수정, 아주 작은 국소적 수정. |
+| `prewalk` | The hard thinking comes first; once it settles the approach, the remaining implementation and verification are bounded. | Tracing an unfamiliar subsystem before a localized change; reading several interacting files before implementing a clear design; diagnosing a bug down to a concrete fix; a migration whose hard part is finding the transformation and everything it touches. |
+| `primary` | Strong reasoning stays necessary while implementing, debugging, or validating, so the first edit is too early to hand off. | Unresolved races or invariants; subtle lifecycle changes; a bug whose cause will still be unclear after a first look; high-risk or algorithmically hard changes. |
+| `direct` | There is no up-front phase worth handing off from. | Explanations and read-only questions; trivial, mechanical, or fully specified edits; tiny localized fixes. |
 
-작업량만 많거나 난이도만 높다고 해서 Prewalk 후보가 되는 것은 아닙니다. 또한 잘못된 인계는 인계 기회를 놓치는 것보다 비용이 더 큽니다. 따라서 판정기는 `prewalk`와 `primary` 사이에서는 `primary`를 선택하고, 작은 작업에는 `direct`를 선택하도록 지시받습니다. OMP는 `prewalk`가 최우선으로 선택되고 **동시에** 그 확률이 0.70 이상일 때만 인계를 준비합니다. 이 임계값은 고정되어 있으며, `prewalk`가 최우선이어도 임계값 미만이면 “아니요”로 처리됩니다.
+Volume of work alone and difficulty alone never make a task a prewalk candidate, and a wrong handoff costs more than a missed one: between `prewalk` and `primary` the judge is told to choose `primary`, and for a small task to choose `direct`. OMP arms only when `prewalk` wins **and** its probability is at least 0.70. That threshold is fixed, and a `prewalk` winner below it counts as a "no".
 
-`suggest`는 판정한 작업마다 한 줄을 보고합니다.
+`suggest` reports one line per judged task:
 
 ```text
 Auto-prewalk: prewalk 0.84
@@ -129,37 +123,32 @@ Auto-prewalk: direct (prewalk 0.06)
 Auto-prewalk: prewalk 0.55 (below threshold)
 ```
 
-`on`에서는 확신도가 높은 결정에 대해 일반적인 `Prewalk: armed for …` 알림을 표시하고, 그 외의 결정은 로그에만 기록합니다. 계획 유도 지침은 작업의 첫 번째 요청에 함께 전달되며, 기존 인계 기능이 전환을 수행합니다. 이때 할 일 게이트와 첫 번째 `edit`/`write` 트리거는 그대로 유지됩니다. 설정으로 활성화한 Prewalk와 마찬가지로, 인계가 준비된 작업은 계획 유도 지침이 할 일 생성을 담당하므로 `todo.eager` 알림을 건너뜁니다.
+Under `on`, a confident decision shows the usual `Prewalk: armed for …` notice; other decisions are only logged. The plan nudge travels with the task's first request, and the existing handoff does the switching, with its todo gate and first `edit`/`write` trigger unchanged. Like a configured prewalk, an armed task skips the `todo.eager` reminder, since the plan nudge owns todo creation.
 
-<a id="one-task-at-a-time"></a>
-### 한 번에 하나의 작업
+### One task at a time
 
-자동 인계는 해당 인계를 준비한 작업에 속합니다. 다음 작업이 시작되면 OMP는 이전 작업의 계획에 사용했던 모델과 추론 수준으로 돌아간 뒤 새 작업을 판정합니다. 따라서 `primary` 작업이 인계 대상 모델에 남아 있는 일은 없습니다. `/new`도 같은 방식으로 동작합니다. 작업에서 사용하지 않은 자동 인계 준비 상태는 다음 작업이 시작될 때 해제되며, 새 작업은 독립적으로 판정됩니다.
+An automatic handoff belongs to the task that armed it. When the next task starts, OMP returns to the model and thinking level that task planned on, then judges the new task, so a `primary` task is never left on the handoff target. `/new` does the same. An auto arm that its task never used is dropped at the next task, which is judged on its own.
 
-인계 후 모델이나 추론 수준을 명시적으로 선택하면 그 선택이 우선권을 갖습니다. 세션은 사용자가 지정한 상태를 유지합니다. `/prewalk`, `--prewalk` 또는 `prewalk.enabled`로 이루어진 인계는 자동 Prewalk가 복원하지 않습니다.
+An explicit model or thinking-level selection after the handoff takes ownership: the session stays where you put it. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk.
 
-<a id="what-is-classified"></a>
-### 분류 대상
+### What is classified
 
-최상위 세션에서 사용자가 작성한 새 작업만 분류합니다. 직접 입력한 프롬프트, 사용자가 호출한 `/skill:` 프롬프트, 그리고 대기열에 있던 후속 요청이 전달될 때가 이에 해당합니다. 진행 방향 조정은 이미 실행 중인 작업을 수정하는 것이므로 분류하지 않습니다. `ok`나 `thanks` 같은 확인 응답, 합성된 이어가기 턴, 에이전트가 작성한 것으로 표시된 메시지, 하위 에이전트, 계획 모드, Prewalk 인계가 이미 준비된 작업은 건너뜁니다.
+Only new, user-authored tasks in the top-level session: typed prompts, user-invoked `/skill:` prompts, and queued follow-ups when they are delivered. Steering is never classified, since it amends the task already running. Acknowledgements such as `ok` or `thanks`, synthetic continuation turns, agent-attributed messages, subagents, plan mode, and tasks where prewalk is already armed are skipped.
 
-판정기는 나머지 프롬프트 준비 작업(메모리 회상, 훅, 자동 추론)과 병렬로 실행되며, 요청을 보내기 직전에 결정을 적용합니다. 따라서 가장 느린 준비 단계일 때만 지연 시간이 추가됩니다.
+The judge runs alongside the rest of prompt setup (memory recall, hooks, auto thinking), and its decision is applied just before the request is sent, so it adds latency only when it is the slowest setup step.
 
-`do that`이나 `continue` 같은 후속 요청은 단독으로 판정할 수 없으므로, 판정기는 이전의 실질적인 사용자 요청과 에이전트의 마지막 응답도 확인합니다. 이 둘은 다른 소형 모델 입력과 마찬가지로 각각 잘립니다. 현재 요청이 여전히 최우선 기준이며, 컨텍스트는 현재 요청이 무엇을 가리키는지 파악하는 데만 사용됩니다.
+A follow-up such as `do that` or `continue` cannot be judged alone, so the judge also sees the previous substantive user request and the agent's last reply, each truncated like other small-model input. The current request stays authoritative: the context only resolves what it points at.
 
-<a id="manual-controls-win"></a>
-### 수동 제어 우선
+### Manual controls win
 
-부정적인 결정, `direct` 결정, 임계값 미만의 결정 또는 분류기 오류가 발생하면 모델, 추론 수준, Prewalk는 모두 기존 상태를 그대로 유지합니다.
+A negative, direct, or sub-threshold decision, or a classifier error, leaves the model, thinking level, and prewalk exactly as they were.
 
-`/prewalk`, `prewalk.enabled` 또는 `--prewalk`로 준비된 대기 중 인계는 대체하거나, 대상을 변경하거나, 다시 분류하지 않습니다. `/prewalk off`와 `--no-prewalk`는 `/new`를 실행할 때까지 세션에서 자동 Prewalk가 개입하지 못하게 하며(`--no-prewalk`의 경우 시작 세션), 둘 다 모델을 전환하지 않습니다. 명시적인 `/prewalk` 또는 `/prewalk restart`는 대기 중인 자동 인계의 제어권을 가져오며, 이후 해당 인계는 수동 인계처럼 동작합니다.
+A pending prewalk from `/prewalk`, `prewalk.enabled`, or `--prewalk` is never replaced, retargeted, or reclassified. `/prewalk off` and `--no-prewalk` keep auto-prewalk out of the session (for `--no-prewalk`, the startup session) until `/new`, and neither switches models. An explicit `/prewalk` or `/prewalk restart` takes over a pending auto arm, which then behaves like a manual one.
 
-<a id="failure-behavior"></a>
-### 실패 시 동작
+### Failure behavior
 
-자동 Prewalk는 최적화 기능이며, 실패해도 작업은 계속 진행됩니다. 네이티브 판정기 부재, 판정기 오류나 잘못된 형식의 응답, 4초 제한 시간 초과, 중단, 판정기가 실행되는 동안 프롬프트가 다른 프롬프트로 대체되는 상황에서는 모두 자동 Prewalk가 없었을 때와 정확히 같은 상태로 작업을 유지합니다. 유효하지 않은 확률, 일관되지 않은 최우선 경로 또는 유효하지 않은 신뢰도가 포함된 응답은 거부됩니다. 판정기 실패는 표시하지 않고 로그에 기록합니다. 사용할 수 없는 대상에 대해서는 `Auto-prewalk not armed: target …` 경고를 표시합니다. 판정은 `auto-prewalk` 목적의 모델 사용량으로 저널에 기록됩니다.
+Auto-prewalk is an optimization and fails open. A missing native judge, a judge error or malformed answer, the 4-second timeout, an abort, or a prompt superseded while the judge ran all leave the task exactly as it would be without auto-prewalk. Answers with invalid probabilities, an inconsistent winning route, or invalid confidence are rejected. Judge failures are logged rather than shown; an unusable target reports an `Auto-prewalk not armed: target …` warning. Judgments are journaled as model usage under the purpose `auto-prewalk`.
 
-<a id="subagent-prewalk"></a>
-## 하위 에이전트 Prewalk
+## Subagent prewalk
 
-작업 하위 에이전트에는 에이전트 프런트매터, `task.prewalk`, 에이전트별 `task.agentPrewalk` 재정의라는 별도의 Prewalk 제어 수단이 있습니다. 우선순위와 대상 선택에 대해서는 [작업 에이전트 검색](./task-agent-discovery.md)을 참조하세요.
+Task subagents have separate prewalk controls: agent frontmatter, `task.prewalk`, and per-agent `task.agentPrewalk` overrides. See [Task agent discovery](./task-agent-discovery.md) for their precedence and target selection.

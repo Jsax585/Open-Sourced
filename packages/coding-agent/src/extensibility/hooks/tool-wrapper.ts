@@ -1,7 +1,6 @@
 /**
  * Tool wrapper - wraps tools with hook callbacks for interception.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type AgentTool,
 	type AgentToolContext,
@@ -82,7 +81,7 @@ export class HookToolWrapper<TParameters extends TSchema = TSchema, TDetails = u
 				if (err instanceof Error) {
 					throw err;
 				}
-				throw new Error(t("Hook failed, blocking execution: {0}", `${String(err)}`));
+				throw new Error(`Hook failed, blocking execution: ${String(err)}`);
 			}
 		}
 

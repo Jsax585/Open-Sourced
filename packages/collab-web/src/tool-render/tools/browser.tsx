@@ -1,5 +1,4 @@
 /** `browser` — drive a Chromium tab: open/close named tabs, run puppeteer scripts. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, CodeBlock, ResultImages, ResultText, type Tone } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -48,8 +47,8 @@ function actionTone(action: string): Tone | undefined {
 
 /** Mirrors the TUI's `describeBrowser`: explicit app args win over reported mode. */
 function describeBrowser(app: AppArg | null, details: BrowserDetails): string | null {
-	if (app?.cdpUrl) return t("connected {0}", `${app.cdpUrl}`);
-	if (app?.path) return t("spawned {0}", `${shortenPath(app.path)}`);
+	if (app?.cdpUrl) return `connected ${app.cdpUrl}`;
+	if (app?.path) return `spawned ${shortenPath(app.path)}`;
 	return details.browser;
 }
 
@@ -62,8 +61,8 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<Badge tone={actionTone(action)}>{action}</Badge>
-			<span>{closeAll ? t("all tabs") : tab}</span>
-			{args.kill === true && <Badge tone="err">{t("kill")}</Badge>}
+			<span>{closeAll ? "all tabs" : tab}</span>
+			{args.kill === true && <Badge tone="err">kill</Badge>}
 			{url && <span className="tv-faint">{truncate(shortenPath(url), 72)}</span>}
 		</>
 	);
@@ -84,12 +83,12 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<span className="tv-badges">
-				{tab !== null && <Badge>{t("tab {0}", `${tab}`)}</Badge>}
+				{tab !== null && <Badge>tab {tab}</Badge>}
 				{url && <Badge tone="accent">{truncate(shortenPath(url), 120)}</Badge>}
 				{browserDesc && <Badge>{browserDesc}</Badge>}
-				{app?.target && <Badge>{t("target {0}", `${app.target}`)}</Badge>}
-				{args.all === true && <Badge tone="warn">{t("all")}</Badge>}
-				{args.kill === true && <Badge tone="err">{t("kill")}</Badge>}
+				{app?.target && <Badge>target {app.target}</Badge>}
+				{args.all === true && <Badge tone="warn">all</Badge>}
+				{args.kill === true && <Badge tone="err">kill</Badge>}
 				{vpWidth !== null && vpHeight !== null && (
 					<Badge>
 						{vpWidth}×{vpHeight}

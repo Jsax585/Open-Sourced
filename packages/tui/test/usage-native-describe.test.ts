@@ -4,8 +4,6 @@ import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { SessionInfoOverlay } from "@oh-my-pi/pi-tui/overlays/session-info-overlay";
 import { UsageDashboardComponent } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
 import { createUsageRowBlock } from "@oh-my-pi/pi-tui/overlays/usage-row";
-import { computeContextBreakdown, ContextUsageView } from "@oh-my-pi/pi-tui/status-line/context-usage";
-import { DEFAULT_COMPACTION_SETTINGS } from "@oh-my-pi/pi-agent-core/compaction";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 
 const cx = { cols: 100, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
@@ -107,9 +105,15 @@ describe("UsageDashboardComponent.describe", () => {
 		// One row per account in the detail table, not the bucket mean.
 		const table = findAll(detail, n => n.k === "table")[0];
 		const left = table?.k === "table" ? table.p?.rows.map(row => row.cells.left) : undefined;
-		expect(left?.map(cell => Array.isArray(cell) ? cell[0] : cell)).toEqual([
-			{ t: "75%", s: "mono" },
-			{ t: "25%", s: "mono warning" },
+		expect(left).toEqual([
+			[
+				{ t: "75%", s: "mono" },
+				{ t: " left", s: "dim" },
+			],
+			[
+				{ t: "25%", s: "mono warning" },
+				{ t: " left", s: "dim" },
+			],
 		]);
 	});
 
@@ -138,26 +142,29 @@ describe("UsageDashboardComponent.describe", () => {
 		const tiles = findAll(root, n => n.p?.role === "omp.usage.stat").map(tile =>
 			findAll(tile, n => n.k === "text").map(plain),
 		);
-		expect(tiles.map(tile => tile[1])).toEqual([
-			expect.stringContaining("10%"),
-			"$247",
-			"$46.50",
-			"$200",
+		expect(tiles).toEqual([
+			["Tightest quota", "10% left", "Claude Weekly · Anthropic"],
+			["Past year", "$247", "740 requests"],
+			["Last 30 days", "$46.50", "140 requests"],
+			["Busiest day", "$200", expect.stringMatching(/ · 600 requests$/)],
 		]);
 		const spark = findAll(root, n => n.k === "chart" && n.p?.kind === "spark")[0];
 		expect(spark?.k === "chart" ? spark.p?.series?.length : 0).toBe(30);
-		expect(tiles[0]?.[2]).toContain("Claude Weekly");
-		expect(tiles[1]?.[2]).toContain("740");
-		expect(tiles[2]?.[2]).toContain("140");
-		expect(tiles[3]?.[2]).toContain("600");
 		const foot = findAll(root, n => n.p?.role === "omp.usage.activity.foot")[0];
-		expect(foot ? findAll(foot, n => n.k === "text").map(plain)[0] : "").toMatch(/4.*3/);
+		expect(foot ? findAll(foot, n => n.k === "text").map(plain)[0] : "").toBe(
+			"4 active days · longest streak 3 days",
+		);
 	});
 
 	it("shows one empty state when nothing is used anywhere", () => {
 		const root = dashboard([report("zai", "z@test", [limit("zai", "5h", "Usage", 0, "ok")])]).describe(cx);
 		const empty = findAll(root, n => n.p?.role === "omp.usage.empty")[0];
-		expect(empty).toBeDefined();
+		expect(empty ? findAll(empty, n => n.k === "text").map(plain) : []).toEqual([
+			"No usage yet",
+			expect.stringContaining("Quotas show here"),
+			"Untouched",
+			"Zai",
+		]);
 		expect(findAll(root, n => n.p?.role === "omp.usage.stats" || n.k === "chart")).toEqual([]);
 	});
 
@@ -201,11 +208,9 @@ describe("UsageDashboardComponent.describe", () => {
 		const last = chart.p?.cells?.[weekday]?.length ?? 0;
 		expect(last).toBe(53);
 		expect(chart.p?.cells?.[weekday]?.[52]).toBe(1);
-		expect(chart.p?.tips?.[weekday]?.[52]).toContain("$0.13");
-		expect(chart.p?.tips?.[weekday]?.[52]).toMatch(/(?:^|\D)2(?:\D|$)/);
+		expect(chart.p?.tips?.[weekday]?.[52]).toMatch(/^\w{3} \d{1,2} \w{3} · \$0\.13 · 2 requests$/);
 		if (weekday < 6) expect(chart.p?.cells?.[6]?.[52]).toBeNull();
-		expect(chart.p?.summary).toContain("$0.13");
-		expect(chart.p?.summary).toContain("53");
+		expect(chart.p?.summary).toBe("$0.13 · 2 requests · last 53 weeks");
 	});
 });
 
@@ -216,11 +221,11 @@ describe("SessionInfoOverlay.describe", () => {
 		`${dim("File")} /tmp/s.jsonl\n${dim("ID")} abc-123\n` +
 		`\n${theme.bold("Provider")}\n${dim("Model")} claude-sonnet-4-5\n` +
 		`\n${theme.bold("Messages")}\n${dim("User")} 6\n${dim("Tool Calls")} 23\n${dim("Total")} 29\n\n` +
-		`${dim("Append-Only")} ${theme.fg("success", "활성")} (설정: auto)\n` +
+		`${dim("Append-Only")} ${theme.fg("success", "active")} (setting: auto)\n` +
 		`${theme.bold("Tokens")}\n${dim("Input")} 182,440\n${dim("Total")} 182,440\n` +
 		`\n${theme.bold("Cost")}\n${dim("Total")} 0.4127\n` +
 		`\n${theme.bold("MCP Servers")}\n` +
-		`${dim("github")} ${theme.fg("success", "연결됨")} ${theme.fg("dim", "(도구 4개)")}\n`;
+		`${dim("github")} ${theme.fg("success", "connected")} ${theme.fg("dim", "(4 tools)")}\n`;
 	/** The items of each `kv` with `role`, in order. */
 	const kvItems = (root: NativeNode, role: string): unknown[] =>
 		findAll(root, n => n.p?.role === role).flatMap(n => (n.k === "kv" ? [n.p?.items] : []));
@@ -229,49 +234,57 @@ describe("SessionInfoOverlay.describe", () => {
 		const overlay = new SessionInfoOverlay({ terminal: { rows: 20 } }, fullReport(), () => {});
 		const root = overlay.describe(cx);
 		const copies = findAll(root, n => n.p?.role === "omp.info.copy");
+		expect(copies.map(n => n.p?.title)).toEqual(["Copy session ID", "Copy /tmp/s.jsonl"]);
 		expect(JSON.stringify(copies[0])).toContain("abc-123");
 		expect(JSON.stringify(copies[1])).toContain("/tmp/s.jsonl");
 		expect(JSON.stringify(root)).not.toContain("\x1b");
 	});
 
 	it("does not offer to copy an in-memory session's file", () => {
-		const overlay = new SessionInfoOverlay({ terminal: { rows: 20 } }, `${dim("File")} 메모리 내\n`, () => {});
+		const overlay = new SessionInfoOverlay({ terminal: { rows: 20 } }, `${dim("File")} In-memory\n`, () => {});
 		const root = overlay.describe(cx);
 		expect(findAll(root, n => n.p?.role === "omp.info.copy")).toEqual([]);
-		expect(JSON.stringify(root)).toContain("메모리 내");
+		expect(JSON.stringify(root)).toContain("In-memory");
 	});
 
 	it("groups counts into a stats grid with their totals set apart, and the rest as key/value rows", () => {
 		const overlay = new SessionInfoOverlay({ terminal: { rows: 20 } }, fullReport(), () => {});
 		const root = overlay.describe(cx);
-		expect(findAll(root, n => n.k === "section")).toHaveLength(5);
+		expect(findAll(root, n => n.k === "section").map(n => (n.k === "section" ? n.p?.head : undefined))).toEqual([
+			"Provider",
+			"Messages",
+			"Tokens",
+			"Cost",
+			"MCP servers",
+		]);
 		expect(findAll(root, n => n.p?.role === "omp.info.stats")).toHaveLength(1);
 		expect(kvItems(root, "omp.info.nums")).toEqual([
 			[
-				expect.objectContaining({ v: [{ t: "6", s: "mono" }] }),
-				expect.objectContaining({ v: [{ t: "23", s: "mono" }] }),
+				{ k: "User", v: [{ t: "6", s: "mono" }] },
+				{ k: "Tool calls", v: [{ t: "23", s: "mono" }] },
 			],
-			[expect.objectContaining({ v: [{ t: "182,440", s: "mono" }] })],
-			[expect.objectContaining({ v: [{ t: "$0.4127", s: "mono" }] })],
+			[{ k: "Input", v: [{ t: "182,440", s: "mono" }] }],
+			[{ k: "Total", v: [{ t: "$0.4127", s: "mono" }] }],
 		]);
 		expect(kvItems(root, "omp.info.total")).toEqual([
-			[expect.objectContaining({ v: [{ t: "29", s: "mono" }] })],
-			[expect.objectContaining({ v: [{ t: "182,440", s: "mono" }] })],
+			[{ k: "Total", v: [{ t: "29", s: "mono" }] }],
+			[{ k: "Total", v: [{ t: "182,440", s: "mono" }] }],
 		]);
 		// The append-only mode is a provider setting: it leaves the message counts.
 		expect(kvItems(root, "omp.info.kv")).toEqual([
 			[
-				expect.objectContaining({ v: [{ t: "claude-sonnet-4-5", s: "mono" }] }),
-				expect.objectContaining({
+				{ k: "Model", v: [{ t: "claude-sonnet-4-5", s: "mono" }] },
+				{
+					k: "Append-only",
 					v: [
-						{ t: "활성", s: "success mono" },
-						{ t: " (설정: auto)", s: "mono" },
+						{ t: "active", s: "success mono" },
+						{ t: " (setting: auto)", s: "mono" },
 					],
-				}),
+				},
 			],
 		]);
 		expect(kvItems(root, "omp.info.names")).toEqual([
-			[{ k: "github", v: [{ t: "연결됨", s: "success" }, { t: " " }, { t: "(도구 4개)", s: "dim" }] }],
+			[{ k: "github", v: [{ t: "connected", s: "success" }, { t: " " }, { t: "(4 tools)", s: "dim" }] }],
 		]);
 	});
 
@@ -281,7 +294,7 @@ describe("SessionInfoOverlay.describe", () => {
 		const root = overlay.describe(cx);
 		const [meter] = findAll(root, n => n.k === "meter");
 		expect(meter?.p).toEqual(
-			expect.objectContaining({ value: expect.closeTo(0.206, 6) }),
+			expect.objectContaining({ value: expect.closeTo(0.206, 6), title: "41,200 of 200,000 tokens" }),
 		);
 		expect(JSON.stringify(findAll(root, n => n.p?.role === "omp.info.contextHead"))).toContain("41K / 200K");
 		const plain = new SessionInfoOverlay({ terminal: { rows: 20 } }, fullReport(), () => {}, context).describe(
@@ -296,94 +309,6 @@ describe("SessionInfoOverlay.describe", () => {
 		const overlay = new SessionInfoOverlay({ terminal: { rows: 20 } }, "", () => closed++);
 		overlay.handleNativeEvent({ type: "action", key: "actions/close", act: "close", mods: [] });
 		expect(closed).toBe(1);
-	});
-});
-
-describe("ContextUsageView.describe", () => {
-	const breakdown = computeContextBreakdown(
-		{
-			model: { id: "demo", name: "Demo Model", contextWindow: 200_000 } as never,
-			agent: { tokenizer: {} as never },
-			getContextBreakdown: () => ({
-				messagesTokens: 12_000,
-				skillsTokens: 0,
-				systemToolsTokens: 3_900,
-				systemContextTokens: 112,
-				systemPromptTokens: 2_600,
-				usedTokens: 18_612,
-			}),
-		} as never,
-		{ compaction: { ...DEFAULT_COMPACTION_SETTINGS, thresholdPercent: 85 } },
-	);
-
-	it("stacks categories, then free space as the empty track, then the hatched buffer, marked at the threshold", () => {
-		const view = new ContextUsageView(breakdown, theme);
-		const bar = findAll(view.describe(cx), n => n.k === "meter" && n.p?.style === "bar")[0];
-		if (bar?.k !== "meter") throw new Error("no bar meter");
-		const parts = bar.p?.parts ?? [];
-		expect(parts.map(part => part.token)).toEqual([
-			"accent",
-			"warning",
-			"customMessageLabel",
-			"userMessageText",
-			"track",
-			"warning",
-		]);
-		expect(parts.at(-1)?.hatch).toBe(true);
-		expect(parts.reduce((sum, part) => sum + part.value, 0)).toBeCloseTo(1);
-		const threshold = bar.p?.marks?.[0]?.at ?? 0;
-		expect(threshold).toBeCloseTo(1 - (parts.at(-1)?.value ?? 0));
-	});
-
-	/** The text of every `text` node with `role` under `root`, spans joined. */
-	const texts = (root: NativeNode, role: string): string[] =>
-		findAll(root, n => n.k === "text" && n.p?.role === role).map(n =>
-			n.k === "text" ? (n.p?.text ?? (n.p?.spans ?? []).map(s => s.t).join("")) : "",
-		);
-
-	it("leads with the tokens used and the room before auto-compaction, then one bar and the breakdown in its order", () => {
-		const described = new ContextUsageView(breakdown, theme).describe(cx);
-		expect(texts(described, "omp.context.used")[0]).toContain("19K");
-		expect(texts(described, "omp.context.used")[0]).toContain("200K");
-		expect(texts(described, "omp.context.used")[0]).toContain("9%");
-		expect(texts(described, "omp.context.room")[0]).toContain("85%");
-		expect(findAll(described, n => n.k === "meter")).toHaveLength(1);
-		const rows = findAll(described, n => n.k === "row" && (n.p?.role ?? "").startsWith("omp.context.cat"));
-		expect(rows.map(row => row.p?.role)).toEqual([
-			...breakdown.categories.map(() => "omp.context.cat"),
-			"omp.context.cat.free",
-			"omp.context.cat.buffer",
-		]);
-		expect(rows[4]?.p?.title).toContain("12,000");
-		expect(findAll(described, n => n.p?.role === "omp.context.snap")).toEqual([]);
-	});
-
-	it("titles snapcompact's savings, or says why it is inactive", () => {
-		const withSnap = (snapcompact: NonNullable<typeof breakdown.snapcompact>) =>
-			new ContextUsageView({ ...breakdown, snapcompact }, theme).describe(cx);
-		const applied = withSnap({
-			visionCapable: true,
-			systemPrompt: {
-				applied: true,
-				scope: "agents-md",
-				textTokens: 7_284,
-				frames: 2,
-				imageTokens: 3_120,
-				savedTokens: 4_164,
-			},
-			toolResults: { total: 41, swapped: 0, textTokens: 0, frames: 0, imageTokens: 0, savedTokens: 0 },
-			savedTokens: 4_164,
-		});
-		expect(texts(applied, "omp.context.tokens").slice(-2)).toEqual(["−4.2K", "~14K"]);
-
-		const inactive = withSnap({ visionCapable: false, savedTokens: 0 });
-		expect(texts(inactive, "omp.context.snap.note")).toHaveLength(1);
-	});
-
-	it("keeps the glyph grid on terminals without `meter`", () => {
-		const described = new ContextUsageView(breakdown, theme).describe(plainCx);
-		expect(findAll(described, n => n.k === "meter")).toEqual([]);
-		expect(findAll(described, n => n.p?.role === "omp.context.usage")).toHaveLength(1);
 	});
 });
 

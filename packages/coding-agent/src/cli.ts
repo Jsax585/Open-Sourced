@@ -14,7 +14,6 @@ try {
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
@@ -48,7 +47,7 @@ import { startParentWatchdog } from "./subprocess/parent-watchdog";
 
 if (Bun.semver.order(Bun.version, MIN_BUN_VERSION) < 0) {
 	process.stderr.write(
-		t("error: Bun runtime must be >= {0} (found v{1}). Please upgrade: bun upgrade\n", `${MIN_BUN_VERSION}`, `${Bun.version}`),
+		`error: Bun runtime must be >= ${MIN_BUN_VERSION} (found v${Bun.version}). Please upgrade: bun upgrade\n`,
 	);
 	process.exit(1);
 }
@@ -469,7 +468,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			const { installProfileAlias, resolveProfileAliasCommandFromProcess } = await import("./cli/profile-alias");
 			const profile = extracted.profile ?? getActiveProfile();
 			if (!profile) {
-				throw new Error(t("--alias requires --profile <name> or OMP_PROFILE"));
+				throw new Error("--alias requires --profile <name> or OMP_PROFILE");
 			}
 			const result = await installProfileAlias({
 				profile,
@@ -477,15 +476,15 @@ export async function runCli(argv: string[]): Promise<void> {
 				command: resolveProfileAliasCommandFromProcess(),
 			});
 			process.stdout.write(
-				t("Created {2} for profile {1} in {0}\n", `${result.configPath}`, `${result.profile}`, `${result.aliasName}`) +
-					t("Restart your shell or run: {0}\n", `${result.reloadedWith}`) +
-					t("Then use: {0} update, {1} --version, or {2}\n", `${result.aliasName}`, `${result.aliasName}`, `${result.aliasName}`),
+				`Created ${result.aliasName} for profile ${result.profile} in ${result.configPath}\n` +
+					`Restart your shell or run: ${result.reloadedWith}\n` +
+					`Then use: ${result.aliasName} update, ${result.aliasName} --version, or ${result.aliasName}\n`,
 			);
 			return;
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		process.stderr.write(t("Error: {0}\n", `${message}`));
+		process.stderr.write(`Error: ${message}\n`);
 		process.exitCode = 1;
 		return;
 	}
@@ -564,7 +563,7 @@ export async function runCli(argv: string[]): Promise<void> {
 		// Everything else that isn't a known subcommand routes to "launch".
 		const resolved = resolveCliArgv(resolvedArgv);
 		if ("error" in resolved) {
-			process.stderr.write(t("error: {0}\n", `${resolved.error}`));
+			process.stderr.write(`error: ${resolved.error}\n`);
 			process.exitCode = 1;
 			return;
 		}

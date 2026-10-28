@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentProgress } from "../tools/task";
 
 export type AgentActivityKind = "response" | "tool" | "irc" | "lifecycle";
@@ -104,7 +103,7 @@ export function activityRowsFromProgress(progress: AgentProgress, lastUpdate = D
 			agentId: progress.id,
 			timestamp: lastUpdate,
 			kind: "response",
-			title: t("Response"),
+			title: "Response",
 			summary: response,
 			status: progress.status === "failed" ? "error" : progress.status === "aborted" ? "aborted" : "pending",
 			source: "live",

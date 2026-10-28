@@ -7,7 +7,6 @@
  * titled "Keyboard shortcuts" with one section per group and a two-column
  * table whose key cells carry the `key` span token, so Tern draws keycaps.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "../../app-keybindings";
 import type { KeyName } from "../../key-hint-format";
 import { matchesKey } from "../../keys";
@@ -25,51 +24,51 @@ interface Shortcut {
 
 const GROUPS: readonly { readonly title: string; readonly rows: readonly Shortcut[] }[] = [
 	{
-		title: t("Move"),
+		title: "Move",
 		rows: [
-			{ keys: ["up", "down"], label: t("Move the selection") },
-			{ keys: ["left", "right"], label: t("Fold or unfold a folder or section") },
-			{ keys: ["enter"], label: t("Open the file in the diff") },
-			{ keys: ["tab"], label: t("Switch between the diff and the changes") },
-			{ keys: ["]", "["], label: t("Next or previous file") },
-			{ keys: ["alt+down", "alt+up"], label: t("Next or previous change") },
-			{ keys: ["g", "shift+g"], label: t("First or last row") },
+			{ keys: ["up", "down"], label: "Move the selection" },
+			{ keys: ["left", "right"], label: "Fold or unfold a folder or section" },
+			{ keys: ["enter"], label: "Open the file in the diff" },
+			{ keys: ["tab"], label: "Switch between the diff and the changes" },
+			{ keys: ["]", "["], label: "Next or previous file" },
+			{ keys: ["alt+down", "alt+up"], label: "Next or previous change" },
+			{ keys: ["g", "shift+g"], label: "First or last row" },
 		],
 	},
 	{
-		title: t("Stage"),
+		title: "Stage",
 		rows: [
-			{ keys: ["space"], label: t("Stage or unstage the row") },
-			{ keys: ["s", "u"], label: t("Stage or unstage (the hunk or selected lines in the diff)") },
-			{ keys: ["shift+up", "shift+down"], label: t("Select lines in the diff") },
-			{ keys: ["x"], label: t("Discard the hunk or selected lines (press twice)") },
-			{ keys: ["delete"], label: t("Discard the file or folder (press twice)") },
+			{ keys: ["space"], label: "Stage or unstage the row" },
+			{ keys: ["s", "u"], label: "Stage or unstage (the hunk or selected lines in the diff)" },
+			{ keys: ["shift+up", "shift+down"], label: "Select lines in the diff" },
+			{ keys: ["x"], label: "Discard the hunk or selected lines (press twice)" },
+			{ keys: ["delete"], label: "Discard the file or folder (press twice)" },
 		],
 	},
 	{
-		title: t("View"),
+		title: "View",
 		rows: [
-			{ keys: ["v"], label: t("Cycle the diff view") },
-			{ keys: ["1", "2", "3", "4"], label: t("File, split, inline or hunk view") },
-			{ keys: ["w"], label: t("Wrap long lines") },
-			{ keys: ["b"], label: t("Ignore whitespace, then formatting") },
-			{ keys: ["t"], label: t("Paths or folder tree") },
-			{ keys: ["r"], label: t("Refresh") },
+			{ keys: ["v"], label: "Cycle the diff view" },
+			{ keys: ["1", "2", "3", "4"], label: "File, split, inline or hunk view" },
+			{ keys: ["w"], label: "Wrap long lines" },
+			{ keys: ["b"], label: "Ignore whitespace, then formatting" },
+			{ keys: ["t"], label: "Paths or folder tree" },
+			{ keys: ["r"], label: "Refresh" },
 		],
 	},
 	{
-		title: t("Commit"),
+		title: "Commit",
 		rows: [
-			{ keys: ["c"], label: t("Write the commit message (empty: generate one)") },
-			{ keys: ["escape"], label: t("Leave the field") },
-			{ keys: ["q"], label: t("Quit") },
+			{ keys: ["c"], label: "Write the commit message (empty: generate one)" },
+			{ keys: ["escape"], label: "Leave the field" },
+			{ keys: ["q"], label: "Quit" },
 		],
 	},
 ];
 
 /** The shortcuts overlay; any of `?`, escape or `q` closes it. */
 export class GitHelpSheet implements Component {
-	readonly nativeOverlay = { role: "omp.overlay.hotkeys", head: t("Keyboard shortcuts"), size: "lg" } as const;
+	readonly nativeOverlay = { role: "omp.overlay.hotkeys", head: "Keyboard shortcuts", size: "lg" } as const;
 	readonly #close: () => void;
 	#native: NativeNode | undefined;
 
@@ -97,8 +96,8 @@ export class GitHelpSheet implements Component {
 							node("table", {
 								role: "omp.hotkeys.table",
 								cols: [
-									{ id: "keys", head: t("Keys") },
-									{ id: "does", head: t("Action"), grow: 1 },
+									{ id: "keys", head: "Keys" },
+									{ id: "does", head: "Action", grow: 1 },
 								],
 								rows: group.rows.map((row, index) => ({
 									id: String(index),
@@ -109,7 +108,7 @@ export class GitHelpSheet implements Component {
 						group.title,
 					),
 				),
-				actionBar([null, actionButton(t("Close"), "close", { keys: "escape" })]),
+				actionBar([null, actionButton("Close", "close", { keys: "escape" })]),
 			],
 			{ gap: "lg", role: "omp.app.git.help" },
 		);
@@ -120,7 +119,7 @@ export class GitHelpSheet implements Component {
 		const keyWidth = Math.max(
 			...GROUPS.flatMap(group => group.rows.map(row => visibleWidth(row.keys.map(formatKeyHint).join(" ")))),
 		);
-		const lines = [truncateToWidth(` ${theme.bold(t("Keyboard shortcuts"))}`, width), ""];
+		const lines = [truncateToWidth(` ${theme.bold("Keyboard shortcuts")}`, width), ""];
 		for (const group of GROUPS) {
 			lines.push(truncateToWidth(` ${theme.fg("muted", group.title)}`, width));
 			for (const row of group.rows) {
@@ -130,7 +129,7 @@ export class GitHelpSheet implements Component {
 			}
 			lines.push("");
 		}
-		lines.push(truncateToWidth(` ${theme.fg("dim", t("{0} close", `${formatKeyHint("escape")}`))}`, width));
+		lines.push(truncateToWidth(` ${theme.fg("dim", `${formatKeyHint("escape")} close`)}`, width));
 		return lines;
 	}
 

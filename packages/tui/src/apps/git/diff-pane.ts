@@ -13,7 +13,6 @@
  * the visible viewport brightened; clicking it seeks. Long lines either pan
  * horizontally (`←`/`→`) or soft-wrap when word wrap is enabled.
  */
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { DiffStreamResult, HighlightStream } from "@oh-my-pi/pi-natives";
 import { diffWords, structuredPatchHunks } from "@oh-my-pi/pi-natives";
 import { Image, type ImageBudget } from "../../components/image";
@@ -589,19 +588,19 @@ export function assetTitle(label: string, side: FileAssetSide): string {
 			lfs = side.image.lfsOid !== undefined;
 			break;
 		case "text":
-			kind = localize("Text");
+			kind = "Text";
 			lfs = side.lfsOid !== undefined;
 			break;
 		case "binary":
-			kind = localize("Binary");
+			kind = "Binary";
 			lfs = side.lfsOid !== undefined;
 			break;
 		case "tooLarge":
-			kind = localize("Too large");
+			kind = "Too large";
 			lfs = side.lfsOid !== undefined;
 			break;
 		case "lfsMissing":
-			kind = localize("LFS missing");
+			kind = "LFS missing";
 			lfs = true;
 			break;
 	}
@@ -621,7 +620,7 @@ export class DiffPane {
 	#asset: AssetDocument | null = null;
 	state: DiffPaneState = "empty";
 	/** Message shown in the empty state. */
-	emptyMessage = localize("No changes");
+	emptyMessage = "No changes";
 	mode: ViewMode = "split";
 	wrap = false;
 	/** Which hunk buttons apply: staging (unstaged), unstaging (staged), or none. */
@@ -1108,7 +1107,7 @@ export class DiffPane {
 		if (this.state === "streaming" && this.#streaming) return this.#renderStreaming(width, height);
 		if (this.state === "asset" && this.#asset) return this.#renderAsset(width, height);
 		if (!doc || this.state !== "ready") {
-			const message = this.state === "loading" ? localize("Loading diff…") : this.emptyMessage;
+			const message = this.state === "loading" ? "Loading diff…" : this.emptyMessage;
 			const lines: string[] = [];
 			for (let i = 0; i < height; i++) {
 				lines.push(
@@ -1167,11 +1166,11 @@ export class DiffPane {
 		for (let index = 0; index < height; index++) {
 			const leftSource =
 				index === 0
-					? centerLine(theme.bold(assetTitle(localize("Before"), asset.old)), leftWidth).trimEnd()
+					? centerLine(theme.bold(assetTitle("Before", asset.old)), leftWidth).trimEnd()
 					: (oldLines[index - 1] ?? "");
 			const rightSource =
 				index === 0
-					? centerLine(theme.bold(assetTitle(localize("After"), asset.new)), rightWidth).trimEnd()
+					? centerLine(theme.bold(assetTitle("After", asset.new)), rightWidth).trimEnd()
 					: (newLines[index - 1] ?? "");
 			const left = truncateToWidth(leftSource, leftWidth);
 			const right = truncateToWidth(rightSource, rightWidth);
@@ -1216,26 +1215,26 @@ export class DiffPane {
 			let details: string[];
 			switch (side.kind) {
 				case "empty":
-					details = [localize("No file")];
+					details = ["No file"];
 					break;
 				case "text":
-					details = [localize("Text object"), formatBytes(side.byteLength)];
+					details = ["Text object", formatBytes(side.byteLength)];
 					break;
 				case "binary":
 					details = [
-						localize("Binary object"),
-						side.byteLength === undefined ? localize("Size unavailable") : formatBytes(side.byteLength),
+						"Binary object",
+						side.byteLength === undefined ? "Size unavailable" : formatBytes(side.byteLength),
 					];
 					break;
 				case "tooLarge":
 					details = [
-						localize("Object too large to preview"),
-						side.byteLength === undefined ? localize("Exceeds preview limit") : formatBytes(side.byteLength),
+						"Object too large to preview",
+						side.byteLength === undefined ? "Exceeds preview limit" : formatBytes(side.byteLength),
 					];
 					break;
 				case "lfsMissing":
 					details = [
-						localize("Git LFS object unavailable"),
+						"Git LFS object unavailable",
 						`sha256:${side.oid.slice(0, 12)}… · ${formatBytes(side.byteLength)}`,
 					];
 					break;
@@ -1252,7 +1251,7 @@ export class DiffPane {
 		const total = this.#total();
 		if (total === 0) {
 			return Array.from({ length: height }, (_, index) =>
-				index === Math.floor(height / 2) ? centerLine(theme.fg("dim", localize("Streaming file…")), width).trimEnd() : "",
+				index === Math.floor(height / 2) ? centerLine(theme.fg("dim", "Streaming file…"), width).trimEnd() : "",
 			);
 		}
 		this.#clampScroll();
@@ -1357,10 +1356,10 @@ export class DiffPane {
 		if (this.patchTarget && doc.canPatch) {
 			const primaryLabel =
 				this.patchTarget === "stage"
-					? pill(localize(" Stage Hunk "), theme.getColorHex("toolDiffAdded"))
-					: pill(localize(" Unstage Hunk "), theme.getColorHex("warning"));
+					? pill(" Stage Hunk ", theme.getColorHex("toolDiffAdded"))
+					: pill(" Unstage Hunk ", theme.getColorHex("warning"));
 			const discardLabel =
-				this.patchTarget === "stage" ? pill(localize(" Discard Hunk "), theme.getColorHex("toolDiffRemoved")) : "";
+				this.patchTarget === "stage" ? pill(" Discard Hunk ", theme.getColorHex("toolDiffRemoved")) : "";
 			const total = visibleWidth(primaryLabel) + (discardLabel ? visibleWidth(discardLabel) + 1 : 0);
 			const from = Math.max(0, width - 2 - total);
 			let cursor = from;

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { OmpErrors, type Type } from "@oh-my-pi/omptype";
@@ -81,19 +80,10 @@ export class ConfigError extends Error {
 		let klass: string;
 
 		if (schemaErrors) {
-			klass = t("Schema");
-			messages = schemaErrors.map(e => `${e.instancePath || t("root")}: ${e.message}`);
+			klass = "Schema";
+			messages = schemaErrors.map(e => `${e.instancePath || "root"}: ${e.message}`);
 		} else if (other) {
-			klass =
-				other.stage === "Read"
-					? t("Read")
-					: other.stage === "AuxValidate"
-						? t("AuxValidate")
-						: other.stage === "Unexpected"
-							? t("Unexpected")
-							: other.stage.startsWith("Validate(")
-								? t("Validate{0}", `${(other.stage.slice("Validate".length))}`)
-								: other.stage;
+			klass = other.stage;
 			if (other.err instanceof Error) {
 				messages = [other.err.message];
 				cause = other.err;
@@ -101,10 +91,10 @@ export class ConfigError extends Error {
 				messages = [String(other.err)];
 			}
 		} else {
-			klass = t("Unknown");
+			klass = "Unknown";
 		}
 
-		const title = t("Failed to load config file {0}, {1} error:", `${id}`, `${klass}`);
+		const title = `Failed to load config file ${id}, ${klass} error:`;
 		let message: string;
 		switch (messages?.length ?? 0) {
 			case 0:
@@ -166,7 +156,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			this.#jsonMigrationPath = null;
 		} else {
 			this.#yamlFallbackPath = null;
-			throw new Error(t("Invalid config file path: {0}", `${configPath}`));
+			throw new Error(`Invalid config file path: ${configPath}`);
 		}
 	}
 
@@ -235,7 +225,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 		const fallback = this.schema(undefined);
 		if (!(fallback instanceof Error)) return fallback as T;
 		throw new ConfigError(this.id, undefined, {
-			err: new Error(t("Schema produced no default value")),
+			err: new Error("Schema produced no default value"),
 			stage: "createDefault",
 		});
 	}
@@ -254,7 +244,7 @@ export class ConfigFile<T> implements IConfigFile<T> {
 			} else if (readPath.endsWith(".yml") || readPath.endsWith(".yaml")) {
 				parsed = YAML.parse(content);
 			} else {
-				throw new Error(t("Invalid config file path: {0}", `${readPath}`));
+				throw new Error(`Invalid config file path: ${readPath}`);
 			}
 
 			const checked = this.schema(parsed);

@@ -9,7 +9,6 @@
  *   - { source: "npm", ... } → not yet supported
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -69,12 +68,12 @@ export async function validatePluginSource(
 			const syntheticRoot = path.join(path.parse(process.cwd()).root, "omp-marketplace-validation");
 			const resolved = path.resolve(syntheticRoot, source.path);
 			if (!pathIsWithin(syntheticRoot, resolved)) {
-				throw new Error(t("git-subdir path \"{0}\" escapes the cloned repository", `${source.path}`));
+				throw new Error(`git-subdir path "${source.path}" escapes the cloned repository`);
 			}
 			return undefined;
 		}
 		case "npm":
-			throw new Error(t("npm plugin sources are not yet supported. Use git-based sources instead."));
+			throw new Error("npm plugin sources are not yet supported. Use git-based sources instead.");
 		default: {
 			const unknownSource: unknown = source;
 			if (
@@ -83,9 +82,9 @@ export async function validatePluginSource(
 				"source" in unknownSource &&
 				typeof unknownSource.source === "string"
 			) {
-				throw new Error(t("Unknown plugin source type: \"{0}\"", `${unknownSource.source}`));
+				throw new Error(`Unknown plugin source type: "${unknownSource.source}"`);
 			}
-			throw new Error(t("Unknown plugin source type"));
+			throw new Error("Unknown plugin source type");
 		}
 	}
 }
@@ -97,10 +96,10 @@ function resolveRelativeSourcePath(
 	context: Pick<ResolveContext, "marketplaceClonePath" | "catalogMetadata">,
 ): string {
 	if (!source.startsWith("./")) {
-		throw new Error(t("Relative plugin source paths must start with \"./\" — got: \"{0}\"", `${source}`));
+		throw new Error(`Relative plugin source paths must start with "./" — got: "${source}"`);
 	}
 	if (!context.marketplaceClonePath) {
-		throw new Error(t("Cannot resolve relative source \"{0}\": marketplaceClonePath is required", `${source}`));
+		throw new Error(`Cannot resolve relative source "${source}": marketplaceClonePath is required`);
 	}
 
 	const pluginRoot = context.catalogMetadata?.pluginRoot;
@@ -170,10 +169,10 @@ async function resolveObjectSource(
 			const subdirPath = path.resolve(cloneDir, source.path);
 			if (!pathIsWithin(cloneDir, subdirPath)) {
 				await fs.rm(cloneDir, { recursive: true, force: true });
-				throw new Error(t("git-subdir path \"{0}\" escapes the cloned repository", `${source.path}`));
+				throw new Error(`git-subdir path "${source.path}" escapes the cloned repository`);
 			}
 			try {
-				await verifyDirExists(subdirPath, t("git-subdir path \"{0}\" does not exist in cloned repository", `${source.path}`));
+				await verifyDirExists(subdirPath, `git-subdir path "${source.path}" does not exist in cloned repository`);
 			} catch (err) {
 				await fs.rm(cloneDir, { recursive: true, force: true });
 				throw err;
@@ -182,10 +181,10 @@ async function resolveObjectSource(
 		}
 
 		case "npm":
-			throw new Error(t("npm plugin sources are not yet supported. Use git-based sources instead."));
+			throw new Error("npm plugin sources are not yet supported. Use git-based sources instead.");
 
 		default:
-			throw new Error(t("Unknown plugin source type: \"{0}\"", `${(source as { source: string }).source}`));
+			throw new Error(`Unknown plugin source type: "${(source as { source: string }).source}"`);
 	}
 }
 

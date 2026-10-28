@@ -109,11 +109,9 @@ describe("autoresearch dashboard sheet", () => {
 			return value === undefined || (typeof value === "object" && "meter" in value) ? "" : plain(value);
 		};
 		expect(rows.map((_, index) => cell(index, "run"))).toEqual(["4", "3", "2", "1"]);
-		expect(rows[1]?.cells.status).toEqual([
-			expect.objectContaining({ s: "success" }),
-			expect.objectContaining({ s: "strong" }),
-		]);
+		expect(cell(1, "status")).toContain("best");
 		expect(cell(2, "metric")).toBe("—");
+		expect(cell(3, "change")).toBe("baseline");
 	});
 
 	it("says what it waits for while the segment has no runs", async () => {
@@ -121,11 +119,12 @@ describe("autoresearch dashboard sheet", () => {
 		expect(find(root, "omp.autoresearch.runs")).toBeUndefined();
 		const title = find(root, "omp.autoresearch.empty.title");
 		if (title?.k !== "text") throw new Error("no empty-state title");
+		expect(plain(title.p?.spans)).toBe("No baseline yet");
 	});
 
 	it("titles the sheet by the experiment and scrolls its body by keys", async () => {
 		const sheet = await openSheet(runtime([result(1, 24, "keep"), result(2, 20, "keep")]));
-		expect(plain(sheet.nativeOverlay?.head)).toContain("Speed up the parser");
+		expect(plain(sheet.nativeOverlay?.head)).toBe("Speed up the parser · Autoresearch");
 		expect(describeSheet(sheet).scroll).toBeUndefined();
 		sheet.handleInput?.("j");
 		expect(describeSheet(sheet).scroll).toEqual({ by: "line-down", n: 1 });
@@ -136,7 +135,7 @@ describe("autoresearch dashboard sheet", () => {
 	it("keeps the terminal rendering", async () => {
 		const sheet = await openSheet(runtime([result(1, 24, "keep"), result(2, 20, "keep")]));
 		const lines = sheet.render(100).join("\n");
-		expect(lines).toContain("Speed up the parser");
-		expect(lines).toContain("20ms (#2)");
+		expect(lines).toContain("autoresearch: Speed up the parser");
+		expect(lines).toContain("Best: 20ms (#2)");
 	});
 });

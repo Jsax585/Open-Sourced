@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { tinyModelsHelp as commandHelp } from "../cli/command-help";
 import { runTinyModelsCommand, type TinyModelsAction, type TinyModelsCommandArgs } from "../cli/tiny-models-cli";
@@ -9,18 +8,18 @@ export default class TinyModels extends Command {
 	static description = commandHelp.description;
 	static args = {
 		action: Args.string({
-			description: t("Action to perform"),
+			description: "Action to perform",
 			required: false,
 			options: ACTIONS,
 		}),
 		model: Args.string({
-			description: t("Model key (`smollm` = word completion), or all"),
+			description: "Model key (`smollm` = word completion), or all",
 			required: false,
 		}),
 	};
 
 	static flags = {
-		json: Flags.boolean({ description: t("Output JSON\u0004packages/coding-agent/src/commands/ssh.ts:SSH.flags.json.description") }),
+		json: Flags.boolean({ description: "Output JSON" }),
 	};
 
 	async run(): Promise<void> {

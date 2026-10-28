@@ -3,7 +3,6 @@
  * strongest first; each row carries a score gauge, the hyperlinked file, and
  * its strongest verified line ranges with a verbatim snippet.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import { renderProgressBar } from "../components/progress-bar";
@@ -196,7 +195,7 @@ function describeHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, 
 	const score = hit.contentScore.toFixed(2);
 	const isUrlHit = splitUrlScheme(hit.rel) !== undefined;
 	const head = fileRow(hit.rel, {
-		lead: node("progress", { value: hit.contentScore, tone, title: t("score {0}", `${score}`), max: { w: 40 } }),
+		lead: node("progress", { value: hit.contentScore, tone, title: `score ${score}`, max: { w: 40 } }),
 		detail: [
 			span(score, tone),
 			span(
@@ -226,7 +225,7 @@ function findNativeHead(
 	query: string | undefined,
 	meta: readonly NonNullable<NativeToolHead["meta"]>[number][],
 ): NativeToolHead {
-	return { title: t("Find\u0004packages/tui/src/tools/find.ts:findNativeHead.title"), target: query ?? "", targetKind: "query", meta };
+	return { title: "Find", target: query ?? "", targetKind: "query", meta };
 }
 
 function quoteQuery(query: string | undefined): string | undefined {
@@ -238,12 +237,12 @@ export const findToolRenderer = {
 	renderCall(args: FindRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const keywords = args.grep_keywords ?? [];
 		const meta = keywords.length > 0 ? [keywords.join(" ")] : [];
-		if (args.path) meta.push(t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${args.path}`));
+		if (args.path) meta.push(`in ${args.path}`);
 		const text = renderStatusLine(
 			{
 				icon: "pending",
 				spinnerFrame: options.spinnerFrame,
-				title: t("Find\u0004packages/tui/src/tools/find.ts:findNativeHead.title"),
+				title: "Find",
 				titleColor: "toolTitle",
 				description: quoteQuery(args.query),
 				meta,
@@ -263,7 +262,7 @@ export const findToolRenderer = {
 		const text = result.content?.find(c => c.type === "text")?.text ?? "";
 
 		if (result.isError) {
-			return new Text(formatErrorMessage(text || t("Unknown error"), uiTheme), 0, 0);
+			return new Text(formatErrorMessage(text || "Unknown error", uiTheme), 0, 0);
 		}
 
 		// Streaming progress: the tool reports the phase it is in.
@@ -272,7 +271,7 @@ export const findToolRenderer = {
 				{
 					icon: "pending",
 					spinnerFrame: options.spinnerFrame,
-					title: t("Find\u0004packages/tui/src/tools/find.ts:findNativeHead.title"),
+					title: "Find",
 					titleColor: "toolTitle",
 					description: quoteQuery(args?.query ?? details?.query),
 					meta: text ? [text] : [],
@@ -285,30 +284,30 @@ export const findToolRenderer = {
 		const { hits, stats, threshold } = details;
 		const linkTargets = findLinkTargets(details, options.renderContext?.rawDetails);
 		const description = quoteQuery(details.query);
-		const scope = details.scopePath === undefined ? [] : [t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${details.scopePath}`)];
+		const scope = details.scopePath === undefined ? [] : [`in ${details.scopePath}`];
 		const meta = [
 			formatCount("hit", hits.length),
 			...scope,
-			t("{0} files read", `${stats.filesRead}`),
+			`${stats.filesRead} files read`,
 			`τ ${threshold.toFixed(2)}`,
-			t("{0} tokens\u0004packages/tui/src/chat/compaction-summary-message.ts:compactionNativeLabel", `${formatNumber(stats.inputTokens)}`),
+			`${formatNumber(stats.inputTokens)} tokens`,
 			`$${stats.cost.toFixed(4)}`,
 			formatDuration(details.elapsedMs),
 		];
-		const failed = stats.failed > 0 ? t("{1}/{0} requests failed", `${stats.requests}`, `${stats.failed}`) : undefined;
+		const failed = stats.failed > 0 ? `${stats.failed}/${stats.requests} requests failed` : undefined;
 		if (failed) meta.push(uiTheme.fg("warning", failed));
 
 		if (hits.length === 0) {
-			const emptyMeta = [t("0 hits"), ...scope, `$${stats.cost.toFixed(4)}`, formatDuration(details.elapsedMs)];
+			const emptyMeta = ["0 hits", ...scope, `$${stats.cost.toFixed(4)}`, formatDuration(details.elapsedMs)];
 			if (failed) emptyMeta.push(uiTheme.fg("warning", failed));
 			const header = renderStatusLine(
-				{ icon: "warning", title: t("Find\u0004packages/tui/src/tools/find.ts:findNativeHead.title"), titleColor: "toolTitle", description, meta: emptyMeta },
+				{ icon: "warning", title: "Find", titleColor: "toolTitle", description, meta: emptyMeta },
 				uiTheme,
 			);
 			const empty =
 				details.coverage === "partial"
-					? t("No relevant passages found in the judged files")
-					: t("No relevant passages found");
+					? "No relevant passages found in the judged files"
+					: "No relevant passages found";
 			const lines = [header, formatEmptyMessage(empty, uiTheme)];
 			for (const failure of stats.failures) lines.push(uiTheme.fg("warning", failure));
 			return new Text(lines.join("\n"), 0, 0);
@@ -317,7 +316,7 @@ export const findToolRenderer = {
 		const header = renderStatusLine(
 			{
 				iconOverride: uiTheme.fg("toolTitle", uiTheme.symbol("icon.search")),
-				title: t("Find\u0004packages/tui/src/tools/find.ts:findNativeHead.title"),
+				title: "Find",
 				titleColor: "toolTitle",
 				description,
 				meta,
@@ -360,7 +359,7 @@ export const findToolRenderer = {
 		return {
 			tool: findNativeHead(
 				args.query,
-				compact([keywords.length > 0 && keywords.join(" "), args.path && t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${args.path}`)]),
+				compact([keywords.length > 0 && keywords.join(" "), args.path && `in ${args.path}`]),
 			),
 			inline: true,
 		};
@@ -379,7 +378,7 @@ export const findToolRenderer = {
 		const details = result.details;
 		const progress = result.content?.find(c => c.type === "text")?.text ?? "";
 		const query = args?.query ?? details?.query;
-		if (result.isError) return inlineErrorView(findNativeHead(query, []), progress || t("Unknown error"));
+		if (result.isError) return inlineErrorView(findNativeHead(query, []), progress || "Unknown error");
 		if (options.isPartial || details === undefined) {
 			return {
 				tool: findNativeHead(query, progress ? [[span(progress, "muted", { fx: "shimmer" })]] : []),
@@ -388,13 +387,13 @@ export const findToolRenderer = {
 		}
 		const { hits, stats, threshold } = details;
 		const linkTargets = findLinkTargets(details, options.renderContext?.rawDetails);
-		const scope = details.scopePath === undefined ? undefined : t("in {0}\u0004packages/tui/src/tools/ast-edit.ts:astEditScopeStats", `${details.scopePath}`);
+		const scope = details.scopePath === undefined ? undefined : `in ${details.scopePath}`;
 		const failed =
-			stats.failed > 0 ? [span(t("{1}/{0} requests failed", `${stats.requests}`, `${stats.failed}`), "warning")] : undefined;
+			stats.failed > 0 ? [span(`${stats.failed}/${stats.requests} requests failed`, "warning")] : undefined;
 		const accounting = [
-			t("{0} files read", `${stats.filesRead}`),
+			`${stats.filesRead} files read`,
 			`τ ${threshold.toFixed(2)}`,
-			t("{0} tokens\u0004packages/tui/src/chat/compaction-summary-message.ts:compactionNativeLabel", `${formatNumber(stats.inputTokens)}`),
+			`${formatNumber(stats.inputTokens)} tokens`,
 			`$${stats.cost.toFixed(4)}`,
 			formatDuration(details.elapsedMs),
 		].join(" · ");
@@ -414,7 +413,7 @@ export const findToolRenderer = {
 		const hidden = hits.length - shown.length;
 		const footParts = compact([
 			hidden > 0 && formatCount("more hit", hidden),
-			t("keywords: {0}", `${details.keywords.join(", ")}`),
+			`keywords: ${details.keywords.join(", ")}`,
 		]);
 		// One quiet last line; the accounting ANSI prints in the head rides its tooltip.
 		const foot = keyed(

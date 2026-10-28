@@ -28,6 +28,7 @@ describe("LateDiagnosticsMessageComponent", () => {
 		]);
 
 		const text = plain(component);
+		expect(text).toContain("Late diagnostics");
 		expect(text).toContain("1 error(s)");
 		// File grouped as its own tree node...
 		expect(text).toContain("packages/coding-agent/src/foo.ts");
@@ -52,13 +53,15 @@ describe("LateDiagnosticsMessageComponent", () => {
 		const collapsed = plain(component);
 		expect(collapsed).toContain("err 1");
 		expect(collapsed).not.toContain("err 8");
+		expect(collapsed).toContain("more");
 
 		component.setExpanded(true);
 		const expanded = plain(component);
 		expect(expanded).toContain("err 8");
+		expect(expanded).not.toContain("more");
 	});
 
-	it("groups diagnostics from multiple files", () => {
+	it("groups multiple files under a single header", () => {
 		const component = new LateDiagnosticsMessageComponent([
 			{
 				path: "/abs/a.ts",
@@ -75,6 +78,7 @@ describe("LateDiagnosticsMessageComponent", () => {
 		]);
 
 		const text = plain(component);
+		expect(text.match(/Late diagnostics/g)?.length).toBe(1);
 		expect(text).toContain("a.ts");
 		expect(text).toContain("b.ts");
 		expect(text).toContain("bad a");
@@ -98,12 +102,10 @@ describe("LateDiagnosticsMessageComponent", () => {
 			},
 		]);
 
-		const visible = plain(component);
-		expect(visible).toContain("src/foo.ts");
-		expect(visible).toContain("bad");
+		expect(plain(component)).toContain("Late diagnostics");
 		component.setToolActivityVisible(false);
 		expect(plain(component)).toBe("");
 		component.setToolActivityVisible(true);
-		expect(plain(component)).toBe(visible);
+		expect(plain(component)).toContain("Late diagnostics");
 	});
 });

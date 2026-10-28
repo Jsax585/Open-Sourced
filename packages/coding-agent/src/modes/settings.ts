@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -35,8 +34,9 @@ export const cfgAutoResume = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Auto Resume"),
-		description: t("Automatically resume the most recent session in the current directory"),
+		label: "Auto Resume",
+		description:
+			"Automatically resume the most recent session in the current directory. If its model cannot be restored and model fallback is disabled, interactive startup warns and starts a new session without the saved history",
 	},
 });
 
@@ -47,8 +47,8 @@ export const cfgGitEnabled = register({
 	ui: {
 		tab: "interaction",
 		group: "Git",
-		label: t("Enable Git Integration"),
-		description: t("Show git branch, status, and PR information in the TUI and watch repository metadata."),
+		label: "Enable Git Integration",
+		description: "Show git branch, status, and PR information in the TUI and watch repository metadata.",
 	},
 });
 
@@ -64,8 +64,8 @@ export const cfgThemeDark = register({
 	ui: {
 		tab: "appearance",
 		group: "Theme",
-		label: t("Dark Theme"),
-		description: t("Theme used when the terminal has a dark background"),
+		label: "Dark Theme",
+		description: "Theme used when the terminal has a dark background",
 		options: "runtime",
 	},
 });
@@ -78,8 +78,8 @@ export const cfgThemeLight = register({
 	ui: {
 		tab: "appearance",
 		group: "Theme",
-		label: t("Light Theme"),
-		description: t("Theme used when the terminal has a light background"),
+		label: "Light Theme",
+		description: "Theme used when the terminal has a light background",
 		options: "runtime",
 	},
 });
@@ -93,16 +93,16 @@ export const cfgSymbolPreset = register({
 	ui: {
 		tab: "appearance",
 		group: "Theme",
-		label: t("Symbol Preset"),
-		description: t("Glyph set for icons and symbols (Unicode, Nerd Font, or ASCII)"),
+		label: "Symbol Preset",
+		description: "Glyph set for icons and symbols (Unicode, Nerd Font, or ASCII)",
 		options: [
-			{ value: "unicode", label: "Unicode", description: t("Standard symbols (default)") },
+			{ value: "unicode", label: "Unicode", description: "Standard symbols (default)" },
 			{
 				value: "nerd",
 				label: "Nerd Font",
-				description: t("Requires a Nerd Font, or a Glyph Protocol terminal (icons ship in-band)"),
+				description: "Requires a Nerd Font, or a Glyph Protocol terminal (icons ship in-band)",
 			},
-			{ value: "ascii", label: "ASCII", description: t("Maximum compatibility") },
+			{ value: "ascii", label: "ASCII", description: "Maximum compatibility" },
 		],
 	},
 });
@@ -115,8 +115,8 @@ export const cfgColorBlindMode = register({
 	ui: {
 		tab: "appearance",
 		group: "Theme",
-		label: t("Color-Blind Mode"),
-		description: t("Use blue instead of green for diff additions"),
+		label: "Color-Blind Mode",
+		description: "Use blue instead of green for diff additions",
 	},
 });
 effect(cfgColorBlindMode, setColorBlindMode);
@@ -129,8 +129,8 @@ export const cfgComposerShape = register({
 	ui: {
 		tab: "appearance",
 		group: "Composer",
-		label: t("Composer Shape"),
-		description: t("Visual layout of the input editor and status line"),
+		label: "Composer Shape",
+		description: "Visual layout of the input editor and status line",
 		options: "runtime",
 	},
 });
@@ -143,9 +143,9 @@ export const cfgComposerTokenRate = register({
 	ui: {
 		tab: "appearance",
 		group: "Composer",
-		label: t("Generation Rate"),
+		label: "Generation Rate",
 		description:
-			t("Show a live generation tok/s readout: on the working row next to the session title, or in the native composer bar right after the thinking level, where the last reading stays between turns. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes."),
+			"Show a live generation tok/s readout: on the working row next to the session title, or in the native composer bar right after the thinking level, where the last reading stays between turns. Estimated from streamed deltas and corrected by the provider's billed output count as each message completes.",
 	},
 });
 
@@ -158,16 +158,16 @@ export const cfgStatusLinePreset = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Status Line Preset"),
-		description: t("Pre-built status line configurations"),
+		label: "Status Line Preset",
+		description: "Pre-built status line configurations",
 		options: [
-			{ value: "default", label: t("Default"), description: t("Model, path, git, context, tokens, cost") },
-			{ value: "minimal", label: t("Minimal"), description: t("Path and git only") },
-			{ value: "compact", label: t("Compact"), description: t("Model, git, cost, context") },
-			{ value: "full", label: t("Full"), description: t("All segments including time") },
-			{ value: "nerd", label: "Nerd", description: t("Maximum info with Nerd Font icons") },
-			{ value: "ascii", label: "ASCII", description: t("No special characters") },
-			{ value: "custom", label: t("Custom"), description: t("User-defined segments") },
+			{ value: "default", label: "Default", description: "Model, path, git, context, tokens, cost" },
+			{ value: "minimal", label: "Minimal", description: "Path and git only" },
+			{ value: "compact", label: "Compact", description: "Model, git, cost, context" },
+			{ value: "full", label: "Full", description: "All segments including time" },
+			{ value: "nerd", label: "Nerd", description: "Maximum info with Nerd Font icons" },
+			{ value: "ascii", label: "ASCII", description: "No special characters" },
+			{ value: "custom", label: "Custom", description: "User-defined segments" },
 		],
 	},
 });
@@ -180,16 +180,16 @@ export const cfgStatusLineSeparator = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Status Line Separator"),
-		description: t("Style of separators between segments"),
+		label: "Status Line Separator",
+		description: "Style of separators between segments",
 		options: [
-			{ value: "powerline", label: "Powerline", description: t("Solid arrows (Nerd Font)") },
-			{ value: "powerline-thin", label: t("Thin chevron"), description: t("Thin arrows (Nerd Font)") },
-			{ value: "slash", label: t("Slash"), description: t("Forward slashes") },
-			{ value: "pipe", label: t("Pipe"), description: t("Vertical pipes") },
-			{ value: "block", label: t("Block"), description: t("Solid blocks") },
-			{ value: "none", label: t("None"), description: t("Space only") },
-			{ value: "ascii", label: "ASCII", description: t("Greater-than signs") },
+			{ value: "powerline", label: "Powerline", description: "Solid arrows (Nerd Font)" },
+			{ value: "powerline-thin", label: "Thin chevron", description: "Thin arrows (Nerd Font)" },
+			{ value: "slash", label: "Slash", description: "Forward slashes" },
+			{ value: "pipe", label: "Pipe", description: "Vertical pipes" },
+			{ value: "block", label: "Block", description: "Solid blocks" },
+			{ value: "none", label: "None", description: "Space only" },
+			{ value: "ascii", label: "ASCII", description: "Greater-than signs" },
 		],
 	},
 });
@@ -202,24 +202,24 @@ export const cfgStatusLineContextLine = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Context-Reactive Line"),
-		description: t("How the line between the left and right segments reflects context usage (box composer only)"),
+		label: "Context-Reactive Line",
+		description: "How the line between the left and right segments reflects context usage (box composer only)",
 		options: [
-			{ value: "off", label: t("Off"), description: t("Solid accent line, no context feedback") },
+			{ value: "off", label: "Off", description: "Solid accent line, no context feedback" },
 			{
 				value: "percentage",
-				label: t("Percentage"),
-				description: t("Used portion in accent color, remainder dimmed"),
+				label: "Percentage",
+				description: "Used portion in accent color, remainder dimmed",
 			},
 			{
 				value: "annotated",
-				label: t("Annotated"),
-				description: t("Percentage plus ticks at the speculative and auto-compaction boundaries"),
+				label: "Annotated",
+				description: "Percentage plus ticks at the speculative and auto-compaction boundaries",
 			},
 			{
 				value: "embedded",
-				label: t("Embedded"),
-				description: t("Annotated line with the context percentage and window embedded in the gauge"),
+				label: "Embedded",
+				description: "Annotated line with the context percentage and window embedded in the gauge",
 			},
 		],
 	},
@@ -232,8 +232,8 @@ export const cfgStatusLineSessionAccent = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Session Accent"),
-		description: t("Use the session name color for the editor border and status line gap"),
+		label: "Session Accent",
+		description: "Use the session name color for the editor border and status line gap",
 	},
 });
 
@@ -244,9 +244,9 @@ export const cfgStatusLineTransparent = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Transparent Status Line"),
+		label: "Transparent Status Line",
 		description:
-			t("Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal."),
+			"Use the terminal's default background for the status line instead of the theme's `statusLineBg`. Powerline end caps are dropped because they need a contrasting fill to bridge into the surrounding terminal.",
 	},
 });
 
@@ -257,9 +257,9 @@ export const cfgStatusLineCompactThinkingLevel = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Compact Thinking Level"),
+		label: "Compact Thinking Level",
 		description:
-			t("Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix; in Tern's composer, as the model chip's icon instead of a separate chip (click the icon to cycle it)."),
+			"Show the thinking level as a single icon on the model name instead of a separate ` · <level>` suffix; in Tern's composer, as the model chip's icon instead of a separate chip (click the icon to cycle it).",
 	},
 });
 
@@ -270,8 +270,8 @@ export const cfgStatusLineShowHookStatus = register({
 	ui: {
 		tab: "appearance",
 		group: "Status Line",
-		label: t("Show Hook Status"),
-		description: t("Display hook status messages below the status line"),
+		label: "Show Hook Status",
+		description: "Display hook status messages below the status line",
 	},
 });
 
@@ -279,14 +279,14 @@ export const cfgStatusLineLeftSegments = register({
 	id: "statusLine.leftSegments",
 	type: "array",
 	default: CUSTOM_STATUS_LINE_DEFAULTS.left,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: t("status line segment") },
+	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
 });
 
 export const cfgStatusLineRightSegments = register({
 	id: "statusLine.rightSegments",
 	type: "array",
 	default: CUSTOM_STATUS_LINE_DEFAULTS.right,
-	items: { values: STATUS_LINE_SEGMENT_IDS, label: t("status line segment") },
+	items: { values: STATUS_LINE_SEGMENT_IDS, label: "status line segment" },
 });
 
 export const cfgStatusLineSegmentOptions = register({
@@ -303,8 +303,8 @@ export const cfgTerminalShowImages = register({
 	ui: {
 		tab: "appearance",
 		group: "Images",
-		label: t("Show Inline Images"),
-		description: t("Render images inline in the terminal"),
+		label: "Show Inline Images",
+		description: "Render images inline in the terminal",
 		condition: "hasImageProtocol",
 	},
 });
@@ -316,8 +316,8 @@ export const cfgImagesAutoResize = register({
 	ui: {
 		tab: "appearance",
 		group: "Images",
-		label: t("Auto-Resize Images"),
-		description: t("Resize large images to 2000x2000 max for better model compatibility"),
+		label: "Auto-Resize Images",
+		description: "Resize large images to 2000x2000 max for better model compatibility",
 	},
 });
 
@@ -328,8 +328,8 @@ export const cfgImagesBlockImages = register({
 	ui: {
 		tab: "appearance",
 		group: "Images",
-		label: t("Block Images"),
-		description: t("Prevent images from being sent to LLM providers"),
+		label: "Block Images",
+		description: "Prevent images from being sent to LLM providers",
 	},
 });
 
@@ -338,7 +338,7 @@ export const cfgTuiMaxInlineImageColumns = register({
 	type: "number",
 	default: 100,
 	description:
-		t("Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited (bounded only by terminal width)."),
+		"Maximum width in terminal columns for inline images (default 100). Set to 0 for unlimited (bounded only by terminal width).",
 });
 effect(cfgTuiMaxInlineImageColumns, setInlineImageMaxColumns);
 
@@ -347,7 +347,7 @@ export const cfgTuiMaxInlineImageRows = register({
 	type: "number",
 	default: 20,
 	description:
-		t("Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height)."),
+		"Maximum height in terminal rows for inline images (default 20). Set to 0 to use only the viewport-based limit (60% of terminal height).",
 });
 effect(cfgTuiMaxInlineImageRows, setInlineImageMaxRows);
 
@@ -356,7 +356,7 @@ export const cfgTuiMaxInlineImages = register({
 	type: "number",
 	default: 8,
 	description:
-		t("Maximum number of inline images kept as live terminal graphics (default 8). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit)."),
+		"Maximum number of inline images kept as live terminal graphics (default 8). Older images fall back to a text placeholder via a full redraw once the limit is exceeded. Set to 0 to keep every image (no limit).",
 });
 
 export const cfgTuiResizeScrollback = register({
@@ -367,23 +367,23 @@ export const cfgTuiResizeScrollback = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Resize Scrollback"),
-		description: t("How a settled terminal resize refreshes transcript rows retained in terminal scrollback"),
+		label: "Resize Scrollback",
+		description: "How a settled terminal resize refreshes transcript rows retained in terminal scrollback",
 		options: [
 			{
 				value: "append",
-				label: t("Append"),
-				description: t("Replay the transcript at the new width below retained history"),
+				label: "Append",
+				description: "Replay the transcript at the new width below retained history",
 			},
 			{
 				value: "rebuild",
-				label: t("Rebuild"),
-				description: t("Erase all terminal scrollback, then replay one current-width transcript"),
+				label: "Rebuild",
+				description: "Erase all terminal scrollback, then replay one current-width transcript",
 			},
 			{
 				value: "preserve",
-				label: t("Preserve"),
-				description: t("Repaint only the viewport and keep history wrapped at its old width"),
+				label: "Preserve",
+				description: "Repaint only the viewport and keep history wrapped at its old width",
 			},
 		],
 	},
@@ -396,9 +396,9 @@ export const cfgTuiCompleteScrollback = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Complete Scrollback"),
+		label: "Complete Scrollback",
 		description:
-			t("Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback; when it shrinks, blank rows sit between the transcript and the input until new output fills them"),
+			"Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback; when it shrinks, blank rows sit between the transcript and the input until new output fills them",
 	},
 });
 
@@ -409,9 +409,9 @@ export const cfgTerminalShowProgress = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Native Terminal Progress"),
+		label: "Native Terminal Progress",
 		description:
-			t("Emit OSC 9;4 indeterminate progress while the agent or context maintenance is running (always on in Tern)"),
+			"Emit OSC 9;4 indeterminate progress while the agent or context maintenance is running (always on in Tern)",
 	},
 });
 
@@ -422,9 +422,9 @@ export const cfgTerminalProgramStatus = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Program Status (OSC 7501)"),
+		label: "Program Status (OSC 7501)",
 		description:
-			t("Report whether the agent is working, waiting on you, done, or failed over OSC 7501, for terminal tab indicators and agent inboxes"),
+			"Report whether the agent is working, waiting on you, done, or failed over OSC 7501, for terminal tab indicators and agent inboxes",
 	},
 });
 
@@ -435,9 +435,9 @@ export const cfgTuiTextSizing = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Large Headings (Kitty)"),
+		label: "Large Headings (Kitty)",
 		description:
-			t("Render Markdown H1 headings at 2x scale using Kitty's OSC 66 text-sizing protocol. Only takes effect on Kitty terminals; ignored everywhere else. Off by default."),
+			"Render Markdown H1 headings at 2x scale using Kitty's OSC 66 text-sizing protocol. Only takes effect on Kitty terminals; ignored everywhere else. Off by default.",
 	},
 });
 
@@ -448,8 +448,8 @@ export const cfgTuiRenderMermaid = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Render Mermaid Diagrams"),
-		description: t("Render Mermaid fenced code blocks as ASCII diagrams"),
+		label: "Render Mermaid Diagrams",
+		description: "Render Mermaid fenced code blocks as ASCII diagrams",
 	},
 });
 
@@ -460,9 +460,9 @@ export const cfgTuiRenderSvg = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Render SVG Figures"),
+		label: "Render SVG Figures",
 		description:
-			t("Invite the agent to draw diagrams and charts as SVG, rendered inline as images on terminals that show graphics"),
+			"Invite the agent to draw diagrams and charts as SVG, rendered inline as images on terminals that show graphics",
 	},
 });
 
@@ -474,22 +474,22 @@ export const cfgTuiAutoGraph = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Auto-Graph Tables"),
+		label: "Auto-Graph Tables",
 		description:
-			t("Draw a chart under numeric tables in the agent's answers, in your theme's colors, on terminals that show graphics"),
+			"Draw a chart under numeric tables in the agent's answers, in your theme's colors, on terminals that show graphics",
 		options: [
 			{
 				value: "smart",
-				label: t("Smart"),
+				label: "Smart",
 				description:
-					t("The judge model refines each chart: kind, columns, row names and grouping, scales, which way is better, and its title"),
+					"The judge model refines each chart: kind, columns, row names and grouping, scales, which way is better, and its title",
 			},
 			{
 				value: "always",
-				label: t("Always"),
-				description: t("Chart every table that reads as numeric, using the built-in best guess"),
+				label: "Always",
+				description: "Chart every table that reads as numeric, using the built-in best guess",
 			},
-			{ value: "off", label: t("Off"), description: t("Leave tables as tables") },
+			{ value: "off", label: "Off", description: "Leave tables as tables" },
 		],
 	},
 });
@@ -501,8 +501,8 @@ export const cfgTuiReactions = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Agent Reactions"),
-		description: t("Invite the agent to react to your message with an emoji badge on its bubble"),
+		label: "Agent Reactions",
+		description: "Invite the agent to react to your message with an emoji badge on its bubble",
 	},
 });
 
@@ -513,9 +513,9 @@ export const cfgTuiCodexResetFireworks = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Codex Reset Fireworks"),
+		label: "Codex Reset Fireworks",
 		get description() {
-			return t("Celebrate unscheduled Codex weekly usage resets and newly banked saved resets with a top-third fireworks overlay that remains until {0}", `${formatKeyHint("escape")}`);
+			return `Celebrate unscheduled Codex weekly usage resets and newly banked saved resets with a top-third fireworks overlay that remains until ${formatKeyHint("escape")}`;
 		},
 	},
 });
@@ -527,9 +527,9 @@ export const cfgTuiTitleState = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Terminal Title Run State"),
+		label: "Terminal Title Run State",
 		description:
-			t("Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' under WSL), '>' when it's your turn, '!' when the agent is waiting on you"),
+			"Show the agent run state in the terminal title's separator — an animated spinner while working (a static ':' under WSL), '>' when it's your turn, '!' when the agent is waiting on you",
 	},
 });
 
@@ -541,14 +541,14 @@ export const cfgTuiTitleSpinner = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Terminal Title Spinner"),
+		label: "Terminal Title Spinner",
 		description:
-			t("Glyph set for the working-state spinner in the terminal title — braille sweep, filling moon, single-dot cycle, or ASCII-safe line"),
+			"Glyph set for the working-state spinner in the terminal title — braille sweep, filling moon, single-dot cycle, or ASCII-safe line",
 		options: [
-			{ value: "braille", label: t("Braille"), description: t("Classic ⠋⠙⠹ sweep (default)") },
-			{ value: "pulse", label: t("Pulse"), description: t("Moon filling ○◑● then emptying") },
-			{ value: "dots", label: t("Dots"), description: t("Single braille dots cycling") },
-			{ value: "line", label: t("Line"), description: t("ASCII - \\ | / for fonts without braille coverage") },
+			{ value: "braille", label: "Braille", description: "Classic ⠋⠙⠹ sweep (default)" },
+			{ value: "pulse", label: "Pulse", description: "Moon filling ○◑● then emptying" },
+			{ value: "dots", label: "Dots", description: "Single braille dots cycling" },
+			{ value: "line", label: "Line", description: "ASCII - \\ | / for fonts without braille coverage" },
 		],
 	},
 });
@@ -561,9 +561,9 @@ export const cfgTuiHyperlinks = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Terminal Hyperlinks"),
+		label: "Terminal Hyperlinks",
 		description:
-			t("Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)"),
+			"Wrap paths and URLs in OSC 8 hyperlinks for terminal-native click-to-open (auto: detect support; off: never; always: unconditional)",
 	},
 });
 // Also re-applied when a project-scoped reload (`/move`, cross-project resume, rollback) changes the
@@ -577,10 +577,10 @@ export const cfgTuiMouse = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Mouse Click-to-Focus"),
+		label: "Mouse Click-to-Focus",
 		get description() {
 			const shift = formatKeyHint("shift");
-			return t("Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target. Native text selection becomes {0}+drag and wheel scroll becomes {1}+wheel while on", `${shift}`, `${shift}`);
+			return `Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target. Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
 		},
 	},
 });
@@ -592,8 +592,8 @@ export const cfgTuiTight = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Tight Layout"),
-		description: t("Remove the 1-character horizontal padding from the left and right of the terminal output"),
+		label: "Tight Layout",
+		description: "Remove the 1-character horizontal padding from the left and right of the terminal output",
 	},
 });
 
@@ -605,12 +605,12 @@ export const cfgDisplayShimmer = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Shimmer"),
-		description: t("Animation style for working/loading messages"),
+		label: "Shimmer",
+		description: "Animation style for working/loading messages",
 		options: [
-			{ value: "classic", label: t("Classic"), description: t("Soft cosine wave sweeping across the text") },
-			{ value: "kitt", label: t("KITT Scanner"), description: t("Knight Rider 1982 red light bouncing left-right") },
-			{ value: "disabled", label: t("Disabled\u0004packages/coding-agent/src/modes/settings.ts:cfgDisplayShimmer.ui.options.label"), description: t("No animation; static muted text") },
+			{ value: "classic", label: "Classic", description: "Soft cosine wave sweeping across the text" },
+			{ value: "kitt", label: "KITT Scanner", description: "Knight Rider 1982 red light bouncing left-right" },
+			{ value: "disabled", label: "Disabled", description: "No animation; static muted text" },
 		],
 	},
 });
@@ -624,13 +624,13 @@ export const cfgDisplayPinnedAgents = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Pinned Agents"),
+		label: "Pinned Agents",
 		description:
-			t("Pinned live-agent jump list above the editor (off hides it; collapsed shows a few rows with an expander; full lists all)"),
+			"Pinned live-agent jump list above the editor (off hides it; collapsed shows a few rows with an expander; full lists all)",
 		options: [
-			{ value: "off", label: t("Off"), description: t("Hide the pinned jump list") },
-			{ value: "collapsed", label: t("Collapsed"), description: t("Show a few rows with an expander") },
-			{ value: "full", label: t("Full"), description: t("Always list every live agent") },
+			{ value: "off", label: "Off", description: "Hide the pinned jump list" },
+			{ value: "collapsed", label: "Collapsed", description: "Show a few rows with an expander" },
+			{ value: "full", label: "Full", description: "Always list every live agent" },
 		],
 	},
 });
@@ -642,8 +642,8 @@ export const cfgDisplaySubagentLivePreview = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Subagent Live Preview"),
-		description: t("Show each pinned subagent's current (or most recent) tool call beneath its row"),
+		label: "Subagent Live Preview",
+		description: "Show each pinned subagent's current (or most recent) tool call beneath its row",
 	},
 });
 
@@ -654,8 +654,8 @@ export const cfgDisplaySmoothStreaming = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Smooth Streaming"),
-		description: t("Reveal assistant text and streamed tool input smoothly while chunks arrive"),
+		label: "Smooth Streaming",
+		description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
 	},
 });
 
@@ -666,8 +666,8 @@ export const cfgDisplayHideToolActivity = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Hide Tool Activity"),
-		description: t("Hide model-initiated tool calls and results from the transcript"),
+		label: "Hide Tool Activity",
+		description: "Hide model-initiated tool calls and results from the transcript",
 	},
 });
 
@@ -678,8 +678,8 @@ export const cfgDisplayShowTokenUsage = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Show Token Usage"),
-		description: t("Show per-turn token usage on assistant messages"),
+		label: "Show Token Usage",
+		description: "Show per-turn token usage on assistant messages",
 	},
 });
 
@@ -690,8 +690,8 @@ export const cfgDisplayShowTurnTime = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Show Turn Time"),
-		description: t("Show the total prompt-to-yield time (including tool calls) on assistant message usage rows"),
+		label: "Show Turn Time",
+		description: "Show the total prompt-to-yield time (including tool calls) on assistant message usage rows",
 	},
 });
 
@@ -702,8 +702,8 @@ export const cfgDisplayCacheMissMarker = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Cache Miss Marker"),
-		description: t("Show a divider after an assistant turn whose request lost (missed) the prompt cache"),
+		label: "Cache Miss Marker",
+		description: "Show a divider after an assistant turn whose request lost (missed) the prompt cache",
 	},
 });
 effect(
@@ -725,9 +725,9 @@ export const cfgDisplayCollapseCompacted = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Collapse Compacted History"),
+		label: "Collapse Compacted History",
 		description:
-			t("Collapse pre-compaction history behind the summary divider on the live transcript; disable to keep the full transcript inline with dividers at each compaction point"),
+			"Collapse pre-compaction history behind the summary divider on the live transcript; disable to keep the full transcript inline with dividers at each compaction point",
 	},
 });
 
@@ -738,8 +738,8 @@ export const cfgShowHardwareCursor = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("Show Hardware Cursor"),
-		description: t("Show terminal cursor for IME support"),
+		label: "Show Hardware Cursor",
+		description: "Show terminal cursor for IME support",
 	},
 });
 
@@ -750,8 +750,8 @@ export const cfgTuiImeSafeCursor = register({
 	ui: {
 		tab: "appearance",
 		group: "Display",
-		label: t("IME-Safe Prompt Layout"),
-		description: t("Move the prompt's bottom border to a separate row so macOS IME preedit cannot displace it"),
+		label: "IME-Safe Prompt Layout",
+		description: "Move the prompt's bottom border to a separate row so macOS IME preedit cannot displace it",
 	},
 });
 
@@ -768,8 +768,8 @@ export const cfgSteeringMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Steering Mode"),
-		description: t("How to process queued messages while agent is working"),
+		label: "Steering Mode",
+		description: "How to process queued messages while agent is working",
 	},
 });
 
@@ -781,8 +781,8 @@ export const cfgFollowUpMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Follow-Up Mode"),
-		description: t("How to drain follow-up messages after a turn completes"),
+		label: "Follow-Up Mode",
+		description: "How to drain follow-up messages after a turn completes",
 	},
 });
 
@@ -794,8 +794,8 @@ export const cfgInterruptMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Interrupt Mode"),
-		description: t("When steering messages interrupt tool execution"),
+		label: "Interrupt Mode",
+		description: "When steering messages interrupt tool execution",
 	},
 });
 
@@ -806,9 +806,9 @@ export const cfgTuiVimMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Vim Editing Mode"),
+		label: "Vim Editing Mode",
 		get description() {
-			return t("Modal prompt editing. {0} leaves Insert mode; Normal mode has hjkl, 0, $, ^, w, b, e, gg, G, counts, x/D/C, dd/yy, p and u; operators take motions or text objects (diw, ca(, dap); v/V start a Visual selection that y copies and d deletes", `${formatKeyHint("escape")}`);
+			return `Modal prompt editing. ${formatKeyHint("escape")} leaves Insert mode; Normal mode has hjkl, 0, $, ^, w, b, e, gg, G, counts, x/D/C, dd/yy, p and u; operators take motions or text objects (diw, ca(, dap); v/V start a Visual selection that y copies and d deletes`;
 		},
 	},
 });
@@ -821,13 +821,13 @@ export const cfgTuiVimModeDisplay = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Vim Mode Indicator"),
-		description: t("How the current Vim mode appears in the status line"),
+		label: "Vim Mode Indicator",
+		description: "How the current Vim mode appears in the status line",
 		condition: "vimModeEnabled",
 		options: [
-			{ value: "text", label: t("Text"), description: t("Full mode name — NORMAL, INSERT, VISUAL, V-LINE, REPLACE") },
-			{ value: "icon", label: t("Icon"), description: t("Single compact glyph per mode") },
-			{ value: "none", label: t("Hidden"), description: t("Do not show the mode in the status line") },
+			{ value: "text", label: "Text", description: "Full mode name — NORMAL, INSERT, VISUAL, V-LINE, REPLACE" },
+			{ value: "icon", label: "Icon", description: "Single compact glyph per mode" },
+			{ value: "none", label: "Hidden", description: "Do not show the mode in the status line" },
 		],
 	},
 });
@@ -840,20 +840,20 @@ export const cfgLoopMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Loop Mode"),
-		description: t("What happens between /loop iterations before re-submitting the prompt"),
+		label: "Loop Mode",
+		description: "What happens between /loop iterations before re-submitting the prompt",
 		options: [
 			{
 				value: "prompt",
-				label: t("Prompt"),
-				description: t("Re-submit the prompt as a follow-up message (current behavior)"),
+				label: "Prompt",
+				description: "Re-submit the prompt as a follow-up message (current behavior)",
 			},
 			{
 				value: "compact",
-				label: t("Compact\u0004packages/coding-agent/src/modes/settings.ts:cfgLoopMode.ui.options.label"),
-				description: t("Compact the session context, then re-submit the prompt"),
+				label: "Compact",
+				description: "Compact the session context, then re-submit the prompt",
 			},
-			{ value: "reset", label: t("Reset"), description: t("Start a new session, then re-submit the prompt") },
+			{ value: "reset", label: "Reset", description: "Start a new session, then re-submit the prompt" },
 		],
 	},
 });
@@ -865,14 +865,14 @@ export const cfgLoopConditionTimeoutMs = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Loop Condition Timeout (ms)"),
+		label: "Loop Condition Timeout (ms)",
 		description:
-			t("Max wait for a `/loop --while` / `--until` condition command before treating it as broken and stopping the loop. Set to 0 to wait indefinitely"),
+			"Max wait for a `/loop --while` / `--until` condition command before treating it as broken and stopping the loop. Set to 0 to wait indefinitely",
 		options: [
-			{ value: "0", label: t("Unlimited") },
-			{ value: "10000", label: t("10 seconds") },
-			{ value: "30000", label: t("30 seconds") },
-			{ value: "120000", label: t("2 minutes") },
+			{ value: "0", label: "Unlimited" },
+			{ value: "10000", label: "10 seconds" },
+			{ value: "30000", label: "30 seconds" },
+			{ value: "120000", label: "2 minutes" },
 		],
 	},
 });
@@ -885,9 +885,9 @@ export const cfgComposerRecallClearedDrafts = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Recall Cleared Drafts"),
+		label: "Recall Cleared Drafts",
 		get description() {
-			return t("Keep drafts cleared with {0} in local {1} history until exit; disabling affects future clears", `${formatKeyHint("ctrl+c")}`, `${formatKeyHints(["up", "down"])}`);
+			return `Keep drafts cleared with ${formatKeyHint("ctrl+c")} in local ${formatKeyHints(["up", "down"])} history until exit; disabling affects future clears`;
 		},
 	},
 });
@@ -900,9 +900,9 @@ export const cfgDoubleEscapeAction = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Double-Escape Action"),
+		label: "Double-Escape Action",
 		get description() {
-			return t("What pressing {0} twice with an empty editor does: open the transcript rewind selector, open the session tree, or nothing", `${formatKeyHint("escape")}`);
+			return `What pressing ${formatKeyHint("escape")} twice with an empty editor does: open the transcript rewind selector, open the session tree, or nothing`;
 		},
 	},
 });
@@ -914,9 +914,9 @@ export const cfgBareExitOnEmptySession = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Bare Exit on Empty Session"),
+		label: "Bare Exit on Empty Session",
 		description:
-			t("Submitting exactly `exit`, `quit`, or `q` (any case) before the first message quits instead of prompting the model"),
+			"Submitting exactly `exit`, `quit`, or `q` (any case) before the first message quits instead of prompting the model",
 	},
 });
 
@@ -927,9 +927,9 @@ export const cfgBareSlashCommands = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Bare Slash Commands"),
+		label: "Bare Slash Commands",
 		description:
-			t("Submitting exactly a command name without the leading `/` (e.g. `model`, `compact`) runs that slash command; once the session has messages, press Enter twice to confirm"),
+			"Submitting exactly a command name without the leading `/` (e.g. `model`, `compact`) runs that slash command; once the session has messages, press Enter twice to confirm",
 	},
 });
 
@@ -941,8 +941,8 @@ export const cfgTreeFilterMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Session Tree Filter"),
-		description: t("Default filter mode when opening the session tree"),
+		label: "Session Tree Filter",
+		description: "Default filter mode when opening the session tree",
 	},
 });
 
@@ -953,15 +953,15 @@ export const cfgAutocompleteMaxVisible = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Autocomplete Items"),
-		description: t("Max visible items in autocomplete dropdown (3-20)"),
+		label: "Autocomplete Items",
+		description: "Max visible items in autocomplete dropdown (3-20)",
 		options: [
-			{ value: "3", label: t("3 items") },
-			{ value: "5", label: t("5 items") },
-			{ value: "7", label: t("7 items") },
-			{ value: "10", label: t("10 items") },
-			{ value: "15", label: t("15 items") },
-			{ value: "20", label: t("20 items") },
+			{ value: "3", label: "3 items" },
+			{ value: "5", label: "5 items" },
+			{ value: "7", label: "7 items" },
+			{ value: "10", label: "10 items" },
+			{ value: "15", label: "15 items" },
+			{ value: "20", label: "20 items" },
 		],
 	},
 });
@@ -973,8 +973,8 @@ export const cfgSpellingTypoDetection = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Typo Detection (macOS)"),
-		description: t("Mark misspelled prompt words with the active macOS dictionaries"),
+		label: "Typo Detection (macOS)",
+		description: "Mark misspelled prompt words with the active macOS dictionaries",
 		condition: "macOS",
 	},
 });
@@ -987,25 +987,25 @@ export const cfgSpellingAutocomplete = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Word Autocomplete"),
+		label: "Word Autocomplete",
 		get description() {
-			return t("Show predicted word completions as inline hints: {0} accepts with a space, {1} without", `${formatKeyHint("tab")}`, `${formatKeyHint("right")}`);
+			return `Show predicted word completions as inline hints: ${formatKeyHint("tab")} accepts with a space, ${formatKeyHint("right")} without`;
 		},
 		options: [
-			{ value: "off", label: t("Off"), description: t("No word completion") },
+			{ value: "off", label: "Off", description: "No word completion" },
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("N-gram (nothing to download)"),
+				label: "Auto",
+				description: "N-gram (nothing to download)",
 			},
-			{ value: "ngram", label: "N-gram", description: t("Learns your vocabulary from prompt history") },
+			{ value: "ngram", label: "N-gram", description: "Learns your vocabulary from prompt history" },
 			{
 				value: "smollm",
 				label: "SmolLM",
-				description: t("Small on-device language model blended with N-gram (downloads weights on first use)"),
+				description: "Small on-device language model blended with N-gram (downloads weights on first use)",
 			},
 			...(process.platform === "darwin"
-				? [{ value: "apple" as const, label: "Apple", description: t("macOS dictionary completions") }]
+				? [{ value: "apple" as const, label: "Apple", description: "macOS dictionary completions" }]
 				: []),
 		],
 	},
@@ -1018,9 +1018,9 @@ export const cfgComposerPredictions = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Composer Predictions"),
+		label: "Composer Predictions",
 		get description() {
-			return t("After a completed turn, ask the active model to predict your next message and show it as ghost text in the empty composer; {0} or {1} inserts it without sending. Extra usage: every completed turn sends one more billed request over the whole conversation (counted in /stats)", `${formatKeyHint("tab")}`, `${formatKeyHint("right")}`);
+			return `After a completed turn, ask the active model to predict your next message and show it as ghost text in the empty composer; ${formatKeyHint("tab")} or ${formatKeyHint("right")} inserts it without sending. Extra usage: every completed turn sends one more billed request over the whole conversation (counted in /stats)`;
 		},
 	},
 });
@@ -1032,8 +1032,8 @@ export const cfgSpellingAutocorrect = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Autocorrect (macOS)"),
-		description: t("Apply confident macOS spelling corrections after completed words"),
+		label: "Autocorrect (macOS)",
+		description: "Apply confident macOS spelling corrections after completed words",
 		condition: "macOS",
 	},
 });
@@ -1045,8 +1045,8 @@ export const cfgEmojiAutocomplete = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Emoji Autocomplete"),
-		description: t("Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`"),
+		label: "Emoji Autocomplete",
+		description: "Suggest emojis from `:name:` shortcodes and expand text emoticons like `:D` or `:-)`",
 	},
 });
 effect(cfgEmojiAutocomplete, setEmojiAutocompleteEnabled);
@@ -1058,15 +1058,15 @@ export const cfgPasteLargeMenuThreshold = register({
 	ui: {
 		tab: "interaction",
 		group: "Input",
-		label: t("Large Paste Menu"),
+		label: "Large Paste Menu",
 		description:
-			t("When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker)."),
+			"When a paste reaches this many lines, offer a menu to wrap it in a code block, wrap it in XML tags, or save it to a file. 0 disables the menu (large pastes still collapse to a [Paste] marker).",
 		options: [
-			{ value: "0", label: t("Off") },
-			{ value: "100", label: t("100 lines") },
-			{ value: "250", label: t("250 lines") },
-			{ value: "500", label: t("500 lines") },
-			{ value: "1000", label: t("1000 lines") },
+			{ value: "0", label: "Off" },
+			{ value: "100", label: "100 lines" },
+			{ value: "250", label: "250 lines" },
+			{ value: "500", label: "500 lines" },
+			{ value: "1000", label: "1000 lines" },
 		],
 	},
 });
@@ -1078,8 +1078,8 @@ export const cfgStartupQuiet = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Quiet Startup"),
-		description: t("Skip welcome screen and startup status messages"),
+		label: "Quiet Startup",
+		description: "Skip welcome screen and startup status messages",
 	},
 });
 
@@ -1090,9 +1090,9 @@ export const cfgStartupShowSplash = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Show Startup Splash"),
+		label: "Show Startup Splash",
 		description:
-			t("Show the full animated setup splash on normal interactive startup without rerunning setup. Quiet Startup still suppresses it."),
+			"Show the full animated setup splash on normal interactive startup without rerunning setup. Quiet Startup still suppresses it.",
 	},
 });
 
@@ -1103,8 +1103,8 @@ export const cfgStartupSetupWizard = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Setup Wizard"),
-		description: t("Show newly added onboarding steps once per setup version"),
+		label: "Setup Wizard",
+		description: "Show newly added onboarding steps once per setup version",
 	},
 });
 
@@ -1115,8 +1115,8 @@ export const cfgStartupCheckUpdate = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Check for Updates"),
-		description: t("Check for omp updates on startup"),
+		label: "Check for Updates",
+		description: "Check for omp updates on startup",
 	},
 });
 
@@ -1128,11 +1128,11 @@ export const cfgUpdateChannel = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Update Channel"),
-		description: t("Update channel used by omp update and the startup update check"),
+		label: "Update Channel",
+		description: "Update channel used by omp update and the startup update check",
 		options: [
-			{ value: "stable", label: t("Stable") },
-			{ value: "canary", label: t("Canary") },
+			{ value: "stable", label: "Stable" },
+			{ value: "canary", label: "Canary" },
 		],
 	},
 });
@@ -1145,12 +1145,12 @@ export const cfgMarketplaceAutoUpdate = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Marketplace Auto-Update"),
-		description: t("Check for plugin updates on startup"),
+		label: "Marketplace Auto-Update",
+		description: "Check for plugin updates on startup",
 		options: [
-			{ value: "off", label: t("Off"), description: t("Don't check for plugin updates") },
-			{ value: "notify", label: t("Notify"), description: t("Check on startup and notify when updates are available") },
-			{ value: "auto", label: t("Auto"), description: t("Check on startup and auto-install updates") },
+			{ value: "off", label: "Off", description: "Don't check for plugin updates" },
+			{ value: "notify", label: "Notify", description: "Check on startup and notify when updates are available" },
+			{ value: "auto", label: "Auto", description: "Check on startup and auto-install updates" },
 		],
 	},
 });
@@ -1163,23 +1163,23 @@ export const cfgStartupChangelogMode = register({
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
-		label: t("Startup Changelog"),
-		description: t("Choose whether update notes start as a summary, full details, or stay hidden"),
+		label: "Startup Changelog",
+		description: "Choose whether update notes start as a summary, full details, or stay hidden",
 		options: [
 			{
 				value: "summary",
-				label: t("Summary"),
-				description: t("Show release and change counts with a /changelog hint"),
+				label: "Summary",
+				description: "Show release and change counts with a /changelog hint",
 			},
 			{
 				value: "expanded",
-				label: t("Expanded"),
-				description: t("Show the recent release notes in full"),
+				label: "Expanded",
+				description: "Show the recent release notes in full",
 			},
 			{
 				value: "hidden",
-				label: t("Hidden"),
-				description: t("Do not show release notes on startup"),
+				label: "Hidden",
+				description: "Do not show release notes on startup",
 			},
 		],
 	},
@@ -1192,8 +1192,8 @@ export const cfgMagicKeywordsEnabled = register({
 	ui: {
 		tab: "interaction",
 		group: "Magic Keywords",
-		label: t("Magic Keywords"),
-		description: t("Enable hidden notices for standalone {0} keywords", `${MAGIC_KEYWORDS.map(keyword => keyword.word).join(", ")}`),
+		label: "Magic Keywords",
+		description: `Enable hidden notices for standalone ${MAGIC_KEYWORDS.map(keyword => keyword.word).join(", ")} keywords`,
 	},
 });
 
@@ -1219,8 +1219,8 @@ export const cfgCompletionNotify = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Completion Notification"),
-		description: t("Notify when the agent finishes a turn"),
+		label: "Completion Notification",
+		description: "Notify when the agent finishes a turn",
 	},
 });
 
@@ -1232,8 +1232,8 @@ export const cfgErrorNotify = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Error Notification"),
-		description: t("Notify when the agent stops with an error"),
+		label: "Error Notification",
+		description: "Notify when the agent stops with an error",
 	},
 });
 
@@ -1244,15 +1244,15 @@ export const cfgAskTimeout = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Ask Timeout"),
+		label: "Ask Timeout",
 		description:
-			t("Auto-select the recommended ask option after this many seconds (0 disables). Also bounds cfg:// approval prompts; an unanswered approval denies the write instead of auto-selecting"),
+			"Auto-select the recommended ask option after this many seconds (0 disables). Also bounds cfg:// approval prompts; an unanswered approval denies the write instead of auto-selecting",
 		options: [
-			{ value: "0", label: t("Disabled\u0004packages/coding-agent/src/modes/settings.ts:cfgDisplayShimmer.ui.options.label") },
-			{ value: "15", label: t("15 seconds") },
-			{ value: "30", label: t("30 seconds") },
-			{ value: "60", label: t("60 seconds") },
-			{ value: "120", label: t("120 seconds") },
+			{ value: "0", label: "Disabled" },
+			{ value: "15", label: "15 seconds" },
+			{ value: "30", label: "30 seconds" },
+			{ value: "60", label: "60 seconds" },
+			{ value: "120", label: "120 seconds" },
 		],
 	},
 });
@@ -1275,8 +1275,8 @@ export const cfgAskNotify = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Ask Notification"),
-		description: t("Notify when the ask tool is waiting for input"),
+		label: "Ask Notification",
+		description: "Notify when the ask tool is waiting for input",
 	},
 });
 
@@ -1287,8 +1287,8 @@ export const cfgRecapEnabled = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Idle Recap"),
-		description: t("Generate a brief LLM recap of where things stand after the terminal has been idle"),
+		label: "Idle Recap",
+		description: "Generate a brief LLM recap of where things stand after the terminal has been idle",
 	},
 });
 
@@ -1299,14 +1299,14 @@ export const cfgRecapIdleSeconds = register({
 	ui: {
 		tab: "interaction",
 		group: "Notifications",
-		label: t("Idle Recap Delay"),
-		description: t("Seconds to wait while idle before showing the recap"),
+		label: "Idle Recap Delay",
+		description: "Seconds to wait while idle before showing the recap",
 		options: [
-			{ value: "60", label: t("1 minute") },
-			{ value: "120", label: t("2 minutes") },
-			{ value: "240", label: t("4 minutes") },
-			{ value: "300", label: t("5 minutes") },
-			{ value: "600", label: t("10 minutes") },
+			{ value: "60", label: "1 minute" },
+			{ value: "120", label: "2 minutes" },
+			{ value: "240", label: "4 minutes" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "600", label: "10 minutes" },
 		],
 	},
 });

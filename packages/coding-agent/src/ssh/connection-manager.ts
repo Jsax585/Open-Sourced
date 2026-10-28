@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { $which, getRemoteHostDir, getSshControlDir, isEnoent, logger, postmortem, ptree } from "@oh-my-pi/pi-utils";
@@ -782,7 +781,7 @@ export async function ensureConnection(host: SSHConnectionTarget): Promise<void>
 		const start = await runSshSync(["-M", "-N", "-f", ...commonArgs, target]);
 		if (start.exitCode !== 0) {
 			const detail = start.stderr ? `: ${start.stderr}` : "";
-			throw new Error(t("Failed to start SSH master for {0}{1}", `${target}`, `${detail}`));
+			throw new Error(`Failed to start SSH master for ${target}${detail}`);
 		}
 
 		activeHosts.set(key, host);

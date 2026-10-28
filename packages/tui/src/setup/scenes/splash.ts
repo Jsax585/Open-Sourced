@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { centerLine, visibleWidth } from "../../utils";
 import { padToWidth } from "../../render/utils";
 import { gradientEscape, gradientLogo, logoNode, PI_LOGO, type ShineConfig } from "../../prompt/welcome";
@@ -29,7 +28,7 @@ const MIN_SCENE_HEIGHT = 22;
 
 /** Skip affordance; built at render time so it follows the live symbol preset. */
 function skipHint(): string {
-	return t("press {0} to skip", `${formatKeyHint("enter")}`);
+	return `press ${formatKeyHint("enter")} to skip`;
 }
 
 function starAt(x: number, y: number, frame: number): string {

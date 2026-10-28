@@ -1,132 +1,123 @@
-<a id="agent-hub"></a>
-# 에이전트 허브(Agent Hub)
+# Agent Hub
 
-Agent Hub는 현재 세션에 연결된 하위 에이전트를 관찰하고 제어하는 대화형 TUI입니다. 실시간 목록, 에이전트별 활동 및 사용량, 대화 기록 접근, 방향 조정, 되살리기, 종료 제어 기능을 한곳에서 제공합니다. 주 에이전트의 대화는 기본 세션 화면에 표시되므로 목록에는 주 에이전트가 포함되지 않습니다.
+Agent Hub is the interactive TUI for watching and controlling subagents associated with the current session. It combines a live roster, per-agent activity and usage, transcript access, steering, revive, and kill controls. The main agent is not listed because its conversation is the ambient session view.
 
-세션을 재개하면 Hub는 현재 세션에 영구 저장된 아티팩트에서 대기 중인 하위 에이전트도 찾아냅니다. 어드바이저 대화 기록 파일은 읽기 전용 행으로 표시됩니다.
+The Hub also discovers parked subagents from the current session's persisted artifacts when a session is resumed. Advisor transcript files appear as read-only rows.
 
-<a id="open-the-hub"></a>
-## 에이전트 허브 열기
+## Open the Hub
 
-| 입력          | 동작                                                                                       |
+| Input          | Behavior                                                                                       |
 | -------------- | ---------------------------------------------------------------------------------------------- |
-| `Alt+A`        | `app.agents.hub`를 통해 Agent Hub를 열거나 닫습니다. 목록이 비어 있어도 열립니다. |
-| `Ctrl+S`       | 기존 `app.session.observe` 동작을 통해 동일한 Hub를 열거나 닫습니다.                    |
-| `←` 두 번 누르기 | 현재 세션에 표시할 에이전트가 있을 때, 주 세션의 빈 편집기에서 Hub를 엽니다.  |
+| `Alt+A`        | Open or close Agent Hub through `app.agents.hub`. This opens the roster even when it is empty. |
+| `Ctrl+S`       | Open or close the same Hub through the legacy `app.session.observe` action.                    |
+| Double-tap `←` | Open the Hub from an empty main-session editor when the current session has an agent to show.  |
 
-`/hotkeys`를 실행하면 현재 활성화된 키 조합을 볼 수 있습니다. 두 동작의 키는 `~/.omp/agent/keybindings.yml`에서 다시 지정할 수 있습니다.
+Run `/hotkeys` to see the active chords. Remap either action in `~/.omp/agent/keybindings.yml`:
 
 ```yaml
 app.agents.hub: Alt+A
 app.session.observe: Ctrl+S
 ```
 
-`←`를 두 번 누르는 제스처는 키 바인딩 동작이 아닙니다. 하위 에이전트에 포커스가 있을 때 `←`를 두 번 누르면 Hub를 여는 대신 주 세션으로 돌아갑니다.
+The double-`←` gesture is not a keybinding action. While focused on a subagent, double-`←` returns to the main session instead of opening the Hub.
 
-<a id="roster-and-inspector"></a>
-## 목록과 상세 패널
+## Roster and inspector
 
-목록은 세션의 에이전트 레지스트리와 진행 상황 이벤트를 바탕으로 갱신됩니다. 화면 크기에 맞춰 조정되는 각 행에는 다음 정보가 표시됩니다.
+The roster updates from the session's agent registry and progress events. Its responsive rows show:
 
-- 상태(`running`, `idle`, `parked`, `aborted`), 에이전트 식별 정보, 부모, 읽지 않은 IRC 메시지 수
-- 모델 역할, 최종 결정된 모델, 마지막 활동 이후 경과 시간
-- 할당된 작업 또는 현재 활동
-- 비용, 활성 시간 또는 전체 경과 시간, 요청 수, 도구 호출 수, 토큰 수
+- status (`running`, `idle`, `parked`, or `aborted`), agent identity, parent, and unread IRC count;
+- model role, resolved model, and age since last activity;
+- assigned task or current activity;
+- cost, active time or elapsed span, request count, tool-call count, and tokens.
 
-헤더에는 측정 대상 에이전트 전반의 상태와 사용량이 집계됩니다. `t`를 누르면 운영상 우선순위에 따라 정렬된 평면 목록과 부모/자식 트리 사이를 전환할 수 있습니다. `/`를 누르면 ID 또는 표시 이름으로 에이전트를 필터링할 수 있습니다.
+The header aggregates status and usage across measured agents. Press `t` to switch between the operationally ordered flat roster and a parent/child tree. Press `/` to filter agents by id or display name.
 
-넓은 터미널에서는 선택한 에이전트의 상세 패널이 목록 옆에 표시됩니다. 좁은 터미널에서는 `Tab`을 누르면 목록 대신 상세 패널이 표시됩니다. 상세 패널에는 다음 정보가 추가로 표시됩니다.
+On a wide terminal, the selected agent's inspector appears beside the roster. On a narrow terminal, press `Tab` to replace the roster with it. The inspector adds:
 
-- 현재 도구와 인수, 마지막 의도, 재시도 상태
-- 확인 가능한 경우 컨텍스트 윈도우 사용량
-- 부모 및 자식 계보
-- 출력 및 패치 경로와, 존재하는 경우 격리된 워크트리의 브랜치 메타데이터
+- the current tool and arguments, last intent, and retry state;
+- context-window use when available;
+- parent and child lineage;
+- output and patch paths, plus isolated-worktree branch metadata when present.
 
-지표는 해당 에이전트에서 확인할 수 있는 진행 상황 데이터 또는 영구 저장된 사용량 데이터에 따라 달라집니다. 데이터가 없으면 추정값 대신 사용량 없음(`usage —`)으로 표시됩니다.
+Metrics depend on the progress or persisted usage data available for that agent. Missing data appears as `usage —` rather than an estimate.
 
-<a id="roster-controls"></a>
-### 목록 제어
+### Roster controls
 
-| 키 또는 입력                | 동작                                                                       |
+| Key or input                | Action                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| `j` / `k`, `↑` / `↓`, 휠 | 에이전트를 선택합니다.                                                             |
-| `Enter` 또는 클릭            | 선택한 에이전트를 엽니다.                                                     |
-| `t`                         | 평면 보기와 부모/자식 보기를 전환합니다.                                          |
-| `/`                         | ID 또는 표시 이름으로 에이전트를 필터링합니다.                                        |
-| `1` / `2`                   | 에이전트 섹션과 활동 섹션 사이를 전환합니다.                               |
-| `Tab`                       | 좁은 터미널에서 상세 패널 표시를 전환합니다.                                    |
-| `PageUp` / `PageDown`       | 열려 있는 상세 패널을 스크롤합니다.                                                    |
-| `r`                         | 선택한 대기 중 또는 종료된 에이전트를 되살립니다.                                  |
-| `x`                         | 필요하면 실행 중인 턴을 중단한 다음, 선택한 에이전트를 종료하고 해제합니다. |
-| `Esc`                       | 활성 필터를 먼저 지운 다음, 좁은 화면의 상세 패널 또는 Hub를 닫습니다.    |
+| `j` / `k`, `↑` / `↓`, wheel | Select an agent.                                                             |
+| `Enter` or click            | Open the selected agent.                                                     |
+| `t`                         | Toggle flat and parent/child views.                                          |
+| `/`                         | Filter agents by id or display name.                                        |
+| `1` / `2`                   | Switch between Agents and Activity sections.                               |
+| `Tab`                       | Toggle the inspector on narrow terminals.                                    |
+| `PageUp` / `PageDown`       | Scroll an open inspector.                                                    |
+| `r`                         | Revive the selected parked or killed agent.                                  |
+| `x`                         | Abort a running turn if necessary, then kill and release the selected agent. |
+| `Esc`                       | Clear an active filter first, then close the narrow inspector or the Hub.    |
 
-`parked` 상태이거나 종료된(`aborted`) 에이전트는 되살릴 수 있습니다. 대화 기록이 디스크에 있으므로 종료된 에이전트는 전체 기록을 갖춘 새 인스턴스로 돌아옵니다. `x`는 즉시 적용되며, 에이전트를 되살리거나 메시지를 보낼 때까지 중지시킵니다.
+`parked` and killed (`aborted`) agents can be revived: the transcript is on disk, so a killed agent comes back as a fresh instance with its full history. `x` is immediate; it stops the agent until something revives or messages it.
 
-<a id="activity-log"></a>
-## 활동 로그
+## Activity log
 
-`2`를 누르면 통합 활동 로그가 표시되고, `1`을 누르면 목록으로 돌아갑니다. 로그에는 응답, 도구 호출, IRC 메시지, 수명 주기 활동이 포함됩니다. 앵커가 있는 경우 `Enter`를 누르면 선택한 항목에 해당하는 에이전트 대화 기록의 해당 위치가 열립니다.
+Press `2` for the combined activity log; `1` returns to the roster. The log includes responses, tool calls, IRC messages, and lifecycle activity. `Enter` opens the selected entry's agent transcript at that entry when an anchor is available.
 
-- `f`는 전체, 오류, 응답, 도구 필터를 차례로 전환합니다.
-- `s`는 범위를 모든 에이전트, 선택한 에이전트, 해당 에이전트의 하위 트리 순으로 전환합니다.
-- `/`는 활동 로그를 검색합니다.
-- `Space`는 최신 항목 따라가기를 켜거나 끕니다. 수동으로 항목을 선택하면 따라가기가 일시 중지됩니다.
-- `Esc`는 검색을 먼저 지운 다음 Hub를 닫습니다.
+- `f` cycles All, Errors, Responses, and Tools filters.
+- `s` cycles the scope between all agents, the selected agent, and its subtree.
+- `/` searches the activity log.
+- `Space` toggles following the newest entry; manual selection pauses following.
+- `Esc` clears the search first, then closes the Hub.
 
-<a id="read-and-steer-a-subagent"></a>
-## 하위 에이전트의 기록 읽기 및 방향 조정
+## Read and steer a subagent
 
-일반적인 로컬 하위 에이전트의 경우, `Enter`를 누르거나 클릭하면 주 TUI의 포커스가 해당 에이전트의 세션으로 이동하고 Hub가 닫힙니다. 대기 중이거나 종료된 에이전트에 포커스를 두면 해당 에이전트가 되살아납니다. 이후 대화 기록, 상태 표시줄, 편집기는 해당 하위 에이전트의 것이 됩니다.
+For a normal local subagent, `Enter` or click focuses the main TUI on that agent's session and closes the Hub. Focusing a parked or killed agent revives it. The transcript, status line, and editor then belong to that subagent:
 
-1. 실시간 대화 기록과 도구 활동을 읽습니다.
-2. 메시지를 입력하고 `Enter`를 눌러 실행 중인 턴의 방향을 조정하거나 유휴 에이전트에 프롬프트를 보냅니다.
-3. `Alt+P`, `/switch`, `Ctrl+P`, `Shift+Tab`, `/effort`로 모델 또는 추론 수준을 변경합니다. 이러한 전환은 해당 세션에만 적용되며 주 세션에는 영향을 주지 않습니다. 역할 할당은 주 세션을 설정하므로, `/model`과 `Alt+M`도 동일한 세션 전용 선택기를 엽니다.
-4. 편집기가 비어 있을 때 `Esc`를 누르거나 `←`를 두 번 눌러 주 세션으로 돌아갑니다.
+1. Read its live transcript and tool activity.
+2. Type a message and press `Enter` to steer a running turn or prompt an idle agent.
+3. Change its model or thinking level with `Alt+P`, `/switch`, `Ctrl+P`, `Shift+Tab`, or `/effort`. These switches are session-only and leave the main session alone. `/model` and `Alt+M` open the same session-only picker, because role assignments configure the main session.
+4. Press `Esc` with an empty editor, or double-tap `←`, to return to the main session.
 
-방향 조정은 일반 프롬프트 경로를 사용하므로 메시지와 응답은 하위 에이전트의 영구 저장 세션 기록에 기록됩니다. 하위 에이전트에 포커스가 있을 때 `Esc`를 누르면 주 세션으로 돌아가며, 하위 에이전트를 중단하지는 않습니다.
+Steering uses the normal prompt path, so the message and response are written to the subagent's persisted session history. While a subagent is focused, `Esc` returns to the main session; it does not interrupt the subagent.
 
-포커스를 둘 수 있는 로컬 세션이 없는 컨텍스트에서는 대신 Hub의 전체 화면 대화 기록 뷰어를 사용합니다. 여기에는 협업 게스트와 어드바이저 행이 포함되며, 어드바이저 대화 기록은 읽기 전용입니다. 뷰어는 파일 기반 대화 기록에 새로 추가되는 내용을 점진적으로 읽어 표시하며, 선택한 에이전트에 메시지를 보낼 수 있을 때만 입력줄을 제공합니다. 여기서 메시지를 보내는 동작도 동일합니다. 대기 중이거나 종료된 경우 되살리고, 실행 중이면 방향을 조정하며, 유휴 상태이면 프롬프트를 보냅니다.
+Contexts without a local focusable session use the Hub's full-screen transcript viewer instead. This includes collab guests and advisor rows; advisor transcripts are read-only. The viewer incrementally tails the file-backed transcript and provides an input line only when the selected agent can be messaged. Sending there has the same semantics: revive if parked or killed, steer if running, and prompt if idle.
 
-<a id="pinned-jump-list-and-click-to-focus"></a>
-## 고정된 이동 목록과 클릭으로 포커스 이동
+## Pinned jump list and click to focus
 
-하위 에이전트가 실행되는 동안 편집기 위에 고정된 **하위 에이전트**(`Subagents`) 블록에는 모든 활성 에이전트가 나열됩니다. 동기식 작업 호출과 분리된 백그라운드 실행이 모두 포함됩니다.
+While subagents run, a pinned `Subagents` block above the editor lists every live agent — sync task calls and detached background spawns alike.
 
-목록은 간결하게 유지됩니다. 몇 개의 행과 펼치기 컨트롤을 표시하거나(`display.pinnedAgents: collapsed`, 기본값), 전체를 나열하거나(`full`), 완전히 숨길 수 있습니다(`off`). `tui.mouse`가 켜져 있을 때 펼치기 컨트롤을 클릭하면 앞의 두 표시 방식 사이를 전환합니다.
+The list stays short: it shows a few rows plus an expander (`display.pinnedAgents: collapsed`, the default), lists everything (`full`), or hides entirely (`off`). Clicking the expander toggles between the two while `tui.mouse` is on.
 
-`display.subagentLivePreview: true`를 설정하면 각 행 아래에 해당 에이전트가 수행 중인 작업을 보여 주는 두 번째 줄이 추가됩니다. 여기에는 현재 도구 호출(호출 사이에는 가장 최근 호출)과 한 줄의 세부 정보가 표시되며, 호출 실행 시간이 5초를 넘으면 경과 시간도 표시됩니다. 기본적으로 꺼져 있습니다.
+Set `display.subagentLivePreview: true` to add a second line under each row showing what that agent is doing: its current tool call (or, between calls, the most recent one) with a one-line detail, plus the elapsed time once a call runs longer than five seconds. Off by default.
 
-`tui.mouse`를 활성화하면 Hub를 먼저 열지 않고도 주 세션에서 실시간 하위 에이전트 카드와 이동 목록 행을 직접 클릭할 수 있습니다. 카드를 클릭하면 해당 카드의 가장 최근 에이전트에 포커스가 이동하고, 이동 목록 행을 클릭하면 정확히 해당 행의 에이전트에 포커스가 이동합니다. 대기 중인 에이전트에 포커스를 두면 해당 에이전트가 되살아납니다. 활성 대상에 마우스를 올리면 먼저 강조 표시되므로 클릭 시 무엇이 열릴지 확인할 수 있습니다.
+Enable `tui.mouse` to click live subagent cards and jump-list rows directly in the main session, without opening the Hub first. A click focuses that card's most recent agent (a jump-list row focuses its exact agent); focusing a parked agent revives it. Hovering a live target lights it up first, so you can see what a click will open.
 
-현재 라이브 뷰포트 안에 있는 행만 클릭할 수 있습니다. 화면에서 벗어난 이전 대화 기록 행은 터미널 스크롤백에 있으므로 클릭을 콘텐츠에 다시 대응시킬 수 없습니다. 캡처를 활성화하면 활성화된 동안 터미널 제스처가 바뀝니다. 텍스트 선택은 Shift+드래그로, 휠 스크롤은 Shift+휠로 변경됩니다. 기본적으로 꺼져 있습니다.
+Only rows currently in the live viewport are clickable — retired transcript rows live in terminal scrollback, where clicks cannot map back to content. Enabling capture changes terminal gestures while on: text selection becomes Shift+drag and wheel scroll becomes Shift+wheel. Off by default.
 
-<a id="persisted-agents-and-advisors"></a>
-## 영구 저장된 에이전트와 어드바이저
+## Persisted agents and advisors
 
-영구 저장된 세션에서 Hub를 열면 해당 세션의 아티팩트 트리를 스캔합니다. 과거 하위 에이전트의 JSONL 파일은 대기 중인 행으로 표시됩니다. 종료된 에이전트의 삭제 표식은 에이전트가 되살아날 때까지 중단 상태를 유지하며, 되살아나면 삭제 표식이 제거됩니다. 중첩된 하위 에이전트는 부모/자식 계보를 유지합니다. 출력 및 패치 아티팩트는 해당 상세 패널 행에 연결됩니다.
+Opening the Hub for a persisted session scans that session's artifact tree. Historical subagent JSONL files become parked rows; a killed agent's tombstone keeps it aborted until it is revived, which removes the tombstone. Nested subagents retain their parent/child lineage. Output and patch artifacts are attached to the corresponding inspector row.
 
-어드바이저 대화 기록 파일(`__advisor*.jsonl`)은 소유 세션 아래에 `advisor` 유형의 행으로 표시됩니다. 이는 동료 에이전트가 아니라 관측용 기록입니다.
+Advisor transcript files (`__advisor*.jsonl`) appear as `advisor`-kind rows under their owning session. They are observability records, not peers:
 
-- 대화 기록을 열고 새 내용을 따라갈 수 있습니다.
-- 메시지를 보낼 수 없습니다.
-- 되살릴 수 없습니다.
-- 종료할 수 없습니다.
+- their transcripts can be opened and followed;
+- they cannot be messaged;
+- they cannot be revived;
+- they cannot be killed.
 
-Collab은 어드바이저 행을 복제하거나 게스트에게 해당 대화 기록을 제공하지 않습니다. 호스트 역시 ID를 통한 어드바이저 채팅, 되살리기, 종료 요청을 거부합니다.
+Collab does not replicate advisor rows or serve their transcripts to guests; the host also rejects advisor chat, revive, and kill requests by id.
 
-<a id="related-surfaces"></a>
-## 관련 인터페이스
+## Related surfaces
 
-Agent Hub는 사용자를 위한 실시간 세션 화면입니다. 관련 명령과 내부 URL은 더 한정된 용도로 사용됩니다.
+Agent Hub is the human-facing live session view. Adjacent commands and internal URLs serve narrower purposes:
 
-`/agents`는 실시간 목록이 아니라 별도의 에이전트 정의/설정 허브입니다. 발견된 에이전트, 활성화/비활성화 상태, 모델 재정의, prewalk, 어드바이저 선택을 관리합니다.
+`/agents` is a separate agent-definition/settings hub, not the live roster. It manages discovered agents, enable/disable state, model overrides, prewalk, and advisor selection.
 
-- `/jobs`는 실행 중이거나 최근 완료된 비동기 도구 작업의 스냅샷을 출력합니다. 에이전트별 대화 기록이나 제어 화면을 대체하지는 않습니다. `/jobs kill <id>|all`은 명령줄에서 실행 중인 작업을 취소합니다.
-- `history://<id>`는 활성/대기 중인 하위 에이전트 또는 디스크에 보관된 대화 기록에 대한 간결한 기록을 코딩 에이전트에 제공합니다.
-- `agent://<id>`는 하위 에이전트의 저장된 최종 출력 아티팩트를 조회하며, 실시간 대화 기록은 아닙니다. 해당 아티팩트가 생성되기 전에는 등록된 에이전트의 상태, 지금까지 제출한 `yield` 페이로드, 가장 최근 어시스턴트 텍스트를 반환합니다.
-- `write agent://<id>`는 일반 하위 에이전트의 방향을 조정하거나 후속 메시지를 보냅니다. `agent://all`은 표시되는 활성 동료 에이전트에 브로드캐스트합니다. 대기 중이거나 종료된 하위 에이전트에 메시지를 보내면 해당 에이전트가 되살아납니다. `read history://`는 등록된 에이전트와 디스크에 보관된 대화 기록을 나열하며, `history://<id>` 조회와 마찬가지로 먼저 호출자 루트의 영구 저장 목록을 새로 고칩니다.
-- `read proc://`는 백그라운드 작업과 프로젝트 서비스를 나열합니다. `read proc://<id>`는 전달 내용을 소비하지 않고 상태/출력을 확인합니다.
+- `/jobs` prints a snapshot of running and recently settled asynchronous tool jobs. It does not replace the per-agent transcript or control view. `/jobs kill <id>|all` cancels running jobs from the command line.
+- `history://<id>` gives the coding agent a concise transcript for a live/parked subagent or a retained on-disk transcript.
+- `agent://<id>` resolves a subagent's saved final output artifact; it is not the live transcript. Before that artifact exists, a registered agent resolves to its status, the `yield` payloads it has submitted so far, and its latest assistant text.
+- `write agent://<id>` steers or follows up with a normal subagent; `agent://all` broadcasts to visible live peers. Messaging a parked or killed subagent revives it. `read history://` lists registered agents and retained on-disk transcripts, refreshing the caller root's persisted roster first, the same as `history://<id>` lookups.
+- `read proc://` lists background jobs and project services; `read proc://<id>` inspects status/output without consuming delivery.
 
-어드바이저 행은 의도적으로 에이전트용 동료 목록, `history://` 인덱스, `agent://` 메시징 워크플로에서 제외됩니다.
+Advisor rows are intentionally excluded from the agent-facing peer roster, `history://` index, and `agent://` messaging workflows.
 
-[작업 에이전트 검색 및 선택](./task-agent-discovery.md), [협업](./collab.md), [어드바이저, WATCHDOG.md 및 WATCHDOG.yml](./advisor-watchdog.md)도 참고하세요.
+See also [Task Agent Discovery and Selection](./task-agent-discovery.md), [Collaboration](./collab.md), and [Advisor, WATCHDOG.md, and WATCHDOG.yml](./advisor-watchdog.md).

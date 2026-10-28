@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowUpRight, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getRecentErrors } from "../api";
@@ -100,7 +99,9 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 	const footer =
 		errors.data !== null && !complete ? (
 			<>
-				<span>{t("Showing the latest {1} failures in {0}; older ones are not loaded.", `${meta.windowLabel}`, `${formatInteger(loaded)}`)}</span>
+				<span>
+					Showing the latest {formatInteger(loaded)} failures in {meta.windowLabel}; older ones are not loaded.
+				</span>
 				{nextStep !== null && (
 					<button
 						type="button"
@@ -109,7 +110,7 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 						disabled={errors.refreshing}
 						onClick={() => setStep(step + 1)}
 					>
-						{errors.refreshing && errors.stale ? t("Loading…") : t("Load latest {0}", `${formatInteger(nextStep)}`)}
+						{errors.refreshing && errors.stale ? "Loading…" : `Load latest ${formatInteger(nextStep)}`}
 					</button>
 				)}
 			</>
@@ -122,8 +123,8 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 	return (
 		<div className="page">
 			<PageHeader
-				title={t("Errors")}
-				description={t("Failed model requests in {0}, grouped by error signature. Open a failure for its full payload.", `${meta.windowLabel}`)}
+				title="Errors"
+				description={`Failed model requests in ${meta.windowLabel}, grouped by error signature. Open a failure for its full payload.`}
 			/>
 
 			<QueryView query={errors} skeleton={<Skeleton height={96} style={{ borderRadius: 12 }} />}>
@@ -131,25 +132,25 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 					<div data-stale={errors.stale}>
 						<StatGrid min={170}>
 							<Stat
-								label={t("Failures")}
+								label="Failures"
 								value={formatInteger(loaded)}
-								hint={complete ? t("in {0}\u0004packages/stats/src/client/routes/ErrorsRoute.tsx:ErrorsRoute", `${meta.windowLabel}`) : t("latest {0} loaded", `${formatInteger(loaded)}`)}
+								hint={complete ? `in ${meta.windowLabel}` : `latest ${formatInteger(loaded)} loaded`}
 							/>
 							<Stat
-								label={t("Signatures")}
-								title={t("Distinct error messages after normalizing ids and numbers")}
+								label="Signatures"
+								title="Distinct error messages after normalizing ids and numbers"
 								value={formatInteger(view.groups.length)}
-								hint={view.groups[0] ? t("top: {0} failures", `${formatInteger(view.groups[0].count)}`) : undefined}
+								hint={view.groups[0] ? `top: ${formatInteger(view.groups[0].count)} failures` : undefined}
 							/>
 							<Stat
-								label={t("Affected models")}
+								label="Affected models"
 								value={formatInteger(view.models.length)}
 								hint={view.models[0]?.model}
 							/>
 							<Stat
-								label={t("Last failure")}
+								label="Last failure"
 								value={view.newest ? formatRelativeTime(view.newest.timestamp) : "–"}
-								hint={view.newest ? formatTimestamp(view.newest.timestamp) : t("none in {0}", `${meta.windowLabel}`)}
+								hint={view.newest ? formatTimestamp(view.newest.timestamp) : `none in ${meta.windowLabel}`}
 							/>
 						</StatGrid>
 					</div>
@@ -159,8 +160,8 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title={t("Error signatures")}
-					description={t("Same message with ids and counters normalized. Select one to filter the failures below.")}
+					title="Error signatures"
+					description="Same message with ids and counters normalized. Select one to filter the failures below."
 					flush
 					stale={errors.stale}
 				>
@@ -170,8 +171,8 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 						isEmpty={rows => rows.length === 0}
 						empty={
 							<EmptyState
-								title={t("No failures in {0}", `${meta.windowLabel}`)}
-								hint={t("Every request succeeded or was aborted.")}
+								title={`No failures in ${meta.windowLabel}`}
+								hint="Every request succeeded or was aborted."
 							/>
 						}
 					>
@@ -197,15 +198,15 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 
 				<Card
 					index={2}
-					title={t("By model")}
-					description={t("Failures per model. Select one to filter.")}
+					title="By model"
+					description="Failures per model. Select one to filter."
 					stale={errors.stale}
 				>
 					<QueryView
 						query={errors}
 						skeleton={<Skeleton height={180} />}
 						isEmpty={rows => rows.length === 0}
-						empty={<EmptyState title={t("No affected models")} />}
+						empty={<EmptyState title="No affected models" />}
 					>
 						{() => (
 							<BarList
@@ -229,11 +230,11 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 
 			<Card
 				index={3}
-				title={t("Failures")}
+				title="Failures"
 				description={
 					errors.data === null
-						? t("Loading failures…")
-						: t("{1} of {0} failures, newest first", `${formatInteger(loaded)}`, `${formatInteger(filtered.length)}`)
+						? "Loading failures…"
+						: `${formatInteger(filtered.length)} of ${formatInteger(loaded)} failures, newest first`
 				}
 				actions={
 					<>
@@ -260,7 +261,7 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 								<X size={12} />
 							</button>
 						)}
-						<SearchInput value={search} onChange={setSearch} placeholder={t("Message, model or project")} />
+						<SearchInput value={search} onChange={setSearch} placeholder="Message, model or project" />
 					</>
 				}
 				flush
@@ -271,7 +272,7 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 					query={errors}
 					skeleton={<TableSkeleton rows={10} />}
 					isEmpty={rows => rows.length === 0}
-					empty={<EmptyState title={t("No failures in {0}", `${meta.windowLabel}`)} />}
+					empty={<EmptyState title={`No failures in ${meta.windowLabel}`} />}
 				>
 					{() => (
 						<Table
@@ -282,7 +283,7 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 							initialSort={{ key: "time", dir: "desc" }}
 							limit={50}
 							dense
-							empty={<EmptyState title={t("No failures match")} hint={t("Clear the search or the selected filters.")} />}
+							empty={<EmptyState title="No failures match" hint="Clear the search or the selected filters." />}
 						/>
 					)}
 				</QueryView>
@@ -295,7 +296,7 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 	return [
 		{
 			key: "signature",
-			header: t("Signature"),
+			header: "Signature",
 			wrap: true,
 			sort: group => group.signature,
 			render: group => (
@@ -306,18 +307,18 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 		},
 		{
 			key: "models",
-			header: t("Models"),
+			header: "Models",
 			sort: group => group.models.length,
 			render: group => (
 				<LabelCell
 					primary={<span className="mono">{group.models[0]?.model}</span>}
-					secondary={group.models.length > 1 ? t("+{0} more", `${group.models.length - 1}`) : group.models[0]?.provider}
+					secondary={group.models.length > 1 ? `+${group.models.length - 1} more` : group.models[0]?.provider}
 				/>
 			),
 		},
 		{
 			key: "last",
-			header: t("Last seen"),
+			header: "Last seen",
 			sort: group => group.lastSeen,
 			render: group => (
 				<span className="muted" title={formatTimestamp(group.lastSeen)}>
@@ -327,7 +328,7 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 		},
 		{
 			key: "count",
-			header: t("Failures"),
+			header: "Failures",
 			align: "right",
 			width: 120,
 			sort: group => group.count,
@@ -342,11 +343,15 @@ function SignatureDetail({ group, onRequestClick }: { group: ErrorGroupView; onR
 	const latestId = group.latest.id;
 	return (
 		<div className="errors-detail">
-			<pre className="code-block errors-detail-message">{group.latest.errorMessage ?? t("Unknown error")}</pre>
+			<pre className="code-block errors-detail-message">{group.latest.errorMessage ?? "Unknown error"}</pre>
 			<div className="errors-detail-meta">
-				<span className="muted">{t("{0} failures · first {1} · last{2}{3}", `${formatInteger(group.count)}`, `${formatTimestamp(group.firstSeen)}`, `${" "}`, `${formatTimestamp(group.lastSeen)}`)}</span>
+				<span className="muted">
+					{formatInteger(group.count)} failures · first {formatTimestamp(group.firstSeen)} · last{" "}
+					{formatTimestamp(group.lastSeen)}
+				</span>
 				{latestId !== undefined && (
-					<button type="button" className="btn" data-size="sm" onClick={() => onRequestClick(latestId)}>{t("Open latest ")}<ArrowUpRight size={13} />
+					<button type="button" className="btn" data-size="sm" onClick={() => onRequestClick(latestId)}>
+						Open latest <ArrowUpRight size={13} />
 					</button>
 				)}
 			</div>
@@ -365,7 +370,7 @@ function SignatureDetail({ group, onRequestClick }: { group: ErrorGroupView; onR
 const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	{
 		key: "time",
-		header: t("When"),
+		header: "When",
 		width: 120,
 		sort: row => row.timestamp,
 		render: row => (
@@ -376,23 +381,23 @@ const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "model",
-		header: t("Model"),
+		header: "Model",
 		sort: row => row.model,
 		render: row => <LabelCell primary={<span className="mono">{row.model}</span>} secondary={row.provider} />,
 	},
 	{
 		key: "error",
-		header: t("Error"),
+		header: "Error",
 		sort: row => row.errorMessage ?? "",
 		render: row => (
 			<span className="errors-message" title={row.errorMessage ?? undefined}>
-				{row.errorMessage ?? t("Unknown error")}
+				{row.errorMessage ?? "Unknown error"}
 			</span>
 		),
 	},
 	{
 		key: "project",
-		header: t("Project"),
+		header: "Project",
 		sort: row => row.folder,
 		render: row => (
 			<span className="mono muted" title={row.folder}>
@@ -402,15 +407,15 @@ const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "tokens",
-		header: t("Tokens"),
+		header: "Tokens",
 		align: "right",
 		sort: row => row.usage.totalTokens,
 		render: row => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
 	},
 	{
 		key: "cost",
-		header: t("Cost"),
-		title: t("API-equivalent estimate"),
+		header: "Cost",
+		title: "API-equivalent estimate",
 		align: "right",
 		sort: row => row.usage.cost.total,
 		render: row => <span className="num">{formatMessageCost(row, 4)}</span>,

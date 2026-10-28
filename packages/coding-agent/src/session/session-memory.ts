@@ -1,6 +1,5 @@
 /** Session memory backend lifecycle and transcript resets. */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Agent, AgentTool } from "@oh-my-pi/pi-agent-core";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
@@ -158,7 +157,7 @@ export class SessionMemory {
 			await hook?.backend.applySettings?.(this.#host.memoryBackendSession(), hook.own);
 		} catch (error) {
 			logger.warn("Memory lifecycle: applying setting change failed", { changed, error: String(error) });
-			this.#host.emitNotice("error", t("Failed to apply memory settings: {0}", `${String(error)}`), "Memory");
+			this.#host.emitNotice("error", `Failed to apply memory settings: ${String(error)}`, "Memory");
 		}
 	}
 

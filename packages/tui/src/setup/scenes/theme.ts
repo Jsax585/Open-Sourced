@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { padding, visibleWidth } from "../../utils";
 import { padToWidth } from "../../render/utils";
 import { type SgrMouseEvent } from "../../mouse";
@@ -27,12 +26,12 @@ import type { SetupScene, SetupSceneController, SetupSceneHost } from "./types";
 type ThemeMode = "curated" | "all";
 
 const CURATED_ITEMS: readonly SelectItem[] = [
-	{ value: "auto", label: t("Match terminal"), description: t("Titanium in dark terminals, Light in light terminals") },
-	{ value: "theme:titanium", label: "Titanium", description: t("Default dark theme") },
-	{ value: "theme:light", label: "Light", description: t("Default light theme") },
-	{ value: "colorblind", label: t("Colorblind colors"), description: t("Adjust red/green contrast") },
-	{ value: "ansi", label: t("ANSI-safe"), description: t("ASCII glyphs with the dark terminal theme") },
-	{ value: "browse", label: t("Browse all…"), description: t("Show every built-in and custom theme") },
+	{ value: "auto", label: "Match terminal", description: "Titanium in dark terminals, Light in light terminals" },
+	{ value: "theme:titanium", label: "Titanium", description: "Default dark theme" },
+	{ value: "theme:light", label: "Light", description: "Default light theme" },
+	{ value: "colorblind", label: "Colorblind colors", description: "Adjust red/green contrast" },
+	{ value: "ansi", label: "ANSI-safe", description: "ASCII glyphs with the dark terminal theme" },
+	{ value: "browse", label: "Browse all…", description: "Show every built-in and custom theme" },
 ];
 
 function fillStyledLine(content: string, width: number): string {
@@ -63,10 +62,10 @@ function renderMockEditor(width: number): string[] {
 	const horizontal = box.horizontal.repeat(innerWidth);
 	const top = theme.fg("borderAccent", `${box.topLeft}${horizontal}${box.topRight}`);
 	const bottom = theme.fg("borderMuted", `${box.bottomLeft}${horizontal}${box.bottomRight}`);
-	const prompt = `${theme.fg("accent", ">")} ${theme.fg("text", t("Ask anything, edit files, run tools\u0004packages/tui/src/setup/scenes/theme.ts:renderMockEditor.prompt"))}${theme.inverse(" ")}`;
+	const prompt = `${theme.fg("accent", ">")} ${theme.fg("text", "Ask anything, edit files, run tools")}${theme.inverse(" ")}`;
 	const hint = theme.fg(
 		"dim",
-		t("{0} send · {1} newline · / commands", `${editorKey("tui.input.submit")}`, `${editorKey("tui.input.newLine")}`),
+		`${editorKey("tui.input.submit")} send · ${editorKey("tui.input.newLine")} newline · / commands`,
 	);
 	return [
 		top,
@@ -79,12 +78,12 @@ function renderMockEditor(width: number): string[] {
 function renderThemePreview(width: number): string[] {
 	const previewWidth = Math.max(24, Math.min(width, 88));
 	return [
-		theme.bold(t("Preview")),
-		`${theme.fg("success", t("{0} success", `${theme.status.success}`))}  ${theme.fg("warning", t("{0} warning", `${theme.status.warning}`))}  ${theme.fg("error", t("{0} error", `${theme.status.error}`))}  ${theme.fg("accent", t("accent"))}`,
+		theme.bold("Preview"),
+		`${theme.fg("success", `${theme.status.success} success`)}  ${theme.fg("warning", `${theme.status.warning} warning`)}  ${theme.fg("error", `${theme.status.error} error`)}  ${theme.fg("accent", "accent")}`,
 		"",
-		theme.fg("muted", t("Status line")),
+		theme.fg("muted", "Status line"),
 		renderMockStatusLine(previewWidth),
-		theme.fg("muted", t("Editor")),
+		theme.fg("muted", "Editor"),
 		...renderMockEditor(previewWidth),
 	];
 }
@@ -97,17 +96,17 @@ function renderThemePreview(width: number): string[] {
 function describeThemePreview(): NativeNode {
 	return col(
 		[
-			text([span(t("Preview"), "strong")]),
+			text([span("Preview", "strong")]),
 			text([
-				span(t("{0} success", `${theme.status.success}`), "success"),
+				span(`${theme.status.success} success`, "success"),
 				span("  "),
-				span(t("{0} warning", `${theme.status.warning}`), "warning"),
+				span(`${theme.status.warning} warning`, "warning"),
 				span("  "),
-				span(t("{0} error", `${theme.status.error}`), "error"),
+				span(`${theme.status.error} error`, "error"),
 				span("  "),
-				span(t("accent"), "accent"),
+				span("accent", "accent"),
 			]),
-			text([span(t("Status line"), "muted")]),
+			text([span("Status line", "muted")]),
 			node("status", {}, [
 				node("seg", { spans: [span(`${theme.icon.model} sonnet`, "statusLineModel")], side: "left" }),
 				node("seg", { spans: [span("~/project", "statusLinePath")], side: "left" }),
@@ -115,16 +114,16 @@ function describeThemePreview(): NativeNode {
 				node("seg", { spans: [span(`${theme.icon.context} 42%`, "statusLineContext")], side: "right" }),
 				node("seg", { spans: [span(`${theme.icon.cost} 0.18`, "statusLineCost")], side: "right" }),
 			]),
-			text([span(t("Editor"), "muted")]),
+			text([span("Editor", "muted")]),
 			node("input", {
-				text: t("Ask anything, edit files, run tools\u0004packages/tui/src/setup/scenes/theme.ts:renderMockEditor.prompt"),
-				cursor: t("Ask anything, edit files, run tools\u0004packages/tui/src/setup/scenes/theme.ts:renderMockEditor.prompt").length,
+				text: "Ask anything, edit files, run tools",
+				cursor: "Ask anything, edit files, run tools".length,
 				prompt: [span(">", "accent")],
 				readonly: true,
 			}),
 			text([
 				span(
-					t("{0} send · {1} newline · / commands", `${editorKey("tui.input.submit")}`, `${editorKey("tui.input.newLine")}`),
+					`${editorKey("tui.input.submit")} send · ${editorKey("tui.input.newLine")} newline · / commands`,
 					"dim",
 				),
 			]),
@@ -134,9 +133,9 @@ function describeThemePreview(): NativeNode {
 }
 
 class ThemeSceneController implements SetupSceneController {
-	title = t("Pick a theme");
+	title = "Pick a theme";
 	get subtitle(): string {
-		return t("Move through the list to preview; {0} saves the highlighted choice.", `${editorKey("tui.select.confirm")}`);
+		return `Move through the list to preview; ${editorKey("tui.select.confirm")} saves the highlighted choice.`;
 	}
 	#mode: ThemeMode = "curated";
 	#selectList: SelectList;
@@ -195,7 +194,7 @@ class ThemeSceneController implements SetupSceneController {
 			new Text(
 				theme.fg(
 					"muted",
-					t("Theme changes preview live. Nothing is saved until you press {0}.", `${editorKey("tui.select.confirm")}`),
+					`Theme changes preview live. Nothing is saved until you press ${editorKey("tui.select.confirm")}.`,
 				),
 				0,
 				0,
@@ -204,8 +203,8 @@ class ThemeSceneController implements SetupSceneController {
 		intro.addChild(
 			new Text(
 				this.#mode === "all"
-					? theme.fg("dim", t("Browsing all themes · {0} returns to curated choices", `${editorKey("tui.select.cancel")}`))
-					: theme.fg("dim", t("{0} skips this step", `${editorKey("tui.select.cancel")}`)),
+					? theme.fg("dim", `Browsing all themes · ${editorKey("tui.select.cancel")} returns to curated choices`)
+					: theme.fg("dim", `${editorKey("tui.select.cancel")} skips this step`),
 				0,
 				0,
 			),
@@ -218,7 +217,7 @@ class ThemeSceneController implements SetupSceneController {
 		for (const line of renderThemePreview(width)) {
 			preview.addChild(new Text(line, 0, 0));
 		}
-		const loading = this.#loadingAllThemes ? new Text(theme.fg("dim", t("Loading themes…")), 0, 0) : undefined;
+		const loading = this.#loadingAllThemes ? new Text(theme.fg("dim", "Loading themes…"), 0, 0) : undefined;
 		const status = this.#message ? new Text(theme.fg("error", this.#message), 0, 0) : undefined;
 		if (!this.#step) {
 			this.#step = new WizardStep({
@@ -258,19 +257,19 @@ class ThemeSceneController implements SetupSceneController {
 			() => {
 				const children: NativeChild[] = [
 					col([
-						text([span(t("Theme changes preview live. Nothing is saved until you press {0}.", `${confirm}`), "muted")]),
+						text([span(`Theme changes preview live. Nothing is saved until you press ${confirm}.`, "muted")]),
 						text([
 							span(
 								this.#mode === "all"
-									? t("Browsing all themes · {0} returns to curated choices", `${cancel}`)
-									: t("{0} skips this step", `${cancel}`),
+									? `Browsing all themes · ${cancel} returns to curated choices`
+									: `${cancel} skips this step`,
 								"dim",
 							),
 						]),
 					]),
 					describeThemePreview(),
 					this.#loadingAllThemes
-						? node("spinner", { label: [span(t("Loading themes…"), "dim")] }, undefined, "loading")
+						? node("spinner", { label: [span("Loading themes…", "dim")] }, undefined, "loading")
 						: this.#selectList,
 				];
 				if (this.#message)
@@ -342,7 +341,7 @@ class ThemeSceneController implements SetupSceneController {
 			this.#selectList = this.#createSelectList(items, selectedIndex);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.#message = t("Failed to load themes: {0}", `${message}`);
+			this.#message = `Failed to load themes: ${message}`;
 		} finally {
 			this.#loadingAllThemes = false;
 			this.#host.requestRender();
@@ -406,7 +405,7 @@ class ThemeSceneController implements SetupSceneController {
 		}
 		if (request !== this.#previewRequest || this.#disposed) return;
 		if (!result.success) {
-			this.#message = result.error ?? t("Theme preview failed");
+			this.#message = result.error ?? "Theme preview failed";
 		}
 		this.#host.ctx.ui.invalidate();
 		this.#host.requestRender();
@@ -436,7 +435,7 @@ class ThemeSceneController implements SetupSceneController {
 /** Preview and persist the terminal color theme. */
 export const themeSetupScene: SetupScene = {
 	id: "theme",
-	title: t("Pick a theme"),
+	title: "Pick a theme",
 	minVersion: 1,
 	mount: host => new ThemeSceneController(host),
 };

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as AIError from "../../error";
 import * as apiKeyValidation from "../api-key-validation";
 import type { OAuthController, OAuthCredentials } from "./types";
@@ -16,7 +15,7 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 
 	// Ask which endpoint to use
 	const endpointChoice = await options.onPrompt({
-		message: t("Select Alibaba Coding Plan endpoint: 1=International (default), 2=China, 3=Custom — enter 1, 2, or 3"),
+		message: "Select Alibaba Coding Plan endpoint: 1=International (default), 2=China, 3=Custom — enter 1, 2, or 3",
 		placeholder: "1",
 	});
 
@@ -32,23 +31,23 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 	if (choice === "2") {
 		baseUrl = CHINA_API_BASE_URL;
 		authUrl = CHINA_AUTH_URL;
-		instructions = t("Copy your API key from the Alibaba Cloud Bailian console (China mainland)");
+		instructions = "Copy your API key from the Alibaba Cloud Bailian console (China mainland)";
 	} else if (choice === "3") {
 		const customUrl = await options.onPrompt({
-			message: t("Enter custom base URL"),
+			message: "Enter custom base URL",
 			placeholder: "https://your-proxy.com/v1",
 		});
 		const trimmedUrl = customUrl.trim().replace(/\/+$/, "");
 		if (!trimmedUrl) {
-			throw new AIError.ConfigurationError(t("Custom URL is required for option 3"));
+			throw new AIError.ConfigurationError("Custom URL is required for option 3");
 		}
 		baseUrl = trimmedUrl;
 		authUrl = DEFAULT_AUTH_URL;
-		instructions = t("Copy your API key from the Alibaba Cloud DashScope console");
+		instructions = "Copy your API key from the Alibaba Cloud DashScope console";
 	} else {
 		baseUrl = DEFAULT_API_BASE_URL;
 		authUrl = DEFAULT_AUTH_URL;
-		instructions = t("Copy your API key from the Alibaba Cloud DashScope console (International)");
+		instructions = "Copy your API key from the Alibaba Cloud DashScope console (International)";
 	}
 
 	options.onAuth?.({
@@ -57,7 +56,7 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 	});
 
 	const apiKey = await options.onPrompt({
-		message: t("Paste your Alibaba Coding Plan API key"),
+		message: "Paste your Alibaba Coding Plan API key",
 		placeholder: "sk-...",
 	});
 
@@ -70,7 +69,7 @@ export async function loginAlibabaCodingPlan(options: OAuthController): Promise<
 		throw new AIError.ApiKeyRequiredError();
 	}
 
-	options.onProgress?.(t("Validating API key..."));
+	options.onProgress?.("Validating API key...");
 	if (choice === "3") {
 		await apiKeyValidation.validateApiKeyAgainstModelsEndpoint({
 			provider: "Alibaba Coding Plan",

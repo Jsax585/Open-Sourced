@@ -7,7 +7,6 @@
  * state, while the advisor config overlay embeds it as a plain "pick one
  * model" list.
  */
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -775,17 +774,17 @@ function withCreditBadge(model: Model, price: string): string {
 }
 
 const PRICING_STATUS_LABELS: Record<Exclude<ModelPricingStatus, "fixed">, { short: string; detail: string }> = {
-	free: { short: localize("free"), detail: localize("free") },
-	included: { short: localize("included"), detail: localize("included") },
-	variable: { short: localize("varies"), detail: localize("price varies") },
-	unknown: { short: localize("unknown"), detail: localize("pricing unknown") },
+	free: { short: "free", detail: "free" },
+	included: { short: "included", detail: "included" },
+	variable: { short: "varies", detail: "price varies" },
+	unknown: { short: "unknown", detail: "pricing unknown" },
 };
 
 /** `$in/out` per-million cost pair with any credit badge; `free` when nothing is charged; a declared pricing state otherwise. */
 function formatCostPair(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].short;
-	if (isFreeModel(model)) return localize("free");
+	if (isFreeModel(model)) return "free";
 	const cost = getEffectiveTokenCost(model.cost);
 	return withCreditBadge(model, `$${formatCostLeg(cost.input)}/${formatCostLeg(cost.output)}`);
 }
@@ -793,14 +792,14 @@ function formatCostPair(model: Model): string {
 /** Detail-pane price fact: `$3/15 per M`, or the declared pricing state in words. */
 function formatCostDetail(model: Model): string {
 	const declared = declaredPricingStatus(model);
-	return declared !== undefined ? PRICING_STATUS_LABELS[declared].detail : localize("{0} per M", `${formatCostPair(model)}`);
+	return declared !== undefined ? PRICING_STATUS_LABELS[declared].detail : `${formatCostPair(model)} per M`;
 }
 
 /** Fact columns of a model picker (Stencil `NATIVE_REDESIGN.md` §4.7); the lowest priority hides first. */
 export const MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
-	{ id: "int", head: localize("Int"), format: "num", priority: 1 },
+	{ id: "int", head: "Int", format: "num", priority: 1 },
 	{ id: "speed", head: "t/s", format: "num", priority: 2 },
-	{ id: "ctx", head: localize("Ctx"), format: "num", priority: 4 },
+	{ id: "ctx", head: "Ctx", format: "num", priority: 4 },
 	{ id: "price", head: "$/M", format: "price", priority: 3 },
 ];
 
@@ -808,7 +807,7 @@ export const MODEL_PICKER_COLUMNS: readonly TspPickerColumn[] = [
 function pickerPrice(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].short;
-	if (isFreeModel(model)) return localize("free");
+	if (isFreeModel(model)) return "free";
 	const cost = getEffectiveTokenCost(model.cost);
 	return withCreditBadge(model, `$${formatCostLeg(cost.input)}·${formatCostLeg(cost.output)}`);
 }
@@ -818,8 +817,8 @@ function previewPrice(model: Model): string {
 	const declared = declaredPricingStatus(model);
 	if (declared !== undefined) return PRICING_STATUS_LABELS[declared].detail;
 	const cost = getEffectiveTokenCost(model.cost);
-	const parts = [localize("${0} in", `${formatCostLeg(cost.input)}`), localize("${0} out", `${formatCostLeg(cost.output)}`)];
-	if (cost.cacheRead > 0) parts.push(localize("${0} cache", `${formatCostLeg(cost.cacheRead)}`));
+	const parts = [`$${formatCostLeg(cost.input)} in`, `$${formatCostLeg(cost.output)} out`];
+	if (cost.cacheRead > 0) parts.push(`$${formatCostLeg(cost.cacheRead)} cache`);
 	return withCreditBadge(model, parts.join(" · "));
 }
 
@@ -1594,14 +1593,14 @@ export class ModelBrowser implements Component {
 		const facts: string[] = [model.name];
 		// Upstream badges sit next to the name; the provider blurb goes last so
 		// width truncation eats prose before context, cost, or perf facts.
-		if (model.isNew) facts.push(localize("new"));
-		if (model.isBeta) facts.push(localize("beta"));
-		if (model.isRecommended) facts.push(localize("recommended\u0004packages/tui/src/overlays/model-browser.ts:ModelBrowser.#detailLines"));
-		if (model.contextWindow) facts.push(localize("{0} ctx", `${formatNumber(model.contextWindow).toLowerCase()}`));
-		if (model.maxTokens) facts.push(localize("{0} out", `${formatNumber(model.maxTokens).toLowerCase()}`));
+		if (model.isNew) facts.push("new");
+		if (model.isBeta) facts.push("beta");
+		if (model.isRecommended) facts.push("recommended");
+		if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
+		if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
 		facts.push(formatCostDetail(model));
-		if (model.reasoning) facts.push(localize("reasoning"));
-		if (model.input.includes("image")) facts.push(localize("vision"));
+		if (model.reasoning) facts.push("reasoning");
+		if (model.input.includes("image")) facts.push("vision");
 		const intelligence = formatIntelligence(model);
 		if (intelligence) facts.push(intelligence);
 		const measured = this.#perfFor(selected);
@@ -1618,7 +1617,7 @@ export class ModelBrowser implements Component {
 		const line1 = truncateToWidth(theme.fg("muted", `  ${facts.join(" · ")}`), width);
 
 		if (this.isOverContext(selected)) {
-			const warning = localize("  {0} context {1} exceeds {2} limit · compacts with current model, then switches", `${theme.status.disabled}`, `${formatNumber(this.#currentContextTokens).toLowerCase()}`, `${formatNumber(model.contextWindow ?? 0).toLowerCase()}`);
+			const warning = `  ${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
 			return [line1, truncateToWidth(theme.fg("warning", warning), width)];
 		}
 
@@ -1790,7 +1789,7 @@ export class ModelBrowser implements Component {
 			items.length > 0
 				? ""
 				: plainText(this.#emptyText?.() ?? "").trim() ||
-					(filter ? localize("No matching models") : localize("No models available in this scope"));
+					(filter ? "No matching models" : "No models available in this scope");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
@@ -1867,17 +1866,17 @@ export class ModelBrowser implements Component {
 		if (selected) {
 			const model = selected.model;
 			const head: NativeChild[] = [text([span(model.name, "strong")])];
-			if (model.isNew) head.push(node("badge", { text: localize("new"), tone: "accent" }));
-			if (model.isBeta) head.push(node("badge", { text: localize("beta"), tone: "warning" }));
-			if (model.isRecommended) head.push(node("badge", { text: localize("recommended\u0004packages/tui/src/overlays/model-browser.ts:ModelBrowser.#detailLines"), tone: "success" }));
+			if (model.isNew) head.push(node("badge", { text: "new", tone: "accent" }));
+			if (model.isBeta) head.push(node("badge", { text: "beta", tone: "warning" }));
+			if (model.isRecommended) head.push(node("badge", { text: "recommended", tone: "success" }));
 			children.push(row(head, { gap: "sm", align: "center", wrap: true }));
 
 			const facts: string[] = [];
-			if (model.contextWindow) facts.push(localize("{0} ctx", `${formatNumber(model.contextWindow).toLowerCase()}`));
-			if (model.maxTokens) facts.push(localize("{0} out", `${formatNumber(model.maxTokens).toLowerCase()}`));
+			if (model.contextWindow) facts.push(`${formatNumber(model.contextWindow).toLowerCase()} ctx`);
+			if (model.maxTokens) facts.push(`${formatNumber(model.maxTokens).toLowerCase()} out`);
 			facts.push(formatCostDetail(model));
-			if (model.reasoning) facts.push(localize("reasoning"));
-			if (model.input.includes("image")) facts.push(localize("vision"));
+			if (model.reasoning) facts.push("reasoning");
+			if (model.input.includes("image")) facts.push("vision");
 			const intelligence = formatIntelligence(model);
 			if (intelligence) facts.push(intelligence);
 			const measured = this.#perfFor(selected);
@@ -1892,7 +1891,7 @@ export class ModelBrowser implements Component {
 			if (description) children.push(text([span(description, "dim")], { wrap: "word", lines: 2 }));
 
 			if (this.isOverContext(selected)) {
-				const warning = localize("{0} context {1} exceeds {2} limit · compacts with current model, then switches", `${theme.status.disabled}`, `${formatNumber(this.#currentContextTokens).toLowerCase()}`, `${formatNumber(model.contextWindow ?? 0).toLowerCase()}`);
+				const warning = `${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
 				children.push(text([span(warning, "warning")], { wrap: "word" }));
 			} else {
 				const chips: TspSpan[] = [];
@@ -2004,14 +2003,14 @@ export class ModelBrowser implements Component {
 		const badges: { text: string; tone?: "accent" | "warning" | "success"; title?: string }[] = [];
 		if (this.isOverContext(item)) {
 			badges.push({
-				text: localize("ctx>{0}", `${formatNumber(model.contextWindow ?? 0).toLowerCase()}`),
+				text: `ctx>${formatNumber(model.contextWindow ?? 0).toLowerCase()}`,
 				tone: "warning",
-				title: localize("Context {0} exceeds this model's limit; picking it compacts first", `${formatNumber(this.#currentContextTokens).toLowerCase()}`),
+				title: `Context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds this model's limit; picking it compacts first`,
 			});
 		}
-		if (model.isNew) badges.push({ text: localize("new"), tone: "accent" });
-		if (model.isBeta) badges.push({ text: localize("beta"), tone: "warning" });
-		if (isFreeModel(model)) badges.push({ text: localize("free"), tone: "success" });
+		if (model.isNew) badges.push({ text: "new", tone: "accent" });
+		if (model.isBeta) badges.push({ text: "beta", tone: "warning" });
+		if (isFreeModel(model)) badges.push({ text: "free", tone: "success" });
 		const chips = heldRoles.map(({ role, assignment }) => {
 			const info = this.#settings.getRoleInfo(role);
 			const dot = thinkingDotToken(assignment.thinkingLevel);
@@ -2033,7 +2032,7 @@ export class ModelBrowser implements Component {
 			facts,
 			...(badges.length > 0 ? { badges: badges.slice(0, 3) } : {}),
 			...(chips.length > 0 ? { chips } : {}),
-			...(int !== undefined ? { title: localize("Intelligence {0}", `${Math.round(int)}`) } : {}),
+			...(int !== undefined ? { title: `Intelligence ${Math.round(int)}` } : {}),
 		};
 		// Discovery re-mints Model objects for unchanged models; an equal row keeps its identity.
 		const kept = cached && Bun.deepEquals(cached.value, value) ? cached.value : value;
@@ -2087,7 +2086,7 @@ export class ModelBrowser implements Component {
 			pushRows(visible);
 		} else {
 			if (recent.length > 0) {
-				order.push({ group: "recent", label: localize("Recent"), count: recent.length });
+				order.push({ group: "recent", label: "Recent", count: recent.length });
 				pushRows(recent);
 			}
 			if (grouping.providers) this.#pushProviderGroups(order, rest, pushRows);
@@ -2186,20 +2185,20 @@ export class ModelBrowser implements Component {
 				text: (info.tag ?? info.name ?? role).toLowerCase(),
 				...(assignment ? { tone: assignment.autoSelected ? "muted" : "accent" } : {}),
 				title: assignment
-					? `${info.name}${assignment.autoSelected ? localize(" (auto-selected)") : ""}${level ? localize(" · thinking {0}", `${level}`) : ""}`
-					: localize("{0}: not assigned", `${info.name}`),
+					? `${info.name}${assignment.autoSelected ? " (auto-selected)" : ""}${level ? ` · thinking ${level}` : ""}`
+					: `${info.name}: not assigned`,
 			});
 		};
 
 		if (mode === "compact") {
 			const facts: { k: TspText; v: TspText }[] = [];
-			if (ctx > 0) facts.push({ k: localize("ctx"), v: formatNumber(ctx).toLowerCase() });
-			if (out > 0) facts.push({ k: localize("out"), v: formatNumber(out).toLowerCase() });
-			facts.push({ k: localize("price"), v: isFreeModel(model) ? localize("free") : formatCostDetail(model) });
-			facts.push({ k: localize("reasoning"), v: model.reasoning ? localize("yes") : localize("no") });
+			if (ctx > 0) facts.push({ k: "ctx", v: formatNumber(ctx).toLowerCase() });
+			if (out > 0) facts.push({ k: "out", v: formatNumber(out).toLowerCase() });
+			facts.push({ k: "price", v: isFreeModel(model) ? "free" : formatCostDetail(model) });
+			facts.push({ k: "reasoning", v: model.reasoning ? "yes" : "no" });
 			const children: NativeChild[] = [node("kv", { items: facts, layout: "inline" })];
 			const chips: NativeChild[] = [];
-			if (item.selector === current) chips.push(node("badge", { text: localize("current"), tone: "success" }));
+			if (item.selector === current) chips.push(node("badge", { text: "current", tone: "success" }));
 			for (const { role, assignment } of held) chips.push(roleBadge(role, assignment));
 			if (chips.length > 0) children.push(row(chips, { gap: "xs", wrap: true }));
 			if (warning) children.push(warning);
@@ -2208,7 +2207,7 @@ export class ModelBrowser implements Component {
 
 		const children: NativeChild[] = [
 			text(model.name, { role: "omp.picker.title" }),
-			text([span(selector, "mono")], { actions: { click: "copy" }, title: localize("Copy model id"), truncate: "middle" }),
+			text([span(selector, "mono")], { actions: { click: "copy" }, title: "Copy model id", truncate: "middle" }),
 		];
 		const badges: NativeChild[] = [];
 		if (item.selector === current) badges.push(node("badge", { text: "current", tone: "success" }));
@@ -2233,24 +2232,24 @@ export class ModelBrowser implements Component {
 		const fact = (k: string, v: string | undefined) => {
 			if (v) facts.push({ k: [span(k, "muted")], v: [span(v, "mono")] });
 		};
-		fact(localize("Context"), ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
+		fact("Context", ctx > 0 ? ctx.toLocaleString("en-US") : undefined);
 		const compaction = this.#settings.compactionPointFor?.(model);
 		if (compaction) {
 			const value =
 				compaction.tokens === undefined
-					? localize("off")
+					? "off"
 					: `${compaction.tokens.toLocaleString("en-US")}${compaction.basis !== undefined ? ` · ${compaction.basis}` : ""}`;
 			facts.push({
-				k: [span(localize("Compacts at"), "muted")],
+				k: [span("Compacts at", "muted")],
 				v: [span(value, "mono"), span(` · ${compaction.source}`, "dim")],
 			});
 		}
-		fact(localize("Max output"), out > 0 ? out.toLocaleString("en-US") : undefined);
-		fact(localize("Price"), isFreeModel(model) ? localize("free") : localize("{0} per M", `${previewPrice(model)}`));
-		fact(localize("Speed"), speed.length > 0 ? speed.join(" · ") : undefined);
-		fact(localize("Intelligence"), model.int != null && Number.isFinite(model.int) ? String(Math.round(model.int)) : undefined);
-		fact(localize("Input"), model.input.join(" · "));
-		fact(localize("Reasoning"), model.reasoning ? localize("yes") : localize("no"));
+		fact("Max output", out > 0 ? out.toLocaleString("en-US") : undefined);
+		fact("Price", isFreeModel(model) ? "free" : `${previewPrice(model)} per M`);
+		fact("Speed", speed.length > 0 ? speed.join(" · ") : undefined);
+		fact("Intelligence", model.int != null && Number.isFinite(model.int) ? String(Math.round(model.int)) : undefined);
+		fact("Input", model.input.join(" · "));
+		fact("Reasoning", model.reasoning ? "yes" : "no");
 		children.push(node("kv", { items: facts }));
 		if (warning) children.push(warning);
 
@@ -2262,7 +2261,7 @@ export class ModelBrowser implements Component {
 			roleBadges.push(roleBadge(role, heldBy.get(role)));
 		}
 		if (roleBadges.length > 0) {
-			children.push(node("section", { head: localize("Roles") }, [row(roleBadges, { gap: "xs", wrap: true })]));
+			children.push(node("section", { head: "Roles" }, [row(roleBadges, { gap: "xs", wrap: true })]));
 		}
 		const description = model.description ? sanitizeText(model.description).trim() : "";
 		if (description) children.push(md(description));

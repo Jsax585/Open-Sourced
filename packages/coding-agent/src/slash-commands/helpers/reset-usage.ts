@@ -4,7 +4,6 @@
  * `<provider>/<credential id>` target, and map a redeem outcome code to a
  * human message.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { ResetCreditAccountStatus, ResetCreditRedeemOutcome, ResetCreditTarget } from "../../session/auth-storage";
 import type { ResetUsageAccount } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
@@ -50,10 +49,10 @@ export interface ResetUsageTarget {
 export function parseResetUsageTarget(arg: string, command: string): ResetUsageTarget | { error: string } {
 	const text = arg.trim();
 	const slash = text.indexOf("/");
-	if (slash <= 0) return { error: t("Choose an account with `{0} <provider>/<credential id>`.", `${command}`) };
+	if (slash <= 0) return { error: `Choose an account with \`${command} <provider>/<credential id>\`.` };
 	const provider = normalizeResetProvider(text.slice(0, slash));
 	if (!provider) {
-		return { error: t("Unknown reset provider \"{0}\". Use anthropic or openai-codex.", `${oneLine(text.slice(0, slash))}`) };
+		return { error: `Unknown reset provider "${oneLine(text.slice(0, slash))}". Use anthropic or openai-codex.` };
 	}
 	return {
 		provider,
@@ -82,17 +81,17 @@ export function resolveResetUsageTarget(
 		return credentialId !== undefined && candidate.target.credentialId === credentialId;
 	});
 	if (!account) {
-		return { error: t("No stored account matches \"{0}\". List choices with `{1}`.", `${oneLine(arg.trim())}`, `${command}`) };
+		return { error: `No stored account matches "${oneLine(arg.trim())}". List choices with \`${command}\`.` };
 	}
 	if (account.error) {
 		return {
-			error: t("{0} [{1}]: saved resets unavailable ({2}), so nothing was spent.", `${oneLine(account.label)}`, `${oneLine(account.providerLabel)}`, `${oneLine(account.error)}`),
+			error: `${oneLine(account.label)} [${oneLine(account.providerLabel)}]: saved resets unavailable (${oneLine(account.error)}), so nothing was spent.`,
 		};
 	}
 	if (account.redeemableCount <= 0) {
 		const reason = account.unavailableReason ? ` (${oneLine(account.unavailableReason)})` : "";
 		return {
-			error: t("{0} [{1}]: no saved resets usable right now{2}.", `${oneLine(account.label)}`, `${oneLine(account.providerLabel)}`, `${reason}`),
+			error: `${oneLine(account.label)} [${oneLine(account.providerLabel)}]: no saved resets usable right now${reason}.`,
 		};
 	}
 	return { account };
@@ -104,8 +103,8 @@ export function formatResetUsageAccountLine(account: ResetUsageAccount): string 
 	if (account.error) {
 		detail = `unavailable (${oneLine(account.error)})`;
 	} else {
-		detail = t("{0} saved, {1} usable now", `${account.availableCount}`, `${account.redeemableCount}`);
-		if (account.expiresAt) detail += t(", expires {0}", `${oneLine(account.expiresAt)}`);
+		detail = `${account.availableCount} saved, ${account.redeemableCount} usable now`;
+		if (account.expiresAt) detail += `, expires ${oneLine(account.expiresAt)}`;
 		if (account.redeemableCount === 0 && account.unavailableReason) {
 			detail += ` (${oneLine(account.unavailableReason)})`;
 		}
@@ -131,9 +130,9 @@ export function toResetUsageAccount(status: ResetCreditAccountStatus): ResetUsag
 	const unavailableReason =
 		summary?.unavailableReason ??
 		(provider === CLAUDE_PROVIDER_ID && advertisedRedeemable > 0 && !status.nextCreditId
-			? t("the provider did not identify a grant that can be safely spent")
+			? "the provider did not identify a grant that can be safely spent"
 			: undefined) ??
-		(status.availableCount > 0 && redeemableCount === 0 ? t("not usable right now") : undefined);
+		(status.availableCount > 0 && redeemableCount === 0 ? "not usable right now" : undefined);
 	return {
 		label,
 		provider,
@@ -179,33 +178,33 @@ export function describeRedeemOutcome(outcome: ResetCreditRedeemOutcome, label: 
 			const cleared = outcome.cleared ?? [];
 			const scope =
 				cleared.length === 1 && cleared[0] === "anthropic:5h"
-					? t("Claude's 5h session limit has been refreshed; weekly limits are unchanged")
+					? "Claude's 5h session limit has been refreshed; weekly limits are unchanged"
 					: cleared.length > 0
-						? t(" has")
-						: t("s have");
-			return t("Reset applied for {0}{1} — {2}.", `${label}`, `${provider}`, `${scope}`);
+						? `the covered rate-limit window${cleared.length === 1 ? " has" : "s have"} been refreshed`
+						: "your rate-limit window has been refreshed";
+			return `Reset applied for ${label}${provider} — ${scope}.`;
 		}
 		case "already_redeemed":
-			return t("{0}{1}: that reset was already redeemed.", `${label}`, `${provider}`);
+			return `${label}${provider}: that reset was already redeemed.`;
 		case "no_credit":
-			return t("{0}{1}: no saved resets available to spend{2}.", `${label}`, `${provider}`, `${reason}`);
+			return `${label}${provider}: no saved resets available to spend${reason}.`;
 		case "credit_list_failed":
-			return t("{0}{1}: couldn't load this account's saved resets (network/auth) — nothing was spent, try again.", `${label}`, `${provider}`);
+			return `${label}${provider}: couldn't load this account's saved resets (network/auth) — nothing was spent, try again.`;
 		case "nothing_to_reset":
-			return t("{0}{1}: nothing to reset right now — your covered limits aren't constrained, so no credit was spent.", `${label}`, `${provider}`);
+			return `${label}${provider}: nothing to reset right now — your covered limits aren't constrained, so no credit was spent.`;
 		case "no_account":
-			return t("Could not find the stored account {0}{1}.", `${label}`, `${provider}`);
+			return `Could not find the stored account ${label}${provider}.`;
 		case "account_unavailable":
-			return t("{0}{1}: could not authenticate this account — try /login.", `${label}`, `${provider}`);
+			return `${label}${provider}: could not authenticate this account — try /login.`;
 		case "offer_changed":
-			return t("{0}{1}: the reset offer changed — nothing was spent; reopen /usage reset.", `${label}`, `${provider}`);
+			return `${label}${provider}: the reset offer changed — nothing was spent; reopen /usage reset.`;
 		case "reset_in_progress":
-			return t("{0}{1}: a reset is already in progress.", `${label}`, `${provider}`);
+			return `${label}${provider}: a reset is already in progress.`;
 		case "reset_unconfirmed":
 		case "network_error":
 		case "malformed_response":
-			return t("{0}{1}: couldn't confirm whether the reset applied — check /usage before trying again{2}.", `${label}`, `${provider}`, `${reason}`);
+			return `${label}${provider}: couldn't confirm whether the reset applied — check /usage before trying again${reason}.`;
 		default:
-			return t("{0}{1}: reset was not confirmed ({2}){3}.", `${label}`, `${provider}`, `${outcome.code}`, `${reason}`);
+			return `${label}${provider}: reset was not confirmed (${outcome.code})${reason}.`;
 	}
 }

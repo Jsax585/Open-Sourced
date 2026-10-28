@@ -1,7 +1,5 @@
 /** `lsp` — language-server queries: diagnostics, definitions, references, hover, rename, … */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
-import { formatStatus } from "../../lib/format";
 import type { Tone } from "../parts";
 import { Badge, InvalidArg, Kv, KvGrid, Output, PathText, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -94,14 +92,14 @@ function DiagnosticRows({ text, rows }: { text: string; rows: DiagRow[] }): Reac
 			)}
 			<div className="tv-list">
 				{shown.map((d, i) => (
-					<Row key={i} k={<Badge tone={severityTone(d.severity)}>{formatStatus(d.severity)}</Badge>}>
+					<Row key={i} k={<Badge tone={severityTone(d.severity)}>{d.severity}</Badge>}>
 						<PathText path={d.file} sel={`${d.line}:${d.col}`} />
 						{d.message && <span className="tv-muted"> {truncate(d.message, 160)}</span>}
 					</Row>
 				))}
 				{rows.length > shown.length && (
 					<Row>
-						<span className="tv-faint">{t("… {0} more", `${rows.length - shown.length}`)}</span>
+						<span className="tv-faint">… {rows.length - shown.length} more</span>
 					</Row>
 				)}
 			</div>
@@ -129,7 +127,7 @@ function LocationRows({ text, rows }: { text: string; rows: LocRow[] }): ReactNo
 				))}
 				{rows.length > shown.length && (
 					<Row>
-						<span className="tv-faint">{t("… {0} more", `${rows.length - shown.length}`)}</span>
+						<span className="tv-faint">… {rows.length - shown.length} more</span>
 					</Row>
 				)}
 			</div>
@@ -146,10 +144,10 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 	const newName = str(args.new_name);
 	return (
 		<>
-			<Badge tone="accent">{action ? action.replace(/_/g, " ") : t("request")}</Badge>
-			{file === "*" && <Badge>{t("workspace")}</Badge>}
+			<Badge tone="accent">{action ? action.replace(/_/g, " ") : "request"}</Badge>
+			{file === "*" && <Badge>workspace</Badge>}
 			{file && file !== "*" && <PathText path={file} from={line} />}
-			{!file && line != null && <span className="tv-faint">{t("line {0}", `${line}`)}</span>}
+			{!file && line != null && <span className="tv-faint">line {line}</span>}
 			{symbol && <span className="tv-pattern">{truncate(normalizeWs(symbol), 48)}</span>}
 			{query && <span className="tv-muted">{truncate(normalizeWs(query), 48)}</span>}
 			{newName && <span className="tv-muted">→ {truncate(normalizeWs(newName), 48)}</span>}
@@ -180,26 +178,26 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<ArgKv k={t("action")} raw={args.action} val={str(args.action)?.replace(/_/g, " ")} />
+				<ArgKv k="action" raw={args.action} val={str(args.action)?.replace(/_/g, " ")} />
 				<ArgKv
-					k={t("file\u0004packages/collab-web/src/tool-render/tools/lsp.tsx:Body")}
+					k="file"
 					raw={args.file}
-					val={file === "*" ? <Badge>{t("workspace")}</Badge> : file && <PathText path={file} from={line} />}
+					val={file === "*" ? <Badge>workspace</Badge> : file && <PathText path={file} from={line} />}
 				/>
-				{!file && <ArgKv k={t("line")} raw={args.line} val={line} />}
-				<ArgKv k={t("symbol")} raw={args.symbol} val={symbol && truncate(normalizeWs(symbol), 120)} />
-				<ArgKv k={t("query")} raw={args.query} val={query && truncate(normalizeWs(query), 120)} />
-				<ArgKv k={t("new name")} raw={args.new_name} val={newName && truncate(normalizeWs(newName), 120)} />
-				<ArgKv k={t("apply")} raw={args.apply} val={apply == null ? null : apply ? t("yes") : t("no")} />
-				<ArgKv k={t("timeout")} raw={args.timeout} val={timeout != null && `${timeout}s`} />
+				{!file && <ArgKv k="line" raw={args.line} val={line} />}
+				<ArgKv k="symbol" raw={args.symbol} val={symbol && truncate(normalizeWs(symbol), 120)} />
+				<ArgKv k="query" raw={args.query} val={query && truncate(normalizeWs(query), 120)} />
+				<ArgKv k="new name" raw={args.new_name} val={newName && truncate(normalizeWs(newName), 120)} />
+				<ArgKv k="apply" raw={args.apply} val={apply == null ? null : apply ? "yes" : "no"} />
+				<ArgKv k="timeout" raw={args.timeout} val={timeout != null && `${timeout}s`} />
 				{args.payload !== undefined && payload == null && (
-					<Kv k={t("payload")}>
+					<Kv k="payload">
 						<InvalidArg what="payload" />
 					</Kv>
 				)}
-				{serverName && <Kv k={t("server")}>{serverName}</Kv>}
+				{serverName && <Kv k="server">{serverName}</Kv>}
 			</KvGrid>
-			{payload && <Output text={payload} lang="json" variant="code" maxLines={8} title={t("payload")} />}
+			{payload && <Output text={payload} lang="json" variant="code" maxLines={8} title="payload" />}
 			{diags.length > 0 ? (
 				<DiagnosticRows text={text} rows={diags} />
 			) : locs.length > 0 ? (

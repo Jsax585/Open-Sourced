@@ -92,7 +92,7 @@ describe("bash native run box", () => {
 		expect(props(input)).toMatchObject({ text: 'CI="1" make', wrap: true, preview: { lines: 6 } });
 		expect(props(output)).toMatchObject({ text: "built", follow: true, preview: { lines: 10 } });
 		// The measured wall time wins over the component's clock once settled.
-		expect(foot(box)).toMatchObject({ tone: "success", time: { age: 1500, stopped: 1500 } });
+		expect(foot(box)).toMatchObject({ state: "Done", tone: "success", time: { age: 1500, stopped: 1500 } });
 	});
 
 	it("has no target without an intent and no foot before the command starts", () => {
@@ -111,6 +111,7 @@ describe("bash native run box", () => {
 			{ expanded: false, isPartial: true, executionStarted: true, elapsedMs: 400 },
 		);
 		expect(foot(nodes(started.body)[0])).toMatchObject({
+			state: "Running",
 			tone: "pending",
 			time: { age: 400, stopped: undefined },
 		});
@@ -118,7 +119,7 @@ describe("bash native run box", () => {
 			{ command: "sleep 30" },
 			{ expanded: false, isPartial: true, executionStarted: true, elapsedMs: 900, cancelled: true },
 		);
-		expect(foot(nodes(cancelled.body)[0])).toMatchObject({ time: { age: 900, stopped: 900 } });
+		expect(foot(nodes(cancelled.body)[0])).toMatchObject({ state: "Cancelled", time: { age: 900, stopped: 900 } });
 	});
 
 	it("keeps a running call's clock live", () => {
@@ -127,7 +128,7 @@ describe("bash native run box", () => {
 			{ expanded: false, isPartial: true, executionStarted: true, elapsedMs: 2500 },
 			{ command: "make" },
 		);
-		expect(foot(nodes(view.body)[0])).toMatchObject({ tone: "pending", time: { age: 2500, stopped: undefined } });
+		expect(foot(nodes(view.body)[0])).toMatchObject({ state: "Running", time: { age: 2500, stopped: undefined } });
 	});
 
 	it("keeps a parked background job's card in background with a live clock while its output streams", () => {
@@ -141,12 +142,12 @@ describe("bash native run box", () => {
 		);
 		const box = nodes(view.body)[0];
 		expect(String(props(collect(box?.c, "ansi")[0]).text)).toBe("Benchmark 1\nBenchmark 2");
-		expect(foot(box)).toMatchObject({ tone: "pending", time: { age: 61_000, stopped: undefined } });
+		expect(foot(box)).toMatchObject({ state: "In background", time: { age: 61_000, stopped: undefined } });
 		expect(
 			foot(box)
 				?.facts?.map(s => s.t)
 				.join(""),
-		).toContain("bg_2");
+		).toBe("Job bg_2");
 	});
 
 	it("maps exit, timeout, spawn failure and background jobs to the foot state and box tone", () => {
@@ -164,22 +165,22 @@ describe("bash native run box", () => {
 		expect(failed.view.tool?.exit).toBe(2);
 		expect(failed.output).toBe("boom");
 		expect(props(failed.box).tone).toBe("error");
-		expect(failed.foot).toMatchObject({ tone: "error", time: { stopped: 300 } });
-		expect(failed.foot?.state.match(/\d+/)?.[0]).toBe("2");
+		expect(failed.foot).toMatchObject({ state: "exit 2", tone: "error", time: { stopped: 300 } });
 
 		const spawn = settle("bash: not found", {}, true);
 		expect(props(spawn.box).tone).toBe("error");
-		expect(spawn.foot).toMatchObject({ tone: "error", time: { stopped: 5000 } });
+		expect(spawn.foot).toMatchObject({ state: "Failed", tone: "error", time: { stopped: 5000 } });
 
 		const timedOut = settle("partial", { timedOut: true, timeoutSeconds: 5 }, true);
+		expect(timedOut.view.tool?.note).toBe("timed out");
 		expect(timedOut.view.tool?.exit).toBeUndefined();
 		expect(props(timedOut.box).tone).toBe("warning");
-		expect(timedOut.foot).toMatchObject({ tone: "warning" });
+		expect(timedOut.foot).toMatchObject({ state: "Timed out", tone: "warning" });
 
 		const background = settle("started", { async: { state: "running", jobId: "bg_3", type: "bash" } }, false);
 		expect(props(background.box).tone).toBeUndefined();
-		expect(background.foot).toMatchObject({ tone: "pending", time: undefined });
-		expect(background.foot?.facts?.map(s => s.t).join("")).toContain("bg_3");
+		expect(background.foot).toMatchObject({ state: "In background", tone: "pending", time: undefined });
+		expect(background.foot?.facts?.map(s => s.t).join("")).toBe("Job bg_3");
 	});
 
 	it("moves service state, artifact and truncation notices into the foot facts", () => {
@@ -205,9 +206,7 @@ describe("bash native run box", () => {
 			{ command: "serve" },
 		);
 		const facts = foot(nodes(view.body)[0])?.facts ?? [];
-		expect(facts[0]).toMatchObject({ s: "muted" });
-		expect(facts[0]?.t).toContain("web");
-		expect(facts[0]?.t).toContain("running");
+		expect(facts[0]).toEqual({ t: "Service web · running · ready", s: "muted" });
 		expect(facts.at(-1)?.s).toBe("warning");
 		expect(facts.at(-1)?.t).toContain("900");
 	});
@@ -429,7 +428,7 @@ describe("eval native run boxes", () => {
 		expect(sections(box)).toEqual(["code:omp.tool.eval.input", "ansi:omp.tool.eval.output", "row:omp.run.foot"]);
 		expect(props(nodes(box?.c)[0])).toMatchObject({ text: "x = 1\nprint(x)", wrap: false, preview: { lines: 6 } });
 		expect(props(nodes(box?.c)[1])).toMatchObject({ follow: true, preview: { lines: 10 } });
-		expect(foot(box)).toMatchObject({ tone: "success", time: { age: 120, stopped: 120 } });
+		expect(foot(box)).toMatchObject({ state: "Done", tone: "success", time: { age: 120, stopped: 120 } });
 		expect(foot(box)?.facts).toEqual([{ t: "Fell back to python", s: "muted" }]);
 	});
 
@@ -466,9 +465,9 @@ describe("eval native run boxes", () => {
 		const folded = describeCells({ expanded: false, isPartial: true, executionStarted: true, elapsedMs: 4000 });
 		expect(folded.map(box => spansText(nodes(box.c)[0]))).toEqual(["1/4 Load", "2/4 Fit", "3/4 Plot", "4/4 Save"]);
 		expect(folded.map(box => props(box).tone)).toEqual([undefined, "error", undefined, undefined]);
-		expect(foot(folded[1])).toMatchObject({ tone: "error", time: { stopped: 500 } });
+		expect(foot(folded[1])).toMatchObject({ state: "Failed", tone: "error", time: { stopped: 500 } });
 		// The running cell's clock is the call's minus the cells that finished before it.
-		expect(foot(folded[2])).toMatchObject({ tone: "pending", time: { age: 2500, stopped: undefined } });
+		expect(foot(folded[2])).toMatchObject({ state: "Running", time: { age: 2500, stopped: undefined } });
 		// A cell that never started has no foot; the call's truncation joins the last cell that ran.
 		expect(foot(folded[3])).toBeUndefined();
 		expect(foot(folded[2])?.facts?.map(s => s.s)).toEqual(["warning"]);
@@ -476,7 +475,7 @@ describe("eval native run boxes", () => {
 		const status = nodes(folded[2]?.c).find(child => role(child) === "omp.run.status");
 		const lines = nodes(status?.c);
 		expect(lines).toHaveLength(9);
-		expect(spansText(lines[0]).match(/\d+/)?.[0]).toBe("3");
+		expect(spansText(lines[0])).toBe("3 earlier");
 		expect(spansText(lines[1])).toContain("n=3");
 		expect(spansText(lines.at(-1))).toContain("n=10");
 
@@ -509,12 +508,12 @@ describe("eval native run boxes", () => {
 
 		const folded = statusLines(false);
 		expect(folded).toHaveLength(9);
-		expect(folded[0]?.match(/\d+/)?.[0]).toBe("502");
+		expect(folded[0]).toBe("502 earlier");
 		expect(folded[1]).toContain("n=2");
 
 		const expanded = statusLines(true);
 		expect(expanded).toHaveLength(11);
-		expect(expanded[0]?.match(/\d+/)?.[0]).toBe("500");
+		expect(expanded[0]).toBe("500 earlier");
 		expect(expanded[1]).toContain("n=0");
 	});
 
@@ -533,7 +532,7 @@ describe("eval native run boxes", () => {
 			"row:omp.run.foot",
 		]);
 		expect(props(last).tone).toBe("error");
-		expect(foot(last)).toMatchObject({ tone: "error", time: { stopped: 800 } });
+		expect(foot(last)).toMatchObject({ state: "Failed", time: { stopped: 800 } });
 	});
 
 	it("keeps a nested tool read's preview off its status line and bounds it in a code well when expanded", () => {
@@ -674,13 +673,13 @@ describe("user shell runs", () => {
 		expect(p.command).toBe("ls -la");
 		expect(p.preview).toBe("children");
 		expect(p.collapsed).toBe(true);
+		expect((p.badges as { text: string }[]).map(badge => badge.text)).toEqual(["you", "not sent"]);
 		const [box, image] = nodes(described.c);
 		expect(role(box)).toBe("omp.run");
 		expect(props(box).tone).toBe("error");
 		expect(sections(box)).toEqual(["code:omp.tool.bash.command", "ansi:omp.tool.bash.output", "row:omp.run.foot"]);
 		expect(props(nodes(box?.c)[1])).toMatchObject({ follow: true, preview: { lines: 10 } });
-		expect(foot(box)).toMatchObject({ tone: "error" });
-		expect(foot(box)?.state.match(/\d+/)?.[0]).toBe("1");
+		expect(foot(box)).toMatchObject({ state: "exit 1", tone: "error" });
 		expect(foot(box)?.time?.stopped).toBeNumber();
 		expect(image?.k).toBe("text");
 		expect(run.describe(cx(["card", "ansi"])).k).toBe("card");

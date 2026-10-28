@@ -16,7 +16,6 @@
  * decrypts with the fragment key — which never leaves the browser — and
  * renders the same template as `/export`.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,7 +51,7 @@ const GIST_ID_RE = /^[0-9a-f]{20,64}$/;
 const TEXT_CAPS = [32_768, 8_192, 2_048, 512];
 /** 1×1 transparent GIF; stands in for stripped data-URL images so <img> tags stay valid. */
 const BLANK_IMAGE_DATA_URL = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
-const IMAGE_OMITTED_TEXT = t("[image omitted from share]");
+const IMAGE_OMITTED_TEXT = "[image omitted from share]";
 
 export type ShareStore = "blob" | "gist";
 
@@ -557,7 +556,7 @@ export async function sealToFit(key: CryptoKey, data: SessionData, maxBytes: num
 		if (sealed.byteLength <= maxBytes) return { sealed, truncated: true };
 	}
 
-	throw new Error(t("Session too large to share: {0} bytes sealed exceeds the {1} byte limit", `${sealed.byteLength}`, `${maxBytes}`));
+	throw new Error(`Session too large to share: ${sealed.byteLength} bytes sealed exceeds the ${maxBytes} byte limit`);
 }
 
 /** `[12B IV][AES-256-GCM(gzip(JSON))]` — decrypted and gunzipped by share-loader.js. */
@@ -605,7 +604,7 @@ function capLongStrings(value: unknown, cap: number): void {
 	if (Array.isArray(value)) {
 		for (let i = 0; i < value.length; i++) {
 			const item: unknown = value[i];
-			if (typeof item === "string" && item.length > cap) value[i] = t("{0}\n…[truncated for share]", `${item.slice(0, cap)}`);
+			if (typeof item === "string" && item.length > cap) value[i] = `${item.slice(0, cap)}\n…[truncated for share]`;
 			else capLongStrings(item, cap);
 		}
 		return;
@@ -614,7 +613,7 @@ function capLongStrings(value: unknown, cap: number): void {
 	for (const k in value) {
 		const v = value[k];
 		if (typeof v === "string") {
-			if (v.length > cap) value[k] = t("{0}\n…[truncated for share]", `${v.slice(0, cap)}`);
+			if (v.length > cap) value[k] = `${v.slice(0, cap)}\n…[truncated for share]`;
 			continue;
 		}
 		capLongStrings(v, cap);
@@ -684,16 +683,16 @@ async function uploadToServer(sealed: Uint8Array, base: string): Promise<string>
 			body: sealed,
 		});
 	} catch (err) {
-		throw new Error(t("Share upload to {0} failed: {1}", `${base}`, `${err instanceof Error ? err.message : String(err)}`));
+		throw new Error(`Share upload to ${base} failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 	if (!res.ok) {
 		const detail = (await res.text().catch(() => "")).trim().slice(0, 200);
-		throw new Error(t("Share upload to {0} failed: HTTP {1}{2}", `${base}`, `${res.status}`, `${detail ? ` (${detail})` : ""}`));
+		throw new Error(`Share upload to ${base} failed: HTTP ${res.status}${detail ? ` (${detail})` : ""}`);
 	}
 	const body = (await res.json().catch(() => null)) as { id?: unknown } | null;
 	const id = body && typeof body.id === "string" ? body.id : "";
 	if (!/^[A-Za-z0-9_-]{10,64}$/.test(id)) {
-		throw new Error(t("Share upload to {0} failed: server returned no usable id", `${base}`));
+		throw new Error(`Share upload to ${base} failed: server returned no usable id`);
 	}
 	return id;
 }

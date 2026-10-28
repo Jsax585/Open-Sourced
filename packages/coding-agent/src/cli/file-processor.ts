@@ -1,7 +1,6 @@
 /**
  * Process @file CLI arguments into text, document content, and image attachments
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -47,7 +46,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 
 		const stat = fs.statSync(absolutePath, { throwIfNoEntry: false });
 		if (!stat) {
-			console.error(chalk.red(t("Error: File not found: {0}", `${absolutePath}`)));
+			console.error(chalk.red(`Error: File not found: ${absolutePath}`));
 			process.exit(1);
 		}
 
@@ -79,7 +78,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		const maxBytes = mimeType ? MAX_CLI_IMAGE_BYTES : MAX_CLI_TEXT_BYTES;
 		if (stat.size > maxBytes) {
 			console.error(
-				chalk.yellow(t("Warning: Skipping file contents (too large: {0}): {1}", `${formatBytes(stat.size)}`, `${absolutePath}`)),
+				chalk.yellow(`Warning: Skipping file contents (too large: ${formatBytes(stat.size)}): ${absolutePath}`),
 			);
 			text += `<file name="${absolutePath}">(skipped: too large, ${formatBytes(stat.size)})</file>\n`;
 			continue;
@@ -91,7 +90,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			buffer = await Bun.file(absolutePath).bytes();
 		} catch (err) {
 			if (isEnoent(err)) {
-				console.error(chalk.red(t("Error: File not found: {0}", `${absolutePath}`)));
+				console.error(chalk.red(`Error: File not found: ${absolutePath}`));
 				process.exit(1);
 			}
 			throw err;
@@ -153,7 +152,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 				text += `<file name="${absolutePath}">\n${content}\n</file>\n`;
 			} catch (error: unknown) {
 				const message = error instanceof Error ? error.message : String(error);
-				console.error(chalk.red(t("Error: Could not read file {0}: {1}", `${absolutePath}`, `${message}`)));
+				console.error(chalk.red(`Error: Could not read file ${absolutePath}: ${message}`));
 				process.exit(1);
 			}
 		}

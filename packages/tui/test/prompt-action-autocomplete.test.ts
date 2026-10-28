@@ -74,14 +74,14 @@ describe("prompt action autocomplete", () => {
 		const suggestions = await provider.getSuggestions(["#"], 0, 1);
 		expect(suggestions).not.toBeNull();
 		expect(suggestions?.prefix).toBe("#");
-		expect(suggestions?.items.map(item => "actionId" in item ? item.actionId : undefined)).toEqual([
-			"copy-line",
-			"copy-prompt",
-			"undo",
-			"cursor-message-end",
-			"cursor-message-start",
-			"cursor-line-start",
-			"cursor-line-end",
+		expect(suggestions?.items.map(item => item.label)).toEqual([
+			"Copy current line",
+			"Copy whole prompt",
+			"Undo",
+			"Move cursor to message end",
+			"Move cursor to message start",
+			"Move cursor to line start",
+			"Move cursor to line end",
 		]);
 		const rendered = new SelectList(suggestions?.items ?? [], 10, getSelectListTheme()).render(80).join("\n");
 		for (const item of suggestions?.items ?? []) {
@@ -109,7 +109,7 @@ describe("prompt action autocomplete", () => {
 		});
 
 		const suggestions = await provider.getSuggestions(["hello #undo"], 0, 11);
-		const item = suggestions?.items.find(entry => "actionId" in entry && entry.actionId === "undo");
+		const item = suggestions?.items.find(entry => entry.label === "Undo");
 		expect(item).toBeDefined();
 		if (!item || !suggestions) {
 			throw new Error("expected undo suggestion");
@@ -180,10 +180,7 @@ describe("prompt action autocomplete", () => {
 		const suggestions = await provider.getSuggestions([line], 0, line.length);
 
 		expect(suggestions?.prefix).toBe("#copy");
-		expect(suggestions?.items.map(item => "actionId" in item ? item.actionId : undefined)).toEqual([
-			"copy-line",
-			"copy-prompt",
-		]);
+		expect(suggestions?.items.map(item => item.label)).toEqual(["Copy current line", "Copy whole prompt"]);
 	});
 
 	it("returns slash command argument completions instead of # prompt actions when the command defines them", async () => {

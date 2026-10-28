@@ -3,7 +3,6 @@
  * flamegraph trace viewer for a selected session.
  */
 
-import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { useMemo, useState } from "react";
 import { getSessions } from "../api";
 import {
@@ -74,7 +73,7 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 		() => [
 			{
 				key: "title",
-				header: t("Session"),
+				header: "Session",
 				width: "32%",
 				render: row => (
 					<LabelCell
@@ -84,13 +83,13 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 				),
 				sort: row => (row.title ?? row.file).toLowerCase(),
 			},
-			{ key: "models", header: t("Models"), render: row => <ModelList models={row.models} /> },
+			{ key: "models", header: "Models", render: row => <ModelList models={row.models} /> },
 			{
 				key: "started",
-				header: t("Started"),
+				header: "Started",
 				align: "right",
 				render: row => (
-					<span className="muted" title={new Date(row.startedAt).toLocaleString((getLanguage() === "ko" ? "ko-KR" : "en-US"))}>
+					<span className="muted" title={new Date(row.startedAt).toLocaleString()}>
 						{formatRelativeTime(row.startedAt)}
 					</span>
 				),
@@ -98,28 +97,28 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 			},
 			{
 				key: "duration",
-				header: t("Duration"),
+				header: "Duration",
 				align: "right",
 				render: row => <span className="num">{formatElapsed(row.endedAt - row.startedAt)}</span>,
 				sort: row => row.endedAt - row.startedAt,
 			},
 			{
 				key: "requests",
-				header: t("Requests"),
+				header: "Requests",
 				align: "right",
 				render: row => <span className="num">{formatInteger(row.requests)}</span>,
 				sort: row => row.requests,
 			},
 			{
 				key: "toolCalls",
-				header: t("Tools"),
+				header: "Tools",
 				align: "right",
 				render: row => <span className="num">{formatInteger(row.toolCalls)}</span>,
 				sort: row => row.toolCalls,
 			},
 			{
 				key: "subagents",
-				header: t("Agents"),
+				header: "Agents",
 				align: "right",
 				render: row =>
 					row.subagents > 0 ? (
@@ -131,14 +130,14 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 			},
 			{
 				key: "tokens",
-				header: t("Tokens"),
+				header: "Tokens",
 				align: "right",
 				render: row => <span className="num">{formatCompact(row.totalTokens)}</span>,
 				sort: row => row.totalTokens,
 			},
 			{
 				key: "cost",
-				header: t("Cost"),
+				header: "Cost",
 				align: "right",
 				width: 150,
 				render: row => (
@@ -162,23 +161,23 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 	return (
 		<div className="stack traces-page">
 			<PageHeader
-				title={t("Traces")}
-				description={t("Recent sessions with subagent activity folded in. Open one to inspect its timeline.")}
+				title="Traces"
+				description="Recent sessions with subagent activity folded in. Open one to inspect its timeline."
 			/>
 			<Card
-				title={t("Sessions")}
+				title="Sessions"
 				description={
 					sessions.data
 						? filter.trim()
-							? t("{1} of {0} most recent", `${formatInteger(total)}`, `${formatInteger(filtered.length)}`)
-							: t("{0} most recent", `${formatInteger(total)}`)
+							? `${formatInteger(filtered.length)} of ${formatInteger(total)} most recent`
+							: `${formatInteger(total)} most recent`
 						: undefined
 				}
 				actions={
 					<SearchInput
 						value={filter}
 						onChange={setFilter}
-						placeholder={t("Filter by title, project, model…")}
+						placeholder="Filter by title, project, model…"
 						width={260}
 					/>
 				}
@@ -190,7 +189,7 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 					query={sessions}
 					skeleton={<TableSkeleton rows={10} />}
 					isEmpty={rows => rows.length === 0}
-					empty={<EmptyState title={t("No sessions found")} hint={t("Run a sync to index recent activity.")} />}
+					empty={<EmptyState title="No sessions found" hint="Run a sync to index recent activity." />}
 				>
 					{() => (
 						<Table
@@ -200,7 +199,7 @@ export function TracesRoute({ active, session, onOpenSession }: TracesRouteProps
 							onRowClick={row => onOpenSession(row.file)}
 							initialSort={{ key: "started", dir: "desc" }}
 							limit={50}
-							empty={<EmptyState title={t("No matching sessions")} hint={t("Try a different filter.")} />}
+							empty={<EmptyState title="No matching sessions" hint="Try a different filter." />}
 						/>
 					)}
 				</QueryView>

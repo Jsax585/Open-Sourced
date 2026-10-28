@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, prompt } from "@oh-my-pi/pi-utils";
 import { invalidate as invalidateCapabilityCache } from "../../capability";
@@ -36,9 +35,9 @@ interface GenerateCandidateOptions {
 type SaveCandidateResult = { kind: "saved" | "aborted" | "rejected" } | { kind: "amend"; feedback: string };
 
 const MAX_ATTEMPTS = 3;
-const PROJECT_OPTION = t("This project (.omp/rules)");
-const GLOBAL_OPTION = t("Global — all projects (~/.omp/agent/rules)");
-const AMEND_OPTION = t("Amend with feedback…");
+const PROJECT_OPTION = "This project (.omp/rules)";
+const GLOBAL_OPTION = "Global — all projects (~/.omp/agent/rules)";
+const AMEND_OPTION = "Amend with feedback…";
 /** Keep /omfg prompts in the composer slot: a picker sheet would cover the candidate rule above it. */
 const OMFG_DIALOG = { inline: true } as const;
 
@@ -70,13 +69,13 @@ export class OmfgController {
 	async start(complaint: string): Promise<void> {
 		const trimmedComplaint = complaint.trim();
 		if (!trimmedComplaint) {
-			this.ctx.showStatus(t("Usage: /omfg <complaint>"));
+			this.ctx.showStatus("Usage: /omfg <complaint>");
 			return;
 		}
 
 		const model = this.ctx.session.model;
 		if (!model) {
-			this.ctx.showError(t("No active model available for /omfg."));
+			this.ctx.showError("No active model available for /omfg.");
 			return;
 		}
 
@@ -100,15 +99,15 @@ export class OmfgController {
 			for (;;) {
 				if (!this.#isActiveRequest(request)) return;
 				if (!candidate) {
-					request.component.markError(t("The model did not return a valid TTSR rule."));
+					request.component.markError("The model did not return a valid TTSR rule.");
 					return;
 				}
 
 				if (!candidate.validated) {
-					request.component.setStatus("confirming", t("Couldn't confirm a conversation match."));
+					request.component.setStatus("confirming", "Couldn't confirm a conversation match.");
 					const shouldSave = await this.ctx.showHookConfirm(
-						t("Validation"),
-						t("Couldn't confirm this rule matches the conversation. Save anyway?"),
+						"Validation",
+						"Couldn't confirm this rule matches the conversation. Save anyway?",
 						OMFG_DIALOG,
 					);
 					if (!this.#isActiveRequest(request)) return;
@@ -152,7 +151,7 @@ export class OmfgController {
 		for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
 			if (this.#shouldStop(request)) return undefined;
 			request.component.setRule("");
-			request.component.setStatus("generating", t("Attempt {0}/{1} · generating…", `${attempt}`, `${MAX_ATTEMPTS}`));
+			request.component.setStatus("generating", `Attempt ${attempt}/${MAX_ATTEMPTS} · generating…`);
 			const promptText = prompt.render(omfgUserPrompt, {
 				complaint: request.complaint,
 				feedback: failedAttempts.length > 0 ? failedAttempts.join("\n\n") : undefined,
@@ -177,12 +176,12 @@ export class OmfgController {
 					`Attempt ${attempt} failed: invalid rule (${parsed.error}).\nFailed candidate:\n${failedRule}`,
 				);
 				previousRule = failedRule;
-				request.component.setStatus("validating", t("Attempt {0}/{1} · {2}", `${attempt}`, `${MAX_ATTEMPTS}`, `${parsed.error}`));
+				request.component.setStatus("validating", `Attempt ${attempt}/${MAX_ATTEMPTS} · ${parsed.error}`);
 				continue;
 			}
 
 			request.component.setRule(parsed.fileContent);
-			request.component.setStatus("validating", t("Attempt {0}/{1} · validating…", `${attempt}`, `${MAX_ATTEMPTS}`));
+			request.component.setStatus("validating", `Attempt ${attempt}/${MAX_ATTEMPTS} · validating…`);
 			const validated = await validateParsedRuleAgainstAssistantHistory(
 				parsed,
 				historyOutputs(this.ctx.session.messages, this.#inspector),
@@ -216,9 +215,9 @@ export class OmfgController {
 		if (this.#shouldStop(request)) return { kind: "aborted" };
 
 		for (;;) {
-			request.component.setStatus("saving", t("Choose where to save or amend the TTSR rule…"));
+			request.component.setStatus("saving", "Choose where to save or amend the TTSR rule…");
 			const location = await this.ctx.showHookSelector(
-				t("Save TTSR rule where?"),
+				"Save TTSR rule where?",
 				[PROJECT_OPTION, GLOBAL_OPTION, AMEND_OPTION],
 				OMFG_DIALOG,
 			);
@@ -230,10 +229,10 @@ export class OmfgController {
 			}
 
 			if (location === AMEND_OPTION) {
-				request.component.setStatus("confirming", t("Describe how to amend the rule…"));
+				request.component.setStatus("confirming", "Describe how to amend the rule…");
 				const amendment = await this.ctx.showHookInput(
-					t("Amend TTSR rule"),
-					t("e.g. Make it specific to Ruby string eval in tool:write(*.rb)"),
+					"Amend TTSR rule",
+					"e.g. Make it specific to Ruby string eval in tool:write(*.rb)",
 				);
 				if (!this.#isActiveRequest(request)) return { kind: "aborted" };
 				const feedback = amendment?.trim();
@@ -244,8 +243,8 @@ export class OmfgController {
 			const target = this.#resolveTarget(location, candidate.rule.name);
 			if (await Bun.file(target.filePath).exists()) {
 				const shouldOverwrite = await this.ctx.showHookConfirm(
-					t("Overwrite TTSR rule?"),
-					t("{0} already exists. Overwrite it?", `${shortenPath(target.filePath)}`),
+					"Overwrite TTSR rule?",
+					`${shortenPath(target.filePath)} already exists. Overwrite it?`,
 					OMFG_DIALOG,
 				);
 				if (!this.#isActiveRequest(request)) return { kind: "aborted" };
@@ -255,7 +254,7 @@ export class OmfgController {
 				}
 			}
 
-			request.component.setStatus("saving", t("Saving {0}…", `${candidate.rule.name}`));
+			request.component.setStatus("saving", `Saving ${candidate.rule.name}…`);
 			await Bun.write(target.filePath, candidate.fileContent);
 			// Drop the cached directory snapshot the discovery layer reads, so the next
 			// session-scoped rebuild's rule rediscovery observes this new file instead of

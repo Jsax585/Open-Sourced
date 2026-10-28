@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { useMemo, useState } from "react";
 import { getRecentRequests } from "../api";
 import {
@@ -89,7 +88,7 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 				disabled={log.refreshing}
 				onClick={() => setStep(step + 1)}
 			>
-				{log.refreshing && log.stale ? t("Loading…") : t("Load latest {0}", `${formatInteger(nextStep)}`)}
+				{log.refreshing && log.stale ? "Loading…" : `Load latest ${formatInteger(nextStep)}`}
 			</button>
 		) : undefined;
 
@@ -97,7 +96,7 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 		value,
 		label: (
 			<>
-				{value === "all" ? t("All") : REQUEST_STATUS[value].label}{" "}
+				{value === "all" ? "All" : REQUEST_STATUS[value].label}{" "}
 				<span className="dim num">{formatCompact(counts[value])}</span>
 			</>
 		),
@@ -106,8 +105,8 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 	return (
 		<div className="page">
 			<PageHeader
-				title={t("Requests")}
-				description={t("Every model call omp made in {0}, newest first. Open a row for its full payload.", `${meta.windowLabel}`)}
+				title="Requests"
+				description={`Every model call omp made in ${meta.windowLabel}, newest first. Open a row for its full payload.`}
 			/>
 
 			<QueryView query={log} skeleton={<Skeleton height={96} style={{ borderRadius: 12 }} />}>
@@ -115,38 +114,38 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 					<div data-stale={log.stale}>
 						<StatGrid min={160}>
 							<Stat
-								label={t("Requests")}
+								label="Requests"
 								value={formatInteger(summary.requests)}
 								hint={
 									summary.oldest === null
-										? t("none in {0}", `${meta.windowLabel}`)
-										: t("since {0}", `${formatRelativeTime(summary.oldest)}`)
+										? `none in ${meta.windowLabel}`
+										: `since ${formatRelativeTime(summary.oldest)}`
 								}
 							/>
 							<Stat
-								label={t("Failed")}
+								label="Failed"
 								value={formatInteger(summary.failed)}
-								hint={t("{0} · {1} aborted", `${summary.requests > 0 ? formatErrorRate(summary.failed / summary.requests) : "–"}`, `${formatInteger(summary.aborted)}`)}
+								hint={`${summary.requests > 0 ? formatErrorRate(summary.failed / summary.requests) : "–"} · ${formatInteger(summary.aborted)} aborted`}
 							/>
 							<Stat
-								label={t("Tokens")}
-								title={t("Total tokens across these requests")}
+								label="Tokens"
+								title="Total tokens across these requests"
 								value={formatCompact(summary.tokens)}
 							/>
 							<Stat
-								label={t("API-equivalent cost")}
-								title={t("What these requests would cost at public API rates")}
+								label="API-equivalent cost"
+								title="What these requests would cost at public API rates"
 								value={formatEstimatedCost(summary.cost, summary.unpriced)}
-								hint={summary.unpriced > 0 ? t("{0} unpriced", `${formatInteger(summary.unpriced)}`) : undefined}
+								hint={summary.unpriced > 0 ? `${formatInteger(summary.unpriced)} unpriced` : undefined}
 							/>
 							<Stat
-								label={t("Median duration")}
+								label="Median duration"
 								value={formatDurationMs(summary.medianDuration)}
 								hint={`p95 ${formatDurationMs(summary.p95Duration)}`}
 							/>
 							<Stat
-								label={t("Median TTFT")}
-								title={t("Time to first token")}
+								label="Median TTFT"
+								title="Time to first token"
 								value={formatDurationMs(summary.medianTtft)}
 							/>
 						</StatGrid>
@@ -156,20 +155,20 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 
 			<Card
 				index={1}
-				title={t("Request log")}
+				title="Request log"
 				description={
 					log.data === null
-						? t("Loading the latest requests…")
+						? "Loading the latest requests…"
 						: complete
-							? t("{2} of {1} requests in {0}", `${meta.windowLabel}`, `${formatInteger(summary.requests)}`, `${formatInteger(filtered.length)}`)
-							: t("{1} of the latest {0} requests", `${formatInteger(summary.requests)}`, `${formatInteger(filtered.length)}`)
+							? `${formatInteger(filtered.length)} of ${formatInteger(summary.requests)} requests in ${meta.windowLabel}`
+							: `${formatInteger(filtered.length)} of the latest ${formatInteger(summary.requests)} requests`
 				}
 				actions={
 					<>
-						<SearchInput value={search} onChange={setSearch} placeholder={t("Model, provider or project")} />
+						<SearchInput value={search} onChange={setSearch} placeholder="Model, provider or project" />
 						<Segmented
 							size="sm"
-							aria-label={t("Status")}
+							aria-label="Status"
 							options={statusOptions}
 							value={status}
 							onChange={setStatus}
@@ -181,7 +180,11 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 				footer={
 					log.data !== null && !complete ? (
 						<>
-							<span>{t("Showing the latest {0} requests, back to{1}{2}. Older requests in{3}{4} are not loaded.", `${formatInteger(view.loaded)}`, `${" "}`, `${summary.oldest === null ? "–" : formatTimestamp(summary.oldest)}`, `${" "}`, `${meta.windowLabel}`)}</span>
+							<span>
+								Showing the latest {formatInteger(view.loaded)} requests, back to{" "}
+								{summary.oldest === null ? "–" : formatTimestamp(summary.oldest)}. Older requests in{" "}
+								{meta.windowLabel} are not loaded.
+							</span>
 							{loadMore}
 						</>
 					) : undefined
@@ -199,8 +202,8 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 							dense
 							empty={
 								<EmptyState
-									title={summary.requests === 0 ? t("No requests in {0}", `${meta.windowLabel}`) : t("No requests match")}
-									hint={summary.requests === 0 ? undefined : t("Clear the search or status filter.")}
+									title={summary.requests === 0 ? `No requests in ${meta.windowLabel}` : "No requests match"}
+									hint={summary.requests === 0 ? undefined : "Clear the search or status filter."}
 								/>
 							}
 						/>
@@ -214,13 +217,13 @@ export function RequestsRoute({ active, range, onRequestClick }: RequestsRoutePr
 const REQUEST_COLUMNS: readonly Column<MessageStats>[] = [
 	{
 		key: "model",
-		header: t("Model"),
+		header: "Model",
 		sort: row => row.model,
 		render: row => <LabelCell primary={<span className="mono">{row.model}</span>} secondary={row.provider} />,
 	},
 	{
 		key: "time",
-		header: t("When"),
+		header: "When",
 		sort: row => row.timestamp,
 		render: row => (
 			<span className="muted" title={formatTimestamp(row.timestamp)}>
@@ -230,7 +233,7 @@ const REQUEST_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "project",
-		header: t("Project"),
+		header: "Project",
 		sort: row => row.folder,
 		render: row => (
 			<span className="mono muted truncate" title={row.folder} style={{ display: "block", maxWidth: 180 }}>
@@ -240,42 +243,42 @@ const REQUEST_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "input",
-		header: t("Input"),
-		title: t("Uncached input tokens"),
+		header: "Input",
+		title: "Uncached input tokens",
 		align: "right",
 		sort: row => row.usage.input,
 		render: row => <span className="num">{formatCompact(row.usage.input)}</span>,
 	},
 	{
 		key: "cache",
-		header: t("Cache read"),
-		title: t("Cache read tokens (hover a cell for cache writes)"),
+		header: "Cache read",
+		title: "Cache read tokens (hover a cell for cache writes)",
 		align: "right",
 		sort: row => row.usage.cacheRead,
 		render: row => (
-			<span className="num" title={t("Cache write: {0}", `${formatInteger(row.usage.cacheWrite)}`)}>
+			<span className="num" title={`Cache write: ${formatInteger(row.usage.cacheWrite)}`}>
 				{formatCompact(row.usage.cacheRead)}
 			</span>
 		),
 	},
 	{
 		key: "output",
-		header: t("Output"),
+		header: "Output",
 		align: "right",
 		sort: row => row.usage.output,
 		render: row => <span className="num">{formatCompact(row.usage.output)}</span>,
 	},
 	{
 		key: "cost",
-		header: t("Cost"),
-		title: t("API-equivalent estimate"),
+		header: "Cost",
+		title: "API-equivalent estimate",
 		align: "right",
 		sort: row => row.usage.cost.total,
 		render: row => <span className="num">{formatMessageCost(row, 4)}</span>,
 	},
 	{
 		key: "duration",
-		header: t("Duration"),
+		header: "Duration",
 		align: "right",
 		sort: row => row.duration ?? -1,
 		render: row => <span className="num">{formatDurationMs(row.duration)}</span>,
@@ -283,14 +286,14 @@ const REQUEST_COLUMNS: readonly Column<MessageStats>[] = [
 	{
 		key: "ttft",
 		header: "TTFT",
-		title: t("Time to first token"),
+		title: "Time to first token",
 		align: "right",
 		sort: row => row.ttft ?? -1,
 		render: row => <span className="num muted">{formatDurationMs(row.ttft)}</span>,
 	},
 	{
 		key: "status",
-		header: t("Status"),
+		header: "Status",
 		sort: row => requestStatus(row),
 		render: row => {
 			const status = REQUEST_STATUS[requestStatus(row)];

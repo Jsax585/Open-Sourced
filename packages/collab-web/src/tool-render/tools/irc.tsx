@@ -1,7 +1,5 @@
 /** `irc` — inter-agent messaging: send/wait/inbox/list ops with delivery receipts. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
-import { formatStatus } from "../../lib/format";
 import type { Tone } from "../parts";
 import { Badge, Badges, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -134,11 +132,11 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		const from = str(args.from);
 		return (
 			<>
-				{opBadge} <span className="tv-pattern">{`← ${from ?? t("anyone")}`}</span>
+				{opBadge} <span className="tv-pattern">← {from ?? "anyone"}</span>
 				{d?.waited === null && (
 					<>
 						{" "}
-						<Badge tone="warn">{t("timed out")}</Badge>
+						<Badge tone="warn">timed out</Badge>
 					</>
 				)}
 			</>
@@ -148,10 +146,10 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		const inbox = d ? parseInbox(d.inbox) : [];
 		return (
 			<>
-				{opBadge} {args.peek === true && <Badge>{t("peek")}</Badge>}{" "}
+				{opBadge} {args.peek === true && <Badge>peek</Badge>}{" "}
 				{d && (
 					<span className="tv-muted">
-						{inbox.length === 0 ? t("empty") : t("{0} {1}", `${inbox.length}`, `${inbox.length === 1 ? "message" : "messages"}`)}
+						{inbox.length === 0 ? "empty" : `${inbox.length} ${inbox.length === 1 ? "message" : "messages"}`}
 					</span>
 				)}
 			</>
@@ -163,11 +161,11 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		for (const peer of peers) unread += peer.unread;
 		return (
 			<>
-				{opBadge} {d && <span className="tv-muted">{t("{0} peers", `${peers.length}`)}</span>}
+				{opBadge} {d && <span className="tv-muted">{peers.length === 1 ? "1 peer" : `${peers.length} peers`}</span>}
 				{unread > 0 && (
 					<>
 						{" "}
-						<Badge tone="warn">{t("{0} unread", `${unread}`)}</Badge>
+						<Badge tone="warn">{unread} unread</Badge>
 					</>
 				)}
 			</>
@@ -193,12 +191,12 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			<Badges
 				items={[
 					op ?? "?",
-					to && t("to {0}", `${to}`),
-					op === "wait" && from && t("from {0}", `${from}`),
-					to === "all" && t("broadcast"),
-					args.await === true && t("await reply"),
-					str(args.replyTo) && t("reply"),
-					args.peek === true && t("peek"),
+					to && `to ${to}`,
+					op === "wait" && from && `from ${from}`,
+					to === "all" && "broadcast",
+					args.await === true && "await reply",
+					str(args.replyTo) && "reply",
+					args.peek === true && "peek",
 				]}
 			/>
 			{message && <Note>{message}</Note>}
@@ -206,7 +204,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				<div className="tv-list">
 					{receipts.map((receipt, i) => (
 						<Row key={i} k={receipt.to}>
-							<Badge tone={outcomeTone(receipt.outcome)}>{formatStatus(receipt.outcome)}</Badge>
+							<Badge tone={outcomeTone(receipt.outcome)}>{receipt.outcome}</Badge>
 							{receipt.error && <span className="tv-err-text"> — {receipt.error}</span>}
 						</Row>
 					))}
@@ -219,13 +217,13 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						{waited.replyTo && (
 							<>
 								{" "}
-								<Badge>{t("reply")}</Badge>
+								<Badge>reply</Badge>
 							</>
 						)}
 					</Row>
 				</div>
 			)}
-			{timedOut && <Note tone="warn">{t("No reply yet — they may answer later; check inbox or wait again.")}</Note>}
+			{timedOut && <Note tone="warn">No reply yet — they may answer later; check inbox or wait again.</Note>}
 			{inbox.length > 0 && (
 				<div className="tv-list">
 					{inbox.map((msg, i) => (
@@ -234,7 +232,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 							{msg.replyTo && (
 								<>
 									{" "}
-									<Badge>{t("reply")}</Badge>
+									<Badge>reply</Badge>
 								</>
 							)}
 						</Row>
@@ -245,14 +243,14 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				<div className="tv-list">
 					{peers.map(peer => (
 						<Row key={peer.id} k={peer.id}>
-							<Badge tone={statusTone(peer.status)}>{formatStatus(peer.status)}</Badge>{" "}
+							<Badge tone={statusTone(peer.status)}>{peer.status}</Badge>{" "}
 							<span className="tv-faint">
-								{peer.parentId ? t("{0} · of {1}", `${peer.kind}`, `${peer.parentId}`) : peer.kind}
+								{peer.parentId ? `${peer.kind} · of ${peer.parentId}` : peer.kind}
 							</span>
 							{peer.unread > 0 && (
 								<>
 									{" "}
-									<Badge tone="warn">{t("{0} unread", `${peer.unread}`)}</Badge>
+									<Badge tone="warn">{peer.unread} unread</Badge>
 								</>
 							)}
 						</Row>

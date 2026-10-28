@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Ellipsis,
@@ -144,7 +143,7 @@ class HistoryResultsList implements Component {
 		const items = this.#menu.visibleItems;
 
 		if (items.length === 0) {
-			const message = this.#tokens.length > 0 ? t("No matching history") : t("No history yet");
+			const message = this.#tokens.length > 0 ? "No matching history" : "No history yet";
 			lines.push(theme.fg("muted", `  ${theme.status.info} ${message}`));
 			return lines;
 		}
@@ -370,7 +369,7 @@ export class HistorySearchComponent extends OverlayPanel {
 			{
 				selected: selected ? nativeEntryKey(selected) : null,
 				filter: query || undefined,
-				empty: query ? t("No matching history") : t("No history yet"),
+				empty: query ? "No matching history" : "No history yet",
 				max: { lines: MAX_VISIBLE },
 				virtual: true,
 			},
@@ -401,19 +400,19 @@ export class HistorySearchComponent extends OverlayPanel {
 		return picker({
 			title: this.title,
 			icon: "history",
-			noun: t("prompts"),
+			noun: "prompts",
 			size: "md",
 			layout: "rows",
 			preview: "none",
 			...pickerQuery(this.#searchInput),
-			placeholder: t("Search prompts…"),
+			placeholder: "Search prompts…",
 			columns: [{ id: "when", format: "time" }],
 			items: rows.rows,
 			selected: selected ? nativeEntryKey(selected) : null,
-			empty: t("No history yet"),
+			empty: "No history yet",
 			actions: [
-				pickerAction("insert", t("Insert"), "enter", { primary: true }),
-				pickerAction("close", t("Close"), boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+				pickerAction("insert", "Insert", "enter", { primary: true }),
+				pickerAction("close", "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
 			],
 		});
 	}

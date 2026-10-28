@@ -1,5 +1,4 @@
 /** `read` — file/URL/archive reads: path + selector summary, highlighted content, image thumbnails. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, Kv, KvGrid, PathText, ResultImages, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -71,23 +70,27 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	const { path } = readArgs(args);
 	const d = readDetails(detailsRecord(result));
 	const conflictBadge = d.conflictCount !== null && d.conflictCount > 0 && (
-		<Badge tone="warn">{t("{0} conflict{1}", `${d.conflictCount}`, `${d.conflictCount === 1 ? "" : "s"}`)}</Badge>
+		<Badge tone="warn">
+			{d.conflictCount} conflict{d.conflictCount === 1 ? "" : "s"}
+		</Badge>
 	);
 	const elidedBadge = d.elidedSpans !== null && d.elidedSpans > 0 && (
-		<Badge>{t("{0} elided span{1}", `${d.elidedSpans}`, `${d.elidedSpans === 1 ? "" : "s"}`)}</Badge>
+		<Badge>
+			{d.elidedSpans} elided span{d.elidedSpans === 1 ? "" : "s"}
+		</Badge>
 	);
-	const truncatedBadge = d.truncated && <Badge tone="warn">{t("truncated")}</Badge>;
+	const truncatedBadge = d.truncated && <Badge tone="warn">truncated</Badge>;
 	const resolved = d.suffixTo ?? d.resolvedPath;
 	return (
 		<>
 			{(resolved !== null || d.suffixFrom !== null) && (
 				<KvGrid>
 					{resolved !== null && (
-						<Kv k={t("resolved")}>
+						<Kv k="resolved">
 							<PathText path={resolved} />
 						</Kv>
 					)}
-					{d.suffixFrom !== null && <Kv k={t("corrected from")}>{shortenPath(d.suffixFrom)}</Kv>}
+					{d.suffixFrom !== null && <Kv k="corrected from">{shortenPath(d.suffixFrom)}</Kv>}
 				</KvGrid>
 			)}
 			<Badges items={[conflictBadge, elidedBadge, truncatedBadge]} />

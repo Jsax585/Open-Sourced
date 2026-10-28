@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2263,7 +2262,7 @@ export class WorkerCore {
 							: `could not count matches: ${probe.failure}`;
 				let hint = "";
 				if (interrupted)
-					hint = t("; typing stopped after {1} of {0} characters (the field keeps what was typed)", `${interrupted.total}`, `${interrupted.typed}`);
+					hint = `; typing stopped after ${interrupted.typed} of ${interrupted.total} characters (the field keeps what was typed)`;
 				else if (refusal)
 					hint = `; the element never became clickable (last check: ${refusal}${countNote ? `; ${countNote}` : ""})`;
 				else if (probe && "count" in probe) hint = formatSelectorMatchHint(probe.count);

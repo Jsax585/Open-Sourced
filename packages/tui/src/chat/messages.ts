@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AssistantMessage, ImageContent, MessageAttribution, TextContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
@@ -131,9 +130,9 @@ export function resolveAbortLabel(
 		return message.errorMessage!;
 	}
 	if (retryAttempt > 0) {
-		return t("Aborted after {0} retry attempt{1}", `${retryAttempt}`, `${retryAttempt > 1 ? "s" : ""}`);
+		return `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`;
 	}
-	return t("Operation aborted\u0004packages/tui/src/chat/messages.ts:resolveAbortLabel");
+	return "Operation aborted";
 }
 
 /** True when a persisted or extension-supplied value can be sent as custom-message content. */

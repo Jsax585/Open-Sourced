@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import {
 	type AgentTool,
@@ -94,12 +93,13 @@ export function hasWaitTool(session: ToolSession): boolean {
  */
 export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetails> {
 	readonly name = "wait";
-	readonly label = t("Wait");
+	readonly label = "Wait";
 	readonly summary = "Wait for the next result of a background job or service you started, or a reply you asked for";
 	readonly description = prompt.render(waitDescription);
 	readonly parameters = waitSchema;
 	readonly strict = true;
 	readonly interruptible = true;
+	readonly handlesToolInterrupt = true;
 	readonly approval = "read";
 	readonly loadMode = "essential";
 	readonly intent = "optional";

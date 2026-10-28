@@ -33,7 +33,6 @@
  * them also activates (`omp --print --profile work`).
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { isSubcommand, LAUNCH_FLAG_COMMANDS } from "../cli-commands";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
@@ -110,7 +109,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		if (arg === "--profile") {
 			const value = argv[index + 1];
 			if (!value || value.startsWith("-")) {
-				throw new Error(t("--profile requires a profile name"));
+				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
@@ -120,7 +119,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		if (arg.startsWith("--profile=")) {
 			const value = arg.slice("--profile=".length);
 			if (!value) {
-				throw new Error(t("--profile requires a profile name"));
+				throw new Error("--profile requires a profile name");
 			}
 			profile = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
@@ -129,7 +128,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		if (arg === "--alias") {
 			const value = argv[index + 1];
 			if (!value || value.startsWith("-")) {
-				throw new Error(t("--alias requires a command name"));
+				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);
@@ -139,7 +138,7 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 		if (arg.startsWith("--alias=")) {
 			const value = arg.slice("--alias=".length);
 			if (!value) {
-				throw new Error(t("--alias requires a command name"));
+				throw new Error("--alias requires a command name");
 			}
 			aliasName = value;
 			insertBoundaryBeforeNextValue = needsBoundaryAfterGlobalStrip(stripped);

@@ -1,6 +1,5 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, jsonContainerEnd } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
@@ -175,28 +174,10 @@ function extractPartialBashEnv(partialJson: string | undefined): Readonly<Record
 	const objectStart = envStart === -1 ? -1 : partialJson.indexOf("{", envStart);
 	if (objectStart !== -1) {
 		// Scan only the env object: stop at its closing brace (outside strings)
-		// so the keys that follow it are not read as env assignments.
-		let objectEnd = partialJson.length;
-		let depth = 0;
-		for (let i = objectStart + 1; i < partialJson.length; i++) {
-			const ch = partialJson.charCodeAt(i);
-			if (ch === 0x22) {
-				// Skip the string body, honoring escapes; an unterminated string runs to the end.
-				for (i++; i < partialJson.length; i++) {
-					const inner = partialJson.charCodeAt(i);
-					if (inner === 0x5c) i++;
-					else if (inner === 0x22) break;
-				}
-			} else if (ch === 0x7b || ch === 0x5b) {
-				depth++;
-			} else if (ch === 0x7d || ch === 0x5d) {
-				if (depth === 0) {
-					objectEnd = i;
-					break;
-				}
-				depth--;
-			}
-		}
+		// so the keys that follow it are not read as env assignments. An
+		// unclosed object (still streaming) runs to the end.
+		const end = jsonContainerEnd(partialJson, objectStart);
+		const objectEnd = end === -1 ? partialJson.length : end - 1;
 		const envBody = partialJson.slice(objectStart + 1, objectEnd);
 		const matcher = /"([A-Za-z_][A-Za-z0-9_]*)"\s*:\s*"((?:\\.|[^"\\])*)(?:"|$)/gu;
 		for (const match of envBody.matchAll(matcher)) {
@@ -344,32 +325,32 @@ function bashStatsParts(
 	const wallTimeMs = details?.wallTimeMs;
 	const statsParts: string[] = [];
 	if (details?.async?.state === "running") {
-		statsParts.push(t("Backgrounded: {0}", `${details.async.jobId}`));
+		statsParts.push(`Backgrounded: ${details.async.jobId}`);
 	}
 	if (details?.service) {
 		const service = details.service;
-		statsParts.push(t("Service: {0}", `${service.name}`), t("State: {0}", `${service.state}`));
-		statsParts.push(t("Ready: {0}", `${service.ready ? t("yes") : service.timedOut ? t("timed out") : t("no")}`));
+		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
+		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
 		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
 	}
 	if (wallTimeMs !== undefined) {
-		statsParts.push(t("Wall: {0}s", `${formatWallTimeSeconds(wallTimeMs)}`));
+		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
 	}
 	if (timeoutDisabled) {
-		statsParts.push(t("Timeout: disabled"));
+		statsParts.push("Timeout: disabled");
 	}
 	if (typeof timeoutSeconds === "number") {
 		statsParts.push(
 			requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
-				? t("Timeout: {0}s (requested {1}s clamped)", `${timeoutSeconds}`, `${requestedTimeoutSeconds}`)
-				: t("Timeout: {0}s", `${timeoutSeconds}`),
+				? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
+				: `Timeout: ${timeoutSeconds}s`,
 		);
 	}
 	if (artifactId) {
-		statsParts.push(t("Artifact: {0}", `${artifactId}`));
+		statsParts.push(`Artifact: ${artifactId}`);
 	}
 	if (isError && typeof details?.exitCode === "number") {
-		statsParts.push(t("Exit: {0}", `${details.exitCode}`));
+		statsParts.push(`Exit: ${details.exitCode}`);
 	}
 	return statsParts;
 }
@@ -394,7 +375,7 @@ function shellToolHead(
 		targetKind: intent ? "text" : undefined,
 		command,
 		exit,
-		note: settled && details?.timedOut === true ? t("timed out") : undefined,
+		note: settled && details?.timedOut === true ? "timed out" : undefined,
 	};
 }
 
@@ -409,14 +390,14 @@ function callIntent(args: unknown): string | undefined {
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
 function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
-	if (details?.async?.state === "running") parts.push(t("Job {0}", `${details.async.jobId}`));
+	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
 	const service = details?.service;
 	if (service) {
-		parts.push(t("Service {0}", `${service.name}`), service.state);
-		parts.push(service.ready ? t("ready") : service.timedOut ? t("ready timed out") : t("not ready\u0004packages/tui/src/tools/bash.ts:shellFootParts"));
+		parts.push(`Service ${service.name}`, service.state);
+		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
 		if (service.pid !== undefined) parts.push(`PID ${service.pid}`);
 	}
-	if (artifactId) parts.push(t("Artifact {0}", `${artifactId}`));
+	if (artifactId) parts.push(`Artifact ${artifactId}`);
 	return parts;
 }
 
@@ -479,7 +460,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					footerMeta:
 						elapsedMs === undefined || elapsedMs < 1000
 							? undefined
-							: uiTheme.fg("dim", t("elapsed {0}", `${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`)),
+							: uiTheme.fg("dim", `elapsed ${formatDuration(Math.floor(elapsedMs / 1000) * 1000)}`),
 					sections: [{ content: capPreviewLines(cmdLines, uiTheme, { expanded: options.expanded }) }],
 				};
 			});
@@ -592,7 +573,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						isError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
-						statsParts.unshift(t("elapsed {0}", `${formatDuration(elapsedSecond * 1000)}`));
+						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
 					const footerMeta =
 						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
@@ -639,7 +620,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 									{ expanded },
 								),
 							},
-							{ label: uiTheme.fg("toolTitle", t("Output")), content: outputLines },
+							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
 						],
 					};
 

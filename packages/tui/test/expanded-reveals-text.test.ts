@@ -128,7 +128,7 @@ describe("expanded tool results reveal clipped rows", () => {
 	}
 });
 
-describe("expanded lsp references", () => {
+describe("lsp expand hint", () => {
 	const references = (count: number) =>
 		`${count} reference(s)\n${Array.from({ length: count }, (_, i) => `  src/a.ts:${i + 1}:1`).join("\n")}`;
 
@@ -140,9 +140,21 @@ describe("expanded lsp references", () => {
 				theme,
 			),
 		);
-		for (let line = 1; line <= 5; line++) expect(text).toContain(`src/a.ts:${line}:1`);
+		expect(text).toContain("line 5, col 1");
+		expect(text).not.toContain("more");
 	});
 
+	it("advertises Ctrl+O only when the collapsed view hides something", () => {
+		const hint = (text: string) =>
+			plain(
+				renderLspResult({ content: [{ type: "text", text }] }, { expanded: false, isPartial: false }, theme),
+			).includes("Expand");
+		expect(hint(references(1))).toBe(false);
+		expect(hint(references(2))).toBe(true);
+		expect(hint("Reloaded")).toBe(false);
+		expect(hint(long)).toBe(true);
+		expect(hint(`1 error(s)\nsrc/a.ts:3:5 [error] [ts] ${long} (2345)`)).toBe(true);
+	});
 });
 
 describe("expanded lsp detail rows", () => {

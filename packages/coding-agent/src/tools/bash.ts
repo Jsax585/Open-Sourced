@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type BashToolDetails,
 	formatBackgroundNotice,
@@ -546,12 +545,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				tier: "exec",
 				override: true,
 				policy: "deny",
-				reason: t("Blocked by bash pattern: {0}", `${patternRule.match}`),
+				reason: `Blocked by bash pattern: ${patternRule.match}`,
 			};
 		}
 		const criticalCommand = command !== "" && CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(command));
 		if (!compoundSegments && criticalCommand) {
-			return { tier: "exec", override: true, reason: t("Critical pattern detected") };
+			return { tier: "exec", override: true, reason: "Critical pattern detected" };
 		}
 		if (compoundSegments) {
 			let promptRule: BashApprovalPatternRule | undefined = patternRule;
@@ -563,7 +562,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						tier: "exec",
 						override: true,
 						policy: "deny",
-						reason: t("Blocked by bash pattern: {0}", `${segmentRule.match}`),
+						reason: `Blocked by bash pattern: ${segmentRule.match}`,
 					};
 				}
 				if (segmentRule?.approval === "prompt") promptRule ??= segmentRule;
@@ -574,13 +573,13 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					tier: "exec",
 					override: true,
 					policy: "prompt",
-					reason: t("Prompt required by bash pattern: {0}", `${promptRule.match}`),
+					reason: `Prompt required by bash pattern: ${promptRule.match}`,
 				};
 			}
 			for (const segment of compoundSegments) {
 				const literalCommand = segment.argv.join(" ");
 				if (criticalCommand || CRITICAL_BASH_PATTERNS.some(pattern => pattern.test(literalCommand))) {
-					return { tier: "exec", override: true, reason: t("Critical pattern detected") };
+					return { tier: "exec", override: true, reason: "Critical pattern detected" };
 				}
 			}
 			// Unmatched segments retain the standalone tool-policy and mode fallback.
@@ -592,15 +591,15 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				tier: "exec",
 				override: true,
 				policy: "prompt",
-				reason: t("Prompt required by bash pattern: {0}", `${patternRule.match}`),
+				reason: `Prompt required by bash pattern: ${patternRule.match}`,
 			};
 		}
 		return "exec";
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const rawCommand = (args as Partial<BashToolInput>).command;
-		const command = typeof rawCommand === "string" ? rawCommand : t("(missing)\u0004packages/coding-agent/src/tools/bash.ts:BashTool.formatApprovalDetails.command");
-		return [t("Command: {0}", `${truncateForPrompt(command)}`)];
+		const command = typeof rawCommand === "string" ? rawCommand : "(missing)";
+		return [`Command: ${truncateForPrompt(command)}`];
 	};
 	readonly label = "Bash";
 	readonly loadMode = "essential";
@@ -874,7 +873,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Outlives the run with the job row, so a finished pipeline stays readable.
 		const streams = new PipeStreams();
 		// The job's widget reads the command's own output and every pipe it opens.
-		const outputTap = new TextTap("out", t("the command's own stdout+stderr"));
+		const outputTap = new TextTap("out", "the command's own stdout+stderr");
 		const pipeSources = new PipeTextSources(streams);
 		let latestText = "";
 		let latestProgressDetails: BashProgressDetails | undefined;
@@ -1042,9 +1041,9 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		if (name !== undefined) {
 			if (!this.#launchEnabled) throw new ToolError("Service launch is disabled in this session.");
 			if (rawTimeout !== undefined)
-				pendingNotices.push(t("Ignored timeout: service-only; readiness follows ready.timeout."));
+				pendingNotices.push("Ignored timeout: service-only; readiness follows ready.timeout.");
 			if (asyncRequested)
-				pendingNotices.push(t("Ignored async: service-only; a service start is asynchronous already."));
+				pendingNotices.push("Ignored async: service-only; a service start is asynchronous already.");
 		} else if (ready !== undefined && (ready.log !== undefined || (ready.port !== undefined && ready.port !== 0))) {
 			// Host/timeout only configure a readiness condition; neither requests one,
 			// and tool-call layers may materialize an unset port as zero. Keep service

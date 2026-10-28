@@ -4,7 +4,6 @@
  * Both providers use the same authorization-code flow shape; only the client
  * credentials, scopes, endpoint constants, and project-discovery logic differ.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as AIError from "../../error";
 
 /**
@@ -34,7 +33,7 @@ export interface OAuthFetchOptions {
  */
 export function throwIfLoginCancelled(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) {
-		throw new AIError.LoginCancelledError(t("OAuth login cancelled: {0}", `${String(signal.reason)}`));
+		throw new AIError.LoginCancelledError(`OAuth login cancelled: ${String(signal.reason)}`);
 	}
 }
 
@@ -56,10 +55,10 @@ export async function oauthFetch(
 		return await fetch(url, { ...init, signal: requestSignal });
 	} catch (err) {
 		if (signal?.aborted) {
-			throw new AIError.LoginCancelledError(t("OAuth login cancelled: {0}", `${String(signal.reason)}`));
+			throw new AIError.LoginCancelledError(`OAuth login cancelled: ${String(signal.reason)}`);
 		}
 		if (timeoutSignal.aborted) {
-			throw new AIError.OAuthError(t("Timed out after {1}ms waiting for {0}", `${url}`, `${timeoutMs}`), {
+			throw new AIError.OAuthError(`Timed out after ${timeoutMs}ms waiting for ${url}`, {
 				kind: "timeout",
 				provider,
 			});

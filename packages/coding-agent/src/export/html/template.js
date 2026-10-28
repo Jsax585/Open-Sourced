@@ -1,8 +1,6 @@
     (function() {
       'use strict';
 
-      function ompT(source, ...values) { return source.replace(/\{(\d+)\}/g, (match, index) => index < values.length ? String(values[index]) : match); }
-
       const THEME_STORAGE_KEY = 'omp-export-theme';
       const themeSelect = document.getElementById('theme-select');
       let themePreference = 'auto';
@@ -40,7 +38,6 @@
       // Session render context: scopes entry lookups and tool-view host
       // wiring to one transcript (main session or an embedded subagent).
       const mainSctx = { entries, prefix: '', idPrefix: 'entry-' };
-      const roleLabels = { user: ompT("user"), developer: ompT("developer"), assistant: ompT("assistant"), toolResult: ompT("tool") };
 
       // ============================================================
       // URL PARAMETER HANDLING
@@ -333,7 +330,7 @@
         switch (entry.type) {
           case 'message': {
             const msg = entry.message;
-            parts.push(msg.role, roleLabels[msg.role] || '');
+            parts.push(msg.role);
             if (msg.content) parts.push(extractContent(msg.content));
             if (msg.role === 'bashExecution' && msg.command) parts.push(msg.command);
             if (msg.role === 'jsExecution' && msg.code) parts.push(msg.code);
@@ -344,19 +341,19 @@
             parts.push(typeof entry.content === 'string' ? entry.content : extractContent(entry.content));
             break;
           case 'compaction':
-            parts.push('compaction', ompT("compaction"));
+            parts.push('compaction');
             break;
           case 'branch_summary':
-            parts.push('branch summary', ompT("branch summary"), entry.summary);
+            parts.push('branch summary', entry.summary);
             break;
           case 'model_change':
-            parts.push('model', ompT("model"), entry.model);
+            parts.push('model', entry.model);
             break;
           case 'thinking_level_change':
-            parts.push('thinking', ompT("thinking"), entry.thinkingLevel);
+            parts.push('thinking', entry.thinkingLevel);
             break;
           case 'mode_change':
-            parts.push('mode', ompT("mode"), entry.mode);
+            parts.push('mode', entry.mode);
             break;
         }
 
@@ -515,31 +512,31 @@
             const msg = entry.message;
             if (msg.role === 'user') {
               const content = truncate(normalizeTreeText(extractContent(msg.content)));
-              return labelHtml + `<span class="tree-role-user">${escapeHtml(ompT("user:"))}</span> ${escapeHtml(content)}`;
+              return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
             }
             if (msg.role === 'developer') {
               const content = truncate(normalizeTreeText(extractContent(msg.content)));
-              return labelHtml + `<span class="tree-role-developer">${escapeHtml(ompT("developer:"))}</span> ${escapeHtml(content)}`;
+              return labelHtml + `<span class="tree-role-developer">developer:</span> ${escapeHtml(content)}`;
             }
             if (msg.role === 'assistant') {
               const textContent = truncate(normalizeTreeText(extractContent(msg.content)));
               if (textContent) {
-                return labelHtml + `<span class="tree-role-assistant">${escapeHtml(ompT("assistant:"))}</span> ${escapeHtml(textContent)}`;
+                return labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(textContent)}`;
               }
               if (msg.stopReason === 'aborted') {
-                return labelHtml + `<span class="tree-role-assistant">${escapeHtml(ompT("assistant:"))}</span> <span class="tree-muted">${escapeHtml(ompT("(aborted)"))}</span>`;
+                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(aborted)</span>`;
               }
               if (msg.errorMessage) {
-                return labelHtml + `<span class="tree-role-assistant">${escapeHtml(ompT("assistant:"))}</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
+                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
               }
-              return labelHtml + `<span class="tree-role-assistant">${escapeHtml(ompT("assistant:"))}</span> <span class="tree-muted">${escapeHtml(ompT("(no text)"))}</span>`;
+              return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(no text)</span>`;
             }
             if (msg.role === 'toolResult') {
               const toolCall = msg.toolCallId ? toolCallMap.get(msg.toolCallId) : null;
               if (toolCall) {
                 return labelHtml + `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`;
               }
-              return labelHtml + `<span class="tree-role-tool">[${msg.toolName || ompT("tool")}]</span>`;
+              return labelHtml + `<span class="tree-role-tool">[${msg.toolName || 'tool'}]</span>`;
             }
             if (msg.role === 'bashExecution') {
               const cmd = truncate(normalizeTreeText(msg.command || ''));
@@ -552,21 +549,21 @@
             return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
           }
           case 'compaction':
-            return labelHtml + `<span class="tree-compaction">${escapeHtml(ompT("[compaction: "))}${Math.round(entry.tokensBefore/1000)}${escapeHtml(ompT("k tokens]"))}</span>`;
+            return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
           case 'branch_summary': {
             const summary = truncate(normalizeTreeText(entry.summary || ''));
-            return labelHtml + `<span class="tree-branch-summary">${escapeHtml(ompT("[branch summary]:"))}</span> ${escapeHtml(summary)}`;
+            return labelHtml + `<span class="tree-branch-summary">[branch summary]:</span> ${escapeHtml(summary)}`;
           }
           case 'custom_message': {
             const content = typeof entry.content === 'string' ? entry.content : extractContent(entry.content);
             return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalizeTreeText(content)))}`;
           }
           case 'model_change':
-            return labelHtml + `<span class="tree-muted">${escapeHtml(ompT("[model: "))}${escapeHtml(entry.model)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.model)}]</span>`;
           case 'thinking_level_change':
-            return labelHtml + `<span class="tree-muted">${escapeHtml(ompT("[thinking: "))}${entry.thinkingLevel}]</span>`;
+            return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
           case 'mode_change':
-            return labelHtml + `<span class="tree-muted">${escapeHtml(ompT("[mode: "))}${escapeHtml(entry.mode)}]</span>`;
+            return labelHtml + `<span class="tree-muted">[mode: ${escapeHtml(entry.mode)}]</span>`;
           default:
             return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
         }
@@ -767,7 +764,7 @@
             if (row.assistantText !== undefined) {
               const label = row.showLabel ? flatNode.node.label : undefined;
               const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : '';
-              content.innerHTML = labelHtml + `<span class="tree-role-assistant">${escapeHtml(ompT("assistant:"))}</span> ${escapeHtml(truncate(normalizeTreeText(row.assistantText)))}`;
+              content.innerHTML = labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(truncate(normalizeTreeText(row.assistantText)))}`;
             } else if (row.assistantToolCall) {
               const call = row.assistantToolCall;
               content.innerHTML = `<span class="tree-role-tool">${escapeHtml(formatToolCall(call.name, call.arguments || {}))}</span>`;
@@ -807,7 +804,7 @@
           }
         }
 
-        document.getElementById('tree-status').textContent = ompT("{0} / {1} rows", sidebarRows.length, allSidebarRows.length);
+        document.getElementById('tree-status').textContent = `${sidebarRows.length} / ${allSidebarRows.length} rows`;
 
         // Scroll active node into view after layout
         setTimeout(() => {
@@ -827,15 +824,17 @@
       // MESSAGE RENDERING
       // ============================================================
 
-      const tokenFormat = new Intl.NumberFormat(ompT("en-US"), { notation: 'compact', maximumFractionDigits: 1 });
       function formatTokens(count) {
-        return tokenFormat.format(count);
+        if (count < 1000) return count.toString();
+        if (count < 10000) return (count / 1000).toFixed(1) + 'k';
+        if (count < 1000000) return Math.round(count / 1000) + 'k';
+        return (count / 1000000).toFixed(1) + 'M';
       }
 
       function formatTimestamp(ts) {
         if (!ts) return '';
         const date = new Date(ts);
-        return date.toLocaleTimeString(ompT("en-US"), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       }
 
       function replaceTabs(text) {
@@ -882,7 +881,7 @@
 
             return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
               <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
-              <div class="expand-hint">... (${remaining}${escapeHtml(ompT(" more lines)"))}</div></div>
+              <div class="expand-hint">... (${remaining} more lines)</div></div>
               <div class="output-full"><pre><code class="hljs">${highlighted}</code></pre></div></div>`;
           }
 
@@ -896,7 +895,7 @@
           for (const line of displayLines) {
             out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
           }
-          out += `<div class="expand-hint">... (${remaining}${escapeHtml(ompT(" more lines)"))}</div></div>`;
+          out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
           out += '<div class="output-full">';
           for (const line of lines) {
             out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
@@ -1003,10 +1002,10 @@
         subOverlayEl.id = 'subsession-overlay';
         subOverlayEl.innerHTML = `
           <div class="subsession-backdrop"></div>
-          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(ompT("Subagent session"))}" tabindex="-1">
+          <div class="subsession-panel" role="dialog" aria-modal="true" aria-label="Subagent session" tabindex="-1">
             <div class="subsession-header">
-              <nav class="subsession-breadcrumb" aria-label="${escapeHtml(ompT("Subagent breadcrumb"))}"></nav>
-              <button type="button" class="subsession-close" title="${escapeHtml(ompT("Close (Esc)"))}" aria-label="${escapeHtml(ompT("Close subagent view"))}">&times;</button>
+              <nav class="subsession-breadcrumb" aria-label="Subagent breadcrumb"></nav>
+              <button type="button" class="subsession-close" title="Close (Esc)" aria-label="Close subagent view">&times;</button>
             </div>
             <div class="subsession-meta"></div>
             <div class="subsession-body"></div>
@@ -1031,7 +1030,7 @@
         if (!body.firstChild) {
           const empty = document.createElement('div');
           empty.className = 'subsession-empty';
-          empty.textContent = ompT("(no renderable entries)");
+          empty.textContent = '(no renderable entries)';
           body.appendChild(empty);
         }
         subSessionBodyCache.set(key, body);
@@ -1043,7 +1042,7 @@
         const stats = computeStats(sub.entries);
         const parts = [];
         if (stats.models.length > 0) parts.push(stats.models.join(', '));
-        parts.push(ompT("{0} entries", sub.entries.length));
+        parts.push(sub.entries.length + (sub.entries.length === 1 ? ' entry' : ' entries'));
         return parts.join(' · ');
       }
 
@@ -1208,7 +1207,7 @@
        * Render the copy-link button HTML for a message.
        */
       function renderCopyLinkButton(entryId) {
-        return `<button class="copy-link-btn" data-entry-id="${entryId}" title="${escapeHtml(ompT("Copy link to this message"))}">
+        return `<button class="copy-link-btn" data-entry-id="${entryId}" title="Copy link to this message">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
             <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
@@ -1281,7 +1280,7 @@
                 if (!thinking) continue;
                 html += `<div class="thinking-block" id="${blockId}">
                   <div class="thinking-text">${escapeHtml(thinking)}</div>
-                  <div class="thinking-collapsed">${escapeHtml(ompT("Thinking ..."))}</div>
+                  <div class="thinking-collapsed">Thinking ...</div>
                 </div>`;
               } else if (block.type === 'image') {
                 html += `<div class="message-images" id="${blockId}"><img src="data:${block.mimeType};base64,${block.data}" class="message-image" /></div>`;
@@ -1291,9 +1290,9 @@
             }
 
             if (msg.stopReason === 'aborted') {
-              html += `<div class="error-text">${escapeHtml(ompT("Aborted"))}</div>`;
+              html += '<div class="error-text">Aborted</div>';
             } else if (msg.stopReason === 'error') {
-              html += `<div class="error-text">${escapeHtml(ompT("Error: "))}${escapeHtml(msg.errorMessage || ompT("Unknown error"))}</div>`;
+              html += `<div class="error-text">Error: ${escapeHtml(msg.errorMessage || 'Unknown error')}</div>`;
             }
 
             html += '</div>';
@@ -1306,9 +1305,9 @@
             html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
             if (msg.cancelled) {
-              html += `<div style="color: var(--warning)">${escapeHtml(ompT("(cancelled)"))}</div>`;
+              html += '<div style="color: var(--warning)">(cancelled)</div>';
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">${escapeHtml(ompT("(exit "))}${msg.exitCode})</div>`;
+              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
             }
             html += '</div>';
             return html;
@@ -1320,9 +1319,9 @@
             html += `<div class="tool-command">$ ${escapeHtml(msg.code)}</div>`;
             if (msg.output) html += formatExpandableOutput(msg.output, 10);
             if (msg.cancelled) {
-              html += `<div style="color: var(--warning)">${escapeHtml(ompT("(cancelled)"))}</div>`;
+              html += '<div style="color: var(--warning)">(cancelled)</div>';
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">${escapeHtml(ompT("(exit "))}${msg.exitCode})</div>`;
+              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
             }
             html += '</div>';
             return html;
@@ -1332,27 +1331,27 @@
         }
 
         if (entry.type === 'model_change') {
-          const html = `<div class="model-change" id="${entryId}">${tsHtml}${escapeHtml(ompT("Switched to model: "))}<span class="model-name">${escapeHtml(entry.model)}</span></div>`;
+          const html = `<div class="model-change" id="${entryId}">${tsHtml}Switched to model: <span class="model-name">${escapeHtml(entry.model)}</span></div>`;
           return html;
         }
 
         if (entry.type === 'thinking_level_change') {
-          const html = `<div class="thinking-change" id="${entryId}">${tsHtml}${escapeHtml(ompT("Thinking level: "))}<span class="thinking-level">${escapeHtml(entry.thinkingLevel)}</span></div>`;
+          const html = `<div class="thinking-change" id="${entryId}">${tsHtml}Thinking level: <span class="thinking-level">${escapeHtml(entry.thinkingLevel)}</span></div>`;
           return html;
         }
 
 
         if (entry.type === 'compaction') {
           return `<div class="compaction" id="${entryId}" onclick="this.classList.toggle('expanded')">
-            <div class="compaction-label">${escapeHtml(ompT("[compaction]"))}</div>
-            <div class="compaction-collapsed">${escapeHtml(ompT("Compacted from {0} tokens", entry.tokensBefore.toLocaleString(ompT("en-US"))))}</div>
-            <div class="compaction-content"><strong>${escapeHtml(ompT("Compacted from {0} tokens", entry.tokensBefore.toLocaleString(ompT("en-US"))))}</strong>\n\n${escapeHtml(entry.summary)}</div>
+            <div class="compaction-label">[compaction]</div>
+            <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
+            <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
           </div>`;
         }
 
         if (entry.type === 'branch_summary') {
           return `<div class="branch-summary" id="${entryId}">${tsHtml}
-            <div class="branch-summary-header">${escapeHtml(ompT("branch summary"))}</div>
+            <div class="branch-summary-header">Branch Summary</div>
             <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
           </div>`;
         }
@@ -1421,35 +1420,35 @@
         const tokenParts = [];
         if (globalStats.tokens.input) tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
         if (globalStats.tokens.output) tokenParts.push(`↓${formatTokens(globalStats.tokens.output)}`);
-        if (globalStats.tokens.cacheRead) tokenParts.push(`${escapeHtml(ompT("Cache read "))}${formatTokens(globalStats.tokens.cacheRead)}`);
-        if (globalStats.tokens.cacheWrite) tokenParts.push(`${escapeHtml(ompT("Cache write "))}${formatTokens(globalStats.tokens.cacheWrite)}`);
+        if (globalStats.tokens.cacheRead) tokenParts.push(`R${formatTokens(globalStats.tokens.cacheRead)}`);
+        if (globalStats.tokens.cacheWrite) tokenParts.push(`W${formatTokens(globalStats.tokens.cacheWrite)}`);
 
         const msgParts = [];
-        if (globalStats.userMessages) msgParts.push(ompT("{0} user", globalStats.userMessages));
-        if (globalStats.developerMessages) msgParts.push(ompT("{0} developer", globalStats.developerMessages));
-        if (globalStats.assistantMessages) msgParts.push(ompT("{0} assistant", globalStats.assistantMessages));
-        if (globalStats.toolResults) msgParts.push(ompT("{0} tool results", globalStats.toolResults));
-        if (globalStats.customMessages) msgParts.push(ompT("{0} custom", globalStats.customMessages));
-        if (globalStats.compactions) msgParts.push(ompT("{0} compactions", globalStats.compactions));
-        if (globalStats.branchSummaries) msgParts.push(ompT("{0} branch summaries", globalStats.branchSummaries));
+        if (globalStats.userMessages) msgParts.push(`${globalStats.userMessages} user`);
+        if (globalStats.developerMessages) msgParts.push(`${globalStats.developerMessages} developer`);
+        if (globalStats.assistantMessages) msgParts.push(`${globalStats.assistantMessages} assistant`);
+        if (globalStats.toolResults) msgParts.push(`${globalStats.toolResults} tool results`);
+        if (globalStats.customMessages) msgParts.push(`${globalStats.customMessages} custom`);
+        if (globalStats.compactions) msgParts.push(`${globalStats.compactions} compactions`);
+        if (globalStats.branchSummaries) msgParts.push(`${globalStats.branchSummaries} branch summaries`);
 
         let html = `
           <div class="header">
-            <h1>${escapeHtml(ompT("Session: "))}${escapeHtml(header?.id || ompT("unknown"))}</h1>
-            <div class="help-bar">${escapeHtml(ompT("T toggle thinking · O toggle tools"))}</div>
+            <h1>Session: ${escapeHtml(header?.id || 'unknown')}</h1>
+            <div class="help-bar">T toggle thinking · O toggle tools</div>
             <div class="header-info">
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Date:"))}</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString(ompT("en-US")) : ompT("unknown")}</span></div>
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Models:"))}</span><span class="info-value">${globalStats.models.join(', ') || ompT("unknown")}</span></div>
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Messages:"))}</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Tool Calls:"))}</span><span class="info-value">${globalStats.toolCalls}</span></div>
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Tokens:"))}</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
-              <div class="info-item"><span class="info-label">${escapeHtml(ompT("Cost:"))}</span><span class="info-value">$${totalCost.toFixed(3)}</span></div>
+              <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : 'unknown'}</span></div>
+              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${globalStats.models.join(', ') || 'unknown'}</span></div>
+              <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
+              <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
+              <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
+              <div class="info-item"><span class="info-label">Cost:</span><span class="info-value">$${totalCost.toFixed(3)}</span></div>
             </div>
           </div>`;
 
         if (systemPrompt) {
           html += `<div class="system-prompt">
-            <div class="system-prompt-header">${escapeHtml(ompT("System Prompt"))}</div>
+            <div class="system-prompt-header">System Prompt</div>
             <div class="system-prompt-content">${escapeHtml(systemPrompt)}</div>
           </div>`;
         }
@@ -1458,7 +1457,7 @@
           const namesHtml = tools.map(t => `<span class="tool-name-chip">${escapeHtml(t.name)}</span>`).join('');
           const fullHtml = tools.map(t => `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`).join('');
           html += `<div class="tools-list collapsed" onclick="this.classList.toggle('collapsed')">
-            <div class="tools-header">${escapeHtml(ompT("Available Tools ({0})", tools.length))}</div>
+            <div class="tools-header">Available Tools (${tools.length})</div>
             <div class="tools-collapsed">${namesHtml}</div>
             <div class="tools-content">${fullHtml}</div>
           </div>`;
@@ -1822,7 +1821,7 @@
         if (!messages) return;
         const div = document.createElement('div');
         div.className = 'share-load-error';
-        div.textContent = ompT("Failed to load session: ") + (err && err.message ? err.message : String(err));
+        div.textContent = 'Failed to load session: ' + (err && err.message ? err.message : String(err));
         messages.appendChild(div);
       }
 

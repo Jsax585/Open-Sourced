@@ -5,7 +5,6 @@
  * The settings registry (`config/registry.ts`) is the source of truth for available settings.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { APP_NAME, getAgentDir, isRecord } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { orderedSettings } from "../config/all-settings";
@@ -81,8 +80,8 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 
 	const action = args[1];
 	if (!VALID_ACTIONS.includes(action as ConfigAction)) {
-		console.error(chalk.red(t("Unknown config command: {0}", `${action}`)));
-		console.error(t("Valid commands: {0}", `${VALID_ACTIONS.join(", ")}`));
+		console.error(chalk.red(`Unknown config command: ${action}`));
+		console.error(`Valid commands: ${VALID_ACTIONS.join(", ")}`);
 		process.exit(1);
 	}
 
@@ -117,7 +116,7 @@ export function parseConfigArgs(args: string[]): ConfigCommandArgs | undefined {
 
 function formatValue(value: unknown): string {
 	if (value === undefined || value === null) {
-		return chalk.dim(t("(not set)"));
+		return chalk.dim("(not set)");
 	}
 	if (typeof value === "boolean") {
 		return value ? chalk.green("true") : chalk.red("false");
@@ -223,7 +222,7 @@ async function handleList(flags: { json?: boolean }): Promise<void> {
 		return;
 	}
 
-	console.log(chalk.bold(t("Settings:\n")));
+	console.log(chalk.bold("Settings:\n"));
 
 	const groups: Record<string, CliSettingDef[]> = {};
 	for (const def of defs) {
@@ -258,15 +257,15 @@ async function handleList(flags: { json?: boolean }): Promise<void> {
 
 function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 	if (!key) {
-		console.error(chalk.red(t("Usage: {0} config get <key>", `${APP_NAME}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Usage: ${APP_NAME} config get <key>`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(t("Unknown setting: {0}", `${key}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Unknown setting: ${key}`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
@@ -282,15 +281,15 @@ function handleGet(key: string | undefined, flags: { json?: boolean }): void {
 
 async function handleSet(key: string | undefined, value: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key || value === undefined) {
-		console.error(chalk.red(t("Usage: {0} config set <key> <value>", `${APP_NAME}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Usage: ${APP_NAME} config set <key> <value>`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(t("Unknown setting: {0}", `${key}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Unknown setting: ${key}`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
@@ -335,42 +334,42 @@ function shadowingSource(setting: AnySetting): { json: Record<string, string>; m
 			return setting.envFallback
 				? {
 						json: { fallbackEnv: name },
-						message: t("${0} is used as a fallback while the saved value is blank.", `${name}`),
+						message: `$${name} is used as a fallback while the saved value is blank.`,
 					}
 				: {
 						json: { overriddenBy: name },
-						message: t("${0} overrides this value; unset it for the saved value to apply.", `${name}`),
+						message: `$${name} overrides this value; unset it for the saved value to apply.`,
 					};
 		}
 		case "project":
 			return {
 				json: { overriddenBy: provenance },
-				message: t("Project settings override this value here; edit or remove it there for the saved value to apply."),
+				message: "Project settings override this value here; edit or remove it there for the saved value to apply.",
 			};
 		case "overlay":
 			return {
 				json: { overriddenBy: provenance },
-				message: t("A --config / PI_CONFIG_FILES overlay overrides this value for this process."),
+				message: "A --config / PI_CONFIG_FILES overlay overrides this value for this process.",
 			};
 		case "runtime":
 			return {
 				json: { overriddenBy: provenance },
-				message: t("A runtime override supplies the effective value for this process."),
+				message: "A runtime override supplies the effective value for this process.",
 			};
 	}
 }
 
 async function handleReset(key: string | undefined, flags: { json?: boolean }): Promise<void> {
 	if (!key) {
-		console.error(chalk.red(t("Usage: {0} config reset <key>", `${APP_NAME}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Usage: ${APP_NAME} config reset <key>`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
 	const def = findSettingDef(key);
 	if (!def) {
-		console.error(chalk.red(t("Unknown setting: {0}", `${key}`)));
-		console.error(chalk.dim(t("\nRun '{0} config list' to see available keys", `${APP_NAME}`)));
+		console.error(chalk.red(`Unknown setting: ${key}`));
+		console.error(chalk.dim(`\nRun '${APP_NAME} config list' to see available keys`));
 		process.exit(1);
 	}
 
@@ -404,5 +403,30 @@ function handlePath(): void {
 // =============================================================================
 
 export function printConfigHelp(): void {
-	console.log(t("{0} - Manage settings\n\n{1}\n  list               List all settings with current values\n  get <key>          Get a specific setting value\n  set <key> <value>  Set a setting value\n  reset <key>        Remove a setting from config.yml so its default applies\n  path               Print the config directory path\n  init-xdg           Initialize XDG Base Directory structure\n\n{2}\n  --json             Output as JSON\n\n{3}\n  {4} config list\n  {5} config get theme\n  {6} config set theme catppuccin-mocha\n  {7} config set compaction.enabled false\n  {8} config set defaultThinkingLevel medium\n  {9} config reset steeringMode\n  {10} config list --json\n  {11} config init-xdg\n\n{12}\n  true, false, yes, no, on, off, 1, 0\n", `${chalk.bold(`${APP_NAME} config`)}`, `${chalk.bold(t("Commands:"))}`, `${chalk.bold(t("Options:"))}`, `${chalk.bold(t("Examples:"))}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${APP_NAME}`, `${chalk.bold(t("Boolean Values:"))}`));
+	console.log(`${chalk.bold(`${APP_NAME} config`)} - Manage settings
+
+${chalk.bold("Commands:")}
+  list               List all settings with current values
+  get <key>          Get a specific setting value
+  set <key> <value>  Set a setting value
+  reset <key>        Remove a setting from config.yml so its default applies
+  path               Print the config directory path
+  init-xdg           Initialize XDG Base Directory structure
+
+${chalk.bold("Options:")}
+  --json             Output as JSON
+
+${chalk.bold("Examples:")}
+  ${APP_NAME} config list
+  ${APP_NAME} config get theme
+  ${APP_NAME} config set theme catppuccin-mocha
+  ${APP_NAME} config set compaction.enabled false
+  ${APP_NAME} config set defaultThinkingLevel medium
+  ${APP_NAME} config reset steeringMode
+  ${APP_NAME} config list --json
+  ${APP_NAME} config init-xdg
+
+${chalk.bold("Boolean Values:")}
+  true, false, yes, no, on, off, 1, 0
+`);
 }

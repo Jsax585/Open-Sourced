@@ -1,5 +1,4 @@
 /** `fetch` — reader-mode URL fetch; output is markdown with a metadata header. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, InvalidArg, Kv, KvGrid, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -50,13 +49,13 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 			{args.raw === true && (
 				<>
 					{" "}
-					<Badge>{t("raw")}</Badge>
+					<Badge>raw</Badge>
 				</>
 			)}
 			{details?.truncated && (
 				<>
 					{" "}
-					<Badge tone="warn">{t("truncated")}</Badge>
+					<Badge tone="warn">truncated</Badge>
 				</>
 			)}
 		</>
@@ -73,14 +72,14 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			<KvGrid>
 				<Kv k="url">{url ?? <InvalidArg what="url" />}</Kv>
-				<Kv k={t("method")}>{method && method !== "GET" && <Badge tone="accent">{method}</Badge>}</Kv>
-				<Kv k={t("raw")}>{args.raw === true && <Badge>{t("raw")}</Badge>}</Kv>
-				<Kv k={t("timeout")}>{timeout != null && `${timeout}s`}</Kv>
-				<Kv k={t("final url")}>{redirected && details?.finalUrl}</Kv>
+				<Kv k="method">{method && method !== "GET" && <Badge tone="accent">{method}</Badge>}</Kv>
+				<Kv k="raw">{args.raw === true && <Badge>raw</Badge>}</Kv>
+				<Kv k="timeout">{timeout != null && `${timeout}s`}</Kv>
+				<Kv k="final url">{redirected && details?.finalUrl}</Kv>
 				<Kv k="content-type">{details?.contentType}</Kv>
-				<Kv k={t("via")}>{details?.method}</Kv>
-				<Kv k={t("notes")}>{details && details.notes.length > 0 && details.notes.join("; ")}</Kv>
-				<Kv k={t("truncated\u0004packages/collab-web/src/tool-render/tools/fetch.tsx:Body")}>{details?.truncated && <Badge tone="warn">{t("output truncated")}</Badge>}</Kv>
+				<Kv k="via">{details?.method}</Kv>
+				<Kv k="notes">{details && details.notes.length > 0 && details.notes.join("; ")}</Kv>
+				<Kv k="truncated">{details?.truncated && <Badge tone="warn">output truncated</Badge>}</Kv>
 			</KvGrid>
 			<ResultText result={result} maxLines={12} lang="markdown" />
 		</>

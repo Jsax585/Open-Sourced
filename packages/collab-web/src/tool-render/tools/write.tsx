@@ -1,5 +1,4 @@
 /** `write` — file create/overwrite: content preview plus write confirmation. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, CodeBlock, InvalidArg, Note, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -35,7 +34,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 			{lines > 1 && (
 				<>
 					{" "}
-					<Badge>{t("{0} lines", `${lines}`)}</Badge>
+					<Badge>{lines} lines</Badge>
 				</>
 			)}
 		</>
@@ -51,7 +50,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		<>
 			<Badges
 				items={[
-					details?.madeExecutable === true && <Badge tone="ok">{t("made executable")}</Badge>,
+					details?.madeExecutable === true && <Badge tone="ok">made executable</Badge>,
 					diagnostics?.summary && (
 						<Badge tone={diagnostics.errored ? "err" : "warn"}>
 							{diagnostics.server ? `${diagnostics.server}: ` : ""}
@@ -62,7 +61,8 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			/>
 			{content === null ? (
 				<Note tone="err">
-					<InvalidArg what="content" />{t(" — expected string")}</Note>
+					<InvalidArg what="content" /> — expected string
+				</Note>
 			) : (
 				content && <CodeBlock code={content} lang={path ? languageFromPath(path) : null} maxLines={12} />
 			)}
@@ -70,7 +70,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{diagnostics && diagnostics.messages.length > 0 && (
 				<Output
 					text={diagnostics.messages.join("\n")}
-					title={t("diagnostics")}
+					title="diagnostics"
 					error={diagnostics.errored}
 					maxLines={8}
 				/>

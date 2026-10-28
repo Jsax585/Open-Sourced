@@ -2,7 +2,6 @@
  * System information collection for debug reports.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as os from "node:os";
 import { formatBytes, getProjectDir, VERSION } from "@oh-my-pi/pi-utils";
 
@@ -80,20 +79,20 @@ export async function collectSystemInfo(): Promise<SystemInfo> {
 /** Format system info for display */
 export function formatSystemInfo(info: SystemInfo): string {
 	const lines = [
-		t("System Information"),
+		"System Information",
 		"━━━━━━━━━━━━━━━━━━",
 		`OS:      ${info.os}`,
-		t("Arch:    {0}", `${info.arch}`),
+		`Arch:    ${info.arch}`,
 		`CPU:     ${info.cpu}`,
-		t("Memory:  {0} ({1} free)", `${formatBytes(info.memory.total)}`, `${formatBytes(info.memory.free)}`),
+		`Memory:  ${formatBytes(info.memory.total)} (${formatBytes(info.memory.free)} free)`,
 		`Bun:     ${info.versions.bun}`,
-		t("App:     omp {0}", `${info.versions.app}`),
-		t("Node:    {0} (compat)", `${info.versions.node}`),
-		t("CWD:     {0}", `${info.cwd}`),
-		t("Shell:   {0}", `${info.shell}`),
+		`App:     omp ${info.versions.app}`,
+		`Node:    ${info.versions.node} (compat)`,
+		`CWD:     ${info.cwd}`,
+		`Shell:   ${info.shell}`,
 	];
 	if (info.terminal) {
-		lines.push(t("Terminal: {0}", `${info.terminal}`));
+		lines.push(`Terminal: ${info.terminal}`);
 	}
 	return lines.join("\n");
 }

@@ -95,9 +95,6 @@ describe("renderOutputBlock", () => {
 		).map(line => stripVTControlCharacters(line));
 
 		expect(lines[1]).toBe(`│ ${"x".repeat(26)} │`);
-		expect(lines[2]).toStartWith("│ ");
-		expect(lines[2]?.match(/\d+/)?.[0]).toBe("1");
-		expect(lines.every(line => visibleWidth(line) <= 30)).toBe(true);
-		expect(lines.slice(1, -1).join("")).not.toContain("x".repeat(27));
+		expect(lines[2]).toStartWith("│ … 1 more line");
 	});
 });

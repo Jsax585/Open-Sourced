@@ -1,7 +1,6 @@
 /**
  * Render a code or markdown cell with optional output section.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { Markdown } from "../components/markdown";
 import { styledSpans } from "../native/spans";
@@ -98,7 +97,7 @@ function formatHeader(options: CodeCellOptions, theme: Theme): { title: string; 
 	if (title) {
 		parts.push(theme.fg("toolTitle", title));
 	}
-	const headerTitle = parts.length > 0 ? parts.join(" ") : theme.fg("toolTitle", t("Code"));
+	const headerTitle = parts.length > 0 ? parts.join(" ") : theme.fg("toolTitle", "Code");
 
 	const metaParts: string[] = [];
 	if (duration !== undefined) {
@@ -203,7 +202,7 @@ export function renderCodeCell(options: CodeCellOptions, theme: Theme): string[]
 
 	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: displayCodeLines }];
 	if (outputLines.length > 0) {
-		sections.push({ label: theme.fg("toolTitle", t("Output")), lines: outputLines });
+		sections.push({ label: theme.fg("toolTitle", "Output"), lines: outputLines });
 	}
 
 	return renderOutputBlock({ header: title, headerMeta: meta, state, sections, width }, theme);
@@ -226,7 +225,7 @@ function describeHeader(options: CellHeaderOptions, theme: Theme): { head: TspSp
 		push([span(`[${options.index + 1}/${options.total}]`, "accent")]);
 	}
 	if (options.title) push([span(options.title, "toolTitle")]);
-	if (head.length === 0) head.push(span(t("Code"), "toolTitle"));
+	if (head.length === 0) head.push(span("Code", "toolTitle"));
 	return {
 		head,
 		meta: options.duration === undefined ? undefined : [span(formatDuration(options.duration), "dim")],
@@ -240,7 +239,7 @@ function describeCellOutput(
 ): NativeOutputBlockSection | undefined {
 	if (!output?.trim()) return undefined;
 	return {
-		label: [span(t("Output"), "toolTitle")],
+		label: [span("Output", "toolTitle")],
 		key: "output",
 		body: [describeOutputLines(splitTerminalOutputLines(output), { expanded, collapsedMaxLines: outputMaxLines })],
 	};
@@ -352,7 +351,7 @@ export function renderMarkdownCell(options: MarkdownCellOptions, theme: Theme): 
 
 	const sections: Array<{ label?: string; lines: readonly string[] }> = [{ lines: contentLines }];
 	if (outputLines.length > 0) {
-		sections.push({ label: theme.fg("toolTitle", t("Output")), lines: outputLines });
+		sections.push({ label: theme.fg("toolTitle", "Output"), lines: outputLines });
 	}
 
 	return renderOutputBlock({ header: title, headerMeta: meta, state, sections, width }, theme);

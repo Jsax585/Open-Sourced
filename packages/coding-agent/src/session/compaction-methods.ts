@@ -1,6 +1,5 @@
 /** Ordered automatic context-maintenance methods and their settings metadata. */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type CompactionSettings as EngineCompactionSettings,
 	shouldUseProviderNativeCompaction,
@@ -13,29 +12,29 @@ import type { CompactionSettings } from "./context-settings";
 export const COMPACTION_METHOD_CHOICES = [
 	{
 		value: "remote",
-		label: t("Server compaction"),
+		label: "Server compaction",
 		description:
-			t("Use provider-native server compaction (OpenAI Responses compact, Anthropic compaction beta, including on Bedrock) when the active route supports it"),
+			"Use provider-native server compaction (OpenAI Responses compact, Anthropic compaction beta, including on Bedrock) when the active route supports it",
 	},
 	{
 		value: "snapcompact",
 		label: "Snapcompact",
-		description: t("Archive history onto dense bitmap images the active vision model reads back; no LLM call"),
+		description: "Archive history onto dense bitmap images the active vision model reads back; no LLM call",
 	},
 	{
 		value: "handoff",
-		label: t("Handoff"),
-		description: t("Generate a handoff document and continue from it as the compaction summary"),
+		label: "Handoff",
+		description: "Generate a handoff document and continue from it as the compaction summary",
 	},
 	{
 		value: "soft",
-		label: t("Soft compaction"),
-		description: t("Summarize in place with a compaction model without using server compaction"),
+		label: "Soft compaction",
+		description: "Summarize in place with a compaction model without using server compaction",
 	},
 	{
 		value: "shake",
 		label: "Shake",
-		description: t("Drop recoverable heavy content in place without an LLM call"),
+		description: "Drop recoverable heavy content in place without an LLM call",
 	},
 ] as const;
 

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { pathToFileURL } from "node:url";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "../sdk";
@@ -70,6 +69,17 @@ export interface PdfImageReadTarget {
 	page: number;
 }
 
+/** A page read's physical PDF input, separate from its public read identity. */
+export interface PdfPageReadOptions {
+	readPath: string;
+	absolutePdfPath: string;
+	page: number;
+	pdfFileSize: number;
+	question?: string;
+	suffixResolution?: { from: string; to: string };
+	signal?: AbortSignal;
+}
+
 /** Parse a former PDF image-member path as a Chromium page screenshot request. */
 export function splitPdfImageReadPath(readPath: string): PdfImageReadTarget | null {
 	const match = PDF_IMAGE_MEMBER_RE.exec(readPath);
@@ -133,12 +143,12 @@ export async function renderPdfPageScreenshot(
 			session,
 		});
 		const screenshot = result.screenshots.at(-1);
-		if (!screenshot) throw new ToolError(t("Chromium did not capture PDF page {0}.", `${page}`));
+		if (!screenshot) throw new ToolError(`Chromium did not capture PDF page ${page}.`);
 		return screenshot;
 	} catch (error) {
 		if (signal?.aborted) throw new ToolAbortError();
 		if (timeoutSignal.aborted) {
-			throw new ToolError(t("Timed out rendering PDF page {0} in Chromium.", `${page}`));
+			throw new ToolError(`Timed out rendering PDF page ${page} in Chromium.`);
 		}
 		throw error;
 	} finally {

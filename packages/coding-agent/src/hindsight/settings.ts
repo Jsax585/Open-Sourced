@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../config/registry";
 
 const HINDSIGHT_RECALL_TYPES_DEFAULT: string[] = ["world", "experience"];
@@ -23,7 +22,7 @@ export const cfgHindsightApiUrl = register({
 		tab: "memory",
 		group: "Hindsight",
 		label: "Hindsight API URL",
-		description: t("Hindsight server URL (Cloud or self-hosted)"),
+		description: "Hindsight server URL (Cloud or self-hosted)",
 		condition: "hindsightActive",
 	},
 });
@@ -37,8 +36,8 @@ export const cfgHindsightApiToken = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight API Token"),
-		description: t("Bearer token for authenticated Hindsight servers"),
+		label: "Hindsight API Token",
+		description: "Bearer token for authenticated Hindsight servers",
 		condition: "hindsightActive",
 	},
 });
@@ -51,8 +50,8 @@ export const cfgHindsightBankId = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Bank ID"),
-		description: t("Memory bank identifier (default: project name)"),
+		label: "Hindsight Bank ID",
+		description: "Memory bank identifier (default: project name)",
 		condition: "hindsightActive",
 	},
 });
@@ -68,25 +67,25 @@ export const cfgHindsightScoping = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Scoping"),
+		label: "Hindsight Scoping",
 		description:
-			t("global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall"),
+			"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = shared bank with project tags so global + project memories merge on recall",
 		options: [
 			{
 				value: "global",
-				label: t("Global"),
-				description: t("One shared bank — every project sees the same memories"),
+				label: "Global",
+				description: "One shared bank — every project sees the same memories",
 			},
 			{
 				value: "per-project",
-				label: t("Per project"),
-				description: t("Isolated bank per cwd basename — projects cannot see each other's memories"),
+				label: "Per project",
+				description: "Isolated bank per cwd basename — projects cannot see each other's memories",
 			},
 			{
 				value: "per-project-tagged",
-				label: t("Per project (tagged)"),
+				label: "Per project (tagged)",
 				description:
-					t("Shared bank, retains tagged with project:<cwd>. Recall surfaces project + untagged global memories together"),
+					"Shared bank, retains tagged with project:<cwd>. Recall surfaces project + untagged global memories together",
 			},
 		],
 		condition: "hindsightActive",
@@ -114,8 +113,8 @@ export const cfgHindsightAutoRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Auto Recall"),
-		description: t("Recall memories on the first turn of each session"),
+		label: "Hindsight Auto Recall",
+		description: "Recall memories on the first turn of each session",
 		condition: "hindsightActive",
 	},
 });
@@ -128,8 +127,8 @@ export const cfgHindsightAutoRetain = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Auto Retain"),
-		description: t("Retain transcript every N turns and at session boundaries"),
+		label: "Hindsight Auto Retain",
+		description: "Retain transcript every N turns and at session boundaries",
 		condition: "hindsightActive",
 	},
 });
@@ -143,15 +142,15 @@ export const cfgHindsightRetainMode = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Retain Mode"),
-		description: t("full-session = upsert one document per session, last-turn = chunked"),
+		label: "Hindsight Retain Mode",
+		description: "full-session = upsert one document per session, last-turn = chunked",
 		options: [
 			{
 				value: "full-session",
-				label: t("Full session"),
-				description: t("Upsert one document per session (recommended)"),
+				label: "Full session",
+				description: "Upsert one document per session (recommended)",
 			},
-			{ value: "last-turn", label: t("Last turn"), description: t("Chunked retention sliced by turn boundaries") },
+			{ value: "last-turn", label: "Last turn", description: "Chunked retention sliced by turn boundaries" },
 		],
 		condition: "hindsightActive",
 	},
@@ -249,9 +248,9 @@ export const cfgHindsightMentalModelsEnabled = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Mental Models"),
+		label: "Hindsight Mental Models",
 		description:
-			t("Read curated reflect summaries (mental models) into developer instructions at boot. Loads existing models on the bank — does not write. Pair with hindsight.mentalModelAutoSeed to also auto-create the built-in seed set."),
+			"Read curated reflect summaries (mental models) into developer instructions at boot. Loads existing models on the bank — does not write. Pair with hindsight.mentalModelAutoSeed to also auto-create the built-in seed set.",
 		condition: "hindsightActive",
 	},
 });
@@ -263,9 +262,9 @@ export const cfgHindsightMentalModelAutoSeed = register({
 	ui: {
 		tab: "memory",
 		group: "Hindsight",
-		label: t("Hindsight Mental Model Auto-Seed"),
+		label: "Hindsight Mental Model Auto-Seed",
 		description:
-			t("At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank."),
+			"At session start, create any built-in mental models (project-conventions, project-decisions, user-preferences) that do not yet exist on the bank.",
 		condition: "hindsightActive",
 	},
 });

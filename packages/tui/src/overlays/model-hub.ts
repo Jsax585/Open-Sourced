@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { parseModelString, splitUpstreamRouting, formatModelSelectorValue } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -297,29 +296,29 @@ const ROLES_ACTION_KEYS: Record<string, RolesAction> = {
 
 /** Picker fact columns of the Roles view. */
 const ROLE_PICKER_COLUMNS: readonly TspPickerColumn[] = [
-	{ id: "model", head: localize("Model"), format: "text", priority: 2 },
-	{ id: "thinking", head: localize("Thinking"), format: "dim", priority: 1 },
+	{ id: "model", head: "Model", format: "text", priority: 2 },
+	{ id: "thinking", head: "Thinking", format: "dim", priority: 1 },
 ];
 
 /** Kind tab labels (sentence case; acronyms stay upper). */
 const MODEL_KIND_LABELS: Record<"all" | ModelKind, string> = {
-	all: localize("All"),
-	chat: localize("Chat"),
-	tiny: localize("Tiny\u0004packages/tui/src/overlays/model-hub.ts:MODEL_KIND_LABELS.tiny"),
-	image: localize("Image"),
+	all: "All",
+	chat: "Chat",
+	tiny: "Tiny",
+	image: "Image",
 	tts: "TTS",
 	stt: "STT",
-	search: localize("Search"),
-	judge: localize("Judge\u0004packages/tui/src/overlays/model-hub.ts:MODEL_KIND_LABELS.judge"),
-	embedding: localize("Embedding"),
-	rerank: localize("Rerank"),
-	video: localize("Video"),
+	search: "Search",
+	judge: "Judge",
+	embedding: "Embedding",
+	rerank: "Rerank",
+	video: "Video",
 };
 
 const PROVIDER_REFRESH_DEBOUNCE_MS = 120;
 const RECENT_LIMIT = 15;
 /** Accepted compaction limit input, shown beside the field: a scaled base, a fixed trigger, or a percentage. */
-const COMPACTION_INPUT_HINT = localize("400k base · f400k fixed · 80% · empty resets");
+const COMPACTION_INPUT_HINT = "400k base · f400k fixed · 80% · empty resets";
 
 type CompactionStrip = Extract<StripState, { purpose: "compaction" }>;
 
@@ -480,7 +479,7 @@ export class ModelHubComponent implements Component {
 		return lines.slice(0, rows);
 	};
 	readonly #frame: HubFrame = new HubFrame(
-		localize("Models"),
+		"Models",
 		{ min: 18, max: 26 },
 		(width, rows) => this.#renderSidebar(width, rows),
 		this.#renderBodyPane,
@@ -735,10 +734,10 @@ export class ModelHubComponent implements Component {
 			{
 				id: "roles",
 				kind: "roles",
-				label: localize("Roles"),
+				label: "Roles",
 				annotation: `${assignedCount}/${visibleRoles.length}`,
 			},
-			{ id: "all", kind: "all", label: localize("All models"), annotation: String(availableModels.length) },
+			{ id: "all", kind: "all", label: "All models", annotation: String(availableModels.length) },
 		];
 
 		this.#fixedEntries = fixed;
@@ -1166,17 +1165,17 @@ export class ModelHubComponent implements Component {
 	#formatDiscoveryAge(fetchedAt: number | undefined): string | undefined {
 		if (!fetchedAt) return undefined;
 		const ageMs = Math.max(0, Date.now() - fetchedAt);
-		if (ageMs < 60_000) return localize("less than a minute ago");
-		return localize("{0}m ago", `${Math.round(ageMs / 60_000)}`);
+		if (ageMs < 60_000) return "less than a minute ago";
+		return `${Math.round(ageMs / 60_000)}m ago`;
 	}
 
 	#emptyStateMessage(): string | undefined {
 		if (this.#configError) return `  ${this.#configError}`;
 		const entry = this.#activeEntry();
-		if (entry.kind === "recent") return localize("  No recently used models yet");
+		if (entry.kind === "recent") return "  No recently used models yet";
 		if (entry.kind !== "provider" || entry.locked) return undefined;
 		if (this.#browser.query.trim()) {
-			return localize("  No matching models in {0}. Switch to All models to search every provider.", `${entry.label}`);
+			return `  No matching models in ${entry.label}. Switch to All models to search every provider.`;
 		}
 		const providerId = entry.providerId ?? "";
 		const state = this.#registry.getProviderDiscoveryState(providerId);
@@ -1185,22 +1184,22 @@ export class ModelHubComponent implements Component {
 		switch (state.status) {
 			case "cached":
 				return age
-					? localize("  Using cached model list from {0}. Live refresh is still pending.", `${age}`)
-					: localize("  Using cached model list. Live refresh is still pending.");
+					? `  Using cached model list from ${age}. Live refresh is still pending.`
+					: "  Using cached model list. Live refresh is still pending.";
 			case "unavailable": {
 				const httpMatch = state.error?.match(/^HTTP (\d+) from (.+)$/);
 				if (httpMatch?.[1] === "404") {
-					return localize("  Discovery endpoint {0} returned 404. Point baseUrl at the host that serves /models (usually .../v1).", `${httpMatch[2]}`);
+					return `  Discovery endpoint ${httpMatch[2]} returned 404. Point baseUrl at the host that serves /models (usually .../v1).`;
 				}
-				if (state.error) return localize("  Discovery failed: {0}", `${state.error}`);
-				return age ? localize("  Provider unavailable. Using cached model list from {0}.", `${age}`) : localize("  Provider unavailable.");
+				if (state.error) return `  Discovery failed: ${state.error}`;
+				return age ? `  Provider unavailable. Using cached model list from ${age}.` : "  Provider unavailable.";
 			}
 			case "unauthenticated":
-				return localize("  Provider requires authentication before models can be discovered.");
+				return "  Provider requires authentication before models can be discovered.";
 			case "idle":
-				return localize("  Provider has not been refreshed yet.");
+				return "  Provider has not been refreshed yet.";
 			case "empty":
-				return localize("  Discovery succeeded but returned 0 models. Check that /models returns { data: [{ id }] }.");
+				return "  Discovery succeeded but returned 0 models. Check that /models returns { data: [{ id }] }.";
 			case "ok":
 				return undefined;
 		}
@@ -1371,7 +1370,7 @@ export class ModelHubComponent implements Component {
 				const assignedHere =
 					!!scopedModel && scopedModel.provider === item.model.provider && scopedModel.id === item.model.id;
 				const roleLabel = (info.tag ?? info.name ?? role).toLowerCase();
-				const label = scopedStorage ? `${scope === "project" ? localize("project") : localize("global")} ${roleLabel}` : roleLabel;
+				const label = scopedStorage ? `${scope} ${roleLabel}` : roleLabel;
 				chips.push({
 					label,
 					styled: assignedHere
@@ -1389,25 +1388,25 @@ export class ModelHubComponent implements Component {
 		}
 		chips.push({
 			label: `fallbacks:${item.model.id}`,
-			styled: theme.fg("muted", localize("fallbacks:{0}", `${item.model.id}`)),
+			styled: theme.fg("muted", `fallbacks:${item.model.id}`),
 			action: "fallbackModel",
 		});
 		chips.push({
 			label: `fallbacks:${item.model.provider}/*`,
-			styled: theme.fg("muted", localize("fallbacks:{0}/*", `${item.model.provider}`)),
+			styled: theme.fg("muted", `fallbacks:${item.model.provider}/*`),
 			action: "fallbackProvider",
 		});
 		// `retry-fallback` appends to the default chain, so only chat-capable models qualify.
 		if (this.#settings.getRoleInfo("default").accepts(item.model)) {
-			chips.push({ label: "fallback", styled: theme.fg("muted", localize("retry-fallback")), action: "fallback" });
+			chips.push({ label: "fallback", styled: theme.fg("muted", "retry-fallback"), action: "fallback" });
 		}
 		this.#strip = { kind: "role", item, chips, index: 0, returnToRoles: false };
 	}
 
 	#openScopeStrip(item: ModelBrowserItem, role: string, returnToRoles: boolean): void {
 		const chips: StripChip[] = [
-			{ label: localize("project"), styled: theme.fg("accent", localize("project")), action: "scope", scope: "project" },
-			{ label: localize("global"), styled: theme.fg("muted", localize("global")), action: "scope", scope: "global" },
+			{ label: "project", styled: theme.fg("accent", "project"), action: "scope", scope: "project" },
+			{ label: "global", styled: theme.fg("muted", "global"), action: "scope", scope: "global" },
 		];
 		this.#strip = { kind: "scope", item, role, chips, index: 0, returnToRoles };
 	}
@@ -1704,12 +1703,12 @@ export class ModelHubComponent implements Component {
 		const chips: StripChip[] = [
 			{
 				label: `for ${item.selector}`,
-				styled: theme.fg("muted", localize("for {0}\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#openFallbackKeyStrip.chips.styled", `${item.selector}`)),
+				styled: theme.fg("muted", `for ${item.selector}`),
 				action: "fallbackModel",
 			},
 			{
 				label: `for ${item.model.provider}/*`,
-				styled: theme.fg("muted", localize("for {0}/*", `${item.model.provider}`)),
+				styled: theme.fg("muted", `for ${item.model.provider}/*`),
 				action: "fallbackProvider",
 			},
 		];
@@ -2474,11 +2473,11 @@ export class ModelHubComponent implements Component {
 	#renderModelKindTabs(width: number): string {
 		const active = MODEL_KIND_TABS.indexOf(this.#modelKindTab);
 		const track = renderSegmentTrack(
-			MODEL_KIND_TABS.map(kind => ({ label: MODEL_KIND_LABELS[kind] })),
+			MODEL_KIND_TABS.map(kind => ({ label: kind })),
 			Math.max(0, active),
 		);
 		return truncateToWidth(
-			` ${theme.fg("dim", localize("Kind:"))} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
+			` ${theme.fg("dim", "Kind:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
 			width,
 		);
 	}
@@ -2486,7 +2485,7 @@ export class ModelHubComponent implements Component {
 	#renderRoleTabs(width: number): string {
 		const active = ROLE_TABS.indexOf(this.#roleTab);
 		const track = renderSegmentTrack(
-			ROLE_TABS.map(tab => ({ label: tab === "kind" ? localize("kinds") : tab === "chat" ? localize("Chat") : localize("Kinds") })),
+			ROLE_TABS.map(tab => ({ label: tab === "kind" ? "kinds" : tab })),
 			Math.max(0, active),
 		);
 		const { names, active: activePreset } = this.#presets();
@@ -2497,65 +2496,65 @@ export class ModelHubComponent implements Component {
 				: `${formatKeyHints(["ctrl+left", "ctrl+right"])} · ${formatKeyHints(["p", "shift+p"])}`;
 		const preset =
 			names.length > 0
-				? `   ${theme.fg("dim", localize("Preset:"))} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", localize("custom"))}  ${theme.fg("dim", presetKeys)}`
+				? `   ${theme.fg("dim", "Preset:")} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", "custom")}  ${theme.fg("dim", presetKeys)}`
 				: "";
 		return truncateToWidth(
-			` ${theme.fg("dim", localize("Roles:"))} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
+			` ${theme.fg("dim", "Roles:")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
 			width,
 		);
 	}
 
 	#statusRow(width: number): string {
 		if (this.#assignmentPending) {
-			return truncateToWidth(theme.fg("accent", localize(" Applying model…")), width);
+			return truncateToWidth(theme.fg("accent", " Applying model…"), width);
 		}
 		if (this.#assigning !== null) {
 			const enter = formatKeyHint("enter");
 			const cancel = editorKey("tui.select.cancel");
 			if (this.#assigning.kind === "fallbackKey") {
 				return truncateToWidth(
-					theme.fg("accent", localize(" New fallback chain — {0} picks the model it protects, {1} cancels", `${enter}`, `${cancel}`)),
+					theme.fg("accent", ` New fallback chain — ${enter} picks the model it protects, ${cancel} cancels`),
 					width,
 				);
 			}
 			const info = this.#settings.getRoleInfo(this.#assigning.role);
 			const label = info.tag ?? info.name ?? this.#assigning.role;
 			if (this.#assigning.kind === "fallback") {
-				const verb = this.#assigning.index === null ? localize("Adding fallback for") : localize("Replacing fallback of");
+				const verb = this.#assigning.index === null ? "Adding fallback for" : "Replacing fallback of";
 				return truncateToWidth(
 					theme.fg(
 						"accent",
-						localize(" {0} {1} — {2} picks the fallback model, {3} cancels", `${verb}`, `${theme.bold(label)}`, `${enter}`, `${cancel}`),
+						` ${verb} ${theme.bold(label)} — ${enter} picks the fallback model, ${cancel} cancels`,
 					),
 					width,
 				);
 			}
 			return truncateToWidth(
-				theme.fg("accent", localize(" Assigning {0} — {1} assigns, {2} cancels", `${theme.bold(label)}`, `${enter}`, `${cancel}`)),
+				theme.fg("accent", ` Assigning ${theme.bold(label)} — ${enter} assigns, ${cancel} cancels`),
 				width,
 			);
 		}
 		const entry = this.#activeEntry();
-		const scopedSuffix = this.#scopedModels.length > 0 ? localize(" · --models scope") : "";
+		const scopedSuffix = this.#scopedModels.length > 0 ? " · --models scope" : "";
 		let text: string;
 		switch (entry.kind) {
 			case "recent":
-				text = localize("Recently used models{0}", `${scopedSuffix}`);
+				text = `Recently used models${scopedSuffix}`;
 				break;
 			case "roles":
-				text = localize("Model roles — {0} adds a retry fallback, cleared roles fall back to auto-selection", `${formatKeyHint("f")}`);
+				text = `Model roles — ${formatKeyHint("f")} adds a retry fallback, cleared roles fall back to auto-selection`;
 				break;
 			case "provider":
 				if (entry.locked) {
-					text = localize("{0} · not configured", `${entry.label}`);
+					text = `${entry.label} · not configured`;
 				} else if (entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
-					text = localize("{0} · refreshing model list…", `${entry.label}`);
+					text = `${entry.label} · refreshing model list…`;
 				} else {
-					text = localize("{0} · {1} models{2}", `${entry.label}`, `${entry.annotation ?? "0"}`, `${scopedSuffix}`);
+					text = `${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`;
 				}
 				break;
 			default:
-				text = localize("All available models{0}", `${scopedSuffix}`);
+				text = `All available models${scopedSuffix}`;
 				break;
 		}
 		if (this.#configError && entry.kind !== "provider") {
@@ -2615,7 +2614,7 @@ export class ModelHubComponent implements Component {
 			}
 
 			if (rowDef.kind === "newRole" || rowDef.kind === "newFallback") {
-				const label = rowDef.kind === "newRole" ? localize("+ New role…") : localize("+ New fallback…");
+				const label = rowDef.kind === "newRole" ? "+ New role…" : "+ New fallback…";
 				let line = ` ${cursor} ${theme.fg(selected ? "accent" : "dim", label)}`;
 				line = this.#finishRolesRow(line, width, hovered);
 				lines.push(line);
@@ -2663,7 +2662,7 @@ export class ModelHubComponent implements Component {
 			} else if (assignment) {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
-				value = theme.fg("dim", localize("auto → {0}/{1}", `${assignment.model.provider}`, `${assignment.model.id}`));
+				value = theme.fg("dim", `auto → ${assignment.model.provider}/${assignment.model.id}`);
 			} else {
 				dot = theme.fg("dim", theme.status.shadowed);
 				tagStyled = theme.fg("dim", tag);
@@ -2689,8 +2688,8 @@ export class ModelHubComponent implements Component {
 			const hiddenAbove = this.#roleScrollStart;
 			const hiddenBelow = total - endIndex;
 			const parts: string[] = [];
-			if (hiddenAbove > 0) parts.push(localize("↑ {0} more", `${hiddenAbove}`));
-			if (hiddenBelow > 0) parts.push(localize("↓ {0} more", `${hiddenBelow}`));
+			if (hiddenAbove > 0) parts.push(`↑ ${hiddenAbove} more`);
+			if (hiddenBelow > 0) parts.push(`↓ ${hiddenBelow} more`);
 			lines.push(truncateToWidth(theme.fg("dim", `   ${parts.join("   ")}`), width));
 		}
 
@@ -2708,10 +2707,10 @@ export class ModelHubComponent implements Component {
 					cycleOrder.map(role => ({ label: role })),
 					activeIndex,
 				);
-				lines[rows - 1] = truncateToWidth(`  ${theme.fg("dim", localize("{0} cycle:", `${cycleKey}`))} ${track}`, width);
+				lines[rows - 1] = truncateToWidth(`  ${theme.fg("dim", `${cycleKey} cycle:`)} ${track}`, width);
 			} else {
 				lines[rows - 1] = truncateToWidth(
-					theme.fg("dim", localize("  {0} cycle is empty — press {1} on a role to add it", `${cycleKey}`, `${formatKeyHint("c")}`)),
+					theme.fg("dim", `  ${cycleKey} cycle is empty — press ${formatKeyHint("c")} on a role to add it`),
 					width,
 				);
 			}
@@ -2723,24 +2722,24 @@ export class ModelHubComponent implements Component {
 		const lines: string[] = [];
 		this.#lockedLoginLine = null;
 		lines.push("");
-		lines.push(truncateToWidth(theme.fg("warning", localize("  {0} has no credentials configured", `${entry.label}`)), width));
+		lines.push(truncateToWidth(theme.fg("warning", `  ${entry.label} has no credentials configured`), width));
 		lines.push("");
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		if (envVars.length > 0) {
 			lines.push(
 				truncateToWidth(
-					theme.fg("muted", localize("  Set {0} in your environment, or add a key in config.", `${envVars.join(localize(" or "))}`)),
+					theme.fg("muted", `  Set ${envVars.join(" or ")} in your environment, or add a key in config.`),
 					width,
 				),
 			);
 		} else {
-			lines.push(truncateToWidth(theme.fg("muted", localize("  Add an API key for this provider in config.")), width));
+			lines.push(truncateToWidth(theme.fg("muted", "  Add an API key for this provider in config."), width));
 		}
 		if (entry.oauth) {
 			this.#lockedLoginLine = lines.length + 1; // +1 for the status row offset handled by caller
 			lines.push(
 				truncateToWidth(
-					theme.fg("accent", localize("  {0} Log in with OAuth ({1})", `${theme.nav.cursor}`, `${formatKeyHint("enter")}`)),
+					theme.fg("accent", `  ${theme.nav.cursor} Log in with OAuth (${formatKeyHint("enter")})`),
 					width,
 				),
 			);
@@ -2748,7 +2747,7 @@ export class ModelHubComponent implements Component {
 		lines.push("");
 		const catalogCount = entry.catalogCount ?? 0;
 		if (catalogCount > 0) {
-			lines.push(truncateToWidth(theme.fg("dim", localize("  {0} models in catalog:", `${catalogCount}`)), width));
+			lines.push(truncateToWidth(theme.fg("dim", `  ${catalogCount} models in catalog:`), width));
 			const preview = this.#scopedModels.length > 0 ? [] : this.#registry.getAll("all");
 			for (const model of preview) {
 				if (model.provider !== entry.providerId) continue;
@@ -2772,79 +2771,79 @@ export class ModelHubComponent implements Component {
 		if (strip) {
 			if (strip.kind === "name") {
 				if (strip.purpose === "compaction") {
-					return localize("{0} {1} compaction point · {2} cancel", `${enter}`, `${compactionConfirmPending(strip) ? localize("accept") : localize("set")}`, `${cancel}`);
+					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} cancel`;
 				}
 				if (strip.purpose === "preset") {
-					return localize("{0} save preset · {1} cancel", `${enter}`, `${cancel}`);
+					return `${enter} save preset · ${cancel} cancel`;
 				}
-				return localize("{0} create + pick model · {1} cancel", `${enter}`, `${cancel}`);
+				return `${enter} create + pick model · ${cancel} cancel`;
 			}
-			if (strip.kind === "role") return localize("{0} choose · {1} assign/clear · {2} cancel", `${leftRight}`, `${enter}`, `${cancel}`);
-			if (strip.kind === "scope") return localize("{0} save scope · {1} choose · {2} cancel", `${leftRight}`, `${enter}`, `${cancel}`);
-			return localize("{0} thinking level · {1} apply · {2} keep", `${leftRight}`, `${enter}`, `${cancel}`);
+			if (strip.kind === "role") return `${leftRight} choose · ${enter} assign/clear · ${cancel} cancel`;
+			if (strip.kind === "scope") return `${leftRight} save scope · ${enter} choose · ${cancel} cancel`;
+			return `${leftRight} thinking level · ${enter} apply · ${cancel} keep`;
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return localize("{0} models · {1} providers · type to search · {2} kind · {3} cancel", `${enterRight}`, `${upDown}`, `${altLeftRight}`, `${cancel}`);
+				return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
 			}
-			const browse = localize("{0} models · {1} providers · type to search · {2} kind · {3} cancel", `${upDown}`, `${left}`, `${altLeftRight}`, `${cancel}`);
+			const browse = `${upDown} models · ${left} providers · type to search · ${altLeftRight} kind · ${cancel} cancel`;
 			switch (this.#assigning.kind) {
 				case "fallback":
-					return localize("{0} pick fallback · {1}", `${enter}`, `${browse}`);
+					return `${enter} pick fallback · ${browse}`;
 				case "fallbackKey":
-					return localize("{0} pick the protected model · {1}", `${enter}`, `${browse}`);
+					return `${enter} pick the protected model · ${browse}`;
 				default:
-					return localize("{0} assign · {1}", `${enter}`, `${browse}`);
+					return `${enter} assign · ${browse}`;
 			}
 		}
 		const entry = this.#activeEntry();
 		if (entry.kind === "roles") {
 			if (this.#focus !== "list") {
 				const presets =
-					this.#presets().names.length > 0 ? localize(" · {0} preset", `${formatKeyHints(["ctrl+left", "ctrl+right"])}`) : "";
-				return localize("{0} providers · {1} roles · {2} tabs{3} · {4} close", `${upDown}`, `${enterRight}`, `${altLeftRight}`, `${presets}`, `${cancel}`);
+					this.#presets().names.length > 0 ? ` · ${formatKeyHints(["ctrl+left", "ctrl+right"])} preset` : "";
+				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			// A live query takes printable keys and backspace, so the letter commands rest.
 			if (this.#browser.query.length > 0) {
-				return localize("{0} rows · {1} pick · type to search · {2} providers · {3} close", `${upDown}`, `${enter}`, `${left}`, `${cancel}`);
+				return `${upDown} rows · ${enter} pick · type to search · ${left} providers · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
-					? localize(" · {0} compaction limit", `${formatKeyHint("k")}`)
+					? ` · ${formatKeyHint("k")} compaction limit`
 					: "";
 			if (row?.kind === "fallback") {
 				// Advertise `t` only when the entry resolves: wildcards always
 				// inherit and unknown models have no ladder to offer, so the
 				// action would be inert there.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
-				const thinking = editable ? localize(" · {0} thinking", `${formatKeyHint("t")}`) : "";
-				return localize("{0} rows · {1} replace · {2} add another · {3} remove{4}{5} · [/] reorder · {6} providers", `${upDown}`, `${enter}`, `${formatKeyHint("f")}`, `${formatKeyHint("x")}`, `${thinking}`, `${compaction}`, `${left}`);
+				const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
+				return `${upDown} rows · ${enter} replace · ${formatKeyHint("f")} add another · ${formatKeyHint("x")} remove${thinking}${compaction} · [/] reorder · ${left} providers`;
 			}
 			if (row?.kind === "chainKey") {
-				return localize("{0} rows · {1} add fallback · {2} clear chain · {3} providers", `${upDown}`, `${formatKeyHints(["enter", "f"])}`, `${formatKeyHint("x")}`, `${left}`);
+				return `${upDown} rows · ${formatKeyHints(["enter", "f"])} add fallback · ${formatKeyHint("x")} clear chain · ${left} providers`;
 			}
 			if (row?.kind === "newFallback") {
-				return localize("{0} rows · {1} new model/provider fallback chain · {2} providers", `${upDown}`, `${enter}`, `${left}`);
+				return `${upDown} rows · ${enter} new model/provider fallback chain · ${left} providers`;
 			}
 			// Same rule as fallback rows: advertise `t` only where a strip would
 			// open — an assigned role whose model has thinking levels to offer.
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
-			const thinking = editable ? localize(" · {0} thinking", `${formatKeyHint("t")}`) : "";
-			const savePreset = this.#callbacks.onSavePreset ? localize(" · {0} save preset", `${formatKeyHint("s")}`) : "";
-			const switchPreset = this.#presets().names.length > 0 ? localize(" · {0} preset", `${formatKeyHints(["p", "shift+p"])}`) : "";
-			return localize("{0} rows · {1} pick · {2} fallback · {3} clear{4}{5} · {6} cycle · [/] reorder · {7} new{8}{9}", `${upDown}`, `${enter}`, `${formatKeyHint("f")}`, `${formatKeyHint("x")}`, `${thinking}`, `${compaction}`, `${formatKeyHint("c")}`, `${formatKeyHint("n")}`, `${savePreset}`, `${switchPreset}`);
+			const thinking = editable ? ` · ${formatKeyHint("t")} thinking` : "";
+			const savePreset = this.#callbacks.onSavePreset ? ` · ${formatKeyHint("s")} save preset` : "";
+			const switchPreset = this.#presets().names.length > 0 ? ` · ${formatKeyHints(["p", "shift+p"])} preset` : "";
+			return `${upDown} rows · ${enter} pick · ${formatKeyHint("f")} fallback · ${formatKeyHint("x")} clear${thinking}${compaction} · ${formatKeyHint("c")} cycle · [/] reorder · ${formatKeyHint("n")} new${savePreset}${switchPreset}`;
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
-				? localize("{0} log in · {1} providers · {2} close", `${enter}`, `${upDown}`, `${cancel}`)
-				: localize("{0} providers · {1} close", `${upDown}`, `${cancel}`);
+				? `${enter} log in · ${upDown} providers · ${cancel} close`
+				: `${upDown} providers · ${cancel} close`;
 		}
-		const refresh = entry.kind === "provider" ? localize(" · {0} refresh", `${formatKeyHint("f5")}`) : "";
+		const refresh = entry.kind === "provider" ? ` · ${formatKeyHint("f5")} refresh` : "";
 		if (this.#focus === "scope") {
-			return localize("{0} models · {1} providers · type to search · {2} kind{3} · {4} close", `${enterRight}`, `${upDown}`, `${altLeftRight}`, `${refresh}`, `${cancel}`);
+			return `${enterRight} models · ${upDown} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 		}
-		return localize("{0} assign roles · {1} models · {2} providers · type to search · {3} kind{4} · {5} close", `${enter}`, `${upDown}`, `${left}`, `${altLeftRight}`, `${refresh}`, `${cancel}`);
+		return `${enter} assign roles · ${upDown} models · ${left} providers · type to search · ${altLeftRight} kind${refresh} · ${cancel} close`;
 	}
 
 	#renderFooter(width: number): string {
@@ -2860,10 +2859,10 @@ export class ModelHubComponent implements Component {
 		if (strip.kind === "name") {
 			const labelText =
 				strip.purpose === "compaction"
-					? localize("{0} limit:", `${strip.model.id}`)
+					? `${strip.model.id} limit:`
 					: strip.purpose === "preset"
-						? localize("Preset name:")
-						: localize("New role name:");
+						? "Preset name:"
+						: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
@@ -2875,7 +2874,7 @@ export class ModelHubComponent implements Component {
 				const notice = compactionNotice(strip, this.#callbacks.previewCompactionPoint);
 				hint = theme.fg(notice.style, notice.text);
 			} else {
-				hint = theme.fg("dim", localize("(letters, digits, - and _)"));
+				hint = theme.fg("dim", "(letters, digits, - and _)");
 			}
 			return truncateToWidth(`${label} ${inputLine} ${hint}`, width);
 		}
@@ -2941,7 +2940,7 @@ export class ModelHubComponent implements Component {
 		footer.push(hintsRow(this.#footerHints()));
 		const described = describeHubFrame(
 			"omp.overlay.model-hub",
-			localize("Models"),
+			"Models",
 			describeHubSidebar(this.#entries, this.#activeEntryId, this.#nativeSidebarStyle, "scopes"),
 			this.#describeBody(),
 			node("col", { gap: "xs" }, footer, "footer"),
@@ -3034,10 +3033,10 @@ export class ModelHubComponent implements Component {
 					"row",
 					{ gap: "sm", align: "center" },
 					[
-						text([span(localize("Kind:"), "dim")]),
+						text([span("Kind:", "dim")]),
 						node(
 							"tabs",
-							{ items: MODEL_KIND_TABS.map(kind => ({ id: kind, label: MODEL_KIND_LABELS[kind] })), active: this.#modelKindTab },
+							{ items: MODEL_KIND_TABS.map(kind => ({ id: kind, label: kind })), active: this.#modelKindTab },
 							undefined,
 							"kinds",
 						),
@@ -3053,13 +3052,13 @@ export class ModelHubComponent implements Component {
 
 	#describeStatus(): NativeNode {
 		if (this.#assignmentPending) {
-			return node("spinner", { label: [span(localize("Applying model…"), "accent")] }, undefined, "status");
+			return node("spinner", { label: [span("Applying model…", "accent")] }, undefined, "status");
 		}
 		let spans: TspSpan[];
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") {
-				spans = [span(localize("New fallback chain — pick the model it protects"), "accent")];
+				spans = [span("New fallback chain — pick the model it protects", "accent")];
 			} else {
 				const info = this.#settings.getRoleInfo(assigning.role);
 				const label = info.tag ?? info.name ?? assigning.role;
@@ -3067,8 +3066,8 @@ export class ModelHubComponent implements Component {
 					assigning.kind === "role"
 						? "Assigning"
 						: assigning.index === null
-							? localize("Adding fallback for")
-							: localize("Replacing fallback of");
+							? "Adding fallback for"
+							: "Replacing fallback of";
 				spans = [span(`${verb} `, "accent"), span(label, "accent strong")];
 			}
 			return node("text", { spans, truncate: "end" }, undefined, "status");
@@ -3077,34 +3076,34 @@ export class ModelHubComponent implements Component {
 		if (this.#configError && entry.kind !== "provider") {
 			return node("text", { spans: [span(this.#configError, "error")], wrap: "word" }, undefined, "status");
 		}
-		const scopedSuffix = this.#scopedModels.length > 0 ? localize(" · --models scope") : "";
+		const scopedSuffix = this.#scopedModels.length > 0 ? " · --models scope" : "";
 		switch (entry.kind) {
 			case "recent":
-				spans = [span(localize("Recently used models{0}", `${scopedSuffix}`), "muted")];
+				spans = [span(`Recently used models${scopedSuffix}`, "muted")];
 				break;
 			case "roles":
 				spans = [
-					span(localize("Model roles — "), "muted"),
+					span("Model roles — ", "muted"),
 					span("f", "key"),
-					span(localize(" adds a retry fallback, cleared roles fall back to auto-selection"), "muted"),
+					span(" adds a retry fallback, cleared roles fall back to auto-selection", "muted"),
 				];
 				break;
 			case "provider":
 				if (entry.locked) {
-					spans = [span(localize("{0} · not configured", `${entry.label}`), "muted")];
+					spans = [span(`${entry.label} · not configured`, "muted")];
 				} else if (entry.providerId && this.#refreshingProviders.has(entry.providerId)) {
 					return node(
 						"spinner",
-						{ label: [span(localize("{0} · refreshing model list…", `${entry.label}`), "muted")] },
+						{ label: [span(`${entry.label} · refreshing model list…`, "muted")] },
 						undefined,
 						"status",
 					);
 				} else {
-					spans = [span(localize("{0} · {1} models{2}", `${entry.label}`, `${entry.annotation ?? "0"}`, `${scopedSuffix}`), "muted")];
+					spans = [span(`${entry.label} · ${entry.annotation ?? "0"} models${scopedSuffix}`, "muted")];
 				}
 				break;
 			default:
-				spans = [span(localize("All available models{0}", `${scopedSuffix}`), "muted")];
+				spans = [span(`All available models${scopedSuffix}`, "muted")];
 				break;
 		}
 		return node("text", { spans, truncate: "end" }, undefined, "status");
@@ -3115,11 +3114,11 @@ export class ModelHubComponent implements Component {
 			"row",
 			{ gap: "sm", align: "center" },
 			[
-				text([span(localize("Roles:"), "dim")]),
+				text([span("Roles:", "dim")]),
 				node(
 					"tabs",
 					{
-						items: ROLE_TABS.map(tab => ({ id: tab, label: tab === "kind" ? localize("kinds") : tab === "chat" ? localize("Chat") : localize("Kinds") })),
+						items: ROLE_TABS.map(tab => ({ id: tab, label: tab === "kind" ? "kinds" : tab })),
 						active: this.#roleTab,
 					},
 					undefined,
@@ -3138,7 +3137,7 @@ export class ModelHubComponent implements Component {
 				virtual: true,
 				grow: 1,
 				tone: this.#focus === "list" ? "accent" : undefined,
-				aria: localize("Roles"),
+				aria: "Roles",
 			},
 			items,
 			"roles",
@@ -3152,9 +3151,9 @@ export class ModelHubComponent implements Component {
 			case "separator":
 				return node("rule", undefined, undefined, key);
 			case "newRole":
-				return node("item", { label: [span(localize("+ New role…"), "dim")] }, undefined, key);
+				return node("item", { label: [span("+ New role…", "dim")] }, undefined, key);
 			case "newFallback":
-				return node("item", { label: [span(localize("+ New fallback…"), "dim")] }, undefined, key);
+				return node("item", { label: [span("+ New fallback…", "dim")] }, undefined, key);
 			case "chainKey": {
 				const slash = rowDef.role.lastIndexOf("/");
 				return node(
@@ -3194,7 +3193,7 @@ export class ModelHubComponent implements Component {
 		} else {
 			label = [span(`${theme.status.shadowed} `, "dim"), span(tag, "dim")];
 			detail = assignment
-				? [span(localize("auto → {0}/{1}", `${assignment.model.provider}`, `${assignment.model.id}`), "dim")]
+				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
 		}
 		// Quick-cycle membership badge (`⟳ 2` = second stop of the ctrl+p cycle).
@@ -3216,7 +3215,7 @@ export class ModelHubComponent implements Component {
 				{ gap: "xs", align: "center", wrap: true },
 				[
 					...keycap,
-					text([span(localize("cycle is empty — press "), "dim"), span("c", "key"), span(localize(" on a role to add it"), "dim")]),
+					text([span("cycle is empty — press ", "dim"), span("c", "key"), span(" on a role to add it", "dim")]),
 				],
 				"cycle",
 			);
@@ -3232,14 +3231,14 @@ export class ModelHubComponent implements Component {
 		return node(
 			"row",
 			{ gap: "xs", align: "center", wrap: true },
-			[...keycap, text([span(localize("cycle:"), "dim")]), text(track, { wrap: "word" })],
+			[...keycap, text([span("cycle:", "dim")]), text(track, { wrap: "word" })],
 			"cycle",
 		);
 	}
 
 	#describeLockedView(entry: SidebarEntry): NativeNode {
 		const children: NativeChild[] = [
-			text([span(localize("{0} has no credentials configured", `${entry.label}`), "warning")], { wrap: "word" }),
+			text([span(`${entry.label} has no credentials configured`, "warning")], { wrap: "word" }),
 		];
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		children.push(
@@ -3247,8 +3246,8 @@ export class ModelHubComponent implements Component {
 				[
 					span(
 						envVars.length > 0
-							? localize("Set {0} in your environment, or add a key in config.", `${envVars.join(localize(" or "))}`)
-							: localize("Add an API key for this provider in config."),
+							? `Set ${envVars.join(" or ")} in your environment, or add a key in config.`
+							: "Add an API key for this provider in config.",
 						"muted",
 					),
 				],
@@ -3260,7 +3259,7 @@ export class ModelHubComponent implements Component {
 				node(
 					"row",
 					{ gap: "sm", align: "center", actions: { click: "login" } },
-					[text([span(localize("Log in with OAuth"), "accent")]), node("kbd", { keys: ["enter"] })],
+					[text([span("Log in with OAuth", "accent")]), node("kbd", { keys: ["enter"] })],
 					"login",
 				),
 			);
@@ -3276,7 +3275,7 @@ export class ModelHubComponent implements Component {
 			children.push(
 				node(
 					"section",
-					{ head: [span(localize("{0} models in catalog", `${catalogCount}`), "dim")] },
+					{ head: [span(`${catalogCount} models in catalog`, "dim")] },
 					[node("list", { selected: null, virtual: true }, items, "catalog")],
 					"catalog",
 				),
@@ -3293,7 +3292,7 @@ export class ModelHubComponent implements Component {
 		const lockedView = entry.kind === "provider" && entry.locked === true && this.#assigning === null;
 		const strip = this.#strip;
 		const props: TspPickerProps = {
-			title: localize("Models"),
+			title: "Models",
 			subtitle: this.#pickerSubtitle(entry, rolesView),
 			icon: "cpu",
 			noun: rolesView ? "roles" : "models",
@@ -3304,7 +3303,7 @@ export class ModelHubComponent implements Component {
 			// is live, so the sheet offers no search field to type into.
 			query: rolesView && this.#browser.query.length === 0 ? null : this.#browser.query,
 			cursor: this.#browser.cursor,
-			placeholder: localize("Search models…"),
+			placeholder: "Search models…",
 			scopes: this.#pickerScopes(),
 			scope: entry.id,
 			actions: this.#pickerActions(entry, rolesView, lockedView),
@@ -3318,7 +3317,7 @@ export class ModelHubComponent implements Component {
 					...props,
 					tabs: ROLE_TABS.map(tab => ({
 						id: tab,
-						label: tab === "all" ? localize("All") : tab === "chat" ? localize("Chat") : localize("Kinds\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#describePicker.tabs.label"),
+						label: tab === "all" ? "All" : tab === "chat" ? "Chat" : "Kinds",
 						count: this.#visibleRoleIds().filter(
 							role => tab === "all" || this.#settings.getRoleInfo(role).section === tab,
 						).length,
@@ -3353,7 +3352,7 @@ export class ModelHubComponent implements Component {
 		const query = this.#browser.query.trim();
 		const view = this.#browser.pickerOrder({
 			providers: entry.kind === "all" && query.length === 0,
-			rest: entry.kind === "provider" ? entry.label : query ? localize("Matches\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#describePicker.view.rest") : localize("All models"),
+			rest: entry.kind === "provider" ? entry.label : query ? "Matches" : "All models",
 		});
 		const refreshing =
 			this.#catalogRefreshing ||
@@ -3382,7 +3381,7 @@ export class ModelHubComponent implements Component {
 				...(state === "error" && this.#configError ? { message: this.#configError } : {}),
 				empty:
 					this.#emptyStateMessage()?.trim() ??
-					(entry.kind === "provider" ? localize("No models from {0} yet", `${entry.label}`) : localize("No models available in this scope")),
+					(entry.kind === "provider" ? `No models from ${entry.label} yet` : "No models available in this scope"),
 			},
 			this.#browser.pickerPreview("full", this.#currentSelector),
 		);
@@ -3390,18 +3389,18 @@ export class ModelHubComponent implements Component {
 
 	/** What the hub is doing when it is more than browsing: applying, assigning, refreshing, a config error. */
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
-		if (this.#assignmentPending) return localize("Applying model…");
+		if (this.#assignmentPending) return "Applying model…";
 		const assigning = this.#assigning;
 		if (assigning !== null) {
-			if (assigning.kind === "fallbackKey") return localize("New fallback chain — pick the model it protects");
+			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
 			const info = this.#settings.getRoleInfo(assigning.role);
 			const label = info.tag ?? info.name ?? assigning.role;
 			const verb =
 				assigning.kind === "role"
 					? "Assigning"
 					: assigning.index === null
-						? localize("Adding fallback for")
-						: localize("Replacing fallback of");
+						? "Adding fallback for"
+						: "Replacing fallback of";
 			return [span(`${verb} `), span(label, "strong")];
 		}
 		if (this.#configError && entry.kind !== "provider") return [span(this.#configError, "error")];
@@ -3414,13 +3413,13 @@ export class ModelHubComponent implements Component {
 				span("Preset ", "muted"),
 				presets.active ? span(presets.active, "strong") : span("custom", "muted"),
 				span(
-					this.#scopedModels.length > 0 ? " · --models scope" : localize(" · Cleared roles fall back to auto-selection"),
+					this.#scopedModels.length > 0 ? " · --models scope" : " · Cleared roles fall back to auto-selection",
 					"muted",
 				),
 			];
 		}
 		if (this.#scopedModels.length > 0) return "--models scope";
-		if (rolesView) return localize("Cleared roles fall back to auto-selection");
+		if (rolesView) return "Cleared roles fall back to auto-selection";
 		return undefined;
 	}
 
@@ -3434,12 +3433,12 @@ export class ModelHubComponent implements Component {
 				case "separator":
 					break;
 				case "roles":
-					scopes.push({ id: entry.id, label: localize("Roles"), icon: "sparkles", count: this.#visibleRoleIds().length });
+					scopes.push({ id: entry.id, label: "Roles", icon: "sparkles", count: this.#visibleRoleIds().length });
 					break;
 				case "all":
 					scopes.push({
 						id: entry.id,
-						label: localize("All models"),
+						label: "All models",
 						icon: "list",
 						count: counts ? this.#searchTotal : this.#availableItems.length,
 					});
@@ -3447,7 +3446,7 @@ export class ModelHubComponent implements Component {
 				case "recent":
 					scopes.push({
 						id: entry.id,
-						label: localize("Recent"),
+						label: "Recent",
 						icon: "clock",
 						count: counts ? this.#recentSearchCount : this.#recentItems.length,
 					});
@@ -3461,12 +3460,12 @@ export class ModelHubComponent implements Component {
 							id: entry.id,
 							label: entry.label,
 							mark,
-							group: localize("Not signed in"),
+							group: "Not signed in",
 							disabled: oauthIds.has(providerId)
-								? localize("Sign in with /login")
+								? "Sign in with /login"
 								: envVars.length > 0
-									? localize("Set {0} to sign in", `${envVars.join(" or ")}`)
-									: localize("Add an API key in config to sign in"),
+									? `Set ${envVars.join(" or ")} to sign in`
+									: "Add an API key in config to sign in",
 							dot: "muted",
 						});
 						break;
@@ -3476,7 +3475,7 @@ export class ModelHubComponent implements Component {
 						id: entry.id,
 						label: entry.label,
 						mark,
-						group: localize("Providers"),
+						group: "Providers",
 						count: counts ? (counts.get(providerId) ?? 0) : Number(entry.annotation ?? 0),
 						...(dot ? { dot } : {}),
 					});
@@ -3534,34 +3533,34 @@ export class ModelHubComponent implements Component {
 					? strip.purpose === "compaction"
 						? pickerAction(
 								"compactionPoint",
-								compactionConfirmPending(strip) ? localize("Accept compaction point") : localize("Set compaction point"),
+								compactionConfirmPending(strip) ? "Accept compaction point" : "Set compaction point",
 								"enter",
 								{ primary: true },
 							)
 						: pickerAction(
 								strip.purpose === "preset" ? "presetName" : "roleName",
-								strip.purpose === "preset" ? localize("Save preset") : localize("Create role"),
+								strip.purpose === "preset" ? "Save preset" : "Create role",
 								"enter",
 								{ primary: true },
 							)
 					: pickerAction(
 							"stripApply",
-							strip.kind === "thinking" ? localize("Apply") : strip.kind === "scope" ? localize("Save to scope") : localize("Assign / clear"),
+							strip.kind === "thinking" ? "Apply" : strip.kind === "scope" ? "Save to scope" : "Assign / clear",
 							"enter",
 							{ primary: true },
 						);
-			return [apply, cancel(strip.kind === "thinking" ? localize("Keep") : localize("Cancel"))];
+			return [apply, cancel(strip.kind === "thinking" ? "Keep" : "Cancel")];
 		}
 		const refresh =
-			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", localize("Refresh provider"), "f5") : undefined;
+			entry.kind === "provider" && !entry.locked ? pickerAction("refresh", "Refresh provider", "f5") : undefined;
 		if (this.#assigning !== null) {
 			const label =
 				this.#assigning.kind === "fallback"
-					? localize("Pick fallback")
+					? "Pick fallback"
 					: this.#assigning.kind === "fallbackKey"
-						? localize("Pick protected model")
-						: localize("Assign");
-			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel(localize("Cancel"))]);
+						? "Pick protected model"
+						: "Assign";
+			return compact([pickerAction("assign", label, "enter", { primary: true }), refresh, cancel("Cancel")]);
 		}
 		if (rolesView) {
 			const row = this.#rolesRows[this.#roleIndex];
@@ -3577,63 +3576,63 @@ export class ModelHubComponent implements Component {
 			const actions: (TspPickerAction | undefined)[] = [];
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
-					? roleAction("compaction", localize("Compaction limit"), "k")
+					? roleAction("compaction", "Compaction limit", "k")
 					: undefined;
 			switch (row?.kind) {
 				case "role": {
 					const assigned = this.#roles[row.role];
 					actions.push(
-						roleAction("pick", localize("Pick model"), "enter", true),
-						roleAction("fallback", localize("Add fallback"), "f"),
-						assigned && !assigned.autoSelected ? roleAction("clear", localize("Clear\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#pickerActions"), "x") : undefined,
-						this.#roleThinkingTarget(row.role) ? roleAction("thinking", localize("Thinking"), "t") : undefined,
+						roleAction("pick", "Pick model", "enter", true),
+						roleAction("fallback", "Add fallback", "f"),
+						assigned && !assigned.autoSelected ? roleAction("clear", "Clear", "x") : undefined,
+						this.#roleThinkingTarget(row.role) ? roleAction("thinking", "Thinking", "t") : undefined,
 						compaction,
-						roleAction("cycle", this.#cycleOrder().includes(row.role) ? localize("Leave cycle") : localize("Add to cycle"), "c"),
-						roleAction("new", localize("New role"), "n"),
-						this.#callbacks.onSavePreset ? roleAction("save", localize("Save preset"), "s") : undefined,
-						this.#presets().names.length > 0 ? roleAction("nextPreset", localize("Next preset"), "p") : undefined,
+						roleAction("cycle", this.#cycleOrder().includes(row.role) ? "Leave cycle" : "Add to cycle", "c"),
+						roleAction("new", "New role", "n"),
+						this.#callbacks.onSavePreset ? roleAction("save", "Save preset", "s") : undefined,
+						this.#presets().names.length > 0 ? roleAction("nextPreset", "Next preset", "p") : undefined,
 					);
 					break;
 				}
 				case "fallback":
 					actions.push(
-						roleAction("pick", localize("Replace"), "enter", true),
-						roleAction("fallback", localize("Add another"), "f"),
-						roleAction("clear", localize("Remove"), "x"),
+						roleAction("pick", "Replace", "enter", true),
+						roleAction("fallback", "Add another", "f"),
+						roleAction("clear", "Remove", "x"),
 						this.#resolveFallbackEntry(row.role, row.chainIndex)
-							? roleAction("thinking", localize("Thinking"), "t")
+							? roleAction("thinking", "Thinking", "t")
 							: undefined,
 						compaction,
-						roleAction("earlier", localize("Earlier"), "["),
-						roleAction("later", localize("Later"), "]"),
+						roleAction("earlier", "Earlier", "["),
+						roleAction("later", "Later", "]"),
 					);
 					break;
 				case "chainKey":
-					actions.push(roleAction("pick", localize("Add fallback"), "enter", true), roleAction("clear", localize("Clear chain"), "x"));
+					actions.push(roleAction("pick", "Add fallback", "enter", true), roleAction("clear", "Clear chain", "x"));
 					break;
 				case "newFallback":
-					actions.push(roleAction("pick", localize("New fallback chain"), "enter", true));
+					actions.push(roleAction("pick", "New fallback chain", "enter", true));
 					break;
 				case "newRole":
-					actions.push(roleAction("pick", localize("New role"), "enter", true));
+					actions.push(roleAction("pick", "New role", "enter", true));
 					break;
 			}
 			return compact([...actions, CLOSE_ACTION]);
 		}
 		if (lockedView) {
 			return entry.oauth
-				? [pickerAction("login", localize("Log in"), "enter", { primary: true }), CLOSE_ACTION]
+				? [pickerAction("login", "Log in", "enter", { primary: true }), CLOSE_ACTION]
 				: [CLOSE_ACTION];
 		}
 		return compact([
 			pickerAction(
 				"assign",
-				localize("Assign role"),
+				"Assign role",
 				"enter",
-				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: localize("No model selected\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#pickerActions.disabled") },
+				this.#browser.pickerSelected ? { primary: true } : { primary: true, disabled: "No model selected" },
 			),
 			refresh,
-			this.#browser.query.length > 0 ? cancel(localize("Clear search")) : CLOSE_ACTION,
+			this.#browser.query.length > 0 ? cancel("Clear search") : CLOSE_ACTION,
 		]);
 	}
 
@@ -3645,7 +3644,7 @@ export class ModelHubComponent implements Component {
 				return {
 					label: [
 						span(strip.model.id, "mono"),
-						span(localize(" limit "), "muted"),
+						span(" limit ", "muted"),
 						span(strip.input.getValue(), "mono"),
 						span("▏", "accent"),
 						span(`  ${notice.text}`, notice.style),
@@ -3655,7 +3654,7 @@ export class ModelHubComponent implements Component {
 			}
 			return {
 				label: [
-					span(strip.purpose === "preset" ? localize("Preset name ") : localize("New role name "), "muted"),
+					span(strip.purpose === "preset" ? "Preset name " : "New role name ", "muted"),
 					span(strip.input.getValue(), "mono"),
 					span("▏", "accent"),
 				],
@@ -3667,17 +3666,17 @@ export class ModelHubComponent implements Component {
 			// The second step of "New fallback chain…" reuses the role strip with key chips only.
 			const keyStrip = strip.chips.every(chip => chip.label.startsWith("for "));
 			label = keyStrip
-				? [span(localize("New fallback chain"), "muted")]
-				: [span(localize("Assign "), "muted"), span(strip.item.id, "mono"), span(localize(" to"), "muted")];
+				? [span("New fallback chain", "muted")]
+				: [span("Assign ", "muted"), span(strip.item.id, "mono"), span(" to", "muted")];
 		} else {
 			const info = this.#settings.getRoleInfo(strip.role ?? "");
 			const roleLabel = (info.tag ?? strip.role ?? "").toLowerCase();
 			label = [
-				span(strip.kind === "thinking" ? localize("Thinking for ") : localize("Save "), "muted"),
+				span(strip.kind === "thinking" ? "Thinking for " : "Save ", "muted"),
 				span(roleLabel, "strong"),
 				span(" · ", "muted"),
 				span(strip.item.id, "mono"),
-				...(strip.kind === "scope" ? [span(localize(" to\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#pickerStrip"), "muted")] : []),
+				...(strip.kind === "scope" ? [span(" to", "muted")] : []),
 			];
 		}
 		return {
@@ -3696,7 +3695,7 @@ export class ModelHubComponent implements Component {
 					(strip.kind === "thinking" &&
 						chip.thinkingLevel !== undefined &&
 						chip.thinkingLevel === strip.initialThinkingLevel);
-				return { id: String(index), label: chip.action.startsWith("fallback") ? plainText(chip.styled) : chip.label, ...(on ? { on: true } : {}), ...(dot ? { dot } : {}) };
+				return { id: String(index), label: chip.label, ...(on ? { on: true } : {}), ...(dot ? { dot } : {}) };
 			}),
 			selected: String(strip.index),
 		};
@@ -3715,16 +3714,16 @@ export class ModelHubComponent implements Component {
 				case "separator":
 					return;
 				case "newRole":
-					items.push({ id, label: localize("New role…"), icon: "plus", tone: "muted" });
+					items.push({ id, label: "New role…", icon: "plus", tone: "muted" });
 					return;
 				case "newFallback":
-					items.push({ id, label: localize("New fallback chain…"), icon: "plus", tone: "muted" });
+					items.push({ id, label: "New fallback chain…", icon: "plus", tone: "muted" });
 					return;
 				case "chainKey":
-					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: localize("fallback chain") });
+					items.push({ id, label: row.role, mono: true, icon: "git-branch", detail: "fallback chain" });
 					return;
 				case "fallback":
-					items.push({ id, label: row.selector, mono: true, depth: 1, detail: localize("fallback {0}", `${row.chainIndex + 1}`) });
+					items.push({ id, label: row.selector, mono: true, depth: 1, detail: `fallback ${row.chainIndex + 1}` });
 					return;
 				case "role":
 					break;
@@ -3735,7 +3734,7 @@ export class ModelHubComponent implements Component {
 			const facts: Record<string, string> = {};
 			if (assignment) {
 				const selector = `${assignment.model.provider}/${assignment.model.id}`;
-				facts.model = assignment.autoSelected ? localize("auto → {0}", `${selector}`) : selector;
+				facts.model = assignment.autoSelected ? `auto → ${selector}` : selector;
 				if (assignment.thinkingLevel !== ThinkingLevel.Inherit) {
 					facts.thinking = getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label;
 				}
@@ -3753,9 +3752,9 @@ export class ModelHubComponent implements Component {
 					? {
 							badges: [
 								{
-									text: localize("cycle {0}", `${cycleIndex + 1}`),
+									text: `cycle ${cycleIndex + 1}`,
 									tone: "accent" as const,
-									title: localize("Stop {0} of the quick-switch cycle", `${cycleIndex + 1}`),
+									title: `Stop ${cycleIndex + 1} of the quick-switch cycle`,
 								},
 							],
 						}
@@ -3774,12 +3773,12 @@ export class ModelHubComponent implements Component {
 			head = { group, label, count: 0 };
 			order.push(head);
 		};
-		open(this.#roleTab === "kind" ? "kind" : "chat", this.#roleTab === "kind" ? localize("Kind roles") : localize("Chat roles"));
+		open(this.#roleTab === "kind" ? "kind" : "chat", this.#roleTab === "kind" ? "Kind roles" : "Chat roles");
 		this.#rolesRows.forEach((row, index) => {
 			if (row.kind === "separator") {
 				const previous = this.#rolesRows[index - 1];
-				if (previous?.kind === "newRole") open("chains", localize("Model fallback chains"));
-				else open("kind", localize("Kind roles"));
+				if (previous?.kind === "newRole") open("chains", "Model fallback chains");
+				else open("kind", "Kind roles");
 				return;
 			}
 			order.push(rolesRowKey(row, index));
@@ -3806,7 +3805,7 @@ export class ModelHubComponent implements Component {
 		const chainList = (key: string): NativeChild | undefined => {
 			const chain = this.#fallbackChains()[key] ?? [];
 			if (chain.length === 0) return undefined;
-			return node("section", { head: localize("Fallback chain") }, [
+			return node("section", { head: "Fallback chain" }, [
 				md(chain.map((selector, index) => `${index + 1}. \`${selector}\``).join("\n")),
 			]);
 		};
@@ -3825,19 +3824,19 @@ export class ModelHubComponent implements Component {
 					children.push(
 						node("kv", {
 							items: [
-								{ k: [span(localize("Role"), "muted")], v: info.name },
+								{ k: [span("Role", "muted")], v: info.name },
 								{
-									k: [span(localize("Thinking"), "muted")],
+									k: [span("Thinking", "muted")],
 									v: getConfiguredThinkingLevelMetadata(assignment.thinkingLevel).label,
 								},
-								{ k: [span(localize("Source\u0004packages/tui/src/overlays/agents-hub.ts:SOURCE_COLUMN.head"), "muted")], v: assignment.autoSelected ? localize("auto-selected") : localize("configured") },
+								{ k: [span("Source", "muted")], v: assignment.autoSelected ? "auto-selected" : "configured" },
 							],
 						}),
 					);
 				} else {
 					children.push(
 						text(info.name, { role: "omp.picker.title" }),
-						text([span(localize("Not assigned; no available model fits this role."), "muted")], { wrap: "word" }),
+						text([span("Not assigned; no available model fits this role.", "muted")], { wrap: "word" }),
 					);
 				}
 				const chain = chainList(row.role);
@@ -3860,14 +3859,14 @@ export class ModelHubComponent implements Component {
 			}
 			case "newRole":
 				children.push(
-					text(localize("New role"), { role: "omp.picker.title" }),
-					text([span(localize("Name a custom role, then pick the model it runs on."), "muted")], { wrap: "word" }),
+					text("New role", { role: "omp.picker.title" }),
+					text([span("Name a custom role, then pick the model it runs on.", "muted")], { wrap: "word" }),
 				);
 				break;
 			case "newFallback":
 				children.push(
-					text(localize("New fallback chain"), { role: "omp.picker.title" }),
-					text([span(localize("Pick the model (or provider) a new retry fallback chain protects."), "muted")], {
+					text("New fallback chain", { role: "omp.picker.title" }),
+					text([span("Pick the model (or provider) a new retry fallback chain protects.", "muted")], {
 						wrap: "word",
 					}),
 				);
@@ -3881,9 +3880,9 @@ export class ModelHubComponent implements Component {
 		const envVars = entry.providerId ? (providerEntry(entry.providerId)?.envVars ?? []) : [];
 		const how =
 			envVars.length > 0
-				? localize("Set {0} in your environment, or add a key in config.", `${envVars.join(localize(" or "))}`)
-				: localize("Add an API key for this provider in config.");
-		return localize("{0} has no credentials configured. {1}", `${entry.label}`, `${how}`);
+				? `Set ${envVars.join(" or ")} in your environment, or add a key in config.`
+				: "Add an API key for this provider in config.";
+		return `${entry.label} has no credentials configured. ${how}`;
 	}
 
 	/** A signed-out provider's preview: how to sign in and what its catalog holds. */
@@ -3898,7 +3897,7 @@ export class ModelHubComponent implements Component {
 			for (const model of this.#registry.getAll("all")) {
 				if (model.provider === entry.providerId) ids.push(`- \`${model.id}\``);
 			}
-			children.push(node("section", { head: localize("{0} models in catalog", `${catalogCount}`) }, [md(ids.join("\n"))]));
+			children.push(node("section", { head: `${catalogCount} models in catalog` }, [md(ids.join("\n"))]));
 		}
 		return children;
 	}
@@ -4032,7 +4031,7 @@ export class ModelHubComponent implements Component {
 					"row",
 					{ gap: "sm", align: "center" },
 					[
-						text([span(localize("{0} limit:", `${strip.model.id}`), "accent")]),
+						text([span(`${strip.model.id} limit:`, "accent")]),
 						col([strip.input], { grow: 1 }),
 						text([span(notice.text, notice.style)], { wrap: "word" }),
 					],
@@ -4044,9 +4043,9 @@ export class ModelHubComponent implements Component {
 				"row",
 				{ gap: "sm", align: "center" },
 				[
-					text([span(preset ? localize("Preset name:") : localize("New role name:"), "accent")]),
+					text([span(preset ? "Preset name:" : "New role name:", "accent")]),
 					col([strip.input], { grow: 1 }),
-					text([span(localize("(letters, digits, - and _)"), "dim")]),
+					text([span("(letters, digits, - and _)", "dim")]),
 				],
 				preset ? "presetName" : "roleName",
 			);
@@ -4085,9 +4084,9 @@ export class ModelHubComponent implements Component {
 		const keys = (label: string, ...ids: KeyName[]): NativeHint => ({ keys: ids, label });
 		const cancel = (label: string) => actionHint("tui.select.cancel", label);
 		const upDown = (label: string) => actionHint(["tui.select.up", "tui.select.down"], label);
-		const search = keys(localize("type to search"));
-		const kind = keys(localize("kind"), "alt+left", "alt+right");
-		const reorder = keys(localize("reorder"), "[", "]");
+		const search = keys("type to search");
+		const kind = keys("kind", "alt+left", "alt+right");
+		const reorder = keys("reorder", "[", "]");
 		const strip = this.#strip;
 		if (strip) {
 			switch (strip.kind) {
@@ -4095,117 +4094,117 @@ export class ModelHubComponent implements Component {
 					return strip.purpose === "compaction"
 						? [
 								keys(
-									compactionConfirmPending(strip) ? localize("accept compaction point") : localize("set compaction point"),
+									compactionConfirmPending(strip) ? "accept compaction point" : "set compaction point",
 									"enter",
 								),
-								cancel(localize("cancel")),
+								cancel("cancel"),
 							]
 						: strip.purpose === "preset"
-							? [keys(localize("save preset"), "enter"), cancel(localize("cancel"))]
-							: [keys(localize("create + pick model"), "enter"), cancel(localize("cancel"))];
+							? [keys("save preset", "enter"), cancel("cancel")]
+							: [keys("create + pick model", "enter"), cancel("cancel")];
 				case "role":
-					return [keys(localize("choose"), "left", "right"), keys(localize("assign/clear"), "enter"), cancel(localize("cancel"))];
+					return [keys("choose", "left", "right"), keys("assign/clear", "enter"), cancel("cancel")];
 				case "scope":
-					return [keys(localize("save scope"), "left", "right"), keys(localize("choose"), "enter"), cancel(localize("cancel"))];
+					return [keys("save scope", "left", "right"), keys("choose", "enter"), cancel("cancel")];
 				case "thinking":
-					return [keys(localize("thinking level"), "left", "right"), keys(localize("apply"), "enter"), cancel(localize("keep"))];
+					return [keys("thinking level", "left", "right"), keys("apply", "enter"), cancel("keep")];
 			}
 		}
 		if (this.#assigning !== null) {
 			if (this.#focus === "scope") {
-				return [keys(localize("models"), "enter", "right"), upDown(localize("providers")), search, kind, cancel(localize("cancel"))];
+				return [keys("models", "enter", "right"), upDown("providers"), search, kind, cancel("cancel")];
 			}
 			const pick =
 				this.#assigning.kind === "fallback"
-					? localize("pick fallback")
+					? "pick fallback"
 					: this.#assigning.kind === "fallbackKey"
-						? localize("pick the protected model")
-						: localize("assign");
-			return [keys(pick, "enter"), upDown(localize("models")), keys(localize("providers"), "left"), search, kind, cancel(localize("cancel"))];
+						? "pick the protected model"
+						: "assign";
+			return [keys(pick, "enter"), upDown("models"), keys("providers", "left"), search, kind, cancel("cancel")];
 		}
-		const presetHint = this.#presets().names.length > 0 ? keys(localize("preset"), "ctrl+left", "ctrl+right") : undefined;
+		const presetHint = this.#presets().names.length > 0 ? keys("preset", "ctrl+left", "ctrl+right") : undefined;
 		const entry = this.#activeEntry();
 		if (entry.kind === "roles") {
 			if (this.#focus !== "list") {
 				return [
-					upDown(localize("providers")),
-					keys(localize("roles"), "enter", "right"),
-					keys(localize("tabs"), "alt+left", "alt+right"),
+					upDown("providers"),
+					keys("roles", "enter", "right"),
+					keys("tabs", "alt+left", "alt+right"),
 					presetHint,
-					cancel(localize("close")),
+					cancel("close"),
 				];
 			}
 			// A live query takes printable keys and backspace, so the letter commands rest.
 			if (this.#browser.query.length > 0) {
 				return [
-					upDown(localize("rows")),
-					keys(localize("pick"), "enter"),
+					upDown("rows"),
+					keys("pick", "enter"),
 					search,
-					keys(localize("providers"), "left"),
+					keys("providers", "left"),
 					presetHint,
-					cancel(localize("close")),
+					cancel("close"),
 				];
 			}
 			const row = this.#rolesRows[this.#roleIndex];
 			const compaction =
-				this.#callbacks.onCompactionPointChange && this.#roleRowModel() ? keys(localize("compaction limit"), "k") : undefined;
+				this.#callbacks.onCompactionPointChange && this.#roleRowModel() ? keys("compaction limit", "k") : undefined;
 			if (row?.kind === "fallback") {
 				// Advertise `t` only where a strip would open, as the ANSI footer does.
 				const editable = this.#resolveFallbackEntry(row.role, row.chainIndex) !== undefined;
 				return [
-					upDown(localize("rows")),
-					keys(localize("replace"), "enter"),
-					keys(localize("add another"), "f"),
-					keys(localize("remove"), "x"),
-					editable ? keys(localize("thinking"), "t") : undefined,
+					upDown("rows"),
+					keys("replace", "enter"),
+					keys("add another", "f"),
+					keys("remove", "x"),
+					editable ? keys("thinking", "t") : undefined,
 					compaction,
 					reorder,
-					keys(localize("providers"), "left"),
+					keys("providers", "left"),
 				];
 			}
 			if (row?.kind === "chainKey") {
 				return [
-					upDown(localize("rows")),
-					keys(localize("add fallback"), "enter", "f"),
-					keys(localize("clear chain"), "x"),
-					keys(localize("providers"), "left"),
+					upDown("rows"),
+					keys("add fallback", "enter", "f"),
+					keys("clear chain", "x"),
+					keys("providers", "left"),
 				];
 			}
 			if (row?.kind === "newFallback") {
-				return [upDown(localize("rows")), keys(localize("new model/provider fallback chain"), "enter"), keys(localize("providers"), "left")];
+				return [upDown("rows"), keys("new model/provider fallback chain", "enter"), keys("providers", "left")];
 			}
 			const editable = row?.kind === "role" && this.#roleThinkingTarget(row.role) !== undefined;
 			return [
-				upDown(localize("rows")),
-				keys(localize("pick"), "enter"),
-				keys(localize("fallback"), "f"),
-				keys(localize("clear"), "x"),
-				editable ? keys(localize("thinking"), "t") : undefined,
+				upDown("rows"),
+				keys("pick", "enter"),
+				keys("fallback", "f"),
+				keys("clear", "x"),
+				editable ? keys("thinking", "t") : undefined,
 				compaction,
-				keys(localize("cycle"), "c"),
+				keys("cycle", "c"),
 				reorder,
-				keys(localize("new\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#footerHints"), "n"),
-				this.#callbacks.onSavePreset ? keys(localize("save preset"), "s") : undefined,
-				this.#presets().names.length > 0 ? keys(localize("preset"), "ctrl+left", "ctrl+right", "p", "shift+p") : undefined,
+				keys("new", "n"),
+				this.#callbacks.onSavePreset ? keys("save preset", "s") : undefined,
+				this.#presets().names.length > 0 ? keys("preset", "ctrl+left", "ctrl+right", "p", "shift+p") : undefined,
 			];
 		}
 		if (entry.kind === "provider" && entry.locked) {
 			return entry.oauth
-				? [keys(localize("log in"), "enter"), upDown(localize("providers")), cancel(localize("close"))]
-				: [upDown(localize("providers")), cancel(localize("close"))];
+				? [keys("log in", "enter"), upDown("providers"), cancel("close")]
+				: [upDown("providers"), cancel("close")];
 		}
-		const refresh = entry.kind === "provider" ? keys(localize("refresh\u0004packages/tui/src/overlays/model-hub.ts:ModelHubComponent.#footerHints.refresh"), "f5") : undefined;
+		const refresh = entry.kind === "provider" ? keys("refresh", "f5") : undefined;
 		if (this.#focus === "scope") {
-			return [keys(localize("models"), "enter", "right"), upDown(localize("providers")), search, kind, refresh, cancel(localize("close"))];
+			return [keys("models", "enter", "right"), upDown("providers"), search, kind, refresh, cancel("close")];
 		}
 		return [
-			keys(localize("assign roles"), "enter"),
-			upDown(localize("models")),
-			keys(localize("providers"), "left"),
+			keys("assign roles", "enter"),
+			upDown("models"),
+			keys("providers", "left"),
 			search,
 			kind,
 			refresh,
-			cancel(localize("close")),
+			cancel("close"),
 		];
 	}
 }

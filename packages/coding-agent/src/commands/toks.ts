@@ -2,11 +2,10 @@
  * Count a file or text through every embedded offline tokenizer and print a
  * per-encoding stats table (see `crates/pi-natives/src/utok`).
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as natives from "@oh-my-pi/pi-natives";
-import { formatBytes } from "@oh-my-pi/pi-utils";
+import { formatBytes, pluralize } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { toksHelp as commandHelp } from "../cli/command-help";
@@ -33,7 +32,7 @@ async function resolveInput(input: string): Promise<{ source: Source; text: stri
 	const filePath = path.resolve(input);
 	// Unstattable (missing, name too long, invalid chars) means it is text, not a path.
 	const stat = await fs.stat(filePath).catch(() => undefined);
-	if (stat?.isDirectory()) throw new CliUsageError(t("{0} is a directory; pass a file or text", `${input}`));
+	if (stat?.isDirectory()) throw new CliUsageError(`${input} is a directory; pass a file or text`);
 	if (stat?.isFile()) return { source: { kind: "file", path: filePath }, text: await Bun.file(filePath).text() };
 	return { source: { kind: "text" }, text: input };
 }
@@ -56,18 +55,19 @@ function countLines(text: string): number {
 }
 
 const int = (n: number): string => n.toLocaleString("en-US");
+const count = (n: number, label: string): string => `${int(n)} ${pluralize(label, n)}`;
 
 export default class Toks extends Command {
 	static description = commandHelp.description;
 	static args = {
 		input: Args.string({
-			description: t("File path, or literal text when it does not name a file"),
+			description: "File path, or literal text when it does not name a file",
 			required: true,
 			multiple: true,
 		}),
 	};
 	static flags = {
-		json: Flags.boolean({ description: t("Output JSON\u0004packages/coding-agent/src/commands/ssh.ts:SSH.flags.json.description") }),
+		json: Flags.boolean({ description: "Output JSON" }),
 	};
 
 	static examples = [
@@ -79,7 +79,7 @@ export default class Toks extends Command {
 	async run(): Promise<void> {
 		const { args, flags } = await this.parse(Toks);
 		const input = (args.input ?? []).join(" ");
-		if (input.length === 0) throw new CliUsageError(t("toks requires a file path or text"));
+		if (input.length === 0) throw new CliUsageError("toks requires a file path or text");
 
 		const { source, text } = await resolveInput(input);
 		const bytes = Buffer.byteLength(text, "utf-8");
@@ -97,13 +97,13 @@ export default class Toks extends Command {
 		}
 
 		const baseline = rows.find(row => row.encoding === natives.Encoding.O200kBase)?.tokens ?? 0;
-		const label = source.kind === "file" ? path.relative(process.cwd(), source.path) || source.path : t("text");
+		const label = source.kind === "file" ? path.relative(process.cwd(), source.path) || source.path : "text";
 		const out = [
-			`${chalk.dim(t("input"))}  ${label}`,
-			t("{0}   {1} · {2} char{4} · {3} line{5}", `${(chalk.dim(t("size")))}`, `${(formatBytes(bytes))}`, `${(int(chars))}`, `${(int(lines))}`, `${(chars === 1 ? "" : "s")}`, `${(lines === 1 ? "" : "s")}`),
+			`${chalk.dim("input")}  ${label}`,
+			`${chalk.dim("size")}   ${formatBytes(bytes)} · ${count(chars, "char")} · ${count(lines, "line")}`,
 			"",
 			chalk.dim(
-				`${t("encoding").padEnd(15)}${t("models").padEnd(20)}${t("tokens").padStart(8)}${t("chars/tok").padStart(7)}${t("vs o200k").padStart(8)}`,
+				`${"encoding".padEnd(18)}${"models".padEnd(22)}${"tokens".padStart(10)}${"chars/tok".padStart(11)}${"vs o200k".padStart(10)}`,
 			),
 		];
 		for (const row of rows) {

@@ -144,8 +144,13 @@ describe("AgentsHub layout", () => {
 		// top border + content rows + divider + footer + bottom border = terminal rows.
 		expect(lines.length).toBe(30);
 		const rendered = strip();
+		expect(rendered).toContain("Agents");
+		expect(rendered).toContain("All agents");
+		expect(rendered).toContain("Project");
+		expect(rendered).toContain("Bundled");
 		expect(rendered).toContain("dev");
 		expect(rendered).toContain("scout");
+		expect(rendered).toContain("+ New agent");
 	});
 
 	test("sidebar scope filters the rows to one source", async () => {
@@ -153,6 +158,7 @@ describe("AgentsHub layout", () => {
 		hub.handleInput("\x1b[D"); // left → scope focus
 		hub.handleInput("\x1b[B"); // down → Project
 		const rendered = strip();
+		expect(rendered).toContain("Project agents · 1");
 		expect(rendered).toContain("dev");
 		expect(rendered).not.toContain("scout");
 	});
@@ -187,15 +193,18 @@ describe("AgentsHub configuration strips", () => {
 	test("Enter opens the property strip; advisor → on persists only that agent's entry", async () => {
 		const settings = new TestSettings();
 		settings.records.set("task.agentAdvisor", { scout: "off" });
-		const { hub } = await createHub(settings);
+		const { hub, strip } = await createHub(settings);
 		hub.handleInput("\r"); // agent strip for `dev`
+		expect(strip()).toContain("dev →");
 		hub.handleInput("\x1b[C"); // model → prewalk
 		hub.handleInput("\x1b[C"); // prewalk → advisor
 		hub.handleInput("\r"); // advisor value strip
+		expect(strip()).toContain("dev · advisor →");
 		hub.handleInput("\x1b[C"); // agent default → on
 		hub.handleInput("\r");
 		expect(settings.records.get("task.agentAdvisor")).toEqual({ scout: "off", dev: "on" });
 		expect(settings.writes).toEqual(["task.agentAdvisor.dev"]);
+		expect(strip()).toContain("dev advisor: on (@advisor)");
 	});
 
 	test("pattern… commits a custom advisor pattern and empty submit clears it", async () => {
@@ -220,7 +229,9 @@ describe("AgentsHub configuration strips", () => {
 		const { hub, strip } = await createHub(settings);
 		hub.handleInput("\r"); // agent strip (model chip preselected)
 		hub.handleInput("\r"); // model value strip → [pick model…] first
+		expect(strip()).toContain("dev · model →");
 		hub.handleInput("\r"); // assign mode: model browser
+		expect(strip()).toContain("Picking model override for dev");
 		expect(strip()).toContain("claude-sonnet-4-5");
 		hub.handleInput("\r"); // pick the only model
 		expect(settings.records.get("task.agentModelOverrides")).toEqual({ dev: "anthropic/claude-sonnet-4-5" });
@@ -231,9 +242,10 @@ describe("AgentsHub configuration strips", () => {
 	test("clear override chip removes an existing model override", async () => {
 		const settings = new TestSettings();
 		settings.records.set("task.agentModelOverrides", { dev: "anthropic/claude-sonnet-4-5" });
-		const { hub } = await createHub(settings);
+		const { hub, strip } = await createHub(settings);
 		hub.handleInput("\r"); // agent strip
 		hub.handleInput("\r"); // model value strip
+		expect(strip()).toContain("clear override");
 		hub.handleInput("\x1b[C"); // pick model… → pattern…
 		hub.handleInput("\x1b[C"); // pattern… → clear override
 		hub.handleInput("\r");
@@ -242,13 +254,13 @@ describe("AgentsHub configuration strips", () => {
 
 	test("Esc steps back from a value strip to the agent strip before closing", async () => {
 		const settings = new TestSettings();
-		const { hub, cancelled } = await createHub(settings);
+		const { hub, strip, cancelled } = await createHub(settings);
 		hub.handleInput("\r"); // agent strip
 		hub.handleInput("\r"); // model value strip
 		hub.handleInput("\x1b"); // back to agent strip
-		expect(findKeyed(hub.describe(cx), "strip")).toBeDefined();
+		expect(strip()).toContain("dev →");
 		hub.handleInput("\x1b"); // close strip
-		expect(findKeyed(hub.describe(cx), "strip")).toBeUndefined();
+		expect(strip()).not.toContain("dev →");
 		expect(cancelled()).toBe(false);
 	});
 });
@@ -303,7 +315,7 @@ describe("AgentsHub picker", () => {
 		expect(pickerProps(hub).selected).toBe("agent:bundled:scout");
 		hub.handleNativeEvent({ type: "action", key: "", act: "configure", mods: [] });
 		const strip = pickerProps(hub).strip;
-		expect(strip?.items).toHaveLength(4);
+		expect(strip?.items.map(item => item.label)).toEqual(["Disable", "model: auto", "prewalk: off", "advisor: off"]);
 		expect(pickerProps(hub).focus).toBe("strip");
 
 		hub.handleNativeEvent({ type: "action", key: "", act: "strip", value: "0", mods: [] });
@@ -324,7 +336,7 @@ describe("AgentsHub picker", () => {
 	test("the pattern input leaves the picker for the generic overlay", async () => {
 		const { hub } = await createHub(new TestSettings());
 		hub.handleNativeEvent({ type: "action", key: "", act: "model", mods: [] });
-		expect(pickerProps(hub).strip).toBeDefined();
+		expect(pickerProps(hub).strip?.label).toBe("dev · model");
 		// pattern… is the second chip of the model strip
 		hub.handleNativeEvent({ type: "action", key: "", act: "strip", value: "1", mods: [] });
 		expect(hub.nativeSheet(pickerCx)).toBe(false);

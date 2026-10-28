@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register, type ScopeLike } from "../config/registry";
 import { cfgMemoryBackend } from "../memory-backend/settings";
 
@@ -14,8 +13,8 @@ export const cfgMnemopiDbPath = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi DB Path"),
-		description: t("Optional SQLite DB path. Defaults to the agent memories directory."),
+		label: "Mnemopi DB Path",
+		description: "Optional SQLite DB path. Defaults to the agent memories directory.",
 		condition: "mnemopiActive",
 	},
 });
@@ -27,8 +26,8 @@ export const cfgMnemopiBank = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Bank"),
-		description: t("Optional shared bank base name. Per-project modes derive project-local banks from it."),
+		label: "Mnemopi Bank",
+		description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
 		condition: "mnemopiActive",
 	},
 });
@@ -41,24 +40,24 @@ export const cfgMnemopiScoping = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Scoping"),
+		label: "Mnemopi Scoping",
 		description:
-			t("global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility"),
+			"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
 		options: [
 			{
 				value: "global",
-				label: t("Global"),
-				description: t("One shared Mnemopi bank for every project"),
+				label: "Global",
+				description: "One shared Mnemopi bank for every project",
 			},
 			{
 				value: "per-project",
-				label: t("Per project"),
-				description: t("Project-local Mnemopi bank per cwd basename"),
+				label: "Per project",
+				description: "Project-local Mnemopi bank per cwd basename",
 			},
 			{
 				value: "per-project-tagged",
-				label: t("Per project (tagged)"),
-				description: t("Write to a project-local bank but merge project + shared recall results"),
+				label: "Per project (tagged)",
+				description: "Write to a project-local bank but merge project + shared recall results",
 			},
 		],
 		condition: "mnemopiActive",
@@ -81,19 +80,19 @@ export const cfgMnemopiEmbeddingVariant = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Embedding variant"),
+		label: "Embedding variant",
 		description:
-			t("Local embedding model family. en = stronger English model; multilingual = cross-language model. Changing this rebuilds existing memory embeddings on next start."),
+			"Local embedding model family. en = stronger English model; multilingual = cross-language model. Changing this rebuilds existing memory embeddings on next start.",
 		options: [
 			{
 				value: "en",
-				label: t("English (bge-base-en-v1.5)"),
-				description: t("BAAI/bge-base-en-v1.5 (768d), English-only"),
+				label: "English (bge-base-en-v1.5)",
+				description: "BAAI/bge-base-en-v1.5 (768d), English-only",
 			},
 			{
 				value: "multilingual",
-				label: t("Multilingual (multilingual-e5-large)"),
-				description: t("intfloat/multilingual-e5-large (1024d), cross-language recall"),
+				label: "Multilingual (multilingual-e5-large)",
+				description: "intfloat/multilingual-e5-large (1024d), cross-language recall",
 			},
 		],
 		condition: "mnemopiActive",
@@ -107,8 +106,8 @@ export const cfgMnemopiAutoRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Auto Recall"),
-		description: t("Recall local memories into the first turn of each session"),
+		label: "Mnemopi Auto Recall",
+		description: "Recall local memories into the first turn of each session",
 		condition: "mnemopiActive",
 	},
 });
@@ -120,8 +119,8 @@ export const cfgMnemopiAutoRetain = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Auto Retain"),
-		description: t("Retain completed conversation turns into local Mnemopi memory"),
+		label: "Mnemopi Auto Retain",
+		description: "Retain completed conversation turns into local Mnemopi memory",
 		condition: "mnemopiActive",
 	},
 });
@@ -133,9 +132,9 @@ export const cfgMnemopiPolyphonicRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Polyphonic Recall"),
+		label: "Mnemopi Polyphonic Recall",
 		description:
-			t("Fuse recall with graph, fact, vector and temporal voices so linked memories surface without a keyword match"),
+			"Fuse recall with graph, fact, vector and temporal voices so linked memories surface without a keyword match",
 		condition: "mnemopiActive",
 	},
 });
@@ -147,9 +146,9 @@ export const cfgMnemopiEnhancedRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Enhanced Recall"),
+		label: "Mnemopi Enhanced Recall",
 		description:
-			t("Cache recall results for repeated and similar queries with identical options; any memory write clears it"),
+			"Cache recall results for repeated and similar queries with identical options; any memory write clears it",
 		condition: "mnemopiActive",
 	},
 });
@@ -161,9 +160,9 @@ export const cfgMnemopiProactiveLinking = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Proactive Linking"),
+		label: "Mnemopi Proactive Linking",
 		description:
-			t("Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories"),
+			"Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories",
 		condition: "mnemopiActive",
 	},
 });
@@ -175,8 +174,8 @@ export const cfgMnemopiNoEmbeddings = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Disable Embeddings"),
-		description: t("Force deterministic FTS-only recall instead of vector embeddings"),
+		label: "Mnemopi Disable Embeddings",
+		description: "Force deterministic FTS-only recall instead of vector embeddings",
 		condition: "mnemopiActive",
 	},
 });
@@ -190,9 +189,9 @@ export const cfgMnemopiEmbeddingModel = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Embedding Model"),
+		label: "Mnemopi Embedding Model",
 		description:
-			t("Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant."),
+			"Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant.",
 		condition: "mnemopiActive",
 	},
 });
@@ -204,8 +203,8 @@ export const cfgMnemopiEmbeddingApiUrl = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Embedding API URL"),
-		description: t("Optional OpenAI-compatible embedding endpoint passed to Mnemopi"),
+		label: "Mnemopi Embedding API URL",
+		description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
 		condition: "mnemopiActive",
 	},
 });
@@ -218,8 +217,8 @@ export const cfgMnemopiEmbeddingApiKey = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi Embedding API Key"),
-		description: t("Optional embedding API key passed to Mnemopi"),
+		label: "Mnemopi Embedding API Key",
+		description: "Optional embedding API key passed to Mnemopi",
 		condition: "mnemopiActive",
 	},
 });
@@ -232,18 +231,18 @@ export const cfgMnemopiLlmMode = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi LLM Mode"),
+		label: "Mnemopi LLM Mode",
 		description:
-			t("Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint"),
+			"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
 		condition: "mnemopiActive",
 		options: [
-			{ value: "none", label: t("None"), description: t("Disable Mnemopi LLM-backed extraction") },
+			{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
 			{
 				value: "smol",
-				label: t("Online (tiny)"),
-				description: t("Use the online tiny model (the TINY role from /models, else @smol)"),
+				label: "Online (tiny)",
+				description: "Use the online tiny model (the TINY role from /models, else @smol)",
 			},
-			{ value: "remote", label: t("Remote"), description: t("Use the Mnemopi remote LLM settings below") },
+			{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
 		],
 	},
 });
@@ -255,8 +254,8 @@ export const cfgMnemopiLlmBaseUrl = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi LLM Base URL"),
-		description: t("Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode"),
+		label: "Mnemopi LLM Base URL",
+		description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
 		condition: "mnemopiActive",
 	},
 });
@@ -269,8 +268,8 @@ export const cfgMnemopiLlmApiKey = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi LLM API Key"),
-		description: t("Optional LLM API key for Mnemopi remote mode"),
+		label: "Mnemopi LLM API Key",
+		description: "Optional LLM API key for Mnemopi remote mode",
 		condition: "mnemopiActive",
 	},
 });
@@ -282,8 +281,8 @@ export const cfgMnemopiLlmModel = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: t("Mnemopi LLM Model"),
-		description: t("Optional LLM model name for Mnemopi remote mode"),
+		label: "Mnemopi LLM Model",
+		description: "Optional LLM model name for Mnemopi remote mode",
 		condition: "mnemopiActive",
 	},
 });

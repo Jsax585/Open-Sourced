@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Added language-pack support to collaboration UI and shared browser tool renderers ([#17203](https://github.com/can1357/oh-my-pi/pull/17203) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
-
 ## [18.8.0] - 2026-10-07
 
 ### Changed

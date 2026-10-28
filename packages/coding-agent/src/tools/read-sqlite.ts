@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Database } from "bun:sqlite";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { ToolSession } from "../sdk";
@@ -215,7 +214,7 @@ export async function readSqlite(
 			}
 		}
 
-		throw new ToolError(t("Unsupported SQLite selector"));
+		throw new ToolError("Unsupported SQLite selector");
 	} catch (error) {
 		if (error instanceof ToolError) {
 			throw error;

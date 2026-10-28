@@ -2,7 +2,6 @@
  * Edit tool renderer.
  */
 
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { type EditInspection, editInspect } from "@oh-my-pi/pi-natives";
 import type { Component } from "../tui";
 import { sliceWithWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
@@ -274,7 +273,7 @@ function countEditFiles(edits: EditRenderEntry[]): number {
 }
 
 function getOperationTitle(op: Operation | undefined): string {
-	return op === "create" ? localize("Create") : op === "delete" ? localize("Delete") : localize("Edit");
+	return op === "create" ? "Create" : op === "delete" ? "Delete" : "Edit";
 }
 
 interface EditPathDisplayOptions {
@@ -427,7 +426,7 @@ function renderInlineEditRow(
 					? undefined
 					: uiTheme.styledSymbol(isDelete ? "tool.delete" : "tool.move", "accent"),
 				op: opts.op,
-				title: isDelete ? localize("Delete") : "Move",
+				title: isDelete ? "Delete" : "Move",
 				rawPath: opts.rawPath,
 				rename: opts.rename,
 				linkPath: opts.linkPath,
@@ -1285,7 +1284,7 @@ export const editToolRenderer = {
 			if (remaining > 0) {
 				body.push(
 					node("spinner", {
-						label: [span(localize("{0} more file{1} pending…", `${remaining}`, `${remaining > 1 ? "s" : ""}`), "muted")],
+						label: [span(`${remaining} more file${remaining > 1 ? "s" : ""} pending…`, "muted")],
 					}),
 				);
 			}
@@ -1356,7 +1355,7 @@ function editToolHead(facts: EditHeadFacts): NativeToolHead {
 			? `${displayPath(sanitizeText(facts.path))}${facts.line ? `:${facts.line}` : ""}`
 			: undefined;
 	return {
-		title: multi ? localize("Edit") : getOperationTitle(facts.op),
+		title: multi ? "Edit" : getOperationTitle(facts.op),
 		target,
 		targetKind: multi ? "text" : "path",
 		href: multi ? undefined : facts.href,
@@ -1440,7 +1439,7 @@ function editFileParts(
 	} else if (editDiffPreview && "error" in editDiffPreview) {
 		body.push(errorText(editDiffPreview.error));
 	} else if (details && op !== "delete" && op !== "create" && !rename) {
-		body.push(noteText(localize("No changes were made{0}.", `${shownPath ? ` to ${shownPath}` : ""}`)));
+		body.push(noteText(`No changes were made${shownPath ? ` to ${shownPath}` : ""}.`));
 	}
 	const diagnostics = diagnosticsSection(details?.diagnostics);
 	if (diagnostics) body.push(diagnostics);
@@ -1597,7 +1596,7 @@ function renderSingleFileResult(
 						: rawPath
 							? shortenPath(sanitizeText(rawPath))
 							: "";
-					body = uiTheme.fg("dim", localize("No changes were made{0}.", `${noChangePath ? ` to ${noChangePath}` : ""}`));
+					body = uiTheme.fg("dim", `No changes were made${noChangePath ? ` to ${noChangePath}` : ""}.`);
 				}
 			} else if (editDiffPreview) {
 				if ("error" in editDiffPreview) body = uiTheme.fg("error", replaceTabs(editDiffPreview.error));
@@ -1690,8 +1689,8 @@ function renderMultiFileResult(
 					renderStatusLine(
 						{
 							iconOverride: spinner,
-							title: localize("Edit"),
-							description: uiTheme.fg("dim", localize("{0} more file{1} pending…", `${remaining}`, `${remaining > 1 ? "s" : ""}`)),
+							title: "Edit",
+							description: uiTheme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
 						},
 						uiTheme,
 					),

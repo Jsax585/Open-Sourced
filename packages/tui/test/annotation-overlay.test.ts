@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, afterEach, it } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
-import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
+import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { getKeybindings, setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
 import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
 import { AnnotationOverlay, type AnnotationOverlayCallbacks } from "@oh-my-pi/pi-tui/overlays/annotation-overlay";
@@ -333,6 +333,7 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getAnnotations().map(annotation => annotation.note)).toEqual(["first", "second"]);
 
 		overlay.handleInput("e");
+		expect(render(overlay)).toContain("Edit annotation");
 		overlay.handleInput(DOWN);
 		overlay.handleInput(ENTER);
 		overlay.handleInput(CTRL_U);
@@ -429,7 +430,7 @@ describe("AnnotationOverlay", () => {
 		expect(overlay.getAnnotations()).toEqual([expect.objectContaining({ note: "external\neditor" })]);
 	});
 
-	it("opens the source editor on the global external-editor key", () => {
+	it("opens the source editor on the global external-editor key and names that key", () => {
 		const opened: string[] = [];
 		const overlay = new AnnotationOverlay(
 			makeTui(),
@@ -445,7 +446,7 @@ describe("AnnotationOverlay", () => {
 			},
 		);
 		overlay.focused = true;
-		render(overlay);
+		expect(render(overlay)).toContain(`${formatKeyHint("ctrl+e")} editor`);
 		overlay.handleInput(CTRL_E);
 		expect(opened).toEqual(["source"]);
 		expect(overlay.reviewFilePath()).toBe("src/value.ts");
@@ -475,6 +476,7 @@ describe("AnnotationOverlay", () => {
 		overlay.handleInput(ENTER);
 		overlay.handleInput("e");
 		overlay.handleInput(CTRL_E);
+		expect(render(overlay)).toContain("choose");
 		expect(opened).toEqual([]);
 		expect(overlay.getTextAnnotations()).toHaveLength(2);
 	});

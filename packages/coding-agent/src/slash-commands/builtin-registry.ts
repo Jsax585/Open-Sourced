@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
@@ -158,7 +157,7 @@ export async function executeBuiltinSlashCommand(
 	// Collab guests run a read-mostly replica: session-mutating builtins are
 	// host-only; the allowlist covers purely local/read-only commands.
 	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
-		runtime.ctx.showStatus(t("/{0} is host-only during a collab session", `${command.name}`));
+		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
 		// A detached draft already left the editor: give it back, images included.
 		if (runtime.draftDetached) {
 			restoreDetachedDraft(runtime.ctx.editor, parsed.text, runtime.input?.images, runtime.input?.imageLinks);

@@ -7,7 +7,6 @@
  * stay in their respective files.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Loader } from "../components/loader";
 import { Text } from "../components/text";
 import { Container, type TUI } from "../tui";
@@ -36,7 +35,7 @@ export function clampDisplayLine(line: string): string {
 		return line;
 	}
 	const omitted = visible - MAX_DISPLAY_LINE_CHARS;
-	return t("{0}… [{1} visible columns omitted]", `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}`, `${omitted}`);
+	return `${truncateToWidth(line, MAX_DISPLAY_LINE_CHARS, Ellipsis.Omit)}… [${omitted} visible columns omitted]`;
 }
 
 export type ExecutionStatus = "running" | "complete" | "cancelled" | "error";
@@ -66,7 +65,7 @@ export function buildExecutionFrame(
 		ui,
 		spinner => theme.fg(colorKey, spinner),
 		text => theme.fg("muted", text),
-		t("Running… ({0} to cancel)", `${interruptKey()}`),
+		`Running… (${interruptKey()} to cancel)`,
 		getSymbolTheme().spinnerFrames,
 	);
 
@@ -91,12 +90,12 @@ export function buildStatusFooter(opts: {
 	const parts: string[] = [];
 
 	if (opts.hiddenLineCount > 0 && !opts.suppressHiddenCount) {
-		parts.push(theme.fg("dim", t("… {0} more lines ({1} to expand)", `${opts.hiddenLineCount}`, `${expandKeyHint()}`)));
+		parts.push(theme.fg("dim", `… ${opts.hiddenLineCount} more lines (${expandKeyHint()} to expand)`));
 	}
 	if (opts.status === "cancelled") {
-		parts.push(theme.fg("warning", t("(cancelled)")));
+		parts.push(theme.fg("warning", "(cancelled)"));
 	} else if (opts.status === "error") {
-		parts.push(theme.fg("error", t("(exit {0})", `${opts.exitCode}`)));
+		parts.push(theme.fg("error", `(exit ${opts.exitCode})`));
 	}
 	if (opts.truncation) {
 		parts.push(theme.fg("warning", formatTruncationMetaNotice(opts.truncation)));
@@ -160,7 +159,7 @@ export function describeExecutionCard(input: ExecutionCardInput): NativeNode {
 	if (input.images) children.push(...input.images);
 	if (running) {
 		children.push(
-			node("spinner", { label: [span(t("Running… ({0} to cancel)", `${interruptKey()}`), "muted")] }, undefined, "running"),
+			node("spinner", { label: [span(`Running… (${interruptKey()} to cancel)`, "muted")] }, undefined, "running"),
 		);
 	}
 	const notes: TspSpan[] = [];
@@ -168,8 +167,8 @@ export function describeExecutionCard(input: ExecutionCardInput): NativeNode {
 		if (notes.length > 0) notes.push(span("\n"));
 		notes.push(span(value, token));
 	};
-	if (input.status === "cancelled") note(t("(cancelled)"), "warning");
-	else if (input.status === "error") note(t("(exit {0})", `${input.exitCode}`), "error");
+	if (input.status === "cancelled") note("(cancelled)", "warning");
+	else if (input.status === "error") note(`(exit ${input.exitCode})`, "error");
 	if (input.truncation) note(formatTruncationMetaNotice(input.truncation), "warning");
 	if (input.artifactError) note(formatArtifactErrorNotice(input.artifactError), "warning");
 	if (notes.length > 0) children.push(text(notes, { wrap: "word", key: "notes" }));
@@ -250,8 +249,8 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 		],
 		{ key: "run", tone: state === "failed" ? "error" : undefined },
 	);
-	const badges: { text: string; tone?: TspTone; title?: string }[] = [{ text: t("you"), tone: "user" }];
-	if (input.excluded) badges.push({ text: t("not sent"), title: t("Not sent to the model"), tone: "muted" });
+	const badges: { text: string; tone?: TspTone; title?: string }[] = [{ text: "you", tone: "user" }];
+	if (input.excluded) badges.push({ text: "not sent", title: "Not sent to the model", tone: "muted" });
 	return node(
 		"tool",
 		{
@@ -264,7 +263,7 @@ export function describeExecutionTool(input: ExecutionToolInput): NativeNode {
 			age: running ? ms : undefined,
 			took: running ? undefined : ms,
 			exit: input.status === "error" ? input.exitCode : undefined,
-			note: input.status === "cancelled" ? t("cancelled") : undefined,
+			note: input.status === "cancelled" ? "cancelled" : undefined,
 			frame: "card",
 			collapsible: true,
 			collapsed: !input.expanded,

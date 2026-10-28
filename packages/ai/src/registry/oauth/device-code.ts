@@ -1,10 +1,9 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as AIError from "../../error";
 
-const DEVICE_FLOW_CANCEL_MESSAGE = t("Login cancelled");
-const DEVICE_FLOW_TIMEOUT_MESSAGE = t("Device flow timed out");
+const DEVICE_FLOW_CANCEL_MESSAGE = "Login cancelled";
+const DEVICE_FLOW_TIMEOUT_MESSAGE = "Device flow timed out";
 const DEVICE_FLOW_SLOW_DOWN_TIMEOUT_MESSAGE =
-	t("Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.");
+	"Device flow timed out after one or more slow_down responses. This is often caused by clock drift in WSL or VM environments. Please sync or restart the VM clock and try again.";
 const MINIMUM_DEVICE_FLOW_INTERVAL_MS = 1000;
 const DEFAULT_DEVICE_FLOW_INTERVAL_SECONDS = 5;
 const SLOW_DOWN_INTERVAL_INCREMENT_MS = 5000;

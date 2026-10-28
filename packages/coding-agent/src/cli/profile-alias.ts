@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as os from "node:os";
 import * as path from "node:path";
 import { normalizeProfileName } from "@oh-my-pi/pi-utils/dirs";
@@ -150,13 +149,13 @@ function getReservedAliasNames(shell: ProfileAliasShell): ReadonlySet<string> {
 function validateAliasName(aliasName: string, shell: ProfileAliasShell): string {
 	const normalized = aliasName.trim();
 	if (!ALIAS_NAME_RE.test(normalized)) {
-		throw new Error(t("Invalid alias \"{0}\". Alias names must match {1}.", `${aliasName}`, `${ALIAS_NAME_RE.source}`));
+		throw new Error(`Invalid alias "${aliasName}". Alias names must match ${ALIAS_NAME_RE.source}.`);
 	}
 	if (normalized.toLowerCase() === "omp") {
-		throw new Error(t("Invalid alias \"omp\". Refusing to shadow the base omp command."));
+		throw new Error('Invalid alias "omp". Refusing to shadow the base omp command.');
 	}
 	if (getReservedAliasNames(shell).has(normalized.toLowerCase())) {
-		throw new Error(t("Invalid alias \"{0}\". Refusing to create a {1} reserved word.", `${aliasName}`, `${shell}`));
+		throw new Error(`Invalid alias "${aliasName}". Refusing to create a ${shell} reserved word.`);
 	}
 	return normalized;
 }
@@ -191,7 +190,7 @@ function normalizeShellName(
 	if (shell === "pwsh") return "pwsh";
 	if (shell === "powershell") return "powershell";
 	if (platform === "win32") return detectWindowsPowerShell(env);
-	throw new Error(t("Unsupported shell{0}. Supported shells: bash, zsh, fish, PowerShell.", `${shell ? ` "${shell}"` : ""}`));
+	throw new Error(`Unsupported shell${shell ? ` "${shell}"` : ""}. Supported shells: bash, zsh, fish, PowerShell.`);
 }
 
 /** Resolve the command a generated profile alias should invoke. */
@@ -311,8 +310,8 @@ function upsertBlock(content: string, aliasName: string, block: string): string 
 		const endIndex = content.indexOf(end, startIndex + start.length);
 		if (endIndex === -1) {
 			throw new Error(
-				t("Found \"{0}\" without a matching \"{1}\" in the shell config. ", `${start}`, `${end}`) +
-					t("The managed alias block is malformed; remove the stale marker line and rerun --alias."),
+				`Found "${start}" without a matching "${end}" in the shell config. ` +
+					`The managed alias block is malformed; remove the stale marker line and rerun --alias.`,
 			);
 		}
 		const afterEnd = endIndex + end.length;
@@ -343,7 +342,7 @@ export async function readProfileAliasConfigFile(
 export async function installProfileAlias(options: ProfileAliasInstallOptions): Promise<ProfileAliasInstallResult> {
 	const profile = normalizeProfileName(options.profile);
 	if (!profile) {
-		throw new Error(t("--alias requires a named --profile value."));
+		throw new Error("--alias requires a named --profile value.");
 	}
 	const platform = options.platform ?? process.platform;
 	const homeDir = options.homeDir ?? os.homedir();

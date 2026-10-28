@@ -2,7 +2,6 @@
  * Test web search models.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { searchHelp as commandHelp } from "../cli/command-help";
 import { runSearchCommand, type SearchCommandArgs } from "../cli/web-search-cli";
@@ -14,14 +13,14 @@ export default class Search extends Command {
 	static aliases = ["q", "web-search"];
 
 	static args = {
-		query: Args.string({ description: t("Search query text"), required: false, multiple: true }),
+		query: Args.string({ description: "Search query text", required: false, multiple: true }),
 	};
 
 	static flags = {
-		model: Flags.string({ description: t("Catalog model selector") }),
-		recency: Flags.string({ description: t("Recency filter"), options: RECENCY }),
-		limit: Flags.integer({ char: "l", description: t("Max results to return") }),
-		compact: Flags.boolean({ description: t("Render condensed output") }),
+		model: Flags.string({ description: "Catalog model selector" }),
+		recency: Flags.string({ description: "Recency filter", options: RECENCY }),
+		limit: Flags.integer({ char: "l", description: "Max results to return" }),
+		compact: Flags.boolean({ description: "Render condensed output" }),
 	};
 
 	async run(): Promise<void> {

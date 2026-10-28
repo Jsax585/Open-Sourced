@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
@@ -116,15 +115,15 @@ interface BtwHistoryNativeMemo {
 }
 
 const STATUS: Record<BtwHistoryRecord["status"], { label: string; color: ThemeColor }> = {
-	running: { label: t("Running"), color: "accent" },
-	complete: { label: t("Complete"), color: "success" },
-	cancelled: { label: t("Cancelled"), color: "warning" },
-	error: { label: t("Error"), color: "error" },
-	interrupted: { label: t("Interrupted"), color: "warning" },
+	running: { label: "Running", color: "accent" },
+	complete: { label: "Complete", color: "success" },
+	cancelled: { label: "Cancelled", color: "warning" },
+	error: { label: "Error", color: "error" },
+	interrupted: { label: "Interrupted", color: "warning" },
 };
 
-const SHEET = { role: "omp.overlay.btwHistory", anchor: "center", size: "lg", head: t("BTW history") } as const;
-const EMPTY_SHEET = { role: "omp.overlay.btwHistory", anchor: "center", size: "md", head: t("BTW history") } as const;
+const SHEET = { role: "omp.overlay.btwHistory", anchor: "center", size: "lg", head: "BTW history" } as const;
+const EMPTY_SHEET = { role: "omp.overlay.btwHistory", anchor: "center", size: "md", head: "BTW history" } as const;
 
 /** A status worth naming next to an answer natively; an answered question needs none. */
 function describeStatus(status: BtwHistoryTurn["status"]): TspSpan[] | undefined {
@@ -132,11 +131,11 @@ function describeStatus(status: BtwHistoryTurn["status"]): TspSpan[] | undefined
 		case "running":
 			return [span("●", "accent", { fx: "pulse" }), span(" Answering", "accent")];
 		case "cancelled":
-			return [span(t("Cancelled"), "warning")];
+			return [span("Cancelled", "warning")];
 		case "error":
-			return [span(t("Failed"), "error")];
+			return [span("Failed", "error")];
 		case "interrupted":
-			return [span(t("Interrupted"), "warning")];
+			return [span("Interrupted", "warning")];
 		case "complete":
 			return undefined;
 	}
@@ -328,8 +327,8 @@ export class BtwHistoryPanel implements Component, Focusable {
 
 	#openComposer(record: BtwHistoryRecord): void {
 		const input = new Input();
-		input.prompt = theme.fg("accent", t("Follow up: "));
-		input.placeholder = t("Ask about this answer…");
+		input.prompt = theme.fg("accent", "Follow up: ");
+		input.placeholder = "Ask about this answer…";
 		if (this.#options.spaceHoldKeys !== undefined) input.spaceHold.keys = this.#options.spaceHoldKeys;
 		input.spaceHold.handler = this.#options.spaceHold?.(input);
 		const composer: FollowUpComposer = {
@@ -362,7 +361,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		let question = value.trim();
 		if (!question) {
-			composer.notice = t("Enter a follow-up question.");
+			composer.notice = "Enter a follow-up question.";
 			return;
 		}
 		const record = this.#records.find(record => record.id === composer.recordId);
@@ -371,7 +370,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			return;
 		}
 		this.#followUpPending = true;
-		composer.notice = t("Starting follow-up…");
+		composer.notice = "Starting follow-up…";
 		this.#options.requestRender();
 		let images: ImageContent[] | undefined;
 		if (composer.images.length > 0) {
@@ -398,7 +397,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			}
 		} catch {
 			if (this.#composer === composer) {
-				composer.notice = t("Could not start the follow-up. Your draft is kept; {0} to retry.", `${editorKey("tui.input.submit")}`);
+				composer.notice = `Could not start the follow-up. Your draft is kept; ${editorKey("tui.input.submit")} to retry.`;
 			}
 		} finally {
 			this.#followUpPending = false;
@@ -712,7 +711,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		if (turn.answer.trim() || !turn.error) {
 			const answer = turn.answer.trim()
 				? md(sanitizeDisplayText(turn.answer), { stream: turn.status === "running" })
-				: text([span(turn.status === "running" ? t("Thinking…") : t("No answer text."), "dim")], {
+				: text([span(turn.status === "running" ? "Thinking…" : "No answer text.", "dim")], {
 						role: "omp.btw.pending",
 					});
 			children.push(node("col", { role: "omp.btw.answer" }, [answer], "answer"));
@@ -721,7 +720,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 			children.push(text([span(sanitizeErrorLine(turn.error), "error")], { role: "omp.btw.error", wrap: "word" }));
 		}
 		if (turn.status === "interrupted") {
-			children.push(text([span(t("Not resumed in this view."), "muted")], { role: "omp.btw.note" }));
+			children.push(text([span("Not resumed in this view.", "muted")], { role: "omp.btw.note" }));
 		}
 		return node("col", { role: "omp.btw.turn" }, children, key);
 	}
@@ -746,12 +745,12 @@ export class BtwHistoryPanel implements Component, Focusable {
 			"col",
 			{ role: "omp.btw.empty", align: "center", gap: "sm" },
 			[
-				text(t("No side questions yet"), { role: "omp.btw.empty.title" }),
+				text("No side questions yet", { role: "omp.btw.empty.title" }),
 				text(
 					[
-						span(t("Ask one with ")),
+						span("Ask one with "),
 						span("/btw <question>", "code"),
-						span(t(". The answer stays out of the main conversation.")),
+						span(". The answer stays out of the main conversation."),
 					],
 					{ role: "omp.btw.empty.hint", wrap: "word" },
 				),
@@ -769,22 +768,22 @@ export class BtwHistoryPanel implements Component, Focusable {
 		if (this.#composer) {
 			return actionBar([
 				null,
-				actionButton(t("Cancel"), "discard", { keys: "escape" }),
-				actionButton(this.#followUpPending ? t("Sending…") : t("Send"), "send", { keys: "enter", tone: "accent" }),
+				actionButton("Cancel", "discard", { keys: "escape" }),
+				actionButton(this.#followUpPending ? "Sending…" : "Send", "send", { keys: "enter", tone: "accent" }),
 			]);
 		}
 		const running = record !== undefined && getBtwLatestTurn(record).status === "running";
 		const hides = this.#options.escapeHides === true;
 		const buttons: (NativeNode | null)[] = [];
-		if (running) buttons.push(actionButton(t("Stop answer"), "stop", { keys: hides ? "x" : "escape" }));
+		if (running) buttons.push(actionButton("Stop answer", "stop", { keys: hides ? "x" : "escape" }));
 		if (record && getBtwCopyText(record) !== undefined) {
-			buttons.push(actionButton(copied ? t("Copy again") : t("Copy answer"), "copy-answer", { keys: "c" }));
-			if (copied) buttons.push(text([span(t("✓ Copied"), "success")], { role: "omp.btw.copied" }));
+			buttons.push(actionButton(copied ? "Copy again" : "Copy answer", "copy-answer", { keys: "c" }));
+			if (copied) buttons.push(text([span("✓ Copied", "success")], { role: "omp.btw.copied" }));
 		}
 		buttons.push(null);
 		// Clicking Close always dismisses the sheet; its tooltip names Esc only where Esc does too.
-		buttons.push(actionButton(t("Close"), "close", running && !hides ? undefined : { keys: "escape" }));
-		if (canFollowUp) buttons.push(actionButton(t("Follow up"), "follow-up", { keys: "f", tone: "accent" }));
+		buttons.push(actionButton("Close", "close", running && !hides ? undefined : { keys: "escape" }));
+		if (canFollowUp) buttons.push(actionButton("Follow up", "follow-up", { keys: "f", tone: "accent" }));
 		return actionBar(buttons);
 	}
 
@@ -792,7 +791,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		const rowSpan = width < 36 && height >= 2 ? 2 : 1;
 		this.#listHeight = Math.max(1, Math.floor(height / rowSpan));
 		if (this.#records.length === 0) {
-			return new Text(theme.fg("muted", t("No side questions yet.\n\nUse /btw QUESTION to start one.")), 0, 0)
+			return new Text(theme.fg("muted", "No side questions yet.\n\nUse /btw QUESTION to start one."), 0, 0)
 				.render(width)
 				.slice(0, height);
 		}
@@ -873,13 +872,13 @@ export class BtwHistoryPanel implements Component, Focusable {
 		else
 			lines.push(
 				...wrapTextWithAnsi(
-					theme.fg("dim", turn.status === "running" ? t("Waiting for response…") : t("No answer text.")),
+					theme.fg("dim", turn.status === "running" ? "Waiting for response…" : "No answer text."),
 					width,
 				),
 			);
 		if (turn.error) lines.push("", ...wrapTextWithAnsi(theme.fg("error", sanitizeErrorLine(turn.error)), width));
 		if (turn.status === "interrupted")
-			lines.push("", ...wrapTextWithAnsi(theme.fg("muted", t("Not resumed in this view.")), width));
+			lines.push("", ...wrapTextWithAnsi(theme.fg("muted", "Not resumed in this view."), width));
 		return {
 			turn: {
 				question: turn.question,
@@ -916,7 +915,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 				this.#turns.length = turns.length;
 			} else {
 				lines.push(
-					...wrapTextWithAnsi(theme.fg("muted", t("No side questions yet. Use /btw QUESTION to start one.")), inner),
+					...wrapTextWithAnsi(theme.fg("muted", "No side questions yet. Use /btw QUESTION to start one."), inner),
 				);
 			}
 			this.#detailRecord = record;
@@ -929,7 +928,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 	}
 
 	#focusLabel(focus: "list" | "answer"): string {
-		const label = focus === "list" ? `History (${this.#records.length})` : t("Details");
+		const label = focus === "list" ? `History (${this.#records.length})` : "Details";
 		return this.#focus === focus
 			? theme.bold(theme.fg("accent", `${theme.nav.cursor} ${label}`))
 			: theme.fg("muted", `  ${label}`);
@@ -983,7 +982,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 				composerLines.push(
 					theme.fg(
 						"dim",
-						truncateToWidth(t("Topic: {0}", `${sanitizeDisplayLine(record ? getBtwTopicLabel(record) : "")}`), inner),
+						truncateToWidth(`Topic: ${sanitizeDisplayLine(record ? getBtwTopicLabel(record) : "")}`, inner),
 					),
 				);
 			}
@@ -1015,7 +1014,7 @@ export class BtwHistoryPanel implements Component, Focusable {
 		}
 		const lines: string[] = [];
 		if (framed) {
-			lines.push(topBorder(width, t("BTW history")));
+			lines.push(topBorder(width, "BTW history"));
 			lines.push(this.#labels.render(width)[0] ?? "");
 		} else if (height >= 3) {
 			lines.push(truncateToWidth(this.#focusLabel(this.#focus), width));

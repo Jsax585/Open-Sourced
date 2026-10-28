@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime } from "../types";
 
 export interface ParsedSubcommand {
@@ -102,7 +101,7 @@ export function parseNamedScopeArgs(rest: string, invalidScopeMessage: string): 
 	}
 	while (i < tokens.length) {
 		const token = tokens[i]!;
-		if (token !== "--scope") return { scope, error: t("Unknown option: {0}", `${token}`) };
+		if (token !== "--scope") return { scope, error: `Unknown option: ${token}` };
 		const value = tokens[i + 1];
 		if (!value || (value !== "project" && value !== "user")) return { scope, error: invalidScopeMessage };
 		scope = value;

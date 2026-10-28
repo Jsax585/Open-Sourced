@@ -15,7 +15,6 @@
  * Project-level config is deliberately ignored: `omp update` modifies a global
  * install, and the working directory it runs from is incidental.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -116,10 +115,10 @@ function toRegistry(entry: RegistryEntry, npmrc?: Map<string, string>): NpmRegis
 	try {
 		url = new URL(entry.url);
 	} catch {
-		throw new Error(t("Invalid npm registry URL \"{0}\" (from {1})", `${entry.url}`, `${entry.source}`));
+		throw new Error(`Invalid npm registry URL "${entry.url}" (from ${entry.source})`);
 	}
 	if (url.protocol !== "https:" && url.protocol !== "http:") {
-		throw new Error(t("Unsupported npm registry protocol \"{0}\" (from {1}); expected http(s)", `${url.protocol}`, `${entry.source}`));
+		throw new Error(`Unsupported npm registry protocol "${url.protocol}" (from ${entry.source}); expected http(s)`);
 	}
 	if (!url.pathname.endsWith("/")) url.pathname += "/";
 	let authorization = entry.authorization;
@@ -182,7 +181,7 @@ function expandNpmrcEnv(value: string, env: Env, source: string): string {
 		const resolved = envLookup(env, name);
 		if (resolved !== undefined) return slashes + resolved;
 		if (optional) return slashes;
-		throw new Error(t("Failed to replace env in config: ${{0}} ({1})", `${name}`, `${source}`));
+		throw new Error(`Failed to replace env in config: \${${name}} (${source})`);
 	});
 }
 
@@ -203,7 +202,7 @@ async function readGlobalBunfig(env: Env, homeDir: string): Promise<BunfigRegist
 		try {
 			parsed = Bun.TOML.parse(text);
 		} catch (err) {
-			throw new Error(t("Failed to parse {0}: {1}", `${file}`, `${err instanceof Error ? err.message : String(err)}`));
+			throw new Error(`Failed to parse ${file}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		const install = isRecord(parsed) && isRecord(parsed.install) ? parsed.install : undefined;
 		const scopes = new Map<string, RegistryEntry>();

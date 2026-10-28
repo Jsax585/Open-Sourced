@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { DeviceType } from "@huggingface/transformers";
 import { $env } from "@oh-my-pi/pi-utils";
 
@@ -48,7 +47,7 @@ export function normalizeTinyModelDevice(value: string | undefined): TinyModelDe
 	if (raw === "metal") return MLX_DEVICE;
 	if (raw in DEVICE_VALUES) return raw as TinyModelDevice;
 	throw new Error(
-		t("Unsupported PI_TINY_DEVICE={0}. Use cpu, gpu, mlx, metal, webgpu, auto, cuda, dml, coreml, wasm, webnn, webnn-gpu, webnn-cpu, or webnn-npu.", `${JSON.stringify(value)}`),
+		`Unsupported PI_TINY_DEVICE=${JSON.stringify(value)}. Use cpu, gpu, mlx, metal, webgpu, auto, cuda, dml, coreml, wasm, webnn, webnn-gpu, webnn-cpu, or webnn-npu.`,
 	);
 }
 
@@ -96,21 +95,21 @@ export const TINY_MODEL_DEVICE_SETTING_VALUES = [
 
 /** Submenu metadata for the `providers.tinyModelDevice` setting. */
 export const TINY_MODEL_DEVICE_SETTING_OPTIONS = [
-	{ value: "default", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("CPU-only inference") },
-	{ value: "gpu", label: "GPU", description: t("Accelerated provider (WebGPU/Metal, CUDA, or DirectML)") },
-	{ value: "cpu", label: "CPU", description: t("CPU-only inference") },
-	{ value: MLX_DEVICE, label: "MLX", description: t("Apple silicon GPU via mlx-lm (Python subprocess; macOS arm64)") },
-	{ value: "metal", label: "Metal", description: t("Alias for MLX") },
-	{ value: "webgpu", label: "WebGPU", description: t("WebGPU/Metal backend") },
-	{ value: "cuda", label: "CUDA", description: "NVIDIA CUDA(Linux x64)" },
-	{ value: "dml", label: "DirectML", description: t("DirectML backend (Windows)") },
-	{ value: "coreml", label: "CoreML", description: t("Apple CoreML (opt-in; can fail to load)") },
-	{ value: "auto", label: t("Auto"), description: t("Let ONNX Runtime choose a provider") },
-	{ value: "wasm", label: "WASM", description: t("WebAssembly backend") },
-	{ value: "webnn", label: "WebNN", description: t("WebNN backend") },
-	{ value: "webnn-gpu", label: "WebNN GPU", description: t("WebNN GPU device") },
-	{ value: "webnn-cpu", label: "WebNN CPU", description: t("WebNN CPU device") },
-	{ value: "webnn-npu", label: "WebNN NPU", description: t("WebNN NPU device") },
+	{ value: "default", label: "Default", description: "CPU-only inference" },
+	{ value: "gpu", label: "GPU", description: "Accelerated provider (WebGPU/Metal, CUDA, or DirectML)" },
+	{ value: "cpu", label: "CPU", description: "CPU-only inference" },
+	{ value: MLX_DEVICE, label: "MLX", description: "Apple silicon GPU via mlx-lm (Python subprocess; macOS arm64)" },
+	{ value: "metal", label: "Metal", description: "Alias for MLX" },
+	{ value: "webgpu", label: "WebGPU", description: "WebGPU/Metal backend" },
+	{ value: "cuda", label: "CUDA", description: "NVIDIA CUDA (Linux x64)" },
+	{ value: "dml", label: "DirectML", description: "DirectML backend (Windows)" },
+	{ value: "coreml", label: "CoreML", description: "Apple CoreML (opt-in; can fail to load)" },
+	{ value: "auto", label: "Auto", description: "Let ONNX Runtime choose a provider" },
+	{ value: "wasm", label: "WASM", description: "WebAssembly backend" },
+	{ value: "webnn", label: "WebNN", description: "WebNN backend" },
+	{ value: "webnn-gpu", label: "WebNN GPU", description: "WebNN GPU device" },
+	{ value: "webnn-cpu", label: "WebNN CPU", description: "WebNN CPU device" },
+	{ value: "webnn-npu", label: "WebNN NPU", description: "WebNN NPU device" },
 ] as const satisfies ReadonlyArray<{
 	value: (typeof TINY_MODEL_DEVICE_SETTING_VALUES)[number];
 	label: string;

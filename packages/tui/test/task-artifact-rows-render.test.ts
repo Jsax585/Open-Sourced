@@ -3,7 +3,11 @@ import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { SingleResult, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { taskToolRenderer } from "@oh-my-pi/pi-tui/tools/task";
 
-describe("task renderer: isolation artifact visibility", () => {
+// Regression for PR #11343 review: sanitizing the isolation artifact rows
+// (shortenPath + width bound) dropped the `Patch:` / `Branch:` /
+// `Nested patch:` labels, so co-displayed artifacts were indistinguishable.
+// Labels must survive sanitization.
+describe("task renderer: isolation artifact row labels", () => {
 	beforeAll(async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();
@@ -45,20 +49,20 @@ describe("task renderer: isolation artifact visibility", () => {
 		return Bun.stripANSI(component.render(160).join("\n"));
 	}
 
-	it("keeps root and nested artifact paths visible after sanitization", async () => {
+	it("keeps the Patch and Nested patch labels on sanitized artifact rows", async () => {
 		const text = await renderResultText(
 			makeResult({
 				patchPath: "/home/user/.omp/artifacts/Worker.patch",
 				nestedPatchPaths: ["/home/user/.omp/artifacts/Worker.nested-0-inner.patch"],
 			}),
 		);
-		expect(text).toContain("Worker.patch");
-		expect(text).toContain("Worker.nested-0-inner.patch");
+		expect(text).toContain("Patch:");
+		expect(text).toContain("Nested patch:");
 	});
 
-	it("keeps the branch name visible after sanitization", async () => {
+	it("keeps the Branch label on sanitized artifact rows", async () => {
 		const text = await renderResultText(makeResult({ branchName: "omp/task/Worker" }));
-		expect(text).toContain("omp/task/Worker");
+		expect(text).toContain("Branch:");
 	});
 
 	it("hides the empty root Patch row for nested-only work", async () => {
@@ -69,7 +73,7 @@ describe("task renderer: isolation artifact visibility", () => {
 				nestedPatchPaths: ["/home/user/.omp/artifacts/Worker.nested-0-inner.patch"],
 			}),
 		);
-		expect(text).not.toContain("Worker.patch");
-		expect(text).toContain("Worker.nested-0-inner.patch");
+		expect(text).not.toContain("Patch:");
+		expect(text).toContain("Nested patch:");
 	});
 });

@@ -4,7 +4,6 @@
  * transcript rows from persisted message entries; holding the row construction
  * here keeps the two byte-for-byte identical.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Component } from "../tui";
 import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
@@ -63,7 +62,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
 		rows.push({
 			parts: [
-				{ text: t("{0} Background job completed", `${theme.status.done}`), color: "success" },
+				{ text: `${theme.status.done} Background job completed`, color: "success" },
 				{ text: typeLabel, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
@@ -100,10 +99,10 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 		rows.push({
 			parts: [
 				failed
-					? { text: t("{0} Supervised process failed", `${theme.status.error}`), color: "error" }
-					: { text: t("{0} Supervised process completed", `${theme.status.done}`), color: "success" },
+					? { text: `${theme.status.error} Supervised process failed`, color: "error" }
+					: { text: `${theme.status.done} Supervised process completed`, color: "success" },
 				{ text: daemon.name, color: "accent" },
-				daemon.exitCode !== undefined ? { text: t("(exit {0})", `${daemon.exitCode}`), color: "dim" } : undefined,
+				daemon.exitCode !== undefined ? { text: `(exit ${daemon.exitCode})`, color: "dim" } : undefined,
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 		});
@@ -163,19 +162,19 @@ export function buildFileMentionBlock(files: FileMentionMessage["files"], indent
 	for (const file of files) {
 		let suffix: string;
 		if (file.skippedReason === "tooLarge" || file.skippedReason === "binary") {
-			const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : t("unknown size");
-			suffix = file.skippedReason === "binary" ? t("(skipped: binary, {0})", `${size}`) : t("(skipped: {0})", `${size}`);
+			const size = typeof file.byteSize === "number" ? formatBytes(file.byteSize) : "unknown size";
+			suffix = file.skippedReason === "binary" ? `(skipped: binary, ${size})` : `(skipped: ${size})`;
 		} else {
 			suffix = file.image
-				? t("(image)")
+				? "(image)"
 				: file.lineCount === undefined
-					? t("(unknown lines)")
-					: t("({0} lines)", `${file.lineCount}`);
+					? "(unknown lines)"
+					: `(${file.lineCount} lines)`;
 		}
 		rows.push({
 			parts: [
 				{ text: theme.tree.last, color: "dim", rowsOnly: true },
-				{ text: t("Read"), color: "muted" },
+				{ text: "Read", color: "muted" },
 				{ text: file.path, color: "accent" },
 				{ text: suffix, color: "dim" },
 			],
@@ -294,7 +293,7 @@ export function resolveAssistantErrorPresentation(
 		return { kind: "full", text: resolveAbortLabel(message, retryAttempt), isError: true };
 	}
 	if (message.stopReason === "error") {
-		return { kind: "full", text: message.errorMessage || t("Error"), isError: true };
+		return { kind: "full", text: message.errorMessage || "Error", isError: true };
 	}
 	if (message.errorMessage && shouldRenderAbortReason(message)) {
 		return { kind: "full", text: message.errorMessage, isError: true };

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { Sparkline } from "../charts/Sparkline";
 
@@ -70,7 +69,7 @@ export function StatGrid({ min, children }: StatGridProps) {
 
 /** Signed percentage change pill, green when the move is good news. */
 export function Delta({ change, good = "up" }: StatDelta) {
-	if (change === null || !Number.isFinite(change)) return <span className="delta">{t("new")}</span>;
+	if (change === null || !Number.isFinite(change)) return <span className="delta">new</span>;
 	const rounded = Math.abs(change) < 0.0005 ? 0 : change;
 	const tone = rounded === 0 ? undefined : rounded > 0 === (good === "up") ? "good" : "bad";
 	const sign = rounded > 0 ? "+" : rounded < 0 ? "−" : "±";

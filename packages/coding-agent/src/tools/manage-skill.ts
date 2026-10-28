@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -41,7 +40,7 @@ export type ManageSkillParams = typeof manageSkillSchema.infer;
 export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 	readonly name = "manage_skill";
 	readonly approval = "write" as const;
-	readonly label = t("Manage Skill");
+	readonly label = "Manage Skill";
 	readonly description = manageSkillDescription;
 	readonly parameters = manageSkillSchema;
 	readonly strict = true;
@@ -60,7 +59,7 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 			await deleteManagedSkill(params.name);
 			await this.refreshSkills?.();
 			return {
-				content: [{ type: "text", text: t("Deleted managed skill \"{0}\".", `${params.name}`) }],
+				content: [{ type: "text", text: `Deleted managed skill "${params.name}".` }],
 				details: { action: "delete", name: params.name },
 			};
 		}
@@ -69,7 +68,7 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 		// without both fields, so this is unreachable for valid input — it only
 		// proves the strings are present to `writeManagedSkill`'s typed contract.
 		if (!params.description || !params.body) {
-			throw new Error(t("\"{0}\" requires both \"description\" and \"body\".", `${params.action}`));
+			throw new Error(`"${params.action}" requires both "description" and "body".`);
 		}
 		// A managed skill resolves below any authored skill of the same name
 		// (authored always wins in discovery), so creating one under a name an
@@ -81,7 +80,7 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 				content: [
 					{
 						type: "text",
-						text: t("Cannot create managed skill \"{0}\": an authored skill of that name already exists, and managed skills cannot override authored ones. Choose a different name.", `${params.name}`),
+						text: `Cannot create managed skill "${params.name}": an authored skill of that name already exists, and managed skills cannot override authored ones. Choose a different name.`,
 					},
 				],
 				isError: true,
@@ -96,9 +95,9 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 		});
 		await this.refreshSkills?.();
 		const relativePath = path.relative(getManagedSkillsDir(), skillPath);
-		const verb = params.action === "create" ? t("Created") : t("Updated");
+		const verb = params.action === "create" ? "Created" : "Updated";
 		return {
-			content: [{ type: "text", text: t("{1} managed skill \"{0}\" (managed-skills/{2}).", `${params.name}`, `${verb}`, `${relativePath}`) }],
+			content: [{ type: "text", text: `${verb} managed skill "${params.name}" (managed-skills/${relativePath}).` }],
 			details: { action: params.action, name: params.name },
 		};
 	}

@@ -12,7 +12,6 @@
  * Sixel, Kitty `a=p`) do not survive. Everything else falls back to the stats
  * line plus a dim notice.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, type ImageBudget, renderImage, TERMINAL } from "../index";
 import {
 	DIM_OFF,
@@ -98,19 +97,19 @@ export class SnapcompactShapePreview implements Component {
 		if (memo !== undefined && memo.variant === this.#variant && memo.entry === entry) return memo.node;
 		const { label, stats } = this.#caption(shape, name);
 		let sample: NativeNode;
-		if (!entry) sample = text([span(t("(graphic sample needs an image-capable terminal)"), "dim")]);
-		else if (entry.state === "rendering") sample = node("spinner", { label: [span(t("rendering sample…"), "dim")] });
-		else if (entry.state === "failed") sample = text([span(t("(sample render failed)"), "dim")]);
+		if (!entry) sample = text([span("(graphic sample needs an image-capable terminal)", "dim")]);
+		else if (entry.state === "rendering") sample = node("spinner", { label: [span("rendering sample…", "dim")] });
+		else if (entry.state === "failed") sample = text([span("(sample render failed)", "dim")]);
 		else {
 			sample = nativeImageNode(entry.bytes, "image/png", {
-				alt: t("snapcompact {0} sample", `${label}`),
+				alt: `snapcompact ${label} sample`,
 				w: entry.edgePx,
 				h: entry.edgePx,
 				max: { w: `${MAX_IMAGE_COLS}ch`, h: `${MAX_IMAGE_ROWS}lines` },
 			});
 		}
 		const described = col(
-			[text([span(t("Sample (zoomed) · {0} · {1}", `${label}`, `${stats}`), "muted")], { wrap: "word" }), sample],
+			[text([span(`Sample (zoomed) · ${label} · ${stats}`, "muted")], { wrap: "word" }), sample],
 			{ role: "omp.preview.snapcompact-shape", gap: "sm" },
 		);
 		this.#native = { variant: this.#variant, entry, node: described };
@@ -125,27 +124,27 @@ export class SnapcompactShapePreview implements Component {
 			shape.frameTokenEstimate >= 1000
 				? `${(shape.frameTokenEstimate / 1000).toFixed(1)}k`
 				: String(shape.frameTokenEstimate);
-		return { label, stats: t("full frame {0}×{1} cells ≈ {2} chars ≈ {3} tokens", `${geo.cols}`, `${geo.rows}`, `${chars}`, `${tokens}`) };
+		return { label, stats: `full frame ${geo.cols}×${geo.rows} cells ≈ ${chars} chars ≈ ${tokens} tokens` };
 	}
 
 	render(width: number): readonly string[] {
 		const shape = resolveShape(this.#model, this.#variant);
 		const name = this.#variant === "auto" ? resolvedVariantName(shape) : this.#variant;
 		const { label, stats } = this.#caption(shape, name);
-		const lines: string[] = [theme.fg("muted", t("  Sample (zoomed) · {0} · {1}", `${label}`, `${stats}`)), ""];
+		const lines: string[] = [theme.fg("muted", `  Sample (zoomed) · ${label} · ${stats}`), ""];
 
 		if (!this.#budget || !TERMINAL.imageProtocol) {
-			lines.push(theme.fg("dim", t("  (graphic sample needs a Kitty-graphics terminal)")));
+			lines.push(theme.fg("dim", "  (graphic sample needs a Kitty-graphics terminal)"));
 			return lines;
 		}
 
 		const entry = this.#ensureEntry(name, shape);
 		if (entry.state === "rendering") {
-			lines.push(theme.fg("dim", t("  rendering sample…")));
+			lines.push(theme.fg("dim", "  rendering sample…"));
 			return lines;
 		}
 		if (entry.state === "failed") {
-			lines.push(theme.fg("dim", t("  (sample render failed)")));
+			lines.push(theme.fg("dim", "  (sample render failed)"));
 			return lines;
 		}
 
@@ -162,7 +161,7 @@ export class SnapcompactShapePreview implements Component {
 		// Only the unicode-placeholder path returns text-cell `lines`; cursor-moving
 		// placements would corrupt the bordered settings frame, so skip them.
 		if (!result?.lines) {
-			lines.push(theme.fg("dim", t("  (graphic sample needs Kitty unicode-placeholder graphics)")));
+			lines.push(theme.fg("dim", "  (graphic sample needs Kitty unicode-placeholder graphics)"));
 			return lines;
 		}
 		if (result.transmit) {

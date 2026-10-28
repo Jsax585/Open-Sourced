@@ -306,8 +306,8 @@ A rule with `question` is judged: its natural-language question goes to the `jud
 - The session's `onBeforeYield` hook awaits in-flight judgments (up to 5s) before the agent loop drains asides and stops, so a warning about the final reply or last tool call lands in the same run. Later verdicts still arrive as asides.
 - Judge failures (no credentials, timeouts, parse errors) are logged and deliver nothing.
 
-### `/omfg`와 CLI
+### `/omfg` and CLI
 
-`/omfg`는 `condition`, `astCondition` 또는 `question` 규칙을 생성하며, 패턴 기반 조건을 우선하도록 지시됩니다. 동일한 완료 출력 보기(`TtsrToolInspector.outputs`)를 통해 대화 기록을 기준으로 후보를 검증합니다. `question` 후보는 범위와 사전 필터를 통과하고, 범위에 해당하는 최근 출력 8개 중 하나에 대해 판정 모델로부터 긍정 판정을 받아야 합니다. 사용할 수 있는 판정 모델이 없으면 사용자가 확인되지 않은 상태로 저장할지 결정합니다.
+`/omfg` generates `condition`, `astCondition`, or `question` rules, instructed to prefer the pattern triggers. It validates candidates against conversation history through the same completed-output view (`TtsrToolInspector.outputs`); a `question` candidate must pass its scope/prefilter and get a yes from the judge on one of the 8 most recent in-scope outputs. With no judge available, the user decides whether to save it unconfirmed.
 
-`omp ttsr list`는 각 규칙의 `question`을 표시합니다. `omp ttsr test`는 판정 모델을 호출하지 않으므로 질문 규칙은 발동하지 않은 것으로 보고되며 질문도 함께 표시됩니다. `omp ttsr scan`은 질문 규칙을 건너뜁니다. 질문 규칙의 조건은 위반 자체가 아니라 사전 필터이기 때문입니다.
+`omp ttsr list` shows each rule's `question`. `omp ttsr test` never calls the judge, so question rules report as not triggered, with their question shown. `omp ttsr scan` skips question rules: their conditions are prefilters, not violations.

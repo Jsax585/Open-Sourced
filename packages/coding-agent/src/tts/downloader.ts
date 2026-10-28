@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getTinyModelsCacheDir } from "@oh-my-pi/pi-utils";
@@ -45,12 +44,12 @@ export async function downloadTtsModel(
 ): Promise<boolean> {
 	const spec = getTtsLocalModelSpec(modelKey);
 	if (!spec) return false;
-	onProgress?.({ stage: t("Preparing {0}...", `${spec.label}`) });
+	onProgress?.({ stage: `Preparing ${spec.label}...` });
 	return ttsClient.downloadModel(spec.key, {
 		signal,
 		onProgress: event => {
 			if (event.status === "ready" || event.status === "done") {
-				onProgress?.({ stage: t("{0} ready\u0004packages/coding-agent/src/tts/downloader.ts:downloadTtsModel.onProgress.stage", `${spec.label}`), percent: 100 });
+				onProgress?.({ stage: `${spec.label} ready`, percent: 100 });
 				return;
 			}
 			const percent =
@@ -59,7 +58,7 @@ export async function downloadTtsModel(
 					: typeof event.progress === "number"
 						? Math.round(event.progress)
 						: undefined;
-			onProgress?.({ stage: t("Downloading {0}", `${spec.label}`), percent });
+			onProgress?.({ stage: `Downloading ${spec.label}`, percent });
 		},
 	});
 }

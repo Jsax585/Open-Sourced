@@ -31,6 +31,28 @@ describe("WelcomeComponent", () => {
 		});
 	});
 
+	it("selects standard tip when preset is not unicode", () => {
+		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("nerd");
+
+		const welcome = new WelcomeComponent("1.0.0");
+		expect(welcome.tip).not.toBe("Please use nerdfont 😭.");
+		expect(welcome.tip).toBeDefined();
+	});
+
+	it("selects nerdfont tip with 10% probability under unicode preset", () => {
+		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("unicode");
+
+		// 9% chance => selects special tip
+		vi.spyOn(Math, "random").mockReturnValue(0.09);
+		const welcomeSpecial = new WelcomeComponent("1.0.0");
+		expect(welcomeSpecial.tip).toBe("Please use nerdfont 😭.");
+
+		// 10% chance => selects regular tip
+		vi.spyOn(Math, "random").mockReturnValue(0.1);
+		const welcomeRegular = new WelcomeComponent("1.0.0");
+		expect(welcomeRegular.tip).not.toBe("Please use nerdfont 😭.");
+		expect(welcomeRegular.tip).toBeDefined();
+	});
 
 	it("weights [NEW] tips above ordinary tips in selection", () => {
 		// Data-independent: tips.txt may legitimately carry zero "[NEW]" tips, so
@@ -70,11 +92,17 @@ describe("WelcomeComponent", () => {
 		expectCentered(indent(bar), columns - visibleWidth(word));
 
 		// Each tip line centers on its own.
-		const below = rows.slice(rows.findIndex(row => row.includes("v1.0.0")) + 1).filter(row => row.length > 0);
+		const below = rows.slice(rows.findIndex(row => row.includes("Tip: "))).filter(row => row.length > 0);
 		expect(below.length).toBeGreaterThanOrEqual(1);
 		for (const row of below) expectCentered(indent(row), columns - visibleWidth(row));
 	});
 
+	it("drops the tip below 50 columns", () => {
+		const text = (columns: number) => Bun.stripANSI(new WelcomeComponent("1.0.0").render(columns).join("\n"));
+		expect(text(50)).toContain("Tip: ");
+		expect(text(49)).not.toContain("Tip: ");
+		expect(text(49)).toContain("v1.0.0");
+	});
 
 	it("sets the version under the wordmark while the lockup fits, else keeps the logo alone", () => {
 		const rows = (columns: number) => new WelcomeComponent("1.0.0").render(columns).map(row => Bun.stripANSI(row));

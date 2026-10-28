@@ -4,7 +4,6 @@
  * submitted: the section labels or workpool item in the head, the data as a
  * JSON tree (Markdown when it is a string), and the reported or rejected error.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatCount, isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import { compact, md } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
@@ -36,7 +35,7 @@ import type {
 } from "./renderer";
 import type { YieldItem } from "./task";
 
-const TITLE = t("Submit Result");
+const TITLE = "Submit Result";
 
 /** Collapsed rows of string data (a report) in the ANSI card. */
 const TEXT_ROWS_COLLAPSED = 4;
@@ -74,11 +73,11 @@ function readSubmission(
 	const incremental = Array.isArray(type) && type.length > 0;
 	const data = details?.data !== undefined ? details.data : (args?.data ?? undefined);
 	let error = args?.error || undefined;
-	if (result?.isError) error = resultText(result) || t("{0} failed\u0004packages/tui/src/tools/native-view.ts:errorView.body", `${TITLE}`);
-	else if (result && details?.status === "aborted") error = details.error || resultText(result) || t("Aborted");
+	if (result?.isError) error = resultText(result) || `${TITLE} failed`;
+	else if (result && details?.status === "aborted") error = details.error || resultText(result) || "Aborted";
 	const settled = result !== undefined;
 	return {
-		target: typeof args?.key === "number" ? t("item {0}", `${args.key}`) : incremental ? type.join(", ") : undefined,
+		target: typeof args?.key === "number" ? `item ${args.key}` : incremental ? type.join(", ") : undefined,
 		data,
 		error,
 		settled,
@@ -86,8 +85,8 @@ function readSubmission(
 		note:
 			settled && error === undefined && data === undefined
 				? incremental
-					? t("Takes the last message as this section")
-					: t("Ends with the sections submitted earlier, or the last message")
+					? "Takes the last message as this section"
+					: "Ends with the sections submitted earlier, or the last message"
 				: undefined,
 	};
 }
@@ -101,7 +100,7 @@ function sizeMeta(data: unknown): string | undefined {
 
 function describeData(data: unknown, streaming: boolean): NativeChild | undefined {
 	if (data === undefined) return undefined;
-	if (typeof data === "string") return data.trim() ? md(data, { stream: streaming }) : noteText(t("(empty)"));
+	if (typeof data === "string") return data.trim() ? md(data, { stream: streaming }) : noteText("(empty)");
 	// Open to the depth cap: the data is the card's whole point, and the
 	// collapsed card's preview clamp already bounds what shows.
 	return describeJsonTree(data, { hiddenRootKeys: [], openDepth: JSON_TREE_MAX_DEPTH_EXPANDED });
@@ -115,7 +114,7 @@ function describeSubmission(s: Submission, streaming: boolean): NativeToolView {
 			target: s.target,
 			targetKind: s.target ? "text" : undefined,
 			meta: size ? [size] : undefined,
-			badges: s.overridden ? [{ text: t("schema overridden"), tone: "warning" }] : undefined,
+			badges: s.overridden ? [{ text: "schema overridden", tone: "warning" }] : undefined,
 		},
 		tone: s.settled && s.error !== undefined ? "error" : undefined,
 		body: compact([
@@ -166,7 +165,7 @@ function renderSubmission(s: Submission, options: RenderResultOptions, theme: Th
 				spinnerFrame: options.spinnerFrame,
 				title: TITLE,
 				description: s.target,
-				badge: s.overridden ? { label: t("schema overridden"), color: "warning" } : undefined,
+				badge: s.overridden ? { label: "schema overridden", color: "warning" } : undefined,
 				meta: size ? [size] : undefined,
 			};
 			const phase: ToolCardPhase = !s.settled ? (running ? "running" : "partial") : failed ? "error" : "success";

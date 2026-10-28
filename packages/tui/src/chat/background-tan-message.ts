@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { BackgroundTanDispatchDetails, CustomMessage } from "./messages";
 import { replaceTabs } from "../render/render-utils";
 import { theme } from "../theme";
@@ -26,7 +25,7 @@ export function createBackgroundTanDispatchBlock(message: CustomMessage<unknown>
 	return new TranscriptStatusBlock([
 		{
 			parts: [
-				{ text: t("{0} Tangent dispatched", `${theme.icon.output}`), color: "muted" },
+				{ text: `${theme.icon.output} Tangent dispatched`, color: "muted" },
 				{ text: "[task]", color: "dim" },
 				{ text: jobId, color: "accent" },
 				work ? { text: `${theme.format.dash} ${work}`, color: "dim" } : undefined,

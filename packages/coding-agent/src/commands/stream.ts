@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { STREAM_TITLE_MAX } from "@oh-my-pi/pi-wire";
 import { CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -13,9 +12,9 @@ export default class Stream extends Command {
 	static description = commandHelp.description;
 
 	static flags = {
-		title: Flags.string({ description: t("Stream title (defaults to the current directory name)") }),
-		server: Flags.string({ description: t("Stream server base URL (overrides stream.serverUrl)") }),
-		"no-tui": Flags.boolean({ description: t("Use the line-oriented console instead of the interactive TUI") }),
+		title: Flags.string({ description: "Stream title (defaults to the current directory name)" }),
+		server: Flags.string({ description: "Stream server base URL (overrides stream.serverUrl)" }),
+		"no-tui": Flags.boolean({ description: "Use the line-oriented console instead of the interactive TUI" }),
 	};
 
 	static examples = [
@@ -29,7 +28,7 @@ export default class Stream extends Command {
 		const cwd = process.cwd();
 		const title = flags.title ?? path.basename(cwd);
 		if (title.length > STREAM_TITLE_MAX) {
-			throw new CliUsageError(t("title must be at most {0} characters", `${STREAM_TITLE_MAX}`));
+			throw new CliUsageError(`title must be at most ${STREAM_TITLE_MAX} characters`);
 		}
 		const settings = await Settings.loadReadOnly({ cwd });
 		let urls: StreamUrls;

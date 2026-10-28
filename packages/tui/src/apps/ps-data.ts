@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -54,7 +53,7 @@ export function collapseCommand(command: string | undefined): string {
 /** One-line daemon summary used by action results and detail views. */
 export function daemonLabel(daemon: DaemonSnapshot): string {
 	const pid = daemon.pid === undefined ? "" : ` pid=${daemon.pid}`;
-	const exit = daemon.exitCode === undefined ? "" : t(" exit={0}", `${daemon.exitCode}`);
+	const exit = daemon.exitCode === undefined ? "" : ` exit=${daemon.exitCode}`;
 	return `${daemon.name}: ${daemon.state}${pid}${exit}`;
 }
 
@@ -90,7 +89,7 @@ export function uptimeCell(snapshot: DaemonSnapshot): string {
 }
 
 /** Labels aligned with the process table's display cells. */
-export const TABLE_HEADER = [t("NAME"), t("STATE"), "PID", t("UPTIME"), t("RESTARTS"), t("FLAGS"), t("COMMAND")];
+export const TABLE_HEADER = ["NAME", "STATE", "PID", "UPTIME", "RESTARTS", "FLAGS", "COMMAND"];
 
 /** Raw (possibly colored) cells for one daemon row, aligned with {@link TABLE_HEADER}. */
 export function tableCells(row: PsDaemonRow): string[] {
@@ -109,9 +108,9 @@ export function tableCells(row: PsDaemonRow): string[] {
 export function scopeHeader(scope: PsScope): string {
 	const label =
 		scope.kind === "global"
-			? t("global {0}", `${chalk.bold(scope.service ?? path.basename(scope.runtimeDir))}`)
-			: t("project {0}", `${chalk.bold(scope.projectDir ?? path.basename(scope.runtimeDir))}`);
+			? `global ${chalk.bold(scope.service ?? path.basename(scope.runtimeDir))}`
+			: `project ${chalk.bold(scope.projectDir ?? path.basename(scope.runtimeDir))}`;
 	const broker =
-		scope.brokerPid !== undefined ? chalk.green(t("broker pid {0}", `${scope.brokerPid}`)) : chalk.dim(t("broker not running"));
+		scope.brokerPid !== undefined ? chalk.green(`broker pid ${scope.brokerPid}`) : chalk.dim("broker not running");
 	return `${label} ${chalk.dim("—")} ${broker}`;
 }

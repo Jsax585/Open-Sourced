@@ -4,26 +4,12 @@
  * selection. Hand-rolled fixed-row virtualization (32px rows, spacer divs).
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { formatDurationMs } from "../data/formatters";
 import { EmptyState } from "../ui";
 import type { TraceMarker, TraceSpan, TraceTrack } from "../types";
 import { formatOffset } from "./time-scale";
 import { useTraceTheme } from "./trace-colors";
-
-const KIND_LABEL: Readonly<Record<string, string>> = {
-	turn: t("turn"),
-	model: t("model"),
-	tool: t("tool"),
-	subagent: t("subagent"),
-	background: t("background"),
-	compaction: t("compaction"),
-	model_change: t("model_change"),
-	mode_change: t("mode_change"),
-	reset: t("reset"),
-	session_exit: t("session_exit"),
-};
 
 export interface TranscriptRow {
 	key: string;
@@ -118,7 +104,7 @@ export const TranscriptList = memo(function TranscriptList({
 						const rowContent = (
 							<>
 								<span className="traces-kind" style={{ "--traces-kind-color": color } as React.CSSProperties}>
-									{KIND_LABEL[chipText] ?? chipText}
+									{chipText}
 								</span>
 								{row.depth > 0 && (
 									<span className="traces-row-track mono truncate" title={row.track.label}>
@@ -128,7 +114,7 @@ export const TranscriptList = memo(function TranscriptList({
 								<span className="traces-row-label truncate">{label}</span>
 								{detail && <span className="traces-row-detail truncate">{detail}</span>}
 								<span className="traces-row-meta num">
-									{row.span?.isError && <span className="tone-bad">{t("error")}</span>}
+									{row.span?.isError && <span className="tone-bad">error</span>}
 									<span>{duration}</span>
 									<span>{formatOffset(row.time - traceStart)}</span>
 								</span>
@@ -154,7 +140,7 @@ export const TranscriptList = memo(function TranscriptList({
 					})}
 				</div>
 			</div>
-			{rows.length === 0 && <EmptyState title={t("No matching events")} />}
+			{rows.length === 0 && <EmptyState title="No matching events" />}
 		</div>
 	);
 });

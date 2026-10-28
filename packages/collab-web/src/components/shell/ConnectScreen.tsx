@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowRight, Lock } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 import { useState } from "react";
@@ -20,11 +19,11 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 		e.preventDefault();
 		const trimmed = link.trim();
 		if (!trimmed) {
-			setLocalError(t("Paste a join link first."));
+			setLocalError("Paste a join link first.");
 			return;
 		}
 		setLocalError(null);
-		onConnect(trimmed, name.trim() || t("guest"));
+		onConnect(trimmed, name.trim() || "guest");
 	};
 
 	const shown = localError ?? error;
@@ -37,17 +36,19 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 					<OmpMark />
 					<span>omp</span>
 					<span className="sh-brand-slash">/</span>
-					<span className="sh-brand-app">{t("collab")}</span>
+					<span className="sh-brand-app">collab</span>
 				</div>
 				<ThemeToggle />
 			</div>
 			<form className="sh-connect-card" onSubmit={submit}>
 				<div className="sh-connect-head">
-					<h1 className="sh-connect-title">{t("Join a live session")}</h1>
-					<p className="sh-connect-sub">{t("Watch an omp agent work in real time — transcript, tool calls and subagents — and prompt it from here.")}</p>
+					<h1 className="sh-connect-title">Join a live session</h1>
+					<p className="sh-connect-sub">
+						Watch an omp agent work in real time — transcript, tool calls and subagents — and prompt it from here.
+					</p>
 				</div>
 				<label className="sh-field">
-					<span className="sh-field-label">{t("Join link")}</span>
+					<span className="sh-field-label">Join link</span>
 					<input
 						className="sh-input sh-input-mono"
 						type="text"
@@ -58,26 +59,31 @@ export function ConnectScreen({ defaultName, error, onConnect }: ConnectScreenPr
 						autoComplete="off"
 						autoFocus
 					/>
-					<span className="sh-field-hint">{t("Run ")}<code>/collab</code>{t(" in any omp session to get one.")}</span>
+					<span className="sh-field-hint">
+						Run <code>/collab</code> in any omp session to get one.
+					</span>
 				</label>
 				<label className="sh-field">
-					<span className="sh-field-label">{t("Display name")}</span>
+					<span className="sh-field-label">Display name</span>
 					<input
 						className="sh-input"
 						type="text"
 						value={name}
 						onChange={e => setName(e.target.value)}
-						placeholder={t("guest")}
+						placeholder="guest"
 						spellCheck={false}
 						autoComplete="off"
 						maxLength={32}
 					/>
 				</label>
 				{shown && <div className="sh-connect-error">{shown}</div>}
-				<button className="sh-btn sh-btn-primary sh-connect-submit" type="submit">{t("Connect ")}<ArrowRight size={14} />
+				<button className="sh-btn sh-btn-primary sh-connect-submit" type="submit">
+					Connect <ArrowRight size={14} />
 				</button>
 				<div className="sh-connect-foot">
-					<Lock size={12} />{t("End-to-end encrypted. The room key stays in the link and never reaches the relay.")}</div>
+					<Lock size={12} />
+					End-to-end encrypted. The room key stays in the link and never reaches the relay.
+				</div>
 			</form>
 		</div>
 	);

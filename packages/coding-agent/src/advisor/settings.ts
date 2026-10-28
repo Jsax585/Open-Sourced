@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ADVISOR_SEVERITIES } from "@oh-my-pi/pi-tui/chat/messages";
 import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { register } from "../config/registry";
@@ -18,9 +17,9 @@ export const cfgAdvisorEnabled = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Enable Advisor"),
+		label: "Enable Advisor",
 		description:
-			t("Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes."),
+			"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
 	},
 });
 
@@ -33,16 +32,9 @@ export const cfgAdvisorSyncBacklog = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Sync Backlog"),
+		label: "Advisor Sync Backlog",
 		description:
-			t("Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits."),
-		options: [
-			{ value: "off", label: t("Off") },
-			{ value: "1", label: t("Fewer than 1 outstanding review") },
-			{ value: "3", label: t("Fewer than 3 outstanding reviews") },
-			{ value: "5", label: t("Fewer than 5 outstanding reviews") },
-			{ value: "strict", label: t("Wait for all reviews") },
-		],
+			"Pause main agent until advisor backlog falls below threshold. Numeric values cap wait at 30 seconds; strict waits for all scheduled reviews without a wall-clock cap. Off disables catch-up delays. Abort, failure, and disposal release waits.",
 		condition: "advisorEnabled",
 	},
 });
@@ -55,16 +47,16 @@ export const cfgAdvisorImmuneTurns = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Immune Turns"),
+		label: "Advisor Immune Turns",
 		description:
-			t("After an advisor concern or blocker interrupts, route further concerns as non-interrupting asides for this many primary turns. Blockers are exempt from the cooldown."),
+			"After an advisor concern or blocker interrupts, route further concerns as non-interrupting asides for this many primary turns. Blockers are exempt from the cooldown.",
 		options: [
-			{ value: "0", label: t("0 steps"), description: t("No cooldown.") },
-			{ value: "1", label: t("1 step") },
-			{ value: "2", label: t("2 steps") },
-			{ value: "3", label: t("3 steps"), description: t("Default.") },
-			{ value: "4", label: t("4 steps") },
-			{ value: "5", label: t("5 steps") },
+			{ value: "0", label: "0 steps", description: "No cooldown." },
+			{ value: "1", label: "1 step" },
+			{ value: "2", label: "2 steps" },
+			{ value: "3", label: "3 steps", description: "Default." },
+			{ value: "4", label: "4 steps" },
+			{ value: "5", label: "5 steps" },
 		],
 		condition: "advisorEnabled",
 	},
@@ -79,13 +71,13 @@ export const cfgAdvisorContinueSeverity = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Continue Severity"),
+		label: "Advisor Continue Severity",
 		description:
-			t("Minimum severity of an advisor note that wakes the agent after it finished with a final answer. Lower-severity notes stay as a card at the end of the transcript and reach the agent with your next message."),
+			"Minimum severity of an advisor note that wakes the agent after it finished with a final answer. Lower-severity notes stay as a card at the end of the transcript and reach the agent with your next message.",
 		options: [
-			{ value: "nit", label: t("Nit"), description: t("Every note continues the run.") },
-			{ value: "concern", label: t("Concern"), description: t("Concerns and blockers continue the run. Default.") },
-			{ value: "blocker", label: t("Blocker"), description: t("Only blockers continue the run.") },
+			{ value: "nit", label: "Nit", description: "Every note continues the run." },
+			{ value: "concern", label: "Concern", description: "Concerns and blockers continue the run. Default." },
+			{ value: "blocker", label: "Blocker", description: "Only blockers continue the run." },
 		],
 		condition: "advisorEnabled",
 	},
@@ -100,12 +92,12 @@ export const cfgAdvisorReviewMode = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Review Mode"),
+		label: "Advisor Review Mode",
 		description:
-			t("Default advisor cadence when no WATCHDOG.yml roster is present. turn reviews every primary turn; agent-end reviews only final yields."),
+			"Default advisor cadence when no WATCHDOG.yml roster is present. turn reviews every primary turn; agent-end reviews only final yields.",
 		options: [
-			{ value: "turn", label: t("Every turn"), description: t("Review every primary update (tool-call round).") },
-			{ value: "agent-end", label: t("Agent end"), description: t("Review only at final yields (once per run).") },
+			{ value: "turn", label: "Every turn", description: "Review every primary update (tool-call round)." },
+			{ value: "agent-end", label: "Agent end", description: "Review only at final yields (once per run)." },
 		],
 		condition: "advisorEnabled",
 	},
@@ -119,15 +111,15 @@ export const cfgAdvisorReviewInterval = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Review Interval"),
+		label: "Advisor Review Interval",
 		description:
-			t("Default advisor cadence when no WATCHDOG.yml roster is present: review every Nth eligible primary update. 1 = every update. Skipped updates are sent with the next scheduled review."),
+			"Default advisor cadence when no WATCHDOG.yml roster is present: review every Nth eligible primary update. 1 = every update. Skipped updates are sent with the next scheduled review.",
 		options: [
-			{ value: "1", label: t("Every eligible update"), description: t("Default.") },
-			{ value: "2", label: t("Every 2nd") },
-			{ value: "3", label: t("Every 3rd") },
-			{ value: "5", label: t("Every 5th") },
-			{ value: "10", label: t("Every 10th") },
+			{ value: "1", label: "Every eligible update", description: "Default." },
+			{ value: "2", label: "Every 2nd" },
+			{ value: "3", label: "Every 3rd" },
+			{ value: "5", label: "Every 5th" },
+			{ value: "10", label: "Every 10th" },
 		],
 		condition: "advisorEnabled",
 	},
@@ -141,15 +133,15 @@ export const cfgAdvisorMaxNotesPerUpdate = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Max Notes Per Update"),
+		label: "Advisor Max Notes Per Update",
 		description:
-			t("Maximum non-blocker advice notes accepted per advisor prompt update (1–32; UI offers 1–5 quick picks). Blockers are exempt."),
+			"Maximum non-blocker advice notes accepted per advisor prompt update (1–32; UI offers 1–5 quick picks). Blockers are exempt.",
 		options: [
-			{ value: "1", label: t("1 note"), description: t("Anti-flood (strict).") },
-			{ value: "2", label: t("2 notes") },
-			{ value: "3", label: t("3 notes") },
-			{ value: "4", label: t("4 notes"), description: t("Frontier reasoning models. Default.") },
-			{ value: "5", label: t("5 notes") },
+			{ value: "1", label: "1 note", description: "Anti-flood (strict)." },
+			{ value: "2", label: "2 notes" },
+			{ value: "3", label: "3 notes" },
+			{ value: "4", label: "4 notes", description: "Frontier reasoning models. Default." },
+			{ value: "5", label: "5 notes" },
 		],
 		condition: "advisorEnabled",
 	},
@@ -163,9 +155,9 @@ export const cfgAdvisorEvictStaleResults = register({
 	ui: {
 		tab: "model",
 		group: "Advisor",
-		label: t("Advisor Evict Stale Results"),
+		label: "Advisor Evict Stale Results",
 		description:
-			t("Before each review, replace the advisor's read/grep/glob output from older reviews with a short placeholder. The latest review is kept."),
+			"Before each review, replace the advisor's read/grep/glob output from older reviews with a short placeholder. The latest review is kept.",
 		condition: "advisorEnabled",
 	},
 });

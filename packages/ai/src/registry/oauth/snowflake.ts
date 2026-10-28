@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { authPolicyFor } from "@oh-my-pi/pi-catalog/compat/auth";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
@@ -11,7 +10,7 @@ const SNOWFLAKE_OAUTH_CLIENT_ID = "LOCAL_APPLICATION";
 
 function snowflakeCallbackPort(): number {
 	const port = authPolicyFor("snowflake")?.callbackPort;
-	if (port === undefined) throw new Error(t("Snowflake auth policy is missing callback-port"));
+	if (port === undefined) throw new Error("Snowflake auth policy is missing callback-port");
 	return port;
 }
 
@@ -28,8 +27,8 @@ async function parseTokenResponse(
 ): Promise<SnowflakeTokens> {
 	signal?.throwIfAborted();
 	if (!response.ok) {
-		const operation = kind === "token-exchange" ? t("exchange") : t("refresh");
-		throw new AIError.OAuthError(t("Snowflake token {0} failed ({1})", `${operation}`, `${response.status}`), {
+		const operation = kind === "token-exchange" ? "exchange" : "refresh";
+		throw new AIError.OAuthError(`Snowflake token ${operation} failed (${response.status})`, {
 			kind,
 			provider: "snowflake",
 			status: response.status,
@@ -42,7 +41,7 @@ async function parseTokenResponse(
 	} catch (error) {
 		signal?.throwIfAborted();
 		if (error instanceof Error && error.name === "AbortError") throw error;
-		throw new AIError.OAuthError(t("Snowflake returned an invalid token response"), {
+		throw new AIError.OAuthError("Snowflake returned an invalid token response", {
 			kind: "validation",
 			provider: "snowflake",
 		});
@@ -57,14 +56,14 @@ async function parseTokenResponse(
 		body.expires_in <= 0 ||
 		(body.refresh_token !== undefined && (typeof body.refresh_token !== "string" || !body.refresh_token.trim()))
 	) {
-		throw new AIError.OAuthError(t("Snowflake returned an invalid token response"), {
+		throw new AIError.OAuthError("Snowflake returned an invalid token response", {
 			kind: "validation",
 			provider: "snowflake",
 		});
 	}
 	const lifetimeMs = body.expires_in * 1000;
 	if (!Number.isFinite(lifetimeMs) || lifetimeMs <= 0) {
-		throw new AIError.OAuthError(t("Snowflake returned an invalid token lifetime"), {
+		throw new AIError.OAuthError("Snowflake returned an invalid token lifetime", {
 			kind: "validation",
 			provider: "snowflake",
 		});
@@ -104,7 +103,7 @@ class SnowflakeOAuthFlow extends OAuthCallbackFlow {
 		});
 		return {
 			url: `${this.#accountUrl}/oauth/authorize?${params.toString()}`,
-			instructions: t("Sign in to Snowflake in your browser and approve access for omp."),
+			instructions: "Sign in to Snowflake in your browser and approve access for omp.",
 		};
 	}
 
@@ -139,7 +138,7 @@ export async function loginSnowflake(ctrl: OAuthController): Promise<OAuthCreden
 	if (!ctrl.onPrompt) throw new AIError.OnPromptRequiredError("Snowflake");
 	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
 	const account = await ctrl.onPrompt({
-		message: t("Enter your Snowflake account identifier or URL"),
+		message: "Enter your Snowflake account identifier or URL",
 		placeholder: "myorg-myaccount",
 	});
 	if (ctrl.signal?.aborted) throw new AIError.LoginCancelledError();
@@ -155,7 +154,7 @@ export async function refreshSnowflakeToken(
 		// Without refresh issuance the shared refresh skew would discard a still-valid token.
 		if (Date.now() < credentials.expires) return credentials;
 		throw new AIError.OAuthError(
-			t("Snowflake did not issue a refresh token; run /login snowflake again or use SNOWFLAKE_ACCOUNT and SNOWFLAKE_PAT"),
+			"Snowflake did not issue a refresh token; run /login snowflake again or use SNOWFLAKE_ACCOUNT and SNOWFLAKE_PAT",
 			{ kind: "token-refresh", provider: "snowflake" },
 		);
 	}
@@ -163,7 +162,7 @@ export async function refreshSnowflakeToken(
 	try {
 		accountUrl = normalizeSnowflakeAccountUrl(credentials.enterpriseUrl ?? "");
 	} catch {
-		throw new AIError.OAuthError(t("Invalid Snowflake account; run /login snowflake again"), {
+		throw new AIError.OAuthError("Invalid Snowflake account; run /login snowflake again", {
 			kind: "validation",
 			provider: "snowflake",
 		});

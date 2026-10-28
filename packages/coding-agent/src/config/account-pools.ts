@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AuthApiKeyOptions, AuthStorage, SessionRestrictionLease } from "@oh-my-pi/pi-ai/auth-storage";
 import type { Api, Model } from "@oh-my-pi/pi-ai/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
@@ -24,7 +23,7 @@ export function validateAgentAccountPools(value: unknown): Record<string, OAuthA
 	if (value === undefined || value === null) return {};
 	if (!isRecord(value)) {
 		throw new Error(
-			t("Invalid task.agentAccountPools: expected a map of agent name to provider account pools, got {0}.", `${Array.isArray(value) ? t("an array") : t("a {0}", `${typeof value}`)}`),
+			`Invalid task.agentAccountPools: expected a map of agent name to provider account pools, got ${Array.isArray(value) ? "an array" : `a ${typeof value}`}.`,
 		);
 	}
 	const pools: Record<string, OAuthAccountPools> = Object.create(null);
@@ -32,7 +31,7 @@ export function validateAgentAccountPools(value: unknown): Record<string, OAuthA
 		if (providers === null) continue;
 		if (!isRecord(providers)) {
 			throw new Error(
-				t("Invalid task.agentAccountPools.{0}: expected a map of provider to OAuth identity keys, got {1}.", `${agentName}`, `${Array.isArray(providers) ? t("an array") : t("a {0}", `${typeof providers}`)}`),
+				`Invalid task.agentAccountPools.${agentName}: expected a map of provider to OAuth identity keys, got ${Array.isArray(providers) ? "an array" : `a ${typeof providers}`}.`,
 			);
 		}
 		const agentPools: Record<string, readonly string[]> = Object.create(null);
@@ -42,7 +41,7 @@ export function validateAgentAccountPools(value: unknown): Record<string, OAuthA
 				!identityKeys.every((key): key is string => typeof key === "string" && key.length > 0 && key.trim() === key)
 			) {
 				throw new Error(
-					t("Invalid task.agentAccountPools.{0}.{1}: expected a list of OAuth identity keys such as \"email:you@example.com|org:<org-id>\".", `${agentName}`, `${provider}`),
+					`Invalid task.agentAccountPools.${agentName}.${provider}: expected a list of OAuth identity keys such as "email:you@example.com|org:<org-id>".`,
 				);
 			}
 			agentPools[provider] = identityKeys;
@@ -141,7 +140,7 @@ export class SessionAccountPoolScope {
 				try {
 					const apiKey = await getApiKey(model);
 					if (apiKey === undefined) {
-						return { ok: false, error: t("No API key found for \"{0}\"", `${model.provider}`) };
+						return { ok: false, error: `No API key found for "${model.provider}"` };
 					}
 					return { ok: true, apiKey, headers: await target.getProviderHeaders(model.provider) };
 				} catch (error) {

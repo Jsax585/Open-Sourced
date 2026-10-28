@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../config/settings";
@@ -72,7 +71,7 @@ export class CostGate {
 		return {
 			spent: this.#spent,
 			cap,
-			message: t("Cost cap reached: this session spent {1} of its {0} cap (--max-cost / session.maxCost), so the next model request was not sent.", `${usd(cap)}`, `${usd(this.#spent)}`),
+			message: `Cost cap reached: this session spent ${usd(this.#spent)} of its ${usd(cap)} cap (--max-cost / session.maxCost), so the next model request was not sent.`,
 		};
 	}
 
@@ -90,7 +89,7 @@ export class CostGate {
 		if (this.#warned || warnCost === undefined || this.#spent < warnCost) return;
 		this.#warned = true;
 		this.#warn(
-			t("Cost warning: this session has spent {0}, past its {1} warning threshold (--warn-cost / session.warnCost).", `${usd(this.#spent)}`, `${usd(warnCost)}`),
+			`Cost warning: this session has spent ${usd(this.#spent)}, past its ${usd(warnCost)} warning threshold (--warn-cost / session.warnCost).`,
 		);
 	}
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { TspKind, TspPickerProps, TspProps } from "@oh-my-pi/pi-wire";
 import type { SessionMessageEntryLike } from "../src/chat/transcript-entry";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 import { setNativeRendering } from "../src/native/state";
@@ -112,11 +112,16 @@ describe("rewind page", () => {
 		return out;
 	}
 
+	function captionText(children: readonly NativeChild[]): string {
+		const caption = children.find(child => "k" in child && child.p?.role === "omp.rewind.here");
+		return JSON.stringify(caption);
+	}
 
 	test("opens on the newest turn: the transcript as blocks, the turn picked under its caption", () => {
 		const page = rewind().describeScreen(pickerCx);
 		expect(page.role).toBe("omp.rewind");
 		expect(marks(page.main)).toEqual(["-", "here:main:u2", "pick"]);
+		expect(captionText(page.main)).toContain("nothing below to drop");
 		expect(page.dock).toHaveLength(1);
 		expect(JSON.stringify((page.dock[0] as RewindSelectorComponent).describe(pickerCx))).toContain("4/4");
 	});
@@ -128,6 +133,9 @@ describe("rewind page", () => {
 		expect(marks(main)).toEqual(["here:main:u1", "pick", "drop"]);
 		const caption = main.find(child => "k" in child && child.p?.role === "omp.rewind.here");
 		expect(caption && "k" in caption ? caption.reveal : undefined).toBe("start");
+		// A user turn rewinds past itself: its prompt returns to the editor.
+		expect(captionText(main)).toContain("the prompt returns to the editor");
+		expect(captionText(main)).toContain("3 turns below dropped");
 	});
 
 	test("Enter and the bar's Rewind button rewind to the outlined turn; Cancel closes", () => {
@@ -216,10 +224,10 @@ describe("copy picker", () => {
 		expect(props(root).focus).toBe("list");
 		const sections = () => (root.c ?? []) as NativeNode[];
 		expect(
-			sections().map(section => [section.key, section.p?.role]),
+			sections().map(section => [section.key, (section.p as TspProps<"section">).head, section.p?.role]),
 		).toEqual([
-			["whole", "omp.picker.block"],
-			["b0", "omp.picker.block"],
+			["whole", "Whole message", "omp.picker.block"],
+			["b0", expect.stringContaining("rust"), "omp.picker.block"],
 		]);
 		expect(sections()[1]?.p?.actions?.click).toBe("copy");
 
@@ -227,6 +235,7 @@ describe("copy picker", () => {
 		root = selector.describe(pickerCx);
 		expect(props(root).focus).toBe("preview");
 		expect(sections()[1]?.p?.role).toBe("omp.picker.block.focused");
+		expect(props(root).actions?.find(action => action.id === "close")?.label).toBe("Back");
 	});
 
 	test("the Copy action picks the focused block, activate picks a whole turn", () => {

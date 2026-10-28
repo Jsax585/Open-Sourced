@@ -1,5 +1,4 @@
 /** `ask` — interactive questions posed to the user mid-run. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, InvalidArg, Note, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -161,7 +160,7 @@ function Summary({ args }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<span>{truncate(normalizeWs(first.question), 70)}</span>
-			{questions.length > 1 && <Badge>{t("{0} questions", `${questions.length}`)}</Badge>}
+			{questions.length > 1 && <Badge>{questions.length} questions</Badge>}
 		</>
 	);
 }
@@ -173,7 +172,7 @@ function QuestionBlock({ q, answer }: { q: AskQuestion; answer: AskAnswer | unde
 			<Row>
 				{q.id !== "?" && <span className="tv-faint">[{q.id}] </span>}
 				{q.question ? <span>{q.question}</span> : <InvalidArg what="question" />}
-				{q.multi && <Badge>{t("multi")}</Badge>}
+				{q.multi && <Badge>multi</Badge>}
 			</Row>
 			{q.options.map((opt, i) => {
 				const isSelected = selected.has(stripRecommended(opt.label));
@@ -181,7 +180,7 @@ function QuestionBlock({ q, answer }: { q: AskQuestion; answer: AskAnswer | unde
 				return (
 					<Row key={i} k={<span className={isSelected ? "tv-ok-text" : undefined}>{marker}</span>}>
 						<span className={answer && !isSelected ? "tv-muted" : undefined}>{opt.label}</span>
-						{i === q.recommended && <Badge tone="accent">{t("recommended")}</Badge>}
+						{i === q.recommended && <Badge tone="accent">recommended</Badge>}
 						{opt.description && <span className="tv-muted"> — {opt.description}</span>}
 					</Row>
 				);
@@ -192,16 +191,16 @@ function QuestionBlock({ q, answer }: { q: AskQuestion; answer: AskAnswer | unde
 				</Row>
 			)}
 			{answer?.note !== undefined && (
-				<Row k={t("note:")}>
+				<Row k="note:">
 					<span className="tv-muted">{answer.note}</span>
 				</Row>
 			)}
 			{answer && answer.selectedOptions.length === 0 && answer.customInput === undefined && (
 				<Row k="—">
-					<span className="tv-warn-text">{t("no selection")}</span>
+					<span className="tv-warn-text">no selection</span>
 				</Row>
 			)}
-			{answer?.timedOut && <Note tone="warn">{t("auto-selected after timeout — not a user choice")}</Note>}
+			{answer?.timedOut && <Note tone="warn">auto-selected after timeout — not a user choice</Note>}
 		</div>
 	);
 }

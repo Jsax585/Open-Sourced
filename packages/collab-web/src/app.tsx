@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentDrawer } from "./components/agents/AgentDrawer";
@@ -23,9 +22,9 @@ interface Creds {
 
 function storedName(): string {
 	try {
-		return localStorage.getItem(NAME_KEY) ?? t("guest");
+		return localStorage.getItem(NAME_KEY) ?? "guest";
 	} catch {
-		return t("guest");
+		return "guest";
 	}
 }
 
@@ -105,7 +104,7 @@ export function App(): ReactNode {
 	}, [connect]);
 
 	useEffect(() => {
-		if (!client) document.title = t("omp collab");
+		if (!client) document.title = "omp collab";
 	}, [client]);
 
 	if (!client) {
@@ -148,9 +147,9 @@ function Session({ client, onLeave, onRejoin }: SessionProps): ReactNode {
 		}
 	}, [subCount]);
 
-	const title = snap.header?.title ?? snap.state?.sessionName ?? t("session");
+	const title = snap.header?.title ?? snap.state?.sessionName ?? "session";
 	useEffect(() => {
-		document.title = t("{0} · omp collab", `${title}`);
+		document.title = `${title} · omp collab`;
 	}, [title]);
 
 	const drawerAgent = selectedId != null ? snap.agents.find(a => a.id === selectedId) : undefined;

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
@@ -35,7 +34,7 @@ export function refuseImages(command: ParsedSlashCommand, runtime: TuiSlashComma
 	const images = runtime.input?.images;
 	if (!images?.length) return false;
 	restoreDetachedDraft(runtime.ctx.editor, command.text, images, runtime.input?.imageLinks);
-	runtime.ctx.showWarning(t("/{0} takes text only; remove the images to run it", `${command.name}`));
+	runtime.ctx.showWarning(`/${command.name} takes text only; remove the images to run it`);
 	return true;
 }
 

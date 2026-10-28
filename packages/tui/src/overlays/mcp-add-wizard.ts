@@ -3,7 +3,6 @@
  *
  * Interactive multi-step wizard for adding MCP servers.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Container, matchesKey, replaceTabs, Spacer, Text, truncateToWidth, wrapTextWithAnsi } from "../index";
 import type { Component } from "../tui";
 import * as path from "node:path";
@@ -182,16 +181,16 @@ function nativeErrorText(error: unknown): string {
 
 /** Footer for text steps; the field submits on `tui.input.submit` and cancels on `tui.select.cancel`. */
 function inputHint(escapeAction: string): string {
-	return t("[{0} to continue, {1} to {2}]", `${editorKey("tui.input.submit")}`, `${editorKey("tui.select.cancel")}`, `${escapeAction}`);
+	return `[${editorKey("tui.input.submit")} to continue, ${editorKey("tui.select.cancel")} to ${escapeAction}]`;
 }
 
 /** Footer for choice steps; the wizard routes navigation, Enter, and Escape itself. */
 function choiceHint(escapeAction: string): string {
-	return t("[{0} to navigate, {1} to select, {2} to {3}]", `${editorKeys("tui.select.up", "tui.select.down")}`, `${formatKeyHint("enter")}`, `${interruptKey()}`, `${escapeAction}`);
+	return `[${editorKeys("tui.select.up", "tui.select.down")} to navigate, ${formatKeyHint("enter")} to select, ${interruptKey()} to ${escapeAction}]`;
 }
 
 /** The wizard's phases, the native progress strip's segments in order. */
-const PHASES = [t("Name"), t("Transport"), t("Connection"), t("Auth"), t("Scope"), t("Review")] as const;
+const PHASES = ["Name", "Transport", "Connection", "Auth", "Scope", "Review"] as const;
 const PHASE_NAME = 0;
 const PHASE_TRANSPORT = 1;
 const PHASE_CONNECTION = 2;
@@ -226,12 +225,12 @@ const TRANSPORTS: readonly TransportType[] = ["stdio", "http", "sse"];
 
 /** How each transport reads as a choice and in the review. */
 const TRANSPORT_CHOICES: Readonly<Record<TransportType, { icon: string; label: string; description: string }>> = {
-	stdio: { icon: "terminal", label: t("Local command"), description: t("omp starts it on this machine") },
-	http: { icon: "globe", label: t("Remote server"), description: t("Streamable HTTP endpoint") },
-	sse: { icon: "broadcast", label: t("Server-sent events"), description: t("Older HTTP servers") },
+	stdio: { icon: "terminal", label: "Local command", description: "omp starts it on this machine" },
+	http: { icon: "globe", label: "Remote server", description: "Streamable HTTP endpoint" },
+	sse: { icon: "broadcast", label: "Server-sent events", description: "Older HTTP servers" },
 };
 
-const SCOPE_LABELS: Readonly<Record<Scope, string>> = { user: t("Every project"), project: t("This project\u0004packages/tui/src/overlays/mcp-add-wizard.ts:SCOPE_LABELS.project") };
+const SCOPE_LABELS: Readonly<Record<Scope, string>> = { user: "Every project", project: "This project" };
 
 /** The ANSI heading: the step's title and where it sits among the phases. */
 function ansiHeading(title: string, tone: "accent" | "success" | "warning" | "error" | "muted", phase: number): Text {
@@ -391,7 +390,7 @@ export class MCPAddWizard extends OverlayPanel {
 		onRender?: () => void,
 		initialName?: string,
 	) {
-		super(t("Add MCP Server"), "omp.overlay.mcpAdd");
+		super("Add MCP Server", "omp.overlay.mcpAdd");
 		this.#deps = deps;
 		this.#onCompleteCallback = onComplete;
 		this.#onCancelCallback = onCancel;
@@ -456,7 +455,7 @@ export class MCPAddWizard extends OverlayPanel {
 		const phase = STEP_PHASE[this.#currentStep];
 		const keyHint =
 			options.escape === undefined
-				? t("[Press {0} to skip or continue]", `${editorKey("tui.input.submit")}`)
+				? `[Press ${editorKey("tui.input.submit")} to skip or continue]`
 				: inputHint(options.escape);
 		const field = new TextFormField({
 			theme: mcpFormTheme,
@@ -497,9 +496,9 @@ export class MCPAddWizard extends OverlayPanel {
 					),
 				],
 				actions: {
-					back: this.#currentStep === "name" ? undefined : t("Back"),
+					back: this.#currentStep === "name" ? undefined : "Back",
 					backKey: cancelKey,
-					next: t("Continue"),
+					next: "Continue",
 					nextKey: getKeybindings().getKeys("tui.input.submit")[0] ?? "enter",
 				},
 			},
@@ -552,9 +551,9 @@ export class MCPAddWizard extends OverlayPanel {
 				body: options.body ?? [],
 				choices: options.choices,
 				actions: {
-					back: this.#currentStep === "name" ? undefined : t("Back"),
+					back: this.#currentStep === "name" ? undefined : "Back",
 					backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
-					next: t("Continue"),
+					next: "Continue",
 					nextKey: "enter",
 				},
 			},
@@ -589,7 +588,7 @@ export class MCPAddWizard extends OverlayPanel {
 				title: options.title,
 				lead: options.lead,
 				body: options.native,
-				actions: { back: options.back ?? t("Back"), backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape" },
+				actions: { back: options.back ?? "Back", backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape" },
 			},
 		);
 	}
@@ -605,7 +604,7 @@ export class MCPAddWizard extends OverlayPanel {
 		const title = row(
 			compact([
 				text(step.title, { role: "omp.mcpAdd.title", wrap: "word" }),
-				step.optional && text(t("Optional"), { role: "omp.mcpAdd.tag" }),
+				step.optional && text("Optional", { role: "omp.mcpAdd.tag" }),
 			]),
 			{ gap: "sm", align: "center" },
 		);
@@ -643,7 +642,7 @@ export class MCPAddWizard extends OverlayPanel {
 		// The wizard replaces the editor in the dock; its sheet hoists into the terminal's layer.
 		const sheet = node(
 			"overlay",
-			{ role: this.nativeRole, head: t("Add MCP server"), anchor: "center", size: "md", modal: true },
+			{ role: this.nativeRole, head: "Add MCP server", anchor: "center", size: "md", modal: true },
 			[col(children, { gap: "lg" })],
 			"sheet",
 		);
@@ -659,7 +658,7 @@ export class MCPAddWizard extends OverlayPanel {
 			const tone = index === phase ? "accent" : index > phase ? "muted" : skipped ? "neutral" : "success";
 			return node(
 				"col",
-				{ role: "omp.mcpAdd.phase", tone, ...(skipped ? { title: t("Auth · not needed") } : {}) },
+				{ role: "omp.mcpAdd.phase", tone, ...(skipped ? { title: "Auth · not needed" } : {}) },
 				[text(label)],
 				label,
 			);
@@ -670,7 +669,7 @@ export class MCPAddWizard extends OverlayPanel {
 	/** Cancel on the left; Back and the step's one primary action on the right. Keys live in the tooltips. */
 	#describeActions(actions: NativeStepActions): NativeNode {
 		const buttons: (NativeNode | null)[] = [
-			actionButton(t("Cancel"), "cancel", { keys: actions.back === undefined ? actions.backKey : "ctrl+c" }),
+			actionButton("Cancel", "cancel", { keys: actions.back === undefined ? actions.backKey : "ctrl+c" }),
 			null,
 		];
 		if (actions.back) buttons.push(actionButton(actions.back, "back", { keys: actions.backKey }));
@@ -793,12 +792,12 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderNameStep(): void {
 		this.#inputStep({
-			title: t("Name the server"),
-			lead: t("A unique name: it labels the server in /mcp and prefixes its tools."),
+			title: "Name the server",
+			lead: "A unique name: it labels the server in /mcp and prefixes its tools.",
 			initial: this.#state.name,
 			placeholder: "github",
-			note: t("Letters, numbers, dash, underscore, dot and colon"),
-			escape: t("cancel"),
+			note: "Letters, numbers, dash, underscore, dot and colon",
+			escape: "cancel",
 			optional: false,
 			error: this.#validationError,
 		});
@@ -806,28 +805,28 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderTransportStep(): void {
 		this.#choiceStep({
-			title: t("How does omp reach it?"),
-			lead: t("Pick how {0} talks to omp.", `${this.#state.name}`),
+			title: "How does omp reach it?",
+			lead: `Pick how ${this.#state.name} talks to omp.`,
 			choices: TRANSPORTS.map(transport => ({ ...TRANSPORT_CHOICES[transport], tag: transport })),
-			escape: t("go back"),
+			escape: "go back",
 		});
 	}
 
 	#renderCommandStep(): void {
 		this.#inputStep({
-			title: t("Command"),
-			lead: t("The program omp starts for this server."),
+			title: "Command",
+			lead: "The program omp starts for this server.",
 			initial: this.#state.command,
 			placeholder: "npx",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
 
 	#renderArgsStep(): void {
 		this.#inputStep({
-			title: t("Arguments"),
-			lead: t("Passed to {0}, separated by spaces. omp tries the connection next.", `${this.#state.command}`),
+			title: "Arguments",
+			lead: `Passed to ${this.#state.command}, separated by spaces. omp tries the connection next.`,
 			initial: this.#state.args,
 			placeholder: "-y @modelcontextprotocol/server-github",
 			optional: true,
@@ -836,12 +835,12 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderUrlStep(): void {
 		this.#inputStep({
-			title: t("Server URL"),
-			lead: t("Where {0} listens. omp tries the connection next.", `${this.#state.name}`),
+			title: "Server URL",
+			lead: `Where ${this.#state.name} listens. omp tries the connection next.`,
 			initial: this.#state.url,
 			placeholder: "https://mcp.example.com/mcp",
-			note: t("Starts with http:// or https://"),
-			escape: t("go back"),
+			note: "Starts with http:// or https://",
+			escape: "go back",
 			optional: false,
 			error: this.#validationError,
 		});
@@ -849,34 +848,34 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderAuthLocationStep(): void {
 		this.#choiceStep({
-			title: t("Where does the key go?"),
-			lead: t("How the server expects to receive it."),
+			title: "Where does the key go?",
+			lead: "How the server expects to receive it.",
 			choices: [
-				{ icon: "terminal", label: t("Environment variable"), description: t("Set when the server starts") },
-				{ icon: "globe", label: t("HTTP header"), description: t("Sent with every request") },
+				{ icon: "terminal", label: "Environment variable", description: "Set when the server starts" },
+				{ icon: "globe", label: "HTTP header", description: "Sent with every request" },
 			],
-			escape: t("go back"),
+			escape: "go back",
 		});
 	}
 
 	#renderEnvVarNameStep(): void {
 		this.#inputStep({
-			title: t("Environment variable"),
-			lead: t("The variable the server reads its key from."),
+			title: "Environment variable",
+			lead: "The variable the server reads its key from.",
 			initial: this.#state.envVarName,
 			placeholder: "API_KEY",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
 
 	#renderHeaderNameStep(): void {
 		this.#inputStep({
-			title: t("Header name"),
-			lead: t("The HTTP header that carries the key."),
+			title: "Header name",
+			lead: "The HTTP header that carries the key.",
 			initial: this.#state.headerName,
 			placeholder: "Authorization",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
@@ -893,8 +892,8 @@ export class MCPAddWizard extends OverlayPanel {
 		const userPath = this.#configPathLabel("user");
 		const projectPath = this.#configPathLabel("project");
 		this.#choiceStep({
-			title: t("Where should it live?"),
-			lead: t("Saved for you everywhere, or only in this project's config."),
+			title: "Where should it live?",
+			lead: "Saved for you everywhere, or only in this project's config.",
 			choices: [
 				{ icon: "home", label: SCOPE_LABELS.user, description: userPath, detail: [span(userPath, "mono")] },
 				{
@@ -904,7 +903,7 @@ export class MCPAddWizard extends OverlayPanel {
 					detail: [span(projectPath, "mono")],
 				},
 			],
-			escape: t("go back"),
+			escape: "go back",
 		});
 	}
 
@@ -915,33 +914,33 @@ export class MCPAddWizard extends OverlayPanel {
 		const scopePath = this.#configPathLabel(scope);
 		// `ansi` is the value in the ANSI summary; `v` the native `kv` value (it styles and fits values itself).
 		const entries: { k: string; v: TspText; ansi: string }[] = [
-			{ k: t("Name"), v: [span(state.name, "strong")], ansi: theme.fg("accent", state.name) },
+			{ k: "Name", v: [span(state.name, "strong")], ansi: theme.fg("accent", state.name) },
 			{
-				k: t("Transport"),
+				k: "Transport",
 				v: [span(`${TRANSPORT_CHOICES[transport].label}  `), span(transport, "mono muted")],
 				ansi: transport,
 			},
 		];
 		if (transport === "stdio") {
-			entries.push({ k: t("Command"), v: [span(state.command, "mono")], ansi: state.command });
-			if (state.args) entries.push({ k: t("Arguments"), v: [span(state.args, "mono")], ansi: state.args });
+			entries.push({ k: "Command", v: [span(state.command, "mono")], ansi: state.command });
+			if (state.args) entries.push({ k: "Arguments", v: [span(state.args, "mono")], ansi: state.args });
 		} else {
 			entries.push({ k: "URL", v: [span(replaceTabs(state.url), "mono")], ansi: sanitize(state.url) });
 		}
 		if (state.authMethod === "oauth") {
-			entries.push({ k: t("Auth"), v: t("OAuth, signed in"), ansi: t("OAuth (authenticated)") });
+			entries.push({ k: "Auth", v: "OAuth, signed in", ansi: "OAuth (authenticated)" });
 		} else if (state.authMethod === "manual") {
 			const [where, name] = state.authLocation === "env" ? ["env", state.envVarName] : ["header", state.headerName];
 			entries.push({
-				k: t("Auth"),
-				v: [span(where === "env" ? t("API key in ") : t("API key in header ")), span(name, "mono")],
-				ansi: t("API key via {0} ({1})", `${where}`, `${name}`),
+				k: "Auth",
+				v: [span(where === "env" ? "API key in " : "API key in header "), span(name, "mono")],
+				ansi: `API key via ${where} (${name})`,
 			});
 		} else {
-			entries.push({ k: t("Auth"), v: [span(t("None"), "muted")], ansi: t("None") });
+			entries.push({ k: "Auth", v: [span("None", "muted")], ansi: "None" });
 		}
 		entries.push({
-			k: t("Saved in"),
+			k: "Saved in",
 			v: [span(`${SCOPE_LABELS[scope]}  `), span(scopePath, "mono muted")],
 			ansi: `${SCOPE_LABELS[scope]} (${scopePath})`,
 		});
@@ -949,23 +948,23 @@ export class MCPAddWizard extends OverlayPanel {
 		const summary = new Container();
 		for (const entry of entries) summary.addChild(new Text(`${entry.k}: ${entry.ansi}`, 0, 0));
 		summary.addChild(new Spacer(1));
-		summary.addChild(new Text(t("Save this configuration?"), 0, 0));
+		summary.addChild(new Text("Save this configuration?", 0, 0));
 		this.#stepKind = "confirm";
 		this.#show(
 			new WizardStep({
 				kind: "confirm",
-				heading: ansiHeading(t("Review"), "accent", PHASE_REVIEW),
+				heading: ansiHeading("Review", "accent", PHASE_REVIEW),
 				content: summary,
 				footer: new Text(
-					theme.fg("muted", t("[{0} to save, {1} to go back]", `${formatKeyHint("enter")}`, `${interruptKey()}`)),
+					theme.fg("muted", `[${formatKeyHint("enter")} to save, ${interruptKey()} to go back]`),
 					0,
 					0,
 				),
 			}),
 			{
 				phase: PHASE_REVIEW,
-				title: t("Review and save"),
-				lead: t("omp connects to the server as soon as it is saved."),
+				title: "Review and save",
+				lead: "omp connects to the server as soon as it is saved.",
 				body: [
 					node(
 						"kv",
@@ -975,9 +974,9 @@ export class MCPAddWizard extends OverlayPanel {
 					),
 				],
 				actions: {
-					back: t("Back"),
+					back: "Back",
 					backKey: boundKeys("app.interrupt", ["escape"])[0] ?? "escape",
-					next: t("Save server"),
+					next: "Save server",
 					nextKey: "enter",
 				},
 			},
@@ -1081,7 +1080,7 @@ export class MCPAddWizard extends OverlayPanel {
 				// Validate URL; a rejected URL stays in the field to be fixed.
 				this.#state.url = value;
 				if (!value) {
-					this.#validationError = t("URL is required");
+					this.#validationError = "URL is required";
 					this.#renderStep();
 					return;
 				}
@@ -1089,12 +1088,12 @@ export class MCPAddWizard extends OverlayPanel {
 				try {
 					parsedUrl = new URL(value);
 				} catch {
-					this.#validationError = t("Invalid URL format (must start with http:// or https://)");
+					this.#validationError = "Invalid URL format (must start with http:// or https://)";
 					this.#renderStep();
 					return;
 				}
 				if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-					this.#validationError = t("URL must use http:// or https:// scheme");
+					this.#validationError = "URL must use http:// or https:// scheme";
 					this.#renderStep();
 					return;
 				}
@@ -1327,54 +1326,54 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderAuthMethodStep(): void {
 		this.#choiceStep({
-			title: t("How does it authenticate?"),
-			lead: t("{0} needs credentials before omp can use it.", `${this.#state.name}`),
+			title: "How does it authenticate?",
+			lead: `${this.#state.name} needs credentials before omp can use it.`,
 			choices: [
-				{ icon: "log-in", label: t("Sign in with OAuth"), description: t("Opens your browser") },
-				{ icon: "key", label: t("API key or token"), description: t("Paste it, or run a command that prints it") },
+				{ icon: "log-in", label: "Sign in with OAuth", description: "Opens your browser" },
+				{ icon: "key", label: "API key or token", description: "Paste it, or run a command that prints it" },
 			],
-			escape: t("go back"),
+			escape: "go back",
 		});
 	}
 
 	#renderOAuthAuthUrlStep(): void {
 		this.#inputStep({
-			title: t("Authorization URL"),
-			lead: t("The provider's OAuth authorize endpoint."),
+			title: "Authorization URL",
+			lead: "The provider's OAuth authorize endpoint.",
 			initial: this.#state.oauthAuthUrl,
 			placeholder: "https://auth.example.com/oauth/authorize",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
 
 	#renderOAuthTokenUrlStep(): void {
 		this.#inputStep({
-			title: t("Token URL"),
-			lead: t("The endpoint that exchanges the authorization code for a token."),
+			title: "Token URL",
+			lead: "The endpoint that exchanges the authorization code for a token.",
 			initial: this.#state.oauthTokenUrl,
 			placeholder: "https://auth.example.com/oauth/token",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
 
 	#renderOAuthClientIdStep(): void {
 		this.#inputStep({
-			title: t("Client ID"),
-			lead: t("The ID of the OAuth app registered with the provider."),
+			title: "Client ID",
+			lead: "The ID of the OAuth app registered with the provider.",
 			initial: this.#state.oauthClientId,
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
 
 	#renderOAuthClientSecretStep(): void {
 		this.#inputStep({
-			title: t("Client secret"),
-			lead: t("Leave it empty for PKCE-only flows."),
+			title: "Client secret",
+			lead: "Leave it empty for PKCE-only flows.",
 			initial: this.#state.oauthClientSecret,
-			escape: t("go back"),
+			escape: "go back",
 			optional: true,
 			secret: true,
 		});
@@ -1382,11 +1381,11 @@ export class MCPAddWizard extends OverlayPanel {
 
 	#renderOAuthScopesStep(): void {
 		this.#inputStep({
-			title: t("Scopes"),
-			lead: t("What omp may access, separated by spaces. Sign-in starts next."),
+			title: "Scopes",
+			lead: "What omp may access, separated by spaces. Sign-in starts next.",
 			initial: this.#state.oauthScopes,
 			placeholder: "read write",
-			escape: t("go back"),
+			escape: "go back",
 			optional: true,
 		});
 	}
@@ -1403,7 +1402,7 @@ export class MCPAddWizard extends OverlayPanel {
 				intro.addChild(new Spacer(1));
 			}
 		}
-		intro.addChild(new Text(t("Choose next action:"), 0, 0));
+		intro.addChild(new Text("Choose next action:", 0, 0));
 		const body = compact([
 			failure && !cancelled ? errorBlock(failure.message) : undefined,
 			failure?.tip ? { ...text(failure.tip, { role: "omp.mcpAdd.note", wrap: "word" }), key: "tip" } : undefined,
@@ -1412,25 +1411,25 @@ export class MCPAddWizard extends OverlayPanel {
 			title: cancelled ? "Sign-in cancelled" : "Sign-in failed",
 			headingTone: cancelled ? "muted" : "error",
 			lead: cancelled
-				? t("The browser sign-in stopped before it finished.")
-				: t("The provider didn't finish signing you in."),
+				? "The browser sign-in stopped before it finished."
+				: "The provider didn't finish signing you in.",
 			intro,
 			body,
 			choices: [
-				{ icon: "repeat", label: t("Try again"), description: t("Opens the browser again") },
-				{ icon: "sliders", label: t("Edit OAuth settings"), description: t("Endpoints, client and scopes") },
+				{ icon: "repeat", label: "Try again", description: "Opens the browser again" },
+				{ icon: "sliders", label: "Edit OAuth settings", description: "Endpoints, client and scopes" },
 			],
-			escape: t("go back"),
+			escape: "go back",
 		});
 	}
 
 	#renderApiKeyStep(): void {
 		this.#inputStep({
-			title: t("API key"),
-			lead: t("Paste the key or token. Start with ! to run a command that prints it, e.g. a password manager."),
+			title: "API key",
+			lead: "Paste the key or token. Start with ! to run a command that prints it, e.g. a password manager.",
 			initial: this.#state.apiKey,
 			placeholder: "!op read op://dev/github/token",
-			escape: t("go back"),
+			escape: "go back",
 			optional: false,
 		});
 	}
@@ -1454,11 +1453,11 @@ export class MCPAddWizard extends OverlayPanel {
 			testConfig.type === "stdio" ? [testConfig.command, ...(testConfig.args ?? [])].join(" ") : testConfig.url;
 		this.#asyncStep({
 			phase: PHASE_CONNECTION,
-			title: t("Trying the connection"),
+			title: "Trying the connection",
 			tone: "accent",
-			lead: t("omp connects once to see whether the server needs credentials."),
-			ansi: new Text(theme.fg("muted", t("Connecting to {0}…", `${sanitize(target)}`)), 0, 0),
-			native: [statusRow("busy", [span(t("Connecting to ")), span(replaceTabs(target), "mono")])],
+			lead: "omp connects once to see whether the server needs credentials.",
+			ansi: new Text(theme.fg("muted", `Connecting to ${sanitize(target)}…`), 0, 0),
+			native: [statusRow("busy", [span("Connecting to "), span(replaceTabs(target), "mono")])],
 		});
 		this.#requestRender();
 		/** After a delay, on to the scope step unless the user stepped back meanwhile. */
@@ -1480,11 +1479,11 @@ export class MCPAddWizard extends OverlayPanel {
 			// Success! No auth required
 			this.#asyncStep({
 				phase: PHASE_CONNECTION,
-				title: t("Connected"),
+				title: "Connected",
 				tone: "success",
-				lead: t("Next, choose where to save it."),
-				ansi: new Text(theme.fg("success", t("✓ No authentication required")), 0, 0),
-				native: [statusRow("ok", t("No sign-in needed"))],
+				lead: "Next, choose where to save it.",
+				ansi: new Text(theme.fg("success", "✓ No authentication required"), 0, 0),
+				native: [statusRow("ok", "No sign-in needed")],
 			});
 			this.#requestRender();
 			continueToScope(1000);
@@ -1542,14 +1541,14 @@ export class MCPAddWizard extends OverlayPanel {
 				const failureBody = new Container();
 				failureBody.addChild(new Text(sanitize(error instanceof Error ? error.message : String(error)), 0, 0));
 				failureBody.addChild(new Spacer(1));
-				failureBody.addChild(new Text(theme.fg("muted", t("Adding server anyway...")), 0, 0));
+				failureBody.addChild(new Text(theme.fg("muted", "Adding server anyway..."), 0, 0));
 				this.#asyncStep({
 					phase: PHASE_CONNECTION,
-					title: t("Couldn't connect"),
+					title: "Couldn't connect",
 					tone: "warning",
-					lead: t("omp saves the server anyway; fix it later with /mcp."),
+					lead: "omp saves the server anyway; fix it later with /mcp.",
 					ansi: failureBody,
-					native: [errorBlock(nativeErrorText(error)), statusRow("busy", t("Adding the server anyway…"))],
+					native: [errorBlock(nativeErrorText(error)), statusRow("busy", "Adding the server anyway…")],
 				});
 				this.#requestRender();
 				continueToScope(2000);
@@ -1642,8 +1641,8 @@ export class MCPAddWizard extends OverlayPanel {
 				phase: PHASE_AUTH,
 				title: "Sign-in isn't available",
 				tone: "error",
-				ansi: new Text(t("OAuth login cannot start without a host OAuth handler."), 0, 0),
-				native: [statusRow("error", t("OAuth login cannot start without a host OAuth handler."))],
+				ansi: new Text("OAuth login cannot start without a host OAuth handler.", 0, 0),
+				native: [statusRow("error", "OAuth login cannot start without a host OAuth handler.")],
 			});
 			this.#requestRender();
 			return;
@@ -1653,11 +1652,11 @@ export class MCPAddWizard extends OverlayPanel {
 		if (!this.#state.oauthAuthUrl || !this.#state.oauthTokenUrl) {
 			this.#asyncStep({
 				phase: PHASE_AUTH,
-				title: t("OAuth settings incomplete"),
+				title: "OAuth settings incomplete",
 				tone: "error",
-				ansi: new Text(t("Authorization and Token URLs are required."), 0, 0),
-				native: [statusRow("error", t("Authorization and token URLs are required."))],
-				footer: new Text(theme.fg("muted", t("[Press {0} to go back]", `${interruptKey()}`)), 0, 0),
+				ansi: new Text("Authorization and Token URLs are required.", 0, 0),
+				native: [statusRow("error", "Authorization and token URLs are required.")],
+				footer: new Text(theme.fg("muted", `[Press ${interruptKey()} to go back]`), 0, 0),
 			});
 			this.#requestRender();
 			return;
@@ -1665,25 +1664,25 @@ export class MCPAddWizard extends OverlayPanel {
 
 		// Show "Authenticating..." message
 		const authBody = new Container();
-		authBody.addChild(new Text(t("Launching OAuth flow..."), 0, 0));
-		authBody.addChild(new Text(theme.fg("muted", t("Browser will open automatically.")), 0, 0));
+		authBody.addChild(new Text("Launching OAuth flow...", 0, 0));
+		authBody.addChild(new Text(theme.fg("muted", "Browser will open automatically."), 0, 0));
 		authBody.addChild(new Spacer(1));
-		authBody.addChild(new Text(theme.fg("warning", t("If browser doesn't open, copy the URL from chat.")), 0, 0));
+		authBody.addChild(new Text(theme.fg("warning", "If browser doesn't open, copy the URL from chat."), 0, 0));
 		const authHost = URL.parse(this.#state.oauthAuthUrl)?.host;
 		this.#asyncStep({
 			phase: PHASE_AUTH,
-			title: t("Sign in to continue"),
+			title: "Sign in to continue",
 			tone: "accent",
-			lead: t("Approve access in your browser. If it didn't open, copy the link from the chat."),
+			lead: "Approve access in your browser. If it didn't open, copy the link from the chat.",
 			ansi: authBody,
 			native: [
 				statusRow(
 					"busy",
-					authHost ? [span(t("Waiting for ")), span(authHost, "mono"), span("…")] : t("Waiting for the browser…"),
+					authHost ? [span("Waiting for "), span(authHost, "mono"), span("…")] : "Waiting for the browser…",
 				),
 			],
-			footer: new Text(theme.fg("muted", t("(Press {0} to cancel)", `${interruptKey()}`)), 0, 0),
-			back: t("Stop waiting"),
+			footer: new Text(theme.fg("muted", `(Press ${interruptKey()} to cancel)`), 0, 0),
+			back: "Stop waiting",
 		});
 		this.#requestRender();
 
@@ -1718,21 +1717,21 @@ export class MCPAddWizard extends OverlayPanel {
 
 			// Show success message
 			const healthBody = new Container();
-			healthBody.addChild(new Text(theme.fg("muted", t("Running connection health check...")), 0, 0));
+			healthBody.addChild(new Text(theme.fg("muted", "Running connection health check..."), 0, 0));
 			const spinnerFrames = theme.spinnerFrames;
 			const initialFrame = spinnerFrames[0] ?? "|";
-			const healthText = new Text(theme.fg("muted", t("{0} Checking server connection...", `${initialFrame}`)), 0, 0);
+			const healthText = new Text(theme.fg("muted", `${initialFrame} Checking server connection...`), 0, 0);
 			healthBody.addChild(healthText);
-			const signedIn = statusRow("ok", t("Signed in"), "signed-in");
+			const signedIn = statusRow("ok", "Signed in", "signed-in");
 			const checks = (health: NativeNode) =>
 				node("col", { role: "omp.mcpAdd.checks", gap: "sm" }, [signedIn, health], "checks");
 			this.#asyncStep({
 				phase: PHASE_AUTH,
-				title: t("Checking the server"),
+				title: "Checking the server",
 				tone: "success",
-				lead: t("omp tries the new credentials before saving."),
+				lead: "omp tries the new credentials before saving.",
 				ansi: healthBody,
-				native: [checks(statusRow("busy", t("Waiting for the server to answer…"), "health"))],
+				native: [checks(statusRow("busy", "Waiting for the server to answer…", "health"))],
 			});
 
 			// The frame ticker only repaints; a native terminal animates the described spinner itself.
@@ -1743,7 +1742,7 @@ export class MCPAddWizard extends OverlayPanel {
 						healthText.setText(
 							theme.fg(
 								"muted",
-								t("{0} Checking server connection...", `${spinnerFrames[spinnerIndex % spinnerFrames.length]}`),
+								`${spinnerFrames[spinnerIndex % spinnerFrames.length]} Checking server connection...`,
 							),
 						);
 						spinnerIndex++;
@@ -1757,7 +1756,7 @@ export class MCPAddWizard extends OverlayPanel {
 				try {
 					const { promise: timeoutPromise, reject: timeoutReject } = Promise.withResolvers<never>();
 					const timer = setTimeout(
-						() => timeoutReject(new Error(t("Health check timed out after 10 seconds"))),
+						() => timeoutReject(new Error("Health check timed out after 10 seconds")),
 						10_000,
 					);
 					try {
@@ -1777,14 +1776,14 @@ export class MCPAddWizard extends OverlayPanel {
 
 			clearInterval(spinner);
 			if (healthPassed) {
-				healthText.setText(theme.fg("success", t("✓ Health check passed")));
-				this.#setNativeBody([checks(statusRow("ok", t("The server answers"), "health"))]);
+				healthText.setText(theme.fg("success", "✓ Health check passed"));
+				this.#setNativeBody([checks(statusRow("ok", "The server answers", "health"))]);
 			} else {
-				healthText.setText(theme.fg("warning", t("⚠ Health check failed (will still save config)")));
+				healthText.setText(theme.fg("warning", "⚠ Health check failed (will still save config)"));
 				healthBody.addChild(new Spacer(1));
 				healthBody.addChild(new Text(theme.fg("muted", healthError), 0, 0));
 				this.#setNativeBody([
-					checks(statusRow("warn", t("The server didn't answer; omp saves it anyway"), "health")),
+					checks(statusRow("warn", "The server didn't answer; omp saves it anyway", "health")),
 					errorBlock(nativeHealthError),
 				]);
 			}
@@ -1808,13 +1807,13 @@ export class MCPAddWizard extends OverlayPanel {
 			const ansiMessage = sanitize(error instanceof Error ? error.message : String(error));
 			let tip: string | undefined;
 			if (cancelled) {
-				tip = t("Try again reopens the browser.");
+				tip = "Try again reopens the browser.";
 			} else if (ansiMessage.includes("timeout") || ansiMessage.includes("timed out")) {
-				tip = t("Complete authorization faster next time.");
+				tip = "Complete authorization faster next time.";
 			} else if (ansiMessage.includes("Invalid OAuth URLs")) {
-				tip = t("Check that the OAuth URLs are correct.");
+				tip = "Check that the OAuth URLs are correct.";
 			} else if (ansiMessage.includes("ECONNREFUSED")) {
-				tip = t("Verify the OAuth server is accessible.");
+				tip = "Verify the OAuth server is accessible.";
 			}
 			this.#oauthFailure = { cancelled, message: nativeErrorText(error), ansiMessage, tip };
 

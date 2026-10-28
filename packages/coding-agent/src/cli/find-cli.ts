@@ -2,7 +2,6 @@
  * `omp find`: run the semantic `find` tool's cascade from the shell. Same
  * search as the tool, printed as a ranked, colored digest (or JSON).
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { formatBytes, formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -41,19 +40,19 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 	console.log("");
 	if (coverage === "unavailable") {
 		console.log(
-			`${chalk.red(t("find unavailable"))} ${chalk.dim(t("for \"{1}\" in {0}: all {2} judge requests failed, nothing was judged; use grep", `${rel}`, `${cmd.query}`, `${stats.requests}`))}`,
+			`${chalk.red("find unavailable")} ${chalk.dim(`for "${cmd.query}" in ${rel}: all ${stats.requests} judge requests failed, nothing was judged; use grep`)}`,
 		);
 	} else if (hits.length === 0) {
 		console.log(
-			`${chalk.yellow(t("no hits"))} ${chalk.dim(t("for \"{1}\" in {0} · τ {2}", `${rel}`, `${cmd.query}`, `${threshold.toFixed(2)}`))}`,
+			`${chalk.yellow("no hits")} ${chalk.dim(`for "${cmd.query}" in ${rel} · τ ${threshold.toFixed(2)}`)}`,
 		);
 	} else {
 		console.log(
-			`${chalk.bold(t("{0} hit(s)", `${hits.length}`))} ${chalk.dim(t("for \"{1}\" in {0} · τ {2} · strongest first", `${rel}`, `${cmd.query}`, `${threshold.toFixed(2)}`))}`,
+			`${chalk.bold(`${hits.length} hit(s)`)} ${chalk.dim(`for "${cmd.query}" in ${rel} · τ ${threshold.toFixed(2)} · strongest first`)}`,
 		);
 		console.log("");
 		for (const hit of hits) {
-			const coverage = hit.truncated ? t("{0} lines judged, partial", `${hit.linesSeen}`) : t("{0} lines judged", `${hit.linesSeen}`);
+			const coverage = hit.truncated ? `${hit.linesSeen} lines judged, partial` : `${hit.linesSeen} lines judged`;
 			console.log(
 				`${gauge(hit.contentScore)} ${scoreStyle(hit.contentScore)(hit.contentScore.toFixed(2))} ${chalk.cyan(hit.rel)} ${chalk.dim(coverage)}`,
 			);
@@ -66,12 +65,12 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 		}
 	}
 	if (coverage === "partial") {
-		console.log(chalk.yellow(t("partial: {1} of {0} judge requests failed", `${stats.requests}`, `${stats.failed}`)));
+		console.log(chalk.yellow(`partial: ${stats.failed} of ${stats.requests} judge requests failed`));
 	}
 	console.log("");
 	console.log(
 		chalk.dim(
-			t("listed {0} · judged {1} · read {2} files ({3}) · {4} requests{5} · {6} tokens · ${7} · {8} wall / {9} api", `${stats.listed}`, `${stats.judged}`, `${stats.filesRead}`, `${formatBytes(stats.fileBytes)}`, `${stats.requests}`, `${stats.unanswered > 0 ? t(" · {0} unanswered", `${stats.unanswered}`) : ""}`, `${formatNumber(stats.inputTokens)}`, `${stats.cost.toFixed(4)}`, `${formatDuration(elapsedMs)}`, `${formatDuration(stats.apiMs)}`),
+			`listed ${stats.listed} · judged ${stats.judged} · read ${stats.filesRead} files (${formatBytes(stats.fileBytes)}) · ${stats.requests} requests${stats.unanswered > 0 ? ` · ${stats.unanswered} unanswered` : ""} · ${formatNumber(stats.inputTokens)} tokens · $${stats.cost.toFixed(4)} · ${formatDuration(elapsedMs)} wall / ${formatDuration(stats.apiMs)} api`,
 		),
 	);
 	for (const failure of stats.failures) console.log(chalk.yellow(failure));
@@ -80,7 +79,7 @@ function printReport(cmd: FindCommandArgs, rel: string, result: CascadeResult, e
 /** Run one search and print it. Exits non-zero on a bad root or when every judge request failed. */
 export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 	if (!cmd.query.trim()) {
-		console.error(chalk.red(t("Error: query is required")));
+		console.error(chalk.red("Error: query is required"));
 		process.exit(1);
 	}
 	const log = cmd.quiet ? () => {} : (message: string) => console.error(chalk.dim(message));
@@ -92,14 +91,14 @@ export async function runFindCommand(cmd: FindCommandArgs): Promise<void> {
 		root = await resolveSearchRoot(filesystem, cmd.path, cwd);
 	} catch (error) {
 		if (!(error instanceof ToolError)) throw error;
-		console.error(chalk.red(t("Error: {0}", `${error.message}`)));
+		console.error(chalk.red(`Error: ${error.message}`));
 		process.exit(1);
 	}
 
 	// Settings and extensions belong to the searched project; a file or URL
 	// scope has none of its own, so it keeps the caller's.
 	const baseCwd = root.type === "directory" && !isUrlPath(root.path) ? root.path : cwd;
-	log(t("resolving judge"));
+	log("resolving judge");
 	const { judge, close } = await openStandaloneJudge(baseCwd, "find");
 	try {
 		const started = performance.now();

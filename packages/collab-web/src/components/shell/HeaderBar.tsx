@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { SessionHeader, SessionState } from "@oh-my-pi/pi-wire";
 import { LogOut, PanelRight } from "lucide-react";
 import type { ReactNode } from "react";
@@ -9,11 +8,11 @@ import { OmpMark } from "./OmpMark";
 import { ThemeToggle } from "./ThemeToggle";
 
 const PHASE_LABEL: Record<ConnectionPhase, string> = {
-	connecting: t("connecting"),
-	waiting: t("waiting"),
-	live: t("live"),
-	reconnecting: t("reconnecting"),
-	ended: t("ended"),
+	connecting: "Connecting",
+	waiting: "Joining",
+	live: "Live",
+	reconnecting: "Reconnecting",
+	ended: "Ended",
 };
 
 export interface HeaderBarProps {
@@ -38,7 +37,7 @@ export const HeaderBar = memo(function HeaderBar({
 	onToggleRail,
 	onLeave,
 }: HeaderBarProps): ReactNode {
-	const title = header?.title ?? state?.sessionName ?? t("session");
+	const title = header?.title ?? state?.sessionName ?? "session";
 	const usage = state?.contextUsage;
 	let pct: number | null = null;
 	if (usage) {
@@ -52,7 +51,7 @@ export const HeaderBar = memo(function HeaderBar({
 	return (
 		<header className="sh-header">
 			<div className="sh-header-left">
-				<span className="sh-brand" aria-label={t("omp collab")}>
+				<span className="sh-brand" aria-label="omp collab">
 					<OmpMark />
 					<span className="sh-brand-slash">/</span>
 				</span>
@@ -66,19 +65,21 @@ export const HeaderBar = memo(function HeaderBar({
 				)}
 			</div>
 			<div className="sh-header-right">
-				<span className={`sh-status sh-status-${phase}`} title={t("connection: {0}", `${PHASE_LABEL[phase]}`)}>
+				<span className={`sh-status sh-status-${phase}`} title={`connection: ${phase}`}>
 					<span className={`sh-dot sh-dot-${phase}`} />
 					{PHASE_LABEL[phase]}
 				</span>
 				{readOnly && (
-					<span className="sh-chip" title={t("you joined with a read-only link — watching only")}>{t("read-only")}</span>
+					<span className="sh-chip" title="you joined with a read-only link — watching only">
+						read-only
+					</span>
 				)}
 				{state?.model && <span className="sh-chip sh-chip-meta">{state.model.name}</span>}
 				{state?.thinkingLevel && <span className="sh-chip sh-chip-meta">{state.thinkingLevel}</span>}
 				{pct != null && (
 					<span
 						className={pct > 80 ? "sh-gauge sh-gauge-warn" : "sh-gauge"}
-						title={t("context · {0}", `${fmtPercent(pct)}`)}
+						title={`context · ${fmtPercent(pct)}`}
 					>
 						<span className="sh-gauge-track">
 							<span className="sh-gauge-fill" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
@@ -92,7 +93,7 @@ export const HeaderBar = memo(function HeaderBar({
 							<span
 								key={`${p.name}:${i}`}
 								className={p.role === "host" ? "sh-avatar sh-avatar-host" : "sh-avatar"}
-								title={`${p.name} · ${p.role === "host" ? t("sh-avatar sh-avatar-host") : t("sh-avatar")}${p.readOnly ? t(" · view-only") : ""}`}
+								title={`${p.name} · ${p.role}${p.readOnly ? " · view-only" : ""}`}
 							>
 								{(p.name[0] ?? "?").toUpperCase()}
 							</span>
@@ -104,12 +105,12 @@ export const HeaderBar = memo(function HeaderBar({
 					type="button"
 					className={railOpen ? "sh-btn sh-btn-icon sh-btn-on" : "sh-btn sh-btn-icon"}
 					onClick={onToggleRail}
-					title={railOpen ? t("hide agents") : t("show agents")}
+					title={railOpen ? "hide agents" : "show agents"}
 				>
 					<PanelRight size={14} />
 					{subCount > 0 && <span className="sh-badge">{subCount}</span>}
 				</button>
-				<button type="button" className="sh-btn sh-btn-icon" onClick={onLeave} title={t("leave session")}>
+				<button type="button" className="sh-btn sh-btn-icon" onClick={onLeave} title="leave session">
 					<LogOut size={14} />
 				</button>
 			</div>

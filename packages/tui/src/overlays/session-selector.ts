@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	Container,
@@ -127,15 +126,15 @@ const PREVIEW_EXCERPT_CHARS = 1200;
 /** The preview follows the selection once it rests this long (holding ↓ doesn't flood the wire). */
 const PREVIEW_SETTLE_MS = 60;
 const DAY_MS = 86_400_000;
-const PINNED_GROUP = { id: "pinned", label: localize("Pinned") };
+const PINNED_GROUP = { id: "pinned", label: "Pinned" };
 
 /** Day group of a session's last modification, relative to local midnight today. */
 function sessionDayGroup(modified: Date, startOfToday: number): { id: string; label: string } {
 	const at = modified.getTime();
-	if (at >= startOfToday) return { id: "today", label: localize("Today") };
-	if (at >= startOfToday - DAY_MS) return { id: "yesterday", label: localize("Yesterday") };
-	if (at >= startOfToday - 6 * DAY_MS) return { id: "week", label: localize("This week") };
-	return { id: "earlier", label: localize("Earlier") };
+	if (at >= startOfToday) return { id: "today", label: "Today" };
+	if (at >= startOfToday - DAY_MS) return { id: "yesterday", label: "Yesterday" };
+	if (at >= startOfToday - 6 * DAY_MS) return { id: "week", label: "This week" };
+	return { id: "earlier", label: "Earlier" };
 }
 
 /** A cwd as dim-prefix / strong-tail path spans. */
@@ -173,10 +172,10 @@ function sessionPreview(session: SessionSelectorEntry, forkedFrom: string | unde
 			["Created", created && pickerDate(created)],
 			["Modified", pickerDate(session.modified)],
 			["Size", formatBytes(session.size)],
-			[localize("Status"), status && [status]],
-			[localize("Forked from"), forkedFrom],
+			["Status", status && [status]],
+			["Forked from", forkedFrom],
 		]),
-		conversation.length > 0 && node("section", { head: localize("Conversation") }, conversation),
+		conversation.length > 0 && node("section", { head: "Conversation" }, conversation),
 	]);
 }
 
@@ -260,8 +259,8 @@ interface SessionPickerMessage {
 }
 
 const SCOPE_TABS: readonly { id: "folder" | "all"; label: string }[] = [
-	{ id: "folder", label: localize("Current folder") },
-	{ id: "all", label: localize("All projects") },
+	{ id: "folder", label: "Current folder" },
+	{ id: "all", label: "All projects" },
 ];
 
 /** Returns the IDs of sessions whose recorded prompts match a query, best first. */
@@ -980,7 +979,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const title = session.title ? plainText(session.title).trim() : "";
 		const badges: { text: string; tone?: TspTone; title?: string }[] = [];
 		if (session.parentSessionPath) {
-			badges.push({ text: "fork", title: localize("Forked from “{0}”", `${this.parentLabel(session.parentSessionPath)}`) });
+			badges.push({ text: "fork", title: `Forked from “${this.parentLabel(session.parentSessionPath)}”` });
 		}
 		if (session.path === currentPath) badges.push({ text: "current", tone: "accent" });
 		const when = pickerDate(session.modified);
@@ -1027,7 +1026,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (!base) continue;
 			add.push(
 				now.has(key)
-					? { ...base, badges: [...(base.badges ?? []), { text: "history", title: localize("Matched in prompt history") }] }
+					? { ...base, badges: [...(base.badges ?? []), { text: "history", title: "Matched in prompt history" }] }
 					: base,
 			);
 		}
@@ -1065,8 +1064,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const memo = this.#listNative;
 		if (memo?.items === items.items && memo.selected === selected && memo.query === query) return memo.node;
 		const empty: TspText = this.#showCwd
-			? [span(localize("No sessions found\u0004packages/tui/src/overlays/session-selector.ts:SessionList.describeList.empty"), "muted")]
-			: [span(localize("No sessions in current folder. Press "), "muted"), span("tab", "key"), span(localize(" to view all."), "muted")];
+			? [span("No sessions found", "muted")]
+			: [span("No sessions in current folder. Press ", "muted"), span("tab", "key"), span(" to view all.", "muted")];
 		const list = node(
 			"list",
 			{ selected: selected ?? null, filter: query.trim() || undefined, empty, virtual: true },
@@ -1132,12 +1131,12 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 		if (this.#menu.visibleItems.length === 0) {
 			if (this.#showCwd) {
-				lines.push(truncateToWidth(theme.fg("muted", localize("No sessions found\u0004packages/tui/src/overlays/session-selector.ts:SessionList.describeList.empty")), width));
+				lines.push(truncateToWidth(theme.fg("muted", "No sessions found"), width));
 			} else {
 				// "Current folder" scope - hint to try "all"
 				lines.push(
 					truncateToWidth(
-						theme.fg("muted", localize("No sessions in current folder. Press {0} to view all.", `${formatKeyHint("tab")}`)),
+						theme.fg("muted", `No sessions in current folder. Press ${formatKeyHint("tab")} to view all.`),
 						width,
 					),
 				);
@@ -1453,7 +1452,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		onExit: () => void,
 		options: SessionSelectorOptions<T> = {},
 	) {
-		super(options.title ?? localize("Resume Session"));
+		super(options.title ?? "Resume Session");
 
 		this.#messageContainer = new Container();
 		this.#onDelete = options.onDelete;
@@ -1465,7 +1464,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#globalSessions = options.allSessions ?? null;
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
-		this.#title = options.title ?? localize("Resume Session");
+		this.#title = options.title ?? "Resume Session";
 		this.#actionLabel = options.actionLabel ?? "Resume";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
@@ -1535,8 +1534,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				if (!this.#loadAllSessions) return;
 				this.#toggling = true;
 				this.#messageContainer.clear();
-				this.#messageContainer.addChild(new Text(theme.fg("muted", localize("Loading all projects…")), 0, 0));
-				this.#message = { kind: "loading", text: localize("Loading all projects…") };
+				this.#messageContainer.addChild(new Text(theme.fg("muted", "Loading all projects…"), 0, 0));
+				this.#message = { kind: "loading", text: "Loading all projects…" };
 				this.#onRequestRender?.();
 				try {
 					global = await this.#loadAllSessions();
@@ -1628,7 +1627,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			closeDialog();
 		};
 		this.#confirmationDialog = new HookSelectorComponent(
-			localize("Delete session?\n{0}", `${displayName}`),
+			`Delete session?\n${displayName}`,
 			["Yes", "No"],
 			answer,
 			closeDialog,
@@ -1781,26 +1780,26 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
 		const actions = [pickerAction("resume", this.#actionLabel, "enter", { primary: true })];
-		if (this.#onDelete) actions.push(pickerAction("delete", localize("Delete"), "backspace"));
+		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "backspace"));
 		if (toggle) {
-			actions.push(pickerAction("scope", this.#scope === "all" ? localize("This folder") : localize("All projects"), "tab"));
+			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
 		}
 		actions.push(
-			pickerAction("close", localize("Close"), boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
+			pickerAction("close", "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
 		);
 		const folder = this.#scopeLabel === false ? undefined : (this.#scopeLabel ?? path.basename(getProjectDir()));
 		const title = this.#pickerTitle;
 		const placeholder =
 			loading || this.#scope === "all"
-				? localize("Search all sessions…")
+				? "Search all sessions…"
 				: folder && !title
-					? localize("Search sessions in {0}…", `${folder}`)
-					: localize("Search sessions…");
+					? `Search sessions in ${folder}…`
+					: "Search sessions…";
 		const result = picker(
 			{
 				...(title ? { title, ...(folder ? { subtitle: folder } : {}) } : {}),
 				icon: "history",
-				noun: localize("sessions"),
+				noun: "sessions",
 				size: this.#standalone ? "screen" : "lg",
 				layout: "cards",
 				preview: "side",
@@ -1821,12 +1820,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				actions,
 				state: loading ? "loading" : errorOpen ? "error" : "ready",
 				...(loading || errorOpen ? { message: message!.text } : {}),
-				empty: this.#scope === "all" || !toggle ? localize("No sessions yet") : localize("No sessions in this folder yet"),
+				empty: this.#scope === "all" || !toggle ? "No sessions yet" : "No sessions in this folder yet",
 				confirm: choice
 					? {
-							text: localize("Delete “{0}”? This removes the session file.", `${sessionLabel(choice.session)}`),
+							text: `Delete “${sessionLabel(choice.session)}”? This removes the session file.`,
 							act: "delete-confirm",
-							label: localize("Delete"),
+							label: "Delete",
 						}
 					: null,
 			},

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 /**
@@ -24,41 +23,41 @@ export default class Ttsr extends Command {
 	static description = commandHelp.description;
 	static args = {
 		action: Args.string({
-			description: t("TTSR action"),
+			description: "TTSR action",
 			required: false,
 			options: TTSR_ACTIONS,
 		}),
 		snippet: Args.string({
-			description: t("Inline snippet text to test (ttsr test) or directory to scan (ttsr scan)"),
+			description: "Inline snippet text to test (ttsr test) or directory to scan (ttsr scan)",
 			required: false,
 		}),
 	};
 
 	static flags = {
-		file: Flags.string({ description: t("Snippet file path, or - for stdin (ttsr test)") }),
+		file: Flags.string({ description: "Snippet file path, or - for stdin (ttsr test)" }),
 		rule: Flags.string({
 			char: "r",
-			description: t("Rule markdown file to test in isolation (skips project rule loading)"),
+			description: "Rule markdown file to test in isolation (skips project rule loading)",
 		}),
 		source: Flags.string({
-			description: t("Match source: text, thinking, or tool (inferred from --file when omitted)"),
+			description: "Match source: text, thinking, or tool (inferred from --file when omitted)",
 			options: TTSR_SOURCES,
 		}),
 		tool: Flags.string({
-			description: t("Tool name when source is tool (e.g. edit, write); defaults to edit"),
+			description: "Tool name when source is tool (e.g. edit, write); defaults to edit",
 		}),
 		path: Flags.string({
 			char: "p",
-			description: t("Candidate file path for scope/glob matching and AST language inference"),
+			description: "Candidate file path for scope/glob matching and AST language inference",
 		}),
 		agent: Flags.string({
-			description: t("Agent name to evaluate rule `agents` scoping as (ttsr test); defaults to main"),
+			description: "Agent name to evaluate rule `agents` scoping as (ttsr test); defaults to main",
 		}),
-		verbose: Flags.boolean({ char: "v", description: t("Show every evaluated rule, not just triggered ones") }),
-		json: Flags.boolean({ description: t("Output JSON\u0004packages/coding-agent/src/commands/ssh.ts:SSH.flags.json.description") }),
-		"no-gitignore": Flags.boolean({ description: t("Include files excluded by .gitignore (ttsr scan)") }),
+		verbose: Flags.boolean({ char: "v", description: "Show every evaluated rule, not just triggered ones" }),
+		json: Flags.boolean({ description: "Output JSON" }),
+		"no-gitignore": Flags.boolean({ description: "Include files excluded by .gitignore (ttsr scan)" }),
 		"max-bytes": Flags.integer({
-			description: t("Maximum file size to scan in bytes; 0 disables the limit (ttsr scan)"),
+			description: "Maximum file size to scan in bytes; 0 disables the limit (ttsr scan)",
 		}),
 	};
 

@@ -2,7 +2,6 @@
  * Manage configuration settings.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { configHelp as commandHelp } from "../cli/command-help";
 import { type ConfigAction, type ConfigCommandArgs, runConfigCommand } from "../cli/config-cli";
@@ -14,23 +13,23 @@ export default class Config extends Command {
 	static description = commandHelp.description;
 	static args = {
 		action: Args.string({
-			description: t("Config action"),
+			description: "Config action",
 			required: false,
 			options: ACTIONS,
 		}),
 		key: Args.string({
-			description: t("Setting key"),
+			description: "Setting key",
 			required: false,
 		}),
 		value: Args.string({
-			description: t("Value (for set/reset)"),
+			description: "Value (for set/reset)",
 			required: false,
 			multiple: true,
 		}),
 	};
 
 	static flags = {
-		json: Flags.boolean({ description: t("Output JSON") }),
+		json: Flags.boolean({ description: "Output JSON" }),
 	};
 
 	async run(): Promise<void> {

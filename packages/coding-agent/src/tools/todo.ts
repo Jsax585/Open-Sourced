@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type TodoStatus,
 	type TodoOperation,
@@ -713,7 +712,7 @@ function formatSummary(phases: TodoPhase[], errors: string[], readOnly = false):
 export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 	readonly name = "todo";
 	readonly approval = "read" as const;
-	readonly label = localize("Todo");
+	readonly label = "Todo";
 	readonly summary = "Write a structured todo list to track progress within a session";
 	readonly description: string;
 	readonly parameters = todoSchema;

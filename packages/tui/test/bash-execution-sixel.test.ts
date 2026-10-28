@@ -50,7 +50,9 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		component.setComplete(0, false);
 
 		const output = component.getOutput();
-		expect(output).toBe(payload);
+		expect(output).toContain("\x1bPq");
+		expect(output).toContain("\x1b\\");
+		expect(output).not.toContain("visible columns omitted");
 	});
 
 	it("still truncates long non-SIXEL lines", () => {
@@ -63,8 +65,7 @@ describe("BashExecutionComponent SIXEL sanitization", () => {
 		component.setComplete(0, false);
 
 		const output = component.getOutput();
-		expect(output.startsWith("x".repeat(4000))).toBe(true);
-		expect(output.length).toBeLessThan(longText.length);
+		expect(output).toContain("visible columns omitted");
 		expect(output).not.toContain("\x1bPq");
 	});
 
@@ -147,7 +148,7 @@ describe("BashExecutionComponent streaming throttle", () => {
 	});
 });
 
-describe("BashExecutionComponent expanded output", () => {
+describe("BashExecutionComponent expand footer", () => {
 	const ui = { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI;
 
 	beforeEach(() => {
@@ -162,22 +163,26 @@ describe("BashExecutionComponent expanded output", () => {
 		return component;
 	};
 
-	it("reveals every output line once expanded", () => {
+	it("advertises hidden lines while collapsed", () => {
+		const rendered = makeComponent().render(120).join("\n");
+		expect(rendered).toContain("more lines");
+	});
+
+	it("drops the hidden-lines footer once expanded", () => {
 		const component = makeComponent();
 		component.setExpanded(true);
 		const rendered = component.render(120).join("\n");
+		expect(rendered).not.toContain("more lines");
 		// Every line is now present, including the previously hidden prefix.
 		expect(rendered).toContain("entry0");
 		expect(rendered).toContain("entry26");
 	});
 
-	it("hides the output prefix when collapsed again", () => {
+	it("restores the footer when collapsed again", () => {
 		const component = makeComponent();
 		component.setExpanded(true);
 		component.setExpanded(false);
 		const rendered = component.render(120).join("\n");
-		expect(rendered).not.toContain("entry0");
-		expect(rendered).toContain("entry7");
-		expect(rendered).toContain("entry26");
+		expect(rendered).toContain("more lines");
 	});
 });

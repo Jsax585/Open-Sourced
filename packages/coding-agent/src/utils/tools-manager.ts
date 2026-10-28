@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -189,13 +188,13 @@ export async function getLatestVersion(repo: string, signal?: AbortSignal): Prom
 		});
 	} catch (err) {
 		if (err instanceof Error && err.name === "AbortError") {
-			throw new Error(t("GitHub API request timed out"));
+			throw new Error("GitHub API request timed out");
 		}
 		throw err;
 	}
 
 	if (!response.ok) {
-		throw new Error(t("GitHub API error: {0}", `${response.status}`));
+		throw new Error(`GitHub API error: ${response.status}`);
 	}
 
 	const data = (await response.json()) as { tag_name: string };
@@ -221,9 +220,9 @@ export async function downloadFile(url: string, dest: string, options: DownloadF
 			signal: downloadSignal,
 		});
 		if (!response.ok) {
-			throw new Error(t("Failed to download: {0}", `${response.status}`));
+			throw new Error(`Failed to download: ${response.status}`);
 		} else if (!response.body) {
-			throw new Error(t("No response body"));
+			throw new Error("No response body");
 		}
 		const length = Number(response.headers.get("content-length"));
 		const total = Number.isFinite(length) && length > 0 ? length : undefined;
@@ -240,7 +239,7 @@ export async function downloadFile(url: string, dest: string, options: DownloadF
 		);
 	} catch (err) {
 		if (isAbortLikeError(err)) {
-			throw new Error(t("Download timed out: {0}", `${url}`));
+			throw new Error(`Download timed out: ${url}`);
 		}
 		throw err;
 	}
@@ -253,7 +252,7 @@ async function downloadTool(
 	tracker: DownloadTracker,
 ): Promise<string> {
 	const config = TOOLS[tool];
-	if (!config) throw new Error(t("Unknown tool: {0}", `${tool}`));
+	if (!config) throw new Error(`Unknown tool: ${tool}`);
 
 	const plat = os.platform();
 	const architecture = os.arch();
@@ -264,7 +263,7 @@ async function downloadTool(
 	// Get asset name for this platform
 	const assetName = config.getAssetName(version, plat, architecture);
 	if (!assetName) {
-		throw new Error(t("Unsupported platform: {0}/{1}", `${plat}`, `${architecture}`));
+		throw new Error(`Unsupported platform: ${plat}/${architecture}`);
 	}
 
 	// Create tools directory
@@ -287,20 +286,20 @@ async function downloadTool(
 	// Download archive
 	const archivePath = path.join(TOOLS_DIR, assetName);
 	await downloadFile(downloadUrl, archivePath, { signal, onProgress });
-	tracker.update({ detail: t("extracting") });
+	tracker.update({ detail: "extracting" });
 
 	// Extract
 	const tmp = await TempDir.create("@omp-tools-extract-");
 
 	try {
 		if (!assetName.endsWith(".tar.gz") && !assetName.endsWith(".zip")) {
-			throw new Error(t("Unsupported archive format: {0}", `${assetName}`));
+			throw new Error(`Unsupported archive format: ${assetName}`);
 		}
 
 		try {
 			await extractArchive(archivePath, tmp.path());
 		} catch (err) {
-			throw new Error(t("Failed to extract {0}: {1}", `${assetName}`, `${err instanceof Error ? err.message : String(err)}`));
+			throw new Error(`Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`);
 		}
 
 		// Find the binary in extracted files
@@ -316,7 +315,7 @@ async function downloadTool(
 		if (fs.existsSync(extractedBinary)) {
 			await fs.promises.rename(extractedBinary, binaryPath);
 		} else {
-			throw new Error(t("Binary not found in archive: {0}", `${extractedBinary}`));
+			throw new Error(`Binary not found in archive: ${extractedBinary}`);
 		}
 
 		// Make executable (Unix only)

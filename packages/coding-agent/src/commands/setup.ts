@@ -2,7 +2,6 @@
  * Run onboarding setup or install dependencies for optional features.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Args, CliUsageError, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { parseArgs } from "../cli/args";
 import { setupHelp as commandHelp } from "../cli/command-help";
@@ -24,7 +23,7 @@ export async function runOnboardingSetup(deps: OnboardingSetupDependencies = {})
 	const stdinIsTTY = deps.stdinIsTTY ?? process.stdin.isTTY;
 	const stdoutIsTTY = deps.stdoutIsTTY ?? process.stdout.isTTY;
 	if (!stdinIsTTY || !stdoutIsTTY) {
-		(deps.writeStderr ?? (text => process.stderr.write(text)))(t("omp setup requires an interactive TTY.\n"));
+		(deps.writeStderr ?? (text => process.stderr.write(text)))("omp setup requires an interactive TTY.\n");
 		(deps.exit ?? process.exit)(1);
 		return;
 	}
@@ -35,15 +34,15 @@ export default class Setup extends Command {
 	static description = commandHelp.description;
 	static args = {
 		component: Args.string({
-			description: t("Optional component to install"),
+			description: "Optional component to install",
 			required: false,
 			options: COMPONENTS,
 		}),
 	};
 
 	static flags = {
-		check: Flags.boolean({ char: "c", description: t("Check if dependencies are installed") }),
-		json: Flags.boolean({ description: t("Output status as JSON") }),
+		check: Flags.boolean({ char: "c", description: "Check if dependencies are installed" }),
+		json: Flags.boolean({ description: "Output status as JSON" }),
 	};
 
 	async run(): Promise<void> {
@@ -53,7 +52,7 @@ export default class Setup extends Command {
 				// A check/JSON request with no COMPONENT has nothing to probe. Emit a
 				// usage error on stderr (exit 1) rather than printing help to stdout at
 				// exit 0, which would mask failures in scripted `--json` health checks.
-				throw new CliUsageError(t("setup --check/--json requires a COMPONENT (python|speech)"));
+				throw new CliUsageError("setup --check/--json requires a COMPONENT (python|speech)");
 			}
 			await runOnboardingSetup();
 			return;

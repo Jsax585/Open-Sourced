@@ -30,7 +30,6 @@
  * non-interactive environments where the consent dialog never fires. Device
  * execution is never blocked on the network and never throws.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -127,7 +126,7 @@ function normalizeGrievance(rawTool: string, rawReport: string): { tool: string;
 function parseReportIssueBody(text: string): { tool: string; report: string } {
 	const body = text.trim();
 	if (!body) {
-		throw new ToolError(t("Empty report. {0}", `${reportIssueDeviceUsage()}`));
+		throw new ToolError(`Empty report. ${reportIssueDeviceUsage()}`);
 	}
 	const firstNewline = body.indexOf("\n");
 	if (firstNewline >= 0) {
@@ -143,7 +142,7 @@ function parseReportIssueBody(text: string): { tool: string; report: string } {
 		const report = body.slice(colon + 1).trim();
 		if (tool && report) return normalizeGrievance(tool, report);
 	}
-	throw new ToolError(t("Invalid report format. {0}", `${reportIssueDeviceUsage()}`));
+	throw new ToolError(`Invalid report format. ${reportIssueDeviceUsage()}`);
 }
 
 /**
@@ -672,7 +671,7 @@ export async function dispatchReportIssueDevice(
 		logger.error("Failed to record tool issue", { error });
 	}
 	return {
-		result: { content: [{ type: "text", text: t("Noted, thanks!") }] },
+		result: { content: [{ type: "text", text: "Noted, thanks!" }] },
 		xdev: { tool: REPORT_ISSUE_DEVICE_NAME, mode: "execute", args: { report: text.trim() } },
 	};
 }

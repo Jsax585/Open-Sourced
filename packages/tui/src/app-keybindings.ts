@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // Subpaths, not the `@oh-my-pi/pi-utils` barrel: the barrel loads the native
@@ -92,181 +91,181 @@ export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
 	"app.interrupt": {
 		defaultKeys: "escape",
-		description: t("Interrupt current operation"),
+		description: "Interrupt current operation",
 	},
 	"app.clear": {
 		defaultKeys: "ctrl+c",
-		description: t("Clear screen or cancel"),
+		description: "Clear screen or cancel",
 	},
 	"app.exit": {
 		defaultKeys: "ctrl+d",
-		description: t("Exit application"),
+		description: "Exit application",
 	},
 	"app.suspend": {
 		defaultKeys: "ctrl+z",
-		description: t("Suspend application"),
+		description: "Suspend application",
 	},
 	"app.display.reset": {
 		defaultKeys: "alt+l",
-		description: t("Reset terminal display"),
+		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
 		defaultKeys: "shift+tab",
-		description: t("Cycle thinking level"),
+		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
-		description: t("Toggle thinking mode"),
+		description: "Toggle thinking mode",
 	},
 	"app.model.cycleForward": {
 		defaultKeys: "ctrl+p",
-		description: t("Cycle to next model"),
+		description: "Cycle to next model",
 	},
 	"app.model.cycleBackward": {
 		defaultKeys: "shift+ctrl+p",
-		description: t("Cycle to previous model"),
+		description: "Cycle to previous model",
 	},
 	"app.model.select": {
 		defaultKeys: "alt+m",
-		description: t("Select model"),
+		description: "Select model",
 	},
 	"app.model.selectTemporary": {
 		defaultKeys: "alt+p",
-		description: t("Select temporary model for current session"),
+		description: "Select temporary model for current session",
 	},
 	"app.tools.expand": {
 		defaultKeys: "ctrl+o",
-		description: t("Expand tools"),
+		description: "Expand tools",
 	},
 	"app.tools.toggleVisibility": {
 		defaultKeys: "ctrl+shift+o",
-		description: t("Show or hide tool activity"),
+		description: "Show or hide tool activity",
 	},
 	"app.ask.hide": {
 		defaultKeys: "alt+h",
-		description: t("Hide or show a pending ask dialog"),
+		description: "Hide or show a pending ask dialog",
 	},
 	"app.approval.approve": {
 		// A chord, not Enter: an Enter typed for the composer as the prompt appears must not approve.
 		// Ctrl+Q backs up Ctrl+Enter, which Windows Terminal cannot deliver (#1903).
 		defaultKeys: ["ctrl+enter", "ctrl+q"],
-		description: t("Approve a pending tool call"),
+		description: "Approve a pending tool call",
 	},
 	"app.editor.external": {
 		defaultKeys: "ctrl+g",
-		description: t("Open external editor"),
+		description: "Open external editor",
 	},
 	"app.local.open": {
 		defaultKeys: "alt+g",
-		description: t("Open a local:// file in external editor"),
+		description: "Open a local:// file in external editor",
 	},
 	"app.message.followUp": {
 		// Ctrl+Enter is preserved for terminals that deliver it (Kitty/iTerm2/WezTerm/Ghostty),
 		// but Windows Terminal does not emit a distinct event for Ctrl+Enter — Ctrl+Q is listed
 		// first so the default binding works there without remapping (#1903).
 		defaultKeys: ["ctrl+q", "ctrl+enter"],
-		description: t("Send follow-up message"),
+		description: "Send follow-up message",
 	},
 	"app.retry": {
 		// F5 leads: it is delivered verbatim by every terminal, unlike modified
 		// Enter chords (Ctrl/Alt/Cmd+Enter), which various terminals swallow or
 		// fold into plain Enter. The idle "F5 to Retry" status row advertises it.
 		defaultKeys: ["f5", "alt+r"],
-		description: t("Retry last failed assistant turn"),
+		description: "Retry last failed assistant turn",
 	},
 	"app.message.dequeue": {
 		// Shift+Up is listed alongside Alt+Up because macOS Terminal.app consumes Option
 		// for character composition, leaving Alt+Up unreachable there.
 		defaultKeys: ["alt+up", "shift+up"],
-		description: t("Dequeue message"),
+		description: "Dequeue message",
 	},
 	"app.clipboard.pasteImage": {
 		defaultKeys: getDefaultPasteImageKeys(),
-		description: t("Paste image or text from clipboard"),
+		description: "Paste image or text from clipboard",
 	},
 	"app.clipboard.pasteTextRaw": {
 		defaultKeys: ["ctrl+shift+v", "alt+shift+v"],
-		description: t("Paste text from clipboard as raw text (no collapse)"),
+		description: "Paste text from clipboard as raw text (no collapse)",
 	},
 	"app.clipboard.copyLine": {
 		defaultKeys: "alt+shift+l",
-		description: t("Copy current line"),
+		description: "Copy current line",
 	},
 	"app.clipboard.copyPrompt": {
 		defaultKeys: "alt+shift+c",
-		description: t("Copy prompt"),
+		description: "Copy prompt",
 	},
 	"app.session.new": {
 		defaultKeys: [],
-		description: t("Create new session"),
+		description: "Create new session",
 	},
 	"app.session.tree": {
 		defaultKeys: [],
-		description: t("Show session tree"),
+		description: "Show session tree",
 	},
 	"app.session.fork": {
 		defaultKeys: [],
-		description: t("Fork session"),
+		description: "Fork session",
 	},
 	"app.session.resume": {
 		defaultKeys: [],
-		description: t("Resume session"),
+		description: "Resume session",
 	},
 	"app.agents.hub": {
 		defaultKeys: "alt+a",
-		description: t("Open the agent hub"),
+		description: "Open the agent hub",
 	},
 	"app.session.observe": {
 		defaultKeys: "ctrl+s",
-		description: t("Open the agent hub"),
+		description: "Open the agent hub",
 	},
 	"app.session.togglePath": {
 		defaultKeys: "ctrl+p",
-		description: t("Toggle session path display"),
+		description: "Toggle session path display",
 	},
 	"app.session.toggleSort": {
 		defaultKeys: "ctrl+s",
-		description: t("Toggle session sort order"),
+		description: "Toggle session sort order",
 	},
 	"app.session.rename": {
 		defaultKeys: "ctrl+r",
-		description: t("Rename session"),
+		description: "Rename session",
 	},
 	"app.session.delete": {
 		defaultKeys: "ctrl+d",
-		description: t("Delete session"),
+		description: "Delete session",
 	},
 	"app.session.deleteNoninvasive": {
 		defaultKeys: "ctrl+backspace",
-		description: t("Delete session (non-invasive)"),
+		description: "Delete session (non-invasive)",
 	},
 	"app.tree.previousBranch": {
 		defaultKeys: [],
-		description: t("Jump to the previous branch in /tree"),
+		description: "Jump to the previous branch in /tree",
 	},
 	"app.tree.nextBranch": {
 		defaultKeys: [],
-		description: t("Jump to the next branch in /tree"),
+		description: "Jump to the next branch in /tree",
 	},
 	"app.plan.toggle": {
 		defaultKeys: "alt+shift+p",
-		description: t("Toggle plan mode"),
+		description: "Toggle plan mode",
 	},
 	"app.history.search": {
 		defaultKeys: "ctrl+r",
-		description: t("Search history"),
+		description: "Search history",
 	},
 	"app.stt.pushToTalk": {
 		defaultKeys: "space",
-		description: t("Hold to record speech-to-text"),
+		description: "Hold to record speech-to-text",
 	},
 	"app.stt.toggle": {
 		defaultKeys: [],
-		description: t("Toggle speech-to-text recording"),
+		description: "Toggle speech-to-text recording",
 	},
 	"app.live.toggle": {
 		defaultKeys: "ctrl+l",
-		description: t("Start or stop live voice mode (/live)"),
+		description: "Start or stop live voice mode (/live)",
 	},
 } as const satisfies KeybindingDefinitions;
 

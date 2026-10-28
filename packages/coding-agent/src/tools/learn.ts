@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -56,7 +55,7 @@ export class LearnTool implements AgentTool<LearnSchema> {
 			? "write"
 			: "read";
 	};
-	readonly label = t("Learn");
+	readonly label = "Learn";
 	get description(): string {
 		return prompt.render(learnDescription, { globalScope: isGlobalMemoryScopeAvailable(this.session.settings) });
 	}
@@ -167,6 +166,14 @@ export class LearnTool implements AgentTool<LearnSchema> {
 				throw new Error(`${memoryMessage}, but the managed skill could not be written: ${reason}`);
 			}
 			const verb = params.skill.action === "create" ? "Created" : "Updated";
+			try {
+				await this.session.refreshSkills?.();
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				throw new Error(
+					`${memoryMessage}. ${verb} managed skill "${params.skill.name}", but refreshing session skills failed: ${reason}`,
+				);
+			}
 			return {
 				content: [{ type: "text", text: `${memoryMessage}. ${verb} managed skill "${params.skill.name}".` }],
 				details: { skill: params.skill.name },

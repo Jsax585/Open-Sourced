@@ -319,8 +319,8 @@ describe("git native", () => {
 			{ path: "/repo/assets/logo.png", rev: undefined, link: "git-compare" },
 		]);
 		expect(shown.heads).toHaveLength(2);
-		expect(shown.heads[0]).toContain("PNG");
-		expect(shown.heads[1]).toContain("PNG");
+		expect(shown.heads[0]).toContain("Before · PNG");
+		expect(shown.heads[1]).toContain("After · PNG");
 		expect(shown.kv).toBeUndefined();
 	});
 
@@ -348,6 +348,7 @@ describe("git native", () => {
 		});
 		expect(shown.media).toEqual([{ path: "/repo/assets/logo.png", rev: ":0", link: "git-compare" }]);
 		expect(shown.notes).toHaveLength(1);
+		expect(shown.notes[0]).toContain("Did not exist");
 	});
 
 	it("falls back to the before/after facts when the terminal lacks media", async () => {
@@ -363,7 +364,7 @@ describe("git native", () => {
 			TSP_KINDS.filter(kind => kind !== "media"),
 		);
 		expect(shown.media).toEqual([]);
-		expect(JSON.stringify(shown.kv)).toContain("1×1");
+		expect(JSON.stringify(shown.kv)).toContain("image 1×1");
 	});
 });
 

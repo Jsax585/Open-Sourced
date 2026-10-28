@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type Component,
@@ -101,7 +100,7 @@ import { getKeybindings } from "../keybindings";
 import { plainText } from "../native/spans";
 
 const OTHER_OPTION = "Other (type your own)";
-const SUBMIT_OPTION = localize("Submit");
+const SUBMIT_OPTION = "Submit";
 const RECOMMENDED_SUFFIX = " (Recommended)";
 /** Native labels: the free-text row and the answers-review tab. */
 const OTHER_LABEL = "Other…";
@@ -110,7 +109,7 @@ const REVIEW_TAB = "Review";
 // Action rows appended by the guest race participant. An option sanitizing
 // to one of these must disambiguate identically on both sides, or the same
 // question renders different rows depending on who answers.
-const GUEST_ACTION_LABELS = [localize("Chat about this\u0004packages/tui/src/overlays/ask-dialog.ts:GUEST_ACTION_LABELS"), localize("Next →")];
+const GUEST_ACTION_LABELS = ["Chat about this", "Next →"];
 
 /** Fraction of the terminal the dialog may occupy. The box height is fixed
  *  at spawn from the tallest tab's content (re-measured only on viewport
@@ -148,14 +147,21 @@ interface AskDialogCallbacks {
 	): Promise<AskDialogPromptValue | undefined>;
 }
 
+/**
+ * Routes typing to a composer draft that was in progress when the dialog
+ * opened, so in-flight keystrokes never answer by accident. The up/down select
+ * keys are the explicit hand-off: they release the guard for the rest of the
+ * dialog's life and the draft stays parked (intact) beneath it.
+ */
 interface AskDialogInputGuard {
 	isBlocked(): boolean;
 	handleInput(keyData: string): void;
+	/** Shown after the release keys while the guard holds input. */
 	hint: string;
 	/** Mirror the guard's blocked state onto the proxied draft surface each
 	 *  render, so a draft that owns input shows a visible insertion cursor even
-	 *  though this dialog holds TUI focus. */
-	syncPresentation?(): void;
+	 *  though this dialog holds TUI focus, and drops it once the dialog takes over. */
+	syncPresentation?(blocked: boolean): void;
 }
 
 interface AskDialogOptions {
@@ -362,12 +368,12 @@ function renderAnswerSummary(question: ExtensionAskDialogQuestion, state: Questi
 		.map(entry => entry.display);
 	if (question.multi) {
 		const answers = [...selected];
-		if (state.customInput !== undefined) answers.push(localize("Other: “{0}”", `${normalizedInlineInput(state.customInput)}`));
-		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", localize("unanswered"));
+		if (state.customInput !== undefined) answers.push(`Other: “${normalizedInlineInput(state.customInput)}”`);
+		return answers.length > 0 ? answers.join(", ") : theme.fg("warning", "unanswered");
 	}
 	if (state.customInput !== undefined) return `“${normalizedInlineInput(state.customInput)}”`;
-	if (selected.length === 0) return theme.fg("warning", localize("unanswered"));
-	return selected[0] ?? theme.fg("warning", localize("unanswered"));
+	if (selected.length === 0) return theme.fg("warning", "unanswered");
+	return selected[0] ?? theme.fg("warning", "unanswered");
 }
 
 /** Inline markdown code (`` `x` ``) as mono `code` spans, the rest plain, as the ANSI rows render it. */
@@ -395,7 +401,7 @@ function isAnswered(state: QuestionState): boolean {
 
 /** The answer to one question for the Review tab: the chosen labels (code mono), the custom answer, the note. */
 function describeAnswer(question: ExtensionAskDialogQuestion, state: QuestionState): readonly TspSpan[] {
-	if (!isAnswered(state)) return [span(localize("Unanswered"), "warning")];
+	if (!isAnswered(state)) return [span("Unanswered", "warning")];
 	const labels = displayOptionLabels(question);
 	const spans: TspSpan[] = [];
 	const push = (parts: readonly TspSpan[]): void => {
@@ -588,6 +594,8 @@ export class AskDialogComponent implements Component {
 	#native: NativeNode | undefined;
 	/** Input-guard blocked state {@link #native} was described with (the guard flips outside this dialog). */
 	#nativeBlocked = false;
+	/** Set once the user explicitly takes the dialog (up/down, or a pointer action) while a draft held input. */
+	#guardReleased = false;
 	/** When the countdown runs out (epoch ms), for the native ring. */
 	#countdownDeadline = 0;
 	/** Once-a-second re-describe while the native countdown ring is shown. */
@@ -710,9 +718,15 @@ export class AskDialogComponent implements Component {
 			this.toggleQuestionExpansion();
 			return;
 		}
-		const inputGuard = this.options.inputGuard;
-		if (inputGuard?.isBlocked()) {
-			inputGuard.handleInput(keyData);
+		if (this.#guardBlocks()) {
+			if (
+				getKeybindings().matches(keyData, "tui.select.up") ||
+				getKeybindings().matches(keyData, "tui.select.down")
+			) {
+				this.#releaseGuard();
+				return;
+			}
+			this.options.inputGuard?.handleInput(keyData);
 			this.#requestRender();
 			return;
 		}
@@ -737,7 +751,7 @@ export class AskDialogComponent implements Component {
 		// Keep the proxied draft's cursor visible while it owns input (the editor
 		// renders as the next sibling in the same container, so this lands in the
 		// same frame).
-		this.options.inputGuard?.syncPresentation?.();
+		this.options.inputGuard?.syncPresentation?.(this.#guardBlocks());
 		if (this.#hidden) return this.#renderHidden(width);
 		const innerWidth = Math.max(1, width - 4);
 		this.#contentWidth = innerWidth;
@@ -782,10 +796,9 @@ export class AskDialogComponent implements Component {
 	 * countdown, Hide, then Note, Skip and the primary Submit/Next).
 	 */
 	describe(cx: DescribeContext): NativeNode {
-		const inputGuard = this.options.inputGuard;
 		// Same draft-cursor mirroring as render(): the proxied draft describes itself next to this dialog.
-		inputGuard?.syncPresentation?.();
-		const blocked = inputGuard?.isBlocked() ?? false;
+		const blocked = this.#guardBlocks();
+		this.options.inputGuard?.syncPresentation?.(blocked);
 		const ring = this.#countdown !== undefined && cx.supports("meter");
 		if (ring) this.#startRingTick();
 		if (this.#native && this.#nativeBlocked === blocked) return this.#native;
@@ -828,7 +841,7 @@ export class AskDialogComponent implements Component {
 						items,
 						active,
 						role: "omp.ask.questions",
-						title: localize("Next question  tab · Previous  shift+tab"),
+						title: "Next question  tab · Previous  shift+tab",
 						actions: { click: "select" },
 					},
 					undefined,
@@ -851,7 +864,7 @@ export class AskDialogComponent implements Component {
 				style: "ring",
 				size: "sm",
 				label: `${Math.ceil(left / 1000)}s`,
-				title: localize("Answers the recommended option when the time runs out"),
+				title: "Answers the recommended option when the time runs out",
 			},
 			undefined,
 			"timer",
@@ -864,20 +877,20 @@ export class AskDialogComponent implements Component {
 		const more = this.#questions.length > 1 ? `  +${this.#questions.length - 1} more` : "";
 		const summary = text(
 			[
-				span(localize("Question  "), "muted"),
+				span("Question  ", "muted"),
 				span(normalizedInlineInput(sanitizeCarriageReturns(question?.question ?? ""))),
 				...(more ? [span(more, "muted")] : []),
 			],
 			{ truncate: "end", role: "omp.ask.summary" },
 		);
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const show = actionButton(localize("Show"), "show", {
+		const show = actionButton("Show", "show", {
 			tone: "accent",
 			...(hideKey ? { keys: hideKey } : {}),
-			title: localize("Show the question{0}", `${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`),
+			title: `Show the question${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const skip = actionButton(localize("Skip"), "cancel", cancelKey ? { keys: cancelKey } : {});
+		const skip = actionButton("Skip", "cancel", cancelKey ? { keys: cancelKey } : {});
 		const items: (NativeNode | null)[] = [];
 		if (this.#countdown) items.push(this.#describeTimer(this.#countdown, ring));
 		// The summary grows (`omp.ask.summary`), end-aligning Skip and Show.
@@ -911,7 +924,7 @@ export class AskDialogComponent implements Component {
 			const recommended = rowItem.kind === "option" && question.recommended === rowItem.optionIndex;
 			const detail =
 				describeRowDetail(rowItem, question, state) ??
-				(rowItem.kind === "other" ? [span(localize("Type your own answer"))] : undefined);
+				(rowItem.kind === "other" ? [span("Type your own answer")] : undefined);
 			const role =
 				rowItem.kind === "other"
 					? question.multi
@@ -930,7 +943,7 @@ export class AskDialogComponent implements Component {
 							: optionLabelSpans(question, rowItem.optionIndex ?? -1, rowItem.label),
 					role,
 					...(detail ? { detail } : {}),
-					...(recommended ? { value: [span(localize("Recommended"))] } : {}),
+					...(recommended ? { value: [span("Recommended")] } : {}),
 					...(checked ? { tone: "accent" as const, ...(question.multi ? { icon: "check" } : {}) } : {}),
 				},
 				undefined,
@@ -961,10 +974,10 @@ export class AskDialogComponent implements Component {
 		const notice =
 			unanswered > 0
 				? [
-						span(localize("{0} unanswered", `${unanswered}`), "warning"),
-						span(localize(" · Submit still sends {0}", `${unanswered === this.#questions.length ? localize("the questions") : localize("the rest")}`)),
+						span(`${unanswered} unanswered`, "warning"),
+						span(` · Submit still sends ${unanswered === this.#questions.length ? "the questions" : "the rest"}`),
 					]
-				: [span(localize("All answered · Submit sends them"))];
+				: [span("All answered · Submit sends them")];
 		children.push(node("text", { spans: notice, role: "omp.ask.notice" }, undefined, "notice"));
 		const answers: { k: string; v: readonly TspSpan[] }[] = [];
 		for (let index = 0; index < this.#questions.length; index++) {
@@ -985,49 +998,45 @@ export class AskDialogComponent implements Component {
 	 */
 	#describeActions(blocked: boolean, ring: boolean): NativeNode {
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const skip = actionButton(localize("Skip"), "cancel", {
+		const skip = actionButton("Skip", "cancel", {
 			...(cancelKey ? { keys: cancelKey } : {}),
-			title: localize("Skip without answering{0}", `${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`),
+			title: `Skip without answering${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
 		const hideKey = getKeybindings().getKeys("app.ask.hide")[0];
-		const hide = actionButton(localize("Hide"), "hide", {
+		const hide = actionButton("Hide", "hide", {
 			...(hideKey ? { keys: hideKey } : {}),
-			title: localize("Hide until you are ready to answer{0}", `${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`),
+			title: `Hide until you are ready to answer${hideKey ? `  ${formatTooltipKey(hideKey)}` : ""}`,
 		});
 		const lead: NativeNode[] = this.#countdown ? [this.#describeTimer(this.#countdown, ring), hide] : [hide];
 		const inputGuard = this.options.inputGuard;
 		if (blocked && inputGuard) {
 			return actionBar([
 				...lead,
-				text([span(plainText(inputGuard.hint), "muted")], { truncate: "end", role: "omp.ask.summary" }),
+				text([span(plainText(this.#guardHint(inputGuard)), "muted")], { truncate: "end", role: "omp.ask.summary" }),
 				skip,
 			]);
 		}
 		if (this.#isSubmitTab()) {
-			const submit = actionButton(localize("Submit"), "submit", {
+			const submit = actionButton("Submit", "submit", {
 				keys: "enter",
 				tone: "accent",
-				title: localize("Submit answers  enter"),
+				title: "Submit answers  enter",
 			});
 			return actionBar([...lead, null, skip, submit]);
 		}
 		const question = this.#questions[this.#currentQuestionIndex()];
 		const last = this.#questions.length === 1;
-		const enterLabel = last ? localize("Submit") : localize("Next");
+		const enterLabel = last ? "Submit" : "Next";
 		// A multi-select toggles on Space; Enter moves on.
 		const submit = actionButton(enterLabel, "submit", {
 			keys: "enter",
 			tone: "accent",
-			title: question?.multi ? localize("{0}  enter · Toggle  space", `${enterLabel}`) : `${enterLabel}  enter`,
+			title: question?.multi ? `${enterLabel}  enter · Toggle  space` : `${enterLabel}  enter`,
 		});
-		const note = actionButton(
-			localize("Note\u0004packages/tui/src/overlays/ask-dialog.ts:AskDialogComponent.#describeActions.note"),
-			"note",
-			{
-				keys: "n",
-				title: localize("Add a note to the highlighted answer, or to the one just picked  n"),
-			},
-		);
+		const note = actionButton("Note", "note", {
+			keys: "n",
+			title: "Add a note to the highlighted answer, or to the one just picked  n",
+		});
 		return actionBar([...lead, null, note, skip, submit]);
 	}
 
@@ -1050,13 +1059,16 @@ export class AskDialogComponent implements Component {
 				this.#setHidden(event.act === "hide");
 				return;
 			}
-			if (this.#hidden || this.options.inputGuard?.isBlocked()) return;
+			if (this.#hidden) return;
+			// A pointer action on the dialog is an explicit hand-off from the draft.
+			this.#releaseGuardForPointer();
 			if (event.act === "submit") this.#pressEnter();
 			else if (event.act === "note") this.#pressNote();
 			return;
 		}
 		if (event.type !== "select" && event.type !== "activate") return;
-		if (this.#hidden || this.options.inputGuard?.isBlocked()) return;
+		if (this.#hidden) return;
+		this.#releaseGuardForPointer();
 		const key = leafKey(event.key);
 		if (key === "tabs") {
 			if (!this.#hasSubmitTab()) return;
@@ -1217,16 +1229,39 @@ export class AskDialogComponent implements Component {
 		this.#requestRender();
 	}
 
+	/** True while a draft that predates the dialog still owns typing. */
+	#guardBlocks(): boolean {
+		return !this.#guardReleased && (this.options.inputGuard?.isBlocked() ?? false);
+	}
+
+	/** Up/down hand the keyboard to the dialog for good; the draft stays untouched beneath it. */
+	#releaseGuard(): void {
+		this.#guardReleased = true;
+		this.#native = undefined;
+		this.#hidden = false;
+		this.#requestRender();
+	}
+
+	#releaseGuardForPointer(): void {
+		if (!this.#guardBlocks()) return;
+		this.#guardReleased = true;
+		this.#native = undefined;
+	}
+
+	#guardHint(inputGuard: AskDialogInputGuard): string {
+		return `${editorKeys("tui.select.up", "tui.select.down")} answer · ${inputGuard.hint}`;
+	}
+
 	/** Hidden: one line in the composer's place — title (with countdown), the question clipped to fit, and how to bring it back. */
 	#renderHidden(width: number): readonly string[] {
 		const hideKey = editorKey("app.ask.hide");
 		const enter = formatKeyHint("enter");
 		const inputGuard = this.options.inputGuard;
-		const blocked = inputGuard?.isBlocked() ?? false;
+		const blocked = this.#guardBlocks();
 		// While a draft owns input, Enter goes to the draft, so only the hide key restores.
 		const show = blocked ? hideKey : hideKey ? `${hideKey}/${enter}` : enter;
 		const hints: string[] = [];
-		if (blocked && inputGuard) hints.push(inputGuard.hint);
+		if (blocked && inputGuard) hints.push(this.#guardHint(inputGuard));
 		if (show) hints.push(`${show} show`);
 		hints.push(`${editorKey("tui.select.cancel")} cancel`);
 		const hint = theme.fg("dim", ` · ${hints.join(" · ")}`);
@@ -1271,7 +1306,7 @@ export class AskDialogComponent implements Component {
 					id: String(index),
 					label: questionTabLabel(question, index),
 				})),
-				{ id: "submit", label: localize("Submit") },
+				{ id: "submit", label: "Submit" },
 			];
 			this.#tabBar = new TabBar("", tabs, getTabBarTheme(), this.#activeTabIndex);
 			this.#tabBar.showHint = false;
@@ -1280,7 +1315,7 @@ export class AskDialogComponent implements Component {
 		if (this.#isSubmitTab()) {
 			this.#headerExpandable = false;
 			this.#descExpandable = false;
-			lines.push(theme.bold(theme.fg("accent", localize("Review answers"))));
+			lines.push(theme.bold(theme.fg("accent", "Review answers")));
 			return lines;
 		}
 		const questionIndex = this.#currentQuestionIndex();
@@ -1310,7 +1345,7 @@ export class AskDialogComponent implements Component {
 		const enter = formatKeyHint("enter");
 		const upDown = editorKeys("tui.select.up", "tui.select.down");
 		const inputGuard = this.options.inputGuard;
-		if (inputGuard?.isBlocked()) return `${inputGuard.hint}${this.#expandHint()} · ${cancel}`;
+		if (inputGuard && this.#guardBlocks()) return `${this.#guardHint(inputGuard)}${this.#expandHint()} · ${cancel}`;
 		if (this.#isSubmitTab()) {
 			const scroll = indicator ? ` ${indicator} scroll ·` : "";
 			return `${enter} submit · ${upDown} scroll ·${scroll} ${cancel}`;
@@ -1489,7 +1524,7 @@ export class AskDialogComponent implements Component {
 		try {
 			const prefill =
 				state.customInput === undefined ? undefined : { text: state.customInput, images: state.customInputImages };
-			const result = await this.#openPrompt({ title: localize("Custom answer"), question: question.question }, prefill);
+			const result = await this.#openPrompt({ title: "Custom answer", question: question.question }, prefill);
 			if (result === undefined || this.#closed) return;
 			const input = splitPromptInput(result);
 			if (input.text.trim() === "") {
@@ -1529,7 +1564,7 @@ export class AskDialogComponent implements Component {
 			const prefill =
 				isReedit && state.note !== undefined ? { text: state.note, images: state.noteImages } : undefined;
 			const result = await this.#openPrompt(
-				{ title: localize("Note for {0}", `${rowItem.label}`), question: question.question },
+				{ title: `Note for ${rowItem.label}`, question: question.question },
 				prefill,
 			);
 			if (result === undefined || this.#closed) return;
@@ -1629,7 +1664,7 @@ export class AskDialogComponent implements Component {
 			allLines.push(
 				theme.fg(
 					"warning",
-					localize("{0} unanswered question{2}; {1} still submits.", `${unanswered}`, `${formatKeyHint("enter")}`, `${unanswered === 1 ? "" : "s"}`),
+					`${unanswered} unanswered question${unanswered === 1 ? "" : "s"}; ${formatKeyHint("enter")} still submits.`,
 				),
 			);
 			allLines.push("");

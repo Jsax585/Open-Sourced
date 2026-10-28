@@ -4,7 +4,6 @@
  * Dependencies (the arktype validation and pi-coding-agent) are injected via the
  * CustomCommandAPI to avoid import resolution issues with custom commands loaded from user directories.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
@@ -43,7 +42,7 @@ async function loadCommandModule(
 		const factory = (module.default ?? module) as CustomCommandFactory;
 
 		if (typeof factory !== "function") {
-			return { commands: null, error: t("Command must export a default function") };
+			return { commands: null, error: "Command must export a default function" };
 		}
 
 		const result = await factory(sharedApi);
@@ -52,10 +51,10 @@ async function loadCommandModule(
 		// Validate commands
 		for (const cmd of commands) {
 			if (!cmd.name || typeof cmd.name !== "string") {
-				return { commands: null, error: t("Command must have a name") };
+				return { commands: null, error: "Command must have a name" };
 			}
 			if (!cmd.description || typeof cmd.description !== "string") {
-				return { commands: null, error: t("Command \"{0}\" must have a description", `${cmd.name}`) };
+				return { commands: null, error: `Command "${cmd.name}" must have a description` };
 			}
 			if (typeof cmd.execute !== "function") {
 				return { commands: null, error: `Command "${cmd.name}" must have an execute function` };
@@ -65,7 +64,7 @@ async function loadCommandModule(
 		return { commands, error: null };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { commands: null, error: t("Failed to load command: {0}", `${message}`) };
+		return { commands: null, error: `Failed to load command: ${message}` };
 	}
 }
 
@@ -232,7 +231,7 @@ export async function loadCustomCommands(options: LoadCustomCommandsOptions = {}
 						// Conflict between user/project commands
 						errors.push({
 							path: commandPath,
-							error: t("Command name \"{0}\" conflicts with existing command", `${command.name}`),
+							error: `Command name "${command.name}" conflicts with existing command`,
 						});
 						continue;
 					}

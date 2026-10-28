@@ -5,7 +5,6 @@
  * YAML. Writes show the `previous → value` change, its scope (session or
  * saved), and whether the user approved it.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { renderStatusLine } from "../render";
 import {
@@ -59,20 +58,20 @@ export function renderCfgRead(
 	return card((_width, expanded) => {
 		const meta: string[] = [];
 		if (details) {
-			meta.push(t("{0} settings", `${details.count}`));
-			if (details.modified) meta.push(t("{0} modified", `${details.modified}`));
+			meta.push(details.count === 1 ? "1 setting" : `${details.count} settings`);
+			if (details.modified) meta.push(`${details.modified} modified`);
 		}
 		const header = renderStatusLine(
 			{
 				icon: result === undefined ? "pending" : result.isError ? "error" : "info",
-				title: t("Config"),
-				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || t("all settings"),
+				title: "Config",
+				description: (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings",
 				meta,
 			},
 			theme,
 		);
 		if (!result) return [header];
-		if (result.isError) return [header, formatErrorDetail(firstText(result) || t("Settings read failed."), theme)];
+		if (result.isError) return [header, formatErrorDetail(firstText(result) || "Settings read failed.", theme)];
 		const body = firstText(result).trimEnd().split("\n");
 		const shown = cappedHeadLines(body, expanded ? body.length : PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		const lines = [header, ...highlightCode(safe(shown.lines.join("\n")), "yaml", theme).map(line => `  ${line}`)];
@@ -87,14 +86,14 @@ export function describeCfgRead(
 	result: CardToolResult | undefined,
 	details: CfgReadDetails | undefined,
 ): NativeToolView {
-	const description = (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || t("all settings");
+	const description = (details?.path ?? parseCfgUrl(url)?.segments.join(".")) || "all settings";
 	const meta: string[] = [];
 	if (details) {
-		meta.push(t("{0} settings", `${details.count}`));
-		if (details.modified) meta.push(t("{0} modified", `${details.modified}`));
+		meta.push(details.count === 1 ? "1 setting" : `${details.count} settings`);
+		if (details.modified) meta.push(`${details.modified} modified`);
 	}
-	if (result?.isError) return errorView(t("Config"), firstText(result) || t("Settings read failed."), description, ...meta);
-	const head = toolHead(t("Config"), description, ...meta);
+	if (result?.isError) return errorView("Config", firstText(result) || "Settings read failed.", description, ...meta);
+	const head = toolHead("Config", description, ...meta);
 	if (!result) return { head };
 	const listing = plainText(safe(firstText(result).trimEnd()));
 	return {
@@ -114,11 +113,11 @@ export function describeCfgWrite(
 	const target = parseCfgUrl(url);
 	const path = details?.path ?? target?.segments.join(".");
 	const save = details?.save ?? target?.save ?? false;
-	if (result?.isError) return errorView(t("Config"), firstText(result) || t("Settings write failed."), path);
-	const head = toolHead(t("Config"), path);
-	head.push(span(" "), span(save ? t("persist") : t("session"), save ? "accent strong" : "muted"));
-	if (details?.outcome === "declined") head.push(span(" "), span(t("declined"), "warning strong"));
-	if (details?.outcome === "unchanged") head.push(span(" "), span(t("unchanged"), "muted"));
+	if (result?.isError) return errorView("Config", firstText(result) || "Settings write failed.", path);
+	const head = toolHead("Config", path);
+	head.push(span(" "), span(save ? "persist" : "session", save ? "accent strong" : "muted"));
+	if (details?.outcome === "declined") head.push(span(" "), span("declined", "warning strong"));
+	if (details?.outcome === "unchanged") head.push(span(" "), span("unchanged", "muted"));
 	const next = span(plainText(details?.value ?? content?.trim() ?? "…"), "toolOutput");
 	const change = details
 		? [span(plainText(details.previous), "dim"), span(" → ", "dim"), next]
@@ -132,7 +131,7 @@ export function describeCfgWrite(
 				? text(
 						[
 							span(
-								t("still {0}: a higher-precedence layer overrides the saved value", `${plainText(details.effective)}`),
+								`still ${plainText(details.effective)}: a higher-precedence layer overrides the saved value`,
 								"warning",
 							),
 						],
@@ -166,8 +165,8 @@ export function renderCfgWrite(
 		const badges = [formatBadge(save ? "persist" : "session", save ? "accent" : "muted", theme)];
 		if (details?.outcome === "declined") badges.push(formatBadge("declined", "warning", theme));
 		if (details?.outcome === "unchanged") badges.push(formatBadge("unchanged", "muted", theme));
-		const header = `${renderStatusLine({ icon, title: t("Config"), description: details?.path ?? target?.segments.join(".") }, theme)} ${badges.join(" ")}`;
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || t("Settings write failed."), theme)];
+		const header = `${renderStatusLine({ icon, title: "Config", description: details?.path ?? target?.segments.join(".") }, theme)} ${badges.join(" ")}`;
+		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Settings write failed.", theme)];
 		const arrow = theme.fg("dim", "→");
 		const next = theme.fg("toolOutput", details?.value ?? content?.trim() ?? "…");
 		const lines = [

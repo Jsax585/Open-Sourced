@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
 import type { ConfiguredThinkingLevel } from "./render/render-utils";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
@@ -22,30 +21,30 @@ const THINKING_LEVEL_METADATA: Record<ThinkingLevel, ThinkingLevelMetadata> = {
 	[ThinkingLevel.Inherit]: {
 		value: ThinkingLevel.Inherit,
 		label: "inherit",
-		description: t("Inherit session default"),
+		description: "Inherit session default",
 	},
-	[ThinkingLevel.Off]: { value: ThinkingLevel.Off, label: "off", description: t("No reasoning") },
+	[ThinkingLevel.Off]: { value: ThinkingLevel.Off, label: "off", description: "No reasoning" },
 	[ThinkingLevel.Minimal]: {
 		value: ThinkingLevel.Minimal,
 		label: "min",
-		description: t("Very brief reasoning (~1k tokens)"),
+		description: "Very brief reasoning (~1k tokens)",
 	},
-	[ThinkingLevel.Low]: { value: ThinkingLevel.Low, label: "low", description: t("Light reasoning (~2k tokens)") },
+	[ThinkingLevel.Low]: { value: ThinkingLevel.Low, label: "low", description: "Light reasoning (~2k tokens)" },
 	[ThinkingLevel.Medium]: {
 		value: ThinkingLevel.Medium,
 		label: "medium",
-		description: t("Moderate reasoning (~8k tokens)"),
+		description: "Moderate reasoning (~8k tokens)",
 	},
-	[ThinkingLevel.High]: { value: ThinkingLevel.High, label: "high", description: t("Deep reasoning (~16k tokens)") },
+	[ThinkingLevel.High]: { value: ThinkingLevel.High, label: "high", description: "Deep reasoning (~16k tokens)" },
 	[ThinkingLevel.XHigh]: {
 		value: ThinkingLevel.XHigh,
 		label: "xhigh",
-		description: t("Extended reasoning (~32k tokens)"),
+		description: "Extended reasoning (~32k tokens)",
 	},
 	[ThinkingLevel.Max]: {
 		value: ThinkingLevel.Max,
 		label: "max",
-		description: t("Maximum reasoning the model supports"),
+		description: "Maximum reasoning the model supports",
 	},
 };
 
@@ -205,7 +204,7 @@ export interface ConfiguredThinkingLevelMetadata {
 const AUTO_THINKING_METADATA: ConfiguredThinkingLevelMetadata = {
 	value: AUTO_THINKING,
 	label: "auto",
-	description: t("Auto-detect per prompt"),
+	description: "Auto-detect per prompt",
 };
 
 /**

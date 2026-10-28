@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	MAX_THINKING_SUFFIX_OPTIONS,
 	parseThinkingSuffix,
@@ -292,7 +291,7 @@ function resolveBedrockInferenceProfileModelId(
 
 	return buildModel({
 		id: requestedId,
-		name: t("Bedrock inference profile"),
+		name: "Bedrock inference profile",
 		api: "bedrock-converse-stream",
 		provider: AMAZON_BEDROCK_PROVIDER,
 		baseUrl: template.baseUrl,
@@ -985,7 +984,7 @@ function parseModelPatternWithContext(
 		return {
 			model: result.model,
 			thinkingLevel: undefined,
-			warning: t("Invalid thinking level \"{1}\" in pattern \"{0}\". Using default instead.", `${pattern}`, `${suffix}`),
+			warning: `Invalid thinking level "${suffix}" in pattern "${pattern}". Using default instead.`,
 			explicitThinkingLevel: false,
 		};
 	}
@@ -2139,7 +2138,7 @@ export function resolveCliModel(options: CliModelOptions): ResolveCliModelResult
 		selector: undefined,
 		thinkingLevel: undefined,
 		warning: enabled.warning,
-		error: t("Provider \"{0}\" is disabled. Remove \"{2}\" from disabledProviders to use \"{1}\".", `${blocked}`, `${cliModel.trim()}`, `${blocked}`),
+		error: `Provider "${blocked}" is disabled. Remove "${blocked}" from disabledProviders to use "${cliModel.trim()}".`,
 		disabledProvider: blocked,
 	};
 }
@@ -2156,7 +2155,7 @@ function resolveCliModelInScope(
 			model: undefined,
 			selector: undefined,
 			warning: undefined,
-			error: t("No models available. Check your installation or add models to models.json."),
+			error: "No models available. Check your installation or add models to models.json.",
 		};
 	}
 
@@ -2171,7 +2170,7 @@ function resolveCliModelInScope(
 			model: undefined,
 			selector: undefined,
 			warning: undefined,
-			error: t("Unknown provider \"{0}\". Run \"omp models\" to see available providers/models.", `${cliProvider}`),
+			error: `Unknown provider "${cliProvider}". Run "omp models" to see available providers/models.`,
 		};
 	}
 
@@ -2260,7 +2259,7 @@ function resolveCliModelInScope(
 					selector: undefined,
 					thinkingLevel: undefined,
 					warning: resolved.warning,
-					error: t("Model \"{0}\" not found. Run \"omp models\" to see available models.", `${trimmedModel}`),
+					error: `Model "${trimmedModel}" not found. Run "omp models" to see available models.`,
 				};
 			}
 		}
@@ -2320,7 +2319,7 @@ function resolveCliModelInScope(
 			selector: undefined,
 			thinkingLevel: undefined,
 			warning,
-			error: t("Model \"{0}\" not found. Run \"omp models\" to see available models.", `${display}`),
+			error: `Model "${display}" not found. Run "omp models" to see available models.`,
 		};
 	}
 
@@ -2380,7 +2379,7 @@ export async function findInitialModel(options: {
 	if (cliProvider && cliModel) {
 		const found = modelRegistry.find(cliProvider, cliModel);
 		if (!found) {
-			console.error(chalk.red(t("Model {0}/{1} not found", `${cliProvider}`, `${cliModel}`)));
+			console.error(chalk.red(`Model ${cliProvider}/${cliModel} not found`));
 			process.exit(1);
 		}
 		return { model: found, thinkingLevel: undefined, fallbackMessage: undefined };
@@ -2442,26 +2441,26 @@ export async function restoreModelFromSession(
 
 	if (restoredModel && hasApiKey) {
 		if (shouldPrintMessages) {
-			console.log(chalk.dim(t("Restored model: {0}/{1}", `${savedProvider}`, `${savedModelId}`)));
+			console.log(chalk.dim(`Restored model: ${savedProvider}/${savedModelId}`));
 		}
 		return { model: restoredModel, fallbackMessage: undefined };
 	}
 
 	// Model not found or no API key - fall back
-	const reason = !restoredModel ? t("model no longer exists") : t("no API key available");
+	const reason = !restoredModel ? "model no longer exists" : "no API key available";
 
 	if (shouldPrintMessages) {
-		console.error(chalk.yellow(t("Warning: Could not restore model {0}/{1} ({2}).", `${savedProvider}`, `${savedModelId}`, `${reason}`)));
+		console.error(chalk.yellow(`Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`));
 	}
 
 	// If we already have a model, use it as fallback
 	if (currentModel) {
 		if (shouldPrintMessages) {
-			console.log(chalk.dim(t("Falling back to: {0}/{1}", `${currentModel.provider}`, `${currentModel.id}`)));
+			console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
 		}
 		return {
 			model: currentModel,
-			fallbackMessage: t("Could not restore model {0}/{1} ({2}). Using {3}/{4}.", `${savedProvider}`, `${savedModelId}`, `${reason}`, `${currentModel.provider}`, `${currentModel.id}`),
+			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${currentModel.provider}/${currentModel.id}.`,
 		};
 	}
 
@@ -2473,12 +2472,12 @@ export async function restoreModelFromSession(
 	);
 	if (fallbackModel) {
 		if (shouldPrintMessages) {
-			console.log(chalk.dim(t("Falling back to: {0}/{1}", `${fallbackModel.provider}`, `${fallbackModel.id}`)));
+			console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
 		}
 
 		return {
 			model: fallbackModel,
-			fallbackMessage: t("Could not restore model {0}/{1} ({2}). Using {3}/{4}.", `${savedProvider}`, `${savedModelId}`, `${reason}`, `${fallbackModel.provider}`, `${fallbackModel.id}`),
+			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`,
 		};
 	}
 

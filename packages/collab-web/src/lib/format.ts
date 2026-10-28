@@ -1,52 +1,4 @@
-import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 /** Small pure formatting helpers shared across collab-web components. */
-
-const STATUS_LABELS: Readonly<Record<string, string>> = {
-	pending: t("pending"),
-	running: t("running"),
-	idle: t("idle"),
-	parked: t("parked"),
-	aborted: t("aborted"),
-	started: t("started"),
-	completed: t("completed"),
-	done: t("done"),
-	failed: t("failed"),
-	"merge failed": t("merge failed"),
-	cancelled: t("cancelled"),
-	queued: t("queued"),
-	active: t("active"),
-	complete: t("complete"),
-	"budget-limited": t("budget-limited"),
-	paused: t("paused"),
-	dropped: t("dropped"),
-	exited: t("exited"),
-	stopped: t("stopped"),
-	success: t("success"),
-	failure: t("failure"),
-	in_progress: t("in_progress"),
-	waiting: t("waiting\u0004packages/collab-web/src/lib/format.ts:STATUS_LABELS.waiting"),
-	requested: t("requested"),
-	skipped: t("skipped"),
-	timed_out: t("timed_out"),
-	startup_failure: t("startup_failure"),
-	action_required: t("action_required"),
-	neutral: t("neutral"),
-	stale: t("stale"),
-	woken: t("woken"),
-	revived: t("revived"),
-	injected: t("injected"),
-	error: t("error"),
-	warning: t("warning"),
-	info: t("info"),
-	hint: t("hint"),
-	not_found: t("not_found"),
-	already_completed: t("already_completed"),
-};
-
-/** Display labels only; wire status values stay unchanged. */
-export function formatStatus(status: string): string {
-	return STATUS_LABELS[status] ?? status;
-}
 
 /** HTML-escape text destined for `dangerouslySetInnerHTML`. */
 export function escapeHtml(s: string): string {
@@ -58,12 +10,16 @@ export function escapeHtml(s: string): string {
 		.replaceAll("'", "&#39;");
 }
 
-const TOKEN_FORMAT = new Intl.NumberFormat((getLanguage() === "ko" ? "ko-KR" : "en-US"), { notation: "compact", maximumFractionDigits: 1 });
-
-/** Compact token counts in the selected language, tolerant of non-finite input. */
+/** "950", "12.3k", "1.2M" — tolerant of non-finite input. */
 export function fmtTokens(n: number): string {
 	if (!Number.isFinite(n) || n <= 0) return "0";
-	return TOKEN_FORMAT.format(Math.round(n));
+	if (n < 1000) return String(Math.round(n));
+	if (n < 1_000_000) {
+		const k = n / 1000;
+		return `${k >= 100 ? Math.round(k) : k.toFixed(1)}k`;
+	}
+	const m = n / 1_000_000;
+	return `${m >= 100 ? Math.round(m) : m.toFixed(1)}M`;
 }
 
 /** "$0.004", "$0.42", "$4.20" — tolerant of non-finite input. */
@@ -77,25 +33,25 @@ export function fmtDuration(ms: number): string {
 	if (!Number.isFinite(ms) || ms < 0) return "0ms";
 	if (ms < 1000) return `${Math.round(ms)}ms`;
 	const s = ms / 1000;
-	if (s < 60) return t("{0}s", `${s.toFixed(1)}`);
+	if (s < 60) return `${s.toFixed(1)}s`;
 	const min = Math.floor(s / 60);
-	if (min < 60) return t("{0}m{1}s", `${min}`, `${String(Math.round(s % 60)).padStart(2, "0")}`);
+	if (min < 60) return `${min}m${String(Math.round(s % 60)).padStart(2, "0")}s`;
 	const h = Math.floor(min / 60);
-	return t("{0}h{1}m", `${h}`, `${String(min % 60).padStart(2, "0")}`);
+	return `${h}h${String(min % 60).padStart(2, "0")}m`;
 }
 
 /** "now", "42s ago", "5m ago", "3h ago", "2d ago". Input: epoch ms. */
 export function relTime(tsMs: number): string {
 	if (!Number.isFinite(tsMs)) return "";
 	const delta = Date.now() - tsMs;
-	if (delta < 10_000) return t("now");
+	if (delta < 10_000) return "now";
 	const s = Math.floor(delta / 1000);
-	if (s < 60) return t("{0}s ago", `${s}`);
+	if (s < 60) return `${s}s ago`;
 	const min = Math.floor(s / 60);
-	if (min < 60) return t("{0}m ago", `${min}`);
+	if (min < 60) return `${min}m ago`;
 	const h = Math.floor(min / 60);
-	if (h < 24) return t("{0}h ago", `${h}`);
-	return t("{0}d ago", `${Math.floor(h / 24)}`);
+	if (h < 24) return `${h}h ago`;
+	return `${Math.floor(h / 24)}d ago`;
 }
 
 /** "73%" from a 0–100 percent; em dash for null/non-finite. */

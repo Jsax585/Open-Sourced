@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -243,7 +242,7 @@ export async function connectPuppeteer(puppeteer: typeof Puppeteer, options: Con
 				(options.browserURL && (await debuggerEndpointOf(options.browserURL))) ??
 				options.browserURL;
 			if (endpoint)
-				throw new Error(t("WebSocket connection to '{0}' failed: {1}", `${endpoint}`, `${failure.message}`), { cause: failure });
+				throw new Error(`WebSocket connection to '${endpoint}' failed: ${failure.message}`, { cause: failure });
 		}
 		throw failure;
 	}

@@ -571,7 +571,7 @@
     }
 
     .user-message::before {
-      content: '사용자';
+      content: 'user';
       color: color-mix(in srgb, var(--accent) 85%, var(--text));
     }
 
@@ -581,7 +581,7 @@
     }
 
     .user-message.developer-message::before {
-      content: '개발자';
+      content: 'developer';
       color: var(--dim);
     }
 
@@ -597,7 +597,7 @@
     }
 
     .assistant-message::before {
-      content: '어시스턴트';
+      content: 'assistant';
       color: color-mix(in srgb, var(--success) 80%, var(--text));
       margin-bottom: -2px;
     }

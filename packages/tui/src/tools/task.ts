@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ThemeColor } from "../theme/theme";
@@ -30,6 +29,7 @@ import {
 	formatMoreItems,
 	formatNumber,
 	isFeedModelBadgeEnabled,
+	pluralize,
 	previewLine,
 	clipCollapsed,
 	flattenLine,
@@ -84,7 +84,7 @@ function renderNestedCycleLine(theme: Theme): string {
 }
 
 function formatFindingSummary(findings: FindingDetails[], theme: Theme): string {
-	if (findings.length === 0) return theme.fg("dim", t("Findings: none"));
+	if (findings.length === 0) return theme.fg("dim", "Findings: none");
 
 	const counts: { [P in FindingPriority]?: number } = {};
 	for (const finding of findings) {
@@ -99,7 +99,7 @@ function formatFindingSummary(findings: FindingDetails[], theme: Theme): string 
 		parts.push(theme.styledSymbol(symbol, color) ? `${theme.styledSymbol(symbol, color)} ${text}` : text);
 	}
 
-	return `${theme.fg("dim", t("Findings:"))} ${parts.join(theme.sep.dot)}`;
+	return `${theme.fg("dim", "Findings:")} ${parts.join(theme.sep.dot)}`;
 }
 
 function normalizeFindings(value: unknown): FindingDetails[] {
@@ -217,8 +217,8 @@ function getRenderYieldLabels(type: RenderYieldItem["type"]): string[] {
 }
 
 function formatYieldPreview(item: RenderYieldItem): string {
-	if (item.useLastTurn === true && item.data === undefined) return t("last assistant turn");
-	if (item.data === undefined) return t("last assistant turn");
+	if (item.useLastTurn === true && item.data === undefined) return "last assistant turn";
+	if (item.data === undefined) return "last assistant turn";
 	if (typeof item.data === "string") return previewLine(sanitizeText(item.data), 70);
 	try {
 		return previewLine(sanitizeText(JSON.stringify(item.data) ?? "null"), 70);
@@ -349,7 +349,7 @@ function renderOutputSection(
 	if (!trimmedOutput && !warning) return lines;
 
 	if (warning) {
-		lines.push(`${continuePrefix}${theme.fg("dim", t("Output"))}`);
+		lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
 		lines.push(
 			`${continuePrefix}  ${theme.fg("warning", theme.status.warning)} ${theme.fg(
 				"dim",
@@ -420,7 +420,7 @@ function renderOutputSection(
 			}
 
 			// Expanded: tree format
-			lines.push(`${continuePrefix}${theme.fg("dim", t("Output"))}`);
+			lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
 			const tree = renderJsonTreeLines(parsed, theme, {
 				maxDepth: expanded ? 6 : 2,
 				maxLines: expanded ? 24 : 6,
@@ -445,7 +445,7 @@ function renderOutputSection(
 		}
 	}
 
-	lines.push(`${continuePrefix}${theme.fg("dim", t("Output"))}`);
+	lines.push(`${continuePrefix}${theme.fg("dim", "Output")}`);
 
 	const outputLines = trimmedOutput.split("\n");
 	const previewCount = expanded ? maxExpanded : maxCollapsed;
@@ -471,7 +471,7 @@ function renderTaskSection(
 	const trimmed = sanitizeText(task).trim();
 	if (!expanded || !trimmed) return lines;
 
-	lines.push(`${continuePrefix}${theme.fg("dim", t("Task"))}`);
+	lines.push(`${continuePrefix}${theme.fg("dim", "Task")}`);
 	const taskLines = trimmed.split("\n");
 	for (const line of taskLines.slice(0, maxExpanded)) {
 		lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
@@ -525,7 +525,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 	const idLabel = rawName ? formatTaskId(rawName) : "";
 	const brief = taskFirstLine(args.task);
 	if (idLabel || brief) {
-		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || t("agent")))}`;
+		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
 		if (brief) {
 			line += `: ${theme.fg("muted", previewLine(brief, 64))}`;
 		}
@@ -638,7 +638,7 @@ export function renderCall(args: TaskParams, options: TaskRenderOptions, theme: 
 	const header = renderStatusLine(
 		{
 			iconOverride: theme.styledSymbol("tool.task", "accent"),
-			title: t("Task"),
+			title: "Task",
 			description: formatAgentHeaderLabel(args),
 		},
 		theme,
@@ -726,9 +726,9 @@ function renderAgentProgress(
 	const fullDescription = progress.description ? replaceTabs(sanitizeText(progress.description)).trim() : undefined;
 	let statusBadge: string | undefined;
 	if (progress.retryState && progress.status === "running") {
-		statusBadge = ` ${formatBadge(t("retrying"), "warning", theme)}`;
+		statusBadge = ` ${formatBadge("retrying", "warning", theme)}`;
 	} else if (progress.retryFailure && (progress.status === "failed" || progress.status === "aborted")) {
-		statusBadge = ` ${formatBadge(t("rate-limited"), "error", theme)}`;
+		statusBadge = ` ${formatBadge("rate-limited", "error", theme)}`;
 	}
 	const row = renderAgentTreeRow(
 		{
@@ -807,13 +807,15 @@ function renderAgentProgress(
 	// keep spinning while a child sleeps on a 3-hour provider rate-limit.
 	if (progress.retryState && progress.status === "running") {
 		const remainingMs = Math.max(0, progress.retryState.startedAtMs + progress.retryState.delayMs - nowMs);
-		const waitLabel = remainingMs > 0 ? t("in {0}\u0004packages/tui/src/tools/task.ts:renderAgentProgress.waitLabel", `${formatDuration(remainingMs)}`) : t("now\u0004packages/tui/src/tools/task.ts:renderAgentProgress.waitLabel");
+		const waitLabel = remainingMs > 0 ? `in ${formatDuration(remainingMs)}` : "now";
 		const summary =
-			t("retrying {0}/{1} {2}: ", `${progress.retryState.attempt}`, `${progress.retryState.maxAttempts}`, `${waitLabel}`) +
+			`retrying ${progress.retryState.attempt}/${progress.retryState.maxAttempts} ${waitLabel}: ` +
 			previewLine(sanitizeText(progress.retryState.errorMessage), 60);
 		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("warning", summary)}`);
 	} else if (progress.retryFailure && progress.status !== "running") {
-		const summary = t("auto-retry gave up after {0} attempt{2}: {1}", `${progress.retryFailure.attempt}`, `${previewLine(sanitizeText(progress.retryFailure.errorMessage), 80)}`, `${progress.retryFailure.attempt === 1 ? "" : "s"}`);
+		const summary = `auto-retry gave up after ${progress.retryFailure.attempt} attempt${
+			progress.retryFailure.attempt === 1 ? "" : "s"
+		}: ${previewLine(sanitizeText(progress.retryFailure.errorMessage), 80)}`;
 		lines.push(`${continuePrefix}${theme.tree.hook} ${theme.fg("error", summary)}`);
 	}
 
@@ -954,13 +956,16 @@ function renderReviewResult(
 		? theme.styledSymbol("status.done", "accent")
 		: theme.fg(verdictColor, theme.status.error);
 	lines.push(
-		t("{0} Patch is {1} {2} {3}", `${(continuePrefix)}`, `${(theme.fg(verdictColor, isCorrect ? t("correct") : t("incorrect")))}`, `${(verdictIcon)}`, `${(theme.fg("dim", t("({0}% confidence)", `${(summary.confidence * 100).toFixed(0)}`)))}`),
+		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${verdictIcon} ${theme.fg(
+			"dim",
+			`(${(summary.confidence * 100).toFixed(0)}% confidence)`,
+		)}`,
 	);
 
 	// Explanation preview (first ~80 chars when collapsed, full when expanded)
 	if (summary.explanation) {
 		if (expanded) {
-			lines.push(`${continuePrefix}${theme.fg("dim", t("Summary"))}`);
+			lines.push(`${continuePrefix}${theme.fg("dim", "Summary")}`);
 			const explanationLines = sanitizeText(summary.explanation).split("\n");
 			for (const line of explanationLines) {
 				lines.push(`${continuePrefix}  ${theme.fg("dim", replaceTabs(line))}`);
@@ -1003,7 +1008,7 @@ function renderFindings(findings: FindingDetails[], continuePrefix: string, expa
 		const findingContinue = isLastFinding ? "   " : `${theme.tree.vertical}  `;
 
 		const { color } = getPriorityInfo(finding.priority);
-		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? t("Untitled"));
+		const rawTitle = sanitizeText(finding.title?.replace(/^\[P\d\]\s*/, "") ?? "Untitled");
 		const titleText = replaceTabs(rawTitle).replace(/[\r\n]+/g, " ");
 		const loc = `${path.basename(sanitizeText(finding.file_path || "<unknown>"))}:${finding.line_start}`;
 
@@ -1057,14 +1062,14 @@ function renderAgentResult(
 				: theme.status.error;
 	const iconColor = needsWarning ? "warning" : success ? "success" : mergeFailed ? "warning" : "error";
 	const statusText = aborted
-		? t("aborted")
+		? "aborted"
 		: needsWarning
-			? t("warning")
+			? "warning"
 			: success
-				? t("done\u0004packages/coding-agent/src/cli/gallery-cli.ts:GALLERY_STATE_LABELS.success")
+				? "done"
 				: mergeFailed
-					? t("merge failed")
-					: t("failed");
+					? "merge failed"
+					: "failed";
 
 	// Reserve the name and required badges before optional model metadata and details.
 	const fullDescription = result.description ? replaceTabs(sanitizeText(result.description)).trim() : undefined;
@@ -1197,7 +1202,7 @@ function renderAgentResult(
 				const target = lines;
 				if (!isTaskTool) {
 					hasCustomRendering = true;
-					target.push(`${continuePrefix}${theme.fg("dim", t("Tool: {0}", `${toolName}`))}`);
+					target.push(`${continuePrefix}${theme.fg("dim", `Tool: ${toolName}`)}`);
 				}
 				if (component instanceof Text) {
 					// Prefix each line with continuePrefix
@@ -1243,17 +1248,17 @@ function renderAgentResult(
 	// row when the runner reports no root changes — same as the model summary.
 	if (result.patchPath && result.hasRootChanges !== false && !aborted && result.exitCode === 0) {
 		lines.push(
-			`${continuePrefix}${theme.fg("dim", truncateToWidth(t("Patch: {0}", `${replaceTabs(shortenPath(result.patchPath))}`), TRUNCATE_LENGTHS.CONTENT))}`,
+			`${continuePrefix}${theme.fg("dim", truncateToWidth(`Patch: ${replaceTabs(shortenPath(result.patchPath))}`, TRUNCATE_LENGTHS.CONTENT))}`,
 		);
 	} else if (result.branchName && !aborted && result.exitCode === 0) {
 		lines.push(
-			`${continuePrefix}${theme.fg("dim", truncateToWidth(t("Branch: {0}", `${replaceTabs(sanitizeText(result.branchName))}`), TRUNCATE_LENGTHS.CONTENT))}`,
+			`${continuePrefix}${theme.fg("dim", truncateToWidth(`Branch: ${replaceTabs(sanitizeText(result.branchName))}`, TRUNCATE_LENGTHS.CONTENT))}`,
 		);
 	}
 	if (!aborted && result.exitCode === 0) {
 		for (const nestedPath of result.nestedPatchPaths ?? []) {
 			lines.push(
-				`${continuePrefix}${theme.fg("dim", truncateToWidth(t("Nested patch: {0}", `${replaceTabs(shortenPath(nestedPath))}`), TRUNCATE_LENGTHS.CONTENT))}`,
+				`${continuePrefix}${theme.fg("dim", truncateToWidth(`Nested patch: ${replaceTabs(shortenPath(nestedPath))}`, TRUNCATE_LENGTHS.CONTENT))}`,
 			);
 		}
 	}
@@ -1308,11 +1313,11 @@ function formatHiddenProgressLine(hidden: readonly AgentProgress[], theme: Theme
 	};
 	for (const p of hidden) counts[p.status]++;
 	const parts: string[] = [];
-	if (counts.completed > 0) parts.push(theme.fg("dim", t("{0} done", `${counts.completed}`)));
-	if (counts.running > 0) parts.push(theme.fg("dim", t("{0} running\u0004packages/tui/src/tools/task.ts:formatHiddenProgressLine", `${counts.running}`)));
-	if (counts.pending > 0) parts.push(theme.fg("dim", t("{0} pending", `${counts.pending}`)));
-	if (counts.failed > 0) parts.push(theme.fg("error", t("{0} failed", `${counts.failed}`)));
-	if (counts.aborted > 0) parts.push(theme.fg("error", t("{0} aborted", `${counts.aborted}`)));
+	if (counts.completed > 0) parts.push(theme.fg("dim", `${counts.completed} done`));
+	if (counts.running > 0) parts.push(theme.fg("dim", `${counts.running} running`));
+	if (counts.pending > 0) parts.push(theme.fg("dim", `${counts.pending} pending`));
+	if (counts.failed > 0) parts.push(theme.fg("error", `${counts.failed} failed`));
+	if (counts.aborted > 0) parts.push(theme.fg("error", `${counts.aborted} aborted`));
 	const breakdown =
 		parts.length > 0
 			? `${theme.fg("dim", " (")}${parts.join(theme.fg("dim", theme.sep.dot))}${theme.fg("dim", ")")}`
@@ -1360,11 +1365,11 @@ export function renderResult(
 		const text = result.content.find(c => c.type === "text")?.text || "";
 		const errored = result.isError === true;
 		const header = errored
-			? renderStatusLine({ icon: "error", title: t("Task"), description: agentLabel }, theme)
+			? renderStatusLine({ icon: "error", title: "Task", description: agentLabel }, theme)
 			: renderStatusLine(
 					{
 						iconOverride: theme.styledSymbol("status.done", "accent"),
-						title: t("Task"),
+						title: "Task",
 						description: agentLabel,
 					},
 					theme,
@@ -1409,7 +1414,7 @@ export function renderResult(
 	// Header meta is the spawn count only; each row carries its own ⟨agent⟩
 	// badge, so a joined type list here would repeat them. Before anything
 	// spawns, fall back to the flat form's agent type from the call args.
-	const countLabel = agentCount > 0 ? agentCountLabel(agentCount) : undefined;
+	const countLabel = agentCount > 0 ? `${agentCount} ${agentCount === 1 ? "agent" : "agents"}` : undefined;
 	const metaLabel = countLabel ?? agentLabel;
 	const header = renderStatusLine(
 		{
@@ -1423,7 +1428,7 @@ export function renderResult(
 					: icon === "success"
 						? theme.styledSymbol("status.done", "accent")
 						: undefined,
-			title: t("Task"),
+			title: "Task",
 			meta: metaLabel ? [metaLabel] : undefined,
 		},
 		theme,
@@ -1533,12 +1538,12 @@ export function renderResult(
 			}
 
 			const summaryParts: string[] = [];
-			if (abortedCount > 0) summaryParts.push(theme.fg("error", t("{0} aborted", `${abortedCount}`)));
-			if (successCount > 0) summaryParts.push(theme.fg("success", t("{0} succeeded", `${successCount}`)));
-			if (mergeFailedCount > 0) summaryParts.push(theme.fg("warning", t("{0} merge failed", `${mergeFailedCount}`)));
-			if (failCount > 0) summaryParts.push(theme.fg("error", t("{0} failed", `${failCount}`)));
+			if (abortedCount > 0) summaryParts.push(theme.fg("error", `${abortedCount} aborted`));
+			if (successCount > 0) summaryParts.push(theme.fg("success", `${successCount} succeeded`));
+			if (mergeFailedCount > 0) summaryParts.push(theme.fg("warning", `${mergeFailedCount} merge failed`));
+			if (failCount > 0) summaryParts.push(theme.fg("error", `${failCount} failed`));
 			const totalRequests = requestTotal;
-			if (totalRequests > 0) summaryParts.push(theme.fg("dim", t("{0} req", `${formatNumber(totalRequests)}`)));
+			if (totalRequests > 0) summaryParts.push(theme.fg("dim", `${formatNumber(totalRequests)} req`));
 			summaryParts.push(theme.fg("dim", formatDuration(details.totalDurationMs)));
 			// Wrap the run summary in the theme's bracket glyphs (dim chrome, colored
 			// counts) to match the bash tool's `[Wall: … | Exit: …]` footer.
@@ -1553,7 +1558,7 @@ export function renderResult(
 		const borderColor = isError ? "error" : "borderMuted";
 
 		if (lines.length === 0) {
-			const text = fallbackText.trim() ? fallbackText : t("No results");
+			const text = fallbackText.trim() ? fallbackText : "No results";
 			return {
 				header,
 				sections: [
@@ -1818,8 +1823,8 @@ function contextStats(
 /** Agent badges: `background` for async jobs, `isolated` worktrees. */
 function agentBadges(background: boolean, isolated: boolean | undefined): TspAgentProps["badges"] {
 	const badges: { text: string; tone?: TspTone }[] = [];
-	if (background) badges.push({ text: t("background") });
-	if (isolated) badges.push({ text: t("isolated") });
+	if (background) badges.push({ text: "background" });
+	if (isolated) badges.push({ text: "isolated" });
 	return badges.length > 0 ? badges : undefined;
 }
 
@@ -1921,7 +1926,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 				? text(
 						[
 							span(
-								t("auto-retry gave up after {0} attempt{2}: {1}", `${(progress.retryFailure.attempt)}`, `${(plainText(progress.retryFailure.errorMessage))}`, `${(progress.retryFailure.attempt === 1 ? "" : "s")}`),
+								`auto-retry gave up after ${progress.retryFailure.attempt} ${pluralize("attempt", progress.retryFailure.attempt)}: ${plainText(progress.retryFailure.errorMessage)}`,
 								"error",
 							),
 						],
@@ -1945,9 +1950,9 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 	const errorLine = (message: string, token = "error"): NativeNode =>
 		text([span(plainText(message), token)], { wrap: "word", role: "omp.tool.error" });
 	const badges: { text: string; tone?: TspTone }[] = [...(agentBadges(state.background, result.isolated) ?? [])];
-	if (mergeFailed) badges.push({ text: t("merge failed"), tone: "warning" });
-	else if (warning && success) badges.push({ text: t("warning"), tone: "warning" });
-	if (result.truncated) badges.push({ text: t("truncated\u0004packages/tui/src/tools/glob.ts:globToolRenderer.renderResult"), tone: "warning" });
+	if (mergeFailed) badges.push({ text: "merge failed", tone: "warning" });
+	else if (warning && success) badges.push({ text: "warning", tone: "warning" });
+	if (result.truncated) badges.push({ text: "truncated", tone: "warning" });
 	const cost = result.usage?.cost.total ?? 0;
 	return agentNode(
 		{
@@ -1977,7 +1982,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			aborted && result.abortReason ? errorLine(result.abortReason) : undefined,
 			warning ? errorLine(warning, "warning") : undefined,
 			result.error ? errorLine(result.error) : undefined,
-			result.retryFailure ? errorLine(t("auto-retry gave up: {0}", `${result.retryFailure.errorMessage}`)) : undefined,
+			result.retryFailure ? errorLine(`auto-retry gave up: ${result.retryFailure.errorMessage}`) : undefined,
 			structured !== undefined
 				? describeJsonTree(structured)
 				: output
@@ -2010,7 +2015,7 @@ function describeAgents(details: TaskToolDetails, state: AgentDescribeState, dep
 }
 
 function agentCountLabel(count: number): string {
-	return t("{0} agent{1}", `${(count)}`, `${(count === 1 ? "" : "s")}`);
+	return `${count} ${pluralize("agent", count)}`;
 }
 
 /** Streaming call: the context line, then a pending agent per requested spawn. */
@@ -2032,7 +2037,7 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 	if (flatName || taskFirstLine(args?.task)) {
 		agents.push(
 			pending(
-				flatName ? formatTaskId(flatName) : t("agent"),
+				flatName ? formatTaskId(flatName) : "agent",
 				args?.agent,
 				args?.task,
 				args?.isolated,
@@ -2056,7 +2061,7 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 	}
 	const target = agents.length > 1 ? agentCountLabel(agents.length) : formatAgentHeaderLabel(args);
 	return {
-		tool: { title: t("Task"), target, targetKind: target ? "text" : undefined },
+		tool: { title: "Task", target, targetKind: target ? "text" : undefined },
 		body: compact([describeContext(args?.context), ...agents]),
 	};
 }
@@ -2073,13 +2078,13 @@ function describeTaskResult(
 		const fallback = resultText(result).trim();
 		if (result.isError) {
 			return {
-				tool: { title: t("Task"), target: agentLabel, targetKind: "text" },
+				tool: { title: "Task", target: agentLabel, targetKind: "text" },
 				tone: "error",
-				body: compact([context, errorText(fallback || t("Task failed"))]),
+				body: compact([context, errorText(fallback || "Task failed")]),
 			};
 		}
 		return {
-			tool: { title: t("Task"), target: agentLabel, targetKind: agentLabel ? "text" : undefined },
+			tool: { title: "Task", target: agentLabel, targetKind: agentLabel ? "text" : undefined },
 			body: compact([context, fallback ? noteText(fallback, "dim") : undefined]),
 		};
 	}
@@ -2108,10 +2113,10 @@ function describeTaskResult(
 	}
 	const summary: string[] = [];
 	if ((details.results ?? []).length > 0) {
-		if (succeeded) summary.push(t("{0} succeeded", `${succeeded}`));
-		if (failed) summary.push(t("{0} failed", `${failed}`));
-		if (aborted) summary.push(t("{0} aborted", `${aborted}`));
-		if (requests) summary.push(t("{0} req", `${formatNumber(requests)}`));
+		if (succeeded) summary.push(`${succeeded} succeeded`);
+		if (failed) summary.push(`${failed} failed`);
+		if (aborted) summary.push(`${aborted} aborted`);
+		if (requests) summary.push(`${formatNumber(requests)} req`);
 		summary.push(formatDuration(details.totalDurationMs));
 	}
 	const fallback = resultText(result);
@@ -2132,18 +2137,18 @@ function describeTaskResult(
 	const target = count > 0 ? agentCountLabel(count) : agentLabel;
 	return {
 		tool: {
-			title: t("Task"),
+			title: "Task",
 			target,
 			targetKind: target ? "text" : undefined,
 			meta: summary.length > 0 ? [summary.join(" · ")] : undefined,
-			badges: background ? [{ text: t("background") }] : undefined,
+			badges: background ? [{ text: "background" }] : undefined,
 		},
 		tone: aborted + failed > 0 ? "error" : undefined,
 		preview: "none",
 		body: compact([
 			context,
 			...agents,
-			count === 0 ? noteText(fallback.trim() || t("No results"), "dim") : undefined,
+			count === 0 ? noteText(fallback.trim() || "No results", "dim") : undefined,
 			trailer ? text([span(plainText(trailer), "muted")], { wrap: "word", role: "omp.tool.stats" }) : undefined,
 		]),
 	};

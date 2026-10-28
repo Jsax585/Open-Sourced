@@ -59,6 +59,7 @@ describe("theme selector picker", () => {
 		expect(p.items?.[2]?.mark?.seed).toBe("nord");
 		expect(p.current).toEqual(["dark"]);
 		expect(p.selected).toBe("dark");
+		expect(p.actions?.map(a => a.label)).toEqual(["Apply", "Close"]);
 		expect(selector.describe(genericCx)?.c?.[0]).not.toMatchObject({ k: "picker" });
 	});
 
@@ -121,6 +122,7 @@ describe("session account picker", () => {
 		expect(p.current).toEqual(["12"]);
 		expect(p.selected).toBe("12");
 		expect(p.items?.find(item => item.id === "11")?.detail).toBe("Acme");
+		expect(p.actions?.map(a => a.label)).toEqual(["Pin", "Close"]);
 		selector.handleNativeEvent(at("select", "11"));
 		selector.handleNativeEvent(act("confirm"));
 		selector.handleNativeEvent(act("close"));
@@ -165,7 +167,8 @@ describe("reset usage picker", () => {
 
 		selector.handleNativeEvent(act("confirm"));
 		const pending = sheet(selector.describe(pickerCx)).props;
-		expect(pending.confirm).not.toBeNull();
+		expect(pending.confirm?.label).toBe("Spend");
+		expect(pending.subtitle).toBe("Covers Claude 5h.");
 		expect(spent).toEqual([]);
 
 		selector.handleNativeEvent(act("cancel"));
@@ -231,6 +234,7 @@ describe("oauth selector picker", () => {
 		expect(first.layout).toBe("cards");
 		const row = first.items?.find(item => item.id === signedIn);
 		expect(row?.dot).toBe("success");
+		expect(row?.detail).toBe("Signed in · login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
 		selector.handleInput(providers[1]!.name.slice(0, 3));

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ToolTier } from "@oh-my-pi/pi-agent-core";
 import { extractUriScheme } from "../internal-urls/parse";
 import { type LineRange } from "@oh-my-pi/pi-tui/tools/line-ranges";
@@ -188,7 +187,7 @@ export function parseTailCount(sel: string): number | null {
 	const match = TAIL_SELECTOR_RE.exec(sel);
 	if (!match) return null;
 	const count = Number.parseInt(match[1]!, 10);
-	if (count < 1) throw new ToolError(t("Tail selector -0 is invalid; use :-N with N >= 1 to read the last N lines."));
+	if (count < 1) throw new ToolError("Tail selector -0 is invalid; use :-N with N >= 1 to read the last N lines.");
 	return count;
 }
 
@@ -313,7 +312,7 @@ export function splitPathAndSelPreferringLiteralSync(rawPath: string, cwd: strin
 function assertNotInternalUrl(expanded: string, original: string): void {
 	if (!InternalUrlRouter.instance().canHandle(expanded)) return;
 	throw new Error(
-		t("Path \"{0}\" uses internal scheme \"{1}://\" and must be resolved through the proper protocol handler, not as a filesystem path.", `${original}`, `${extractUriScheme(expanded)}`),
+		`Path "${original}" uses internal scheme "${extractUriScheme(expanded)}://" and must be resolved through the proper protocol handler, not as a filesystem path.`,
 	);
 }
 
@@ -823,6 +822,8 @@ export interface ParsedFindPattern {
 	basePath: string;
 	globPattern: string;
 	hasGlob: boolean;
+	/** A trailing separator restricts glob matches to directories. */
+	directoryOnly?: boolean;
 }
 
 export interface ResolvedSearchTarget {
@@ -843,6 +844,7 @@ export interface ResolvedFindTarget {
 	basePath: string;
 	globPattern: string;
 	hasGlob: boolean;
+	directoryOnly?: boolean;
 }
 
 export interface ResolvedMultiFindPattern {
@@ -867,7 +869,7 @@ function decodeUrlGlobSegment(rawSegment: string, input: string): string {
 		// decoded glob metacharacters are bracket-escaped to stay literal.
 		return rawSegment.replace(/(?:%[0-9a-f]{2})+/gi, run => decodeURIComponent(run).replace(/[*?[{]/g, "[$&]"));
 	} catch {
-		throw new ToolError(t("Invalid URL encoding in glob pattern: {0}", `${input}`));
+		throw new ToolError(`Invalid URL encoding in glob pattern: ${input}`);
 	}
 }
 
@@ -939,6 +941,12 @@ export async function parseSearchPathPreferringLiteral(filePath: string, cwd: st
 	}
 }
 
+function globFindPattern(basePath: string, globPattern: string): ParsedFindPattern {
+	return globPattern.endsWith("/")
+		? { basePath, globPattern: globPattern.replace(/\/+$/, ""), hasGlob: true, directoryOnly: true }
+		: { basePath, globPattern, hasGlob: true };
+}
+
 // Parse a find pattern into a base directory path and a glob pattern.
 // Examples:
 //   src/app/**/\*.tsx -> { basePath: "src/app", globPattern: "**/*.tsx", hasGlob: true }
@@ -953,7 +961,7 @@ export function parseFindPattern(pattern: string): ParsedFindPattern {
 		// A URL names its root explicitly, so its glob stays anchored there like `dir/*`.
 		return urlPath.glob === undefined
 			? { basePath: urlPath.basePath, globPattern: "**/*", hasGlob: false }
-			: { basePath: urlPath.basePath, globPattern: urlPath.glob, hasGlob: true };
+			: globFindPattern(urlPath.basePath, urlPath.glob);
 	}
 	const normalizedPattern = normalizePathSeparators(pattern);
 	const segments = normalizedPattern.split("/");
@@ -965,18 +973,10 @@ export function parseFindPattern(pattern: string): ParsedFindPattern {
 
 	if (firstGlobIndex === 0) {
 		const needsRecursive = !normalizedPattern.startsWith("**/");
-		return {
-			basePath: ".",
-			globPattern: needsRecursive ? `**/${normalizedPattern}` : normalizedPattern,
-			hasGlob: true,
-		};
+		return globFindPattern(".", needsRecursive ? `**/${normalizedPattern}` : normalizedPattern);
 	}
 
-	return {
-		basePath: segments.slice(0, firstGlobIndex).join("/"),
-		globPattern: segments.slice(firstGlobIndex).join("/"),
-		hasGlob: true,
-	};
+	return globFindPattern(segments.slice(0, firstGlobIndex).join("/"), segments.slice(firstGlobIndex).join("/"));
 }
 
 export function combineSearchGlobs(prefixGlob?: string, suffixGlob?: string): string | undefined {
@@ -1163,6 +1163,7 @@ async function resolveFindPatternItems(
 			basePath: resolveSearchBase(parsedPattern.basePath, cwd),
 			globPattern: parsedPattern.globPattern,
 			hasGlob: parsedPattern.hasGlob,
+			directoryOnly: parsedPattern.directoryOnly,
 		};
 	});
 
@@ -1461,11 +1462,11 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	const { rawPaths: inputs, cwd, internalUrlAction } = opts;
 	const normalizedRawPaths = inputs.map(normalizePathLikeInput);
 	if (normalizedRawPaths.some(rawPath => rawPath.length === 0)) {
-		throw new ToolError(t("Search scope entries must be non-empty paths or globs"));
+		throw new ToolError("Search scope entries must be non-empty paths or globs");
 	}
 	const rawPaths = await expandDelimitedPathEntries(normalizedRawPaths, cwd);
 	if (rawPaths.some(rawPath => rawPath.length === 0)) {
-		throw new ToolError(t("Search scope entries must be non-empty paths or globs"));
+		throw new ToolError("Search scope entries must be non-empty paths or globs");
 	}
 	// Strict external-URL schemes. `file://` is intentionally absent: it has
 	// local-path semantics (expandPath strips it downstream), so it flows through
@@ -1502,7 +1503,7 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 			// instead of letting the local-path fallthrough surface a confusing
 			// "Path not found" for a URL-shaped input.
 			throw new ToolError(
-				t("Cannot {0} external URL: {1}. Use `read` to fetch web content, then search the returned text.", `${internalUrlAction}`, `${rawPath}`),
+				`Cannot ${internalUrlAction} external URL: ${rawPath}. Use \`read\` to fetch web content, then search the returned text.`,
 			);
 		}
 		const internalUrl = internalRouter.normalize(rawPath);
@@ -1512,7 +1513,7 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		}
 		if (opts.fileWritableOnly && !internalRouter.fileWritable(internalUrl)) {
 			throw new ToolError(
-				t("Cannot {1} {0}: {2}:// URLs are not editable files", `${rawPath}`, `${internalUrlAction}`, `${extractUriScheme(internalUrl)}`),
+				`Cannot ${internalUrlAction} ${rawPath}: ${extractUriScheme(internalUrl)}:// URLs are not editable files`,
 			);
 		}
 		resolvedPathInputs.push(internalUrl);
@@ -1523,7 +1524,7 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 	if (resolvedPathInputs.length > 1) {
 		const partition = await partitionExistingPaths(resolvedPathInputs, cwd, parseSearchPath, opts.filesystem);
 		if (partition.valid.length === 0) {
-			throw new ToolError(t("Path not found: {0}", `${partition.missing.join(", ")}`));
+			throw new ToolError(`Path not found: ${partition.missing.join(", ")}`);
 		}
 		effectivePaths = partition.valid;
 		missingPaths = partition.missing;
@@ -1550,7 +1551,7 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 			opts.fanOutFileTargets === true,
 		);
 		if (!multiSearchPath) {
-			throw new ToolError(t("`paths` must contain at least one path or glob"));
+			throw new ToolError("`paths` must contain at least one path or glob");
 		}
 		searchPath = multiSearchPath.basePath;
 		multiTargets = multiSearchPath.targets;
@@ -1570,11 +1571,11 @@ export async function resolveToolSearchScope(opts: ToolScopeOptions): Promise<To
 		// A URL failure carries its handler's diagnosis (`Artifact 9 not found. Available: 4`).
 		if (internalRouter.canHandle(searchPath)) {
 			throw new ToolError(
-				t("Cannot {1} {0}: {2}", `${searchPath}`, `${internalUrlAction}`, `${error instanceof Error ? error.message : String(error)}`),
+				`Cannot ${internalUrlAction} ${searchPath}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 		const hint = opts.multipathStatHint && rawPaths.length > 1 ? opts.multipathStatHint : "";
-		throw new ToolError(t("Path not found: {0}{1}", `${scopePath}`, `${hint}`));
+		throw new ToolError(`Path not found: ${scopePath}${hint}`);
 	}
 
 	return {

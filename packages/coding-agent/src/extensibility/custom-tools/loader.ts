@@ -6,7 +6,6 @@
  * Dependencies are also injected through CustomToolAPI so tools loaded from
  * user directories need no workspace module resolution.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import * as zod from "@oh-my-pi/omptype/zod";
@@ -48,7 +47,7 @@ function isLoadableCustomTool(value: unknown): value is LoadedCustomTool["tool"]
 function invalidToolError(path: string, index: number, source: ToolLoadError["source"]): ToolLoadError {
 	return {
 		path,
-		error: t("Tool factory returned invalid tool at index {0}: expected object with string name, string description, parameters, and execute function", `${index}`),
+		error: `Tool factory returned invalid tool at index ${index}: expected object with string name, string description, parameters, and execute function`,
 		source,
 	};
 }
@@ -86,7 +85,7 @@ async function loadTool(
 			errors: [
 				{
 					path: toolPath,
-					error: t("Declarative tool files (.md, .json) cannot be loaded as executable modules"),
+					error: "Declarative tool files (.md, .json) cannot be loaded as executable modules",
 					source,
 				},
 			],
@@ -103,7 +102,7 @@ async function loadTool(
 		const factory = customToolFactoryOf(module);
 
 		if (typeof factory !== "function") {
-			return { tools: [], errors: [{ path: toolPath, error: t("Tool must export a default function"), source }] };
+			return { tools: [], errors: [{ path: toolPath, error: "Tool must export a default function", source }] };
 		}
 
 		const toolResult: unknown = await withHostGuard(async () => factory(sharedApi));
@@ -128,7 +127,7 @@ async function loadTool(
 		return { tools: loadedTools, errors };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		return { tools: [], errors: [{ path: toolPath, error: t("Failed to load tool: {0}", `${message}`), source }] };
+		return { tools: [], errors: [{ path: toolPath, error: `Failed to load tool: ${message}`, source }] };
 	}
 }
 
@@ -177,7 +176,7 @@ export class CustomToolLoader {
 			pi,
 			pushPendingAction: action => {
 				if (!pushPendingAction) {
-					throw new Error(t("Pending action store unavailable for custom tools in this runtime."));
+					throw new Error("Pending action store unavailable for custom tools in this runtime.");
 				}
 				pushPendingAction({
 					label: action.label,
@@ -200,7 +199,7 @@ export class CustomToolLoader {
 				if (this.#seenNames.has(loadedTool.tool.name)) {
 					this.errors.push({
 						path: toolPath,
-						error: t("Tool name \"{0}\" conflicts with existing tool", `${loadedTool.tool.name}`),
+						error: `Tool name "${loadedTool.tool.name}" conflicts with existing tool`,
 						source,
 					});
 					continue;

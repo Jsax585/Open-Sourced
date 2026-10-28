@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { combine, effect, register, type SettingValueOf } from "../config/registry";
 import {
 	SERVICE_TIER_ANTHROPIC_OPTIONS,
@@ -32,6 +31,25 @@ const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const EMPTY_STRING_ARRAYS_RECORD: Record<string, string[]> = {};
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["wait"];
 
+/** Scope of the resume picker's current-folder list. */
+export const cfgSessionWorktreeScope = register({
+	id: "session.worktreeScope",
+	type: "enum",
+	values: ["directory", "repo"] as const,
+	default: "repo",
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "Resume Worktree Scope",
+		description:
+			"Choose whether the resume picker's current folder includes sessions from other repository worktrees",
+		options: [
+			{ value: "directory", label: "This Directory", description: "Only sessions saved for this directory" },
+			{ value: "repo", label: "Repository Worktrees", description: "Also include sessions from sibling worktrees" },
+		],
+	},
+});
+
 // Power assertions: macOS IOKit, Linux login1/ScreenSaver, Windows execution state.
 export const cfgPowerSleepPrevention = register({
 	id: "power.sleepPrevention",
@@ -41,30 +59,30 @@ export const cfgPowerSleepPrevention = register({
 	ui: {
 		tab: "interaction",
 		group: "Power",
-		label: t("Sleep Prevention"),
+		label: "Sleep Prevention",
 		description:
-			t("Prevent the system sleeping while the agent is running a turn; an idle session, including one waiting on background jobs, does not hold it. Each level is cumulative — it adds the flags of all lower levels."),
+			"Prevent the system sleeping while the agent is running a turn; an idle session, including one waiting on background jobs, does not hold it. Each level is cumulative — it adds the flags of all lower levels.",
 		options: [
 			{
 				value: "off",
-				label: t("Off"),
-				description: t("Do not prevent any sleep"),
+				label: "Off",
+				description: "Do not prevent any sleep",
 			},
 			{
 				value: "idle",
-				label: t("Prevent Idle Sleep"),
-				description: t("Keep the system awake while the agent is running a turn (macOS `caffeinate -i`)"),
+				label: "Prevent Idle Sleep",
+				description: "Keep the system awake while the agent is running a turn (macOS `caffeinate -i`)",
 			},
 			{
 				value: "display",
-				label: t("Prevent Display Sleep"),
-				description: t("Also keep the display from idle-sleeping (macOS `caffeinate -i -d`)"),
+				label: "Prevent Display Sleep",
+				description: "Also keep the display from idle-sleeping (macOS `caffeinate -i -d`)",
 			},
 			{
 				value: "system",
-				label: t("Prevent System Sleep"),
+				label: "Prevent System Sleep",
 				description:
-					t("Also block all system sleep on AC and declare the user active (macOS `caffeinate -i -d -s -u`)"),
+					"Also block all system sleep on AC and declare the user active (macOS `caffeinate -i -d -s -u`)",
 			},
 		],
 	},
@@ -77,9 +95,9 @@ export const cfgPrewalkEnabled = register({
 	ui: {
 		tab: "model",
 		group: "Prewalk",
-		label: t("Enable Prewalk"),
+		label: "Enable Prewalk",
 		description:
-			t("Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk."),
+			"Start on the active model, then switch to a fast/cheap model (default the 'smol' role) at the first edit/write after the plan nudge's todo list exists — the strong model plans, commits the todos, and starts the implementation before handing off. Overridable per session with --prewalk / --no-prewalk.",
 	},
 });
 
@@ -91,21 +109,21 @@ export const cfgPrewalkAuto = register({
 	ui: {
 		tab: "model",
 		group: "Prewalk",
-		label: t("Auto Prewalk"),
+		label: "Auto Prewalk",
 		description:
-			t("Ask the native judge resolved through the 'judge' role whether each new top-level user task front-loads its hard reasoning. Needs a native judge; without one nothing is classified. Independent of Enable Prewalk."),
+			"Ask the native judge resolved through the 'judge' role whether each new top-level user task front-loads its hard reasoning. Needs a native judge; without one nothing is classified. Independent of Enable Prewalk.",
 		options: [
-			{ value: "off", label: t("Off"), description: t("Never classify prompts for prewalk") },
+			{ value: "off", label: "Off", description: "Never classify prompts for prewalk" },
 			{
 				value: "suggest",
-				label: t("Suggest"),
-				description: t("Classify each task and report the decision without arming prewalk"),
+				label: "Suggest",
+				description: "Classify each task and report the decision without arming prewalk",
 			},
 			{
 				value: "on",
-				label: t("On"),
+				label: "On",
 				description:
-					t("For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model"),
+					"For confidently front-loaded tasks, arm a handoff from the active model to the auto target; the next task starts back on the planning model",
 			},
 		],
 	},
@@ -118,8 +136,8 @@ export const cfgPrewalkAutoTarget = register({
 	ui: {
 		tab: "model",
 		group: "Prewalk",
-		label: t("Auto-prewalk target"),
-		description: t("Model or role (default '@smol') auto-prewalk hands off to at the first edit/write."),
+		label: "Auto-prewalk target",
+		description: "Model or role (default '@smol') auto-prewalk hands off to at the first edit/write.",
 	},
 });
 
@@ -152,7 +170,7 @@ export function validateProviderMaxInFlightRequests(value: unknown): Record<stri
 		const invalidProviders: string[] = [];
 		for (const provider in value) if (!isPositiveLimit(value[provider])) invalidProviders.push(provider);
 		if (invalidProviders.length > 0) {
-			throw new Error(t("Provider request limits must be positive numbers: {0}", `${invalidProviders.join(", ")}`));
+			throw new Error(`Provider request limits must be positive numbers: ${invalidProviders.join(", ")}`);
 		}
 	}
 	return normalizeProviderMaxInFlightRequests(value);
@@ -167,9 +185,9 @@ export const cfgProvidersMaxInFlightRequests = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Max In-Flight Requests"),
+		label: "Max In-Flight Requests",
 		description:
-			t("Maximum concurrent LLM requests per provider id (for example \"openai\" or \"anthropic\"), shared across local OMP processes with this config root. Omitted providers are unlimited."),
+			'Maximum concurrent LLM requests per provider id (for example "openai" or "anthropic"), shared across local OMP processes with this config root. Omitted providers are unlimited.',
 	},
 });
 effect(cfgProvidersMaxInFlightRequests, limits =>
@@ -183,9 +201,9 @@ export const cfgImagesDescribeForTextModels = register({
 	ui: {
 		tab: "model",
 		group: "Vision",
-		label: t("Describe Images for Text Models"),
+		label: "Describe Images for Text Models",
 		description:
-			t("When an image is attached to a model without vision support, save it under local:// and inject a description from a vision-capable model instead of dropping it"),
+			"When an image is attached to a model without vision support, save it under local:// and inject a description from a vision-capable model instead of dropping it",
 	},
 });
 
@@ -202,8 +220,8 @@ export const cfgDefaultThinkingLevel = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Thinking Level"),
-		description: t("Reasoning depth for thinking-capable models"),
+		label: "Thinking Level",
+		description: "Reasoning depth for thinking-capable models",
 		options: [getConfiguredThinkingLevelMetadata(AUTO_THINKING), ...THINKING_EFFORTS.map(getThinkingLevelMetadata)],
 	},
 });
@@ -215,8 +233,8 @@ export const cfgHideThinkingBlock = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Hide Thinking Blocks"),
-		description: t("Hide thinking blocks in assistant responses"),
+		label: "Hide Thinking Blocks",
+		description: "Hide thinking blocks in assistant responses",
 	},
 });
 
@@ -227,8 +245,8 @@ export const cfgExpandThinkingBlocks = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Expand Thinking Blocks"),
-		description: t("Keep finished thinking blocks expanded instead of collapsing them when the turn ends"),
+		label: "Expand Thinking Blocks",
+		description: "Keep finished thinking blocks expanded instead of collapsing them when the turn ends",
 		condition: "nativeRendering",
 	},
 });
@@ -240,8 +258,8 @@ export const cfgProseOnlyThinking = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Prose Only Thinking"),
-		description: t("Omit code blocks from thinking summaries and replace them with an ellipsis"),
+		label: "Prose Only Thinking",
+		description: "Omit code blocks from thinking summaries and replace them with an ellipsis",
 	},
 });
 
@@ -252,8 +270,8 @@ export const cfgOmitThinking = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Omit Thinking summaries"),
-		description: t("Instruct upstream providers to completely omit thinking summaries from responses (where supported)"),
+		label: "Omit Thinking summaries",
+		description: "Instruct upstream providers to completely omit thinking summaries from responses (where supported)",
 	},
 });
 
@@ -264,9 +282,9 @@ export const cfgExternalThinking = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("External Thinking"),
-		description: t("Private scratchpad; not shown to user. Disables supported GPT, Claude, and Gemini reasoning"),
-		warning: t("At your own risk: providers have flagged this request shape as abuse, up to account-level enforcement"),
+		label: "External Thinking",
+		description: "Private scratchpad; not shown to user. Disables supported GPT, Claude, and Gemini reasoning",
+		warning: "At your own risk: providers have flagged this request shape as abuse, up to account-level enforcement",
 	},
 });
 
@@ -279,8 +297,8 @@ export const cfgModelLoopGuardEnabled = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Loop Guard"),
-		description: t("Enable automatic stream loop detection for model reasoning and prose"),
+		label: "Loop Guard",
+		description: "Enable automatic stream loop detection for model reasoning and prose",
 	},
 });
 
@@ -291,8 +309,8 @@ export const cfgModelLoopGuardCheckAssistantContent = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Loop Guard Scan Prose"),
-		description: t("Apply loop guard to assistant prose messages in addition to thinking logs"),
+		label: "Loop Guard Scan Prose",
+		description: "Apply loop guard to assistant prose messages in addition to thinking logs",
 	},
 });
 
@@ -303,9 +321,9 @@ export const cfgModelLoopGuardToolCallReminder = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Loop Guard Tool-Call Reminder"),
+		label: "Loop Guard Tool-Call Reminder",
 		description:
-			t("When a Gemini reasoning stream emits many consecutive planning headers without calling a tool, interrupt it and inject a reminder to issue a tool call (requires Loop Guard)"),
+			"When a Gemini reasoning stream emits many consecutive planning headers without calling a tool, interrupt it and inject a reminder to issue a tool call (requires Loop Guard)",
 	},
 });
 
@@ -316,8 +334,8 @@ export const cfgModelToolCallLoopGuardEnabled = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Tool-Call Loop Guard"),
-		description: t("Detect consecutive identical tool calls across turns and inject a corrective steer"),
+		label: "Tool-Call Loop Guard",
+		description: "Detect consecutive identical tool calls across turns and inject a corrective steer",
 	},
 });
 
@@ -328,8 +346,8 @@ export const cfgModelToolCallLoopGuardThreshold = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Tool-Call Loop Threshold"),
-		description: t("Consecutive identical tool calls required before the corrective steer is injected"),
+		label: "Tool-Call Loop Threshold",
+		description: "Consecutive identical tool calls required before the corrective steer is injected",
 	},
 });
 
@@ -340,8 +358,8 @@ export const cfgModelToolCallLoopGuardExemptTools = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Tool-Call Loop Exempt Tools"),
-		description: t("Tool names that may repeat consecutively without triggering the cross-turn loop guard"),
+		label: "Tool-Call Loop Exempt Tools",
+		description: "Tool names that may repeat consecutively without triggering the cross-turn loop guard",
 	},
 });
 
@@ -353,17 +371,17 @@ export const cfgInlineToolDescriptors = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: t("Inline Tool Descriptors"),
+		label: "Inline Tool Descriptors",
 		description:
-			t("Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once. Auto enables this for Gemini models and disables it otherwise"),
+			"Render full tool descriptors in the system prompt and strip top-level/nested descriptions from provider tool schemas so descriptor text is sent once. Auto enables this for Gemini models and disables it otherwise",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("Inline descriptors for Gemini models; keep them in tool schemas otherwise"),
+				label: "Auto",
+				description: "Inline descriptors for Gemini models; keep them in tool schemas otherwise",
 			},
-			{ value: "on", label: t("On"), description: t("Always inline descriptors in the system prompt") },
-			{ value: "off", label: t("Off"), description: t("Keep descriptors in provider tool schemas only") },
+			{ value: "on", label: "On", description: "Always inline descriptors in the system prompt" },
+			{ value: "off", label: "Off", description: "Keep descriptors in provider tool schemas only" },
 		],
 	},
 });
@@ -375,8 +393,8 @@ export const cfgIncludeModelInPrompt = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: t("Include Model in Prompt"),
-		description: t("Surface the active model identifier in the system prompt so the agent knows which model it is"),
+		label: "Include Model in Prompt",
+		description: "Surface the active model identifier in the system prompt so the agent knows which model it is",
 	},
 });
 
@@ -387,9 +405,9 @@ export const cfgIncludeWorkspaceTree = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: t("Include Workspace Tree"),
+		label: "Include Workspace Tree",
 		description:
-			t("Render the workspace directory tree in the system prompt. WARNING: This can bust prompt caching across sessions when files are modified."),
+			"Render the workspace directory tree in the system prompt. WARNING: This can bust prompt caching across sessions when files are modified.",
 	},
 });
 
@@ -400,9 +418,9 @@ export const cfgSkillful = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: t("List Skills in Prompt"),
+		label: "List Skills in Prompt",
 		description:
-			t("List available skills in the system prompt; disable to save context and toggle per-session with /skillful"),
+			"List available skills in the system prompt; disable to save context and toggle per-session with /skillful",
 	},
 });
 
@@ -417,25 +435,25 @@ export const cfgPersonality = register({
 	ui: {
 		tab: "model",
 		group: "Prompt",
-		label: t("Personality"),
-		description: t("Communication style rendered into the system prompt's personality block"),
+		label: "Personality",
+		description: "Communication style rendered into the system prompt's personality block",
 		options: [
 			{
 				value: "default",
-				label: t("Default"),
-				description: t("Terse, evidence-first engineer; dense, action-oriented replies"),
+				label: "Default",
+				description: "Terse, evidence-first engineer; dense, action-oriented replies",
 			},
 			{
 				value: "friendly",
-				label: t("Friendly"),
-				description: t("Warm, encouraging collaborator focused on momentum and morale"),
+				label: "Friendly",
+				description: "Warm, encouraging collaborator focused on momentum and morale",
 			},
 			{
 				value: "pragmatic",
-				label: t("Pragmatic"),
-				description: t("Direct, efficient engineer focused on clarity and rigor"),
+				label: "Pragmatic",
+				description: "Direct, efficient engineer focused on clarity and rigor",
 			},
-			{ value: "none", label: t("None"), description: t("Omit the personality block entirely") },
+			{ value: "none", label: "None", description: "Omit the personality block entirely" },
 		],
 	},
 });
@@ -448,15 +466,15 @@ export const cfgTemperature = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Temperature"),
-		description: t("Sampling temperature (0 = deterministic, 1 = creative, -1 = provider default)"),
+		label: "Temperature",
+		description: "Sampling temperature (0 = deterministic, 1 = creative, -1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "0", label: "0", description: t("Deterministic") },
-			{ value: "0.2", label: "0.2", description: t("Focused") },
-			{ value: "0.5", label: "0.5", description: t("Balanced") },
-			{ value: "0.7", label: "0.7", description: t("Creative") },
-			{ value: "1", label: "1", description: t("Maximum variety") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "0", label: "0", description: "Deterministic" },
+			{ value: "0.2", label: "0.2", description: "Focused" },
+			{ value: "0.5", label: "0.5", description: "Balanced" },
+			{ value: "0.7", label: "0.7", description: "Creative" },
+			{ value: "1", label: "1", description: "Maximum variety" },
 		],
 	},
 });
@@ -468,15 +486,15 @@ export const cfgTopP = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Top P"),
-		description: t("Nucleus sampling cutoff (0-1, -1 = provider default)"),
+		label: "Top P",
+		description: "Nucleus sampling cutoff (0-1, -1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "0.1", label: "0.1", description: t("Very focused") },
-			{ value: "0.3", label: "0.3", description: t("Focused") },
-			{ value: "0.5", label: "0.5", description: t("Balanced") },
-			{ value: "0.9", label: "0.9", description: t("Broad") },
-			{ value: "1", label: "1", description: t("No nucleus filtering") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "0.1", label: "0.1", description: "Very focused" },
+			{ value: "0.3", label: "0.3", description: "Focused" },
+			{ value: "0.5", label: "0.5", description: "Balanced" },
+			{ value: "0.9", label: "0.9", description: "Broad" },
+			{ value: "1", label: "1", description: "No nucleus filtering" },
 		],
 	},
 });
@@ -488,14 +506,14 @@ export const cfgTopK = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Top K"),
-		description: t("Sample from top-K tokens (-1 = provider default)"),
+		label: "Top K",
+		description: "Sample from top-K tokens (-1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "1", label: "1", description: t("Greedy top token") },
-			{ value: "20", label: "20", description: t("Focused") },
-			{ value: "40", label: "40", description: t("Balanced") },
-			{ value: "100", label: "100", description: t("Broad") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "1", label: "1", description: "Greedy top token" },
+			{ value: "20", label: "20", description: "Focused" },
+			{ value: "40", label: "40", description: "Balanced" },
+			{ value: "100", label: "100", description: "Broad" },
 		],
 	},
 });
@@ -507,13 +525,13 @@ export const cfgMinP = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Min P"),
-		description: t("Minimum probability threshold (0-1, -1 = provider default)"),
+		label: "Min P",
+		description: "Minimum probability threshold (0-1, -1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "0.01", label: "0.01", description: t("Very permissive") },
-			{ value: "0.05", label: "0.05", description: t("Balanced") },
-			{ value: "0.1", label: "0.1", description: t("Strict") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "0.01", label: "0.01", description: "Very permissive" },
+			{ value: "0.05", label: "0.05", description: "Balanced" },
+			{ value: "0.1", label: "0.1", description: "Strict" },
 		],
 	},
 });
@@ -525,14 +543,14 @@ export const cfgPresencePenalty = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Presence Penalty"),
-		description: t("Penalty for introducing already-present tokens (-1 = provider default)"),
+		label: "Presence Penalty",
+		description: "Penalty for introducing already-present tokens (-1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "0", label: "0", description: t("No penalty") },
-			{ value: "0.5", label: "0.5", description: t("Mild novelty") },
-			{ value: "1", label: "1", description: t("Encourage novelty") },
-			{ value: "2", label: "2", description: t("Strong novelty") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "0", label: "0", description: "No penalty" },
+			{ value: "0.5", label: "0.5", description: "Mild novelty" },
+			{ value: "1", label: "1", description: "Encourage novelty" },
+			{ value: "2", label: "2", description: "Strong novelty" },
 		],
 	},
 });
@@ -544,15 +562,15 @@ export const cfgRepetitionPenalty = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Repetition Penalty"),
-		description: t("Penalty for repeated tokens (-1 = provider default)"),
+		label: "Repetition Penalty",
+		description: "Penalty for repeated tokens (-1 = provider default)",
 		options: [
-			{ value: "-1", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use provider default") },
-			{ value: "0.8", label: "0.8", description: t("Allow repetition") },
-			{ value: "1", label: "1", description: t("No penalty") },
-			{ value: "1.1", label: "1.1", description: t("Mild penalty") },
-			{ value: "1.2", label: "1.2", description: t("Balanced") },
-			{ value: "1.5", label: "1.5", description: t("Strong penalty") },
+			{ value: "-1", label: "Default", description: "Use provider default" },
+			{ value: "0.8", label: "0.8", description: "Allow repetition" },
+			{ value: "1", label: "1", description: "No penalty" },
+			{ value: "1.1", label: "1.1", description: "Mild penalty" },
+			{ value: "1.2", label: "1.2", description: "Balanced" },
+			{ value: "1.5", label: "1.5", description: "Strong penalty" },
 		],
 	},
 });
@@ -589,12 +607,12 @@ export const cfgTextVerbosity = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Text Verbosity"),
-		description: t("OpenAI Responses and Codex response verbosity (low, medium, or high)"),
+		label: "Text Verbosity",
+		description: "OpenAI Responses and Codex response verbosity (low, medium, or high)",
 		options: [
-			{ value: "low", label: t("Low"), description: t("Prefer concise responses") },
-			{ value: "medium", label: t("Medium"), description: t("Balance brevity and detail (default)") },
-			{ value: "high", label: t("High"), description: t("Prefer detailed responses") },
+			{ value: "low", label: "Low", description: "Prefer concise responses" },
+			{ value: "medium", label: "Medium", description: "Balance brevity and detail (default)" },
+			{ value: "high", label: "High", description: "Prefer detailed responses" },
 		],
 	},
 });
@@ -607,9 +625,9 @@ export const cfgTierOpenai = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Service Tier — OpenAI"),
+		label: "Service Tier — OpenAI",
 		description:
-			t("Processing tier for OpenAI / OpenAI-Codex requests, and OpenAI-family models routed via OpenRouter (none = omit). Sent as `service_tier`."),
+			"Processing tier for OpenAI / OpenAI-Codex requests, and OpenAI-family models routed via OpenRouter (none = omit). Sent as `service_tier`.",
 		options: SERVICE_TIER_OPENAI_OPTIONS,
 	},
 });
@@ -622,9 +640,9 @@ export const cfgTierAnthropic = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Service Tier — Anthropic"),
+		label: "Service Tier — Anthropic",
 		description:
-			t("Processing tier for Claude requests. `priority` realizes fast mode (`speed: \"fast\"`) on supported direct Anthropic models; ignored on Bedrock/Vertex Claude and via OpenRouter."),
+			'Processing tier for Claude requests. `priority` realizes fast mode (`speed: "fast"`) on supported direct Anthropic models; ignored on Bedrock/Vertex Claude and via OpenRouter.',
 		options: SERVICE_TIER_ANTHROPIC_OPTIONS,
 	},
 });
@@ -637,9 +655,9 @@ export const cfgTierGoogle = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Service Tier — Google"),
+		label: "Service Tier — Google",
 		description:
-			t("Processing tier for Gemini (Google AI Studio + Vertex) requests, and Google-family models routed via OpenRouter (none = omit). Sent as the top-level `serviceTier` field."),
+			"Processing tier for Gemini (Google AI Studio + Vertex) requests, and Google-family models routed via OpenRouter (none = omit). Sent as the top-level `serviceTier` field.",
 		options: SERVICE_TIER_GOOGLE_OPTIONS,
 	},
 });
@@ -652,9 +670,9 @@ export const cfgTierSubagent = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Service Tier — Subagent"),
+		label: "Service Tier — Subagent",
 		description:
-			t("Service Tier for spawned task/eval subagents. Inherit = match the main agent's live per-family tiers (tracks /fast); pick a value to apply it to whichever family the subagent's model belongs to."),
+			"Service Tier for spawned task/eval subagents. Inherit = match the main agent's live per-family tiers (tracks /fast); pick a value to apply it to whichever family the subagent's model belongs to.",
 		options: SERVICE_TIER_INHERIT_OPTIONS,
 	},
 });
@@ -668,9 +686,9 @@ export const cfgTierAdvisor = register({
 	ui: {
 		tab: "model",
 		group: "Sampling",
-		label: t("Service Tier — Advisor"),
+		label: "Service Tier — Advisor",
 		description:
-			t("Service Tier for the advisor model. None = standard processing; Inherit = match the main agent's live per-family tiers; pick a value to apply it to the advisor model's family."),
+			"Service Tier for the advisor model. None = standard processing; Inherit = match the main agent's live per-family tiers; pick a value to apply it to the advisor model's family.",
 		options: SERVICE_TIER_INHERIT_OPTIONS,
 		condition: "advisorEnabled",
 	},
@@ -686,14 +704,14 @@ export const cfgRetryMaxRetries = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Retry Attempts"),
-		description: t("Maximum retry attempts on API errors"),
+		label: "Retry Attempts",
+		description: "Maximum retry attempts on API errors",
 		options: [
-			{ value: "1", label: t("1 retry") },
-			{ value: "2", label: t("2 retries") },
-			{ value: "3", label: t("3 retries") },
-			{ value: "5", label: t("5 retries") },
-			{ value: "10", label: t("10 retries") },
+			{ value: "1", label: "1 retry" },
+			{ value: "2", label: "2 retries" },
+			{ value: "3", label: "3 retries" },
+			{ value: "5", label: "5 retries" },
+			{ value: "10", label: "10 retries" },
 		],
 	},
 });
@@ -707,9 +725,9 @@ export const cfgRetryMaxDelayMs = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Max Retry Delay"),
+		label: "Max Retry Delay",
 		description:
-			t("Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets."),
+			"Maximum wait between retries, in ms. When the provider asks us to wait longer than this and no credential or model fallback succeeds, the request fails fast instead of sleeping (e.g. 3-hour Anthropic rate-limit windows). 0 disables the ceiling — to let the session auto-resume through provider-stated quota resets.",
 	},
 });
 
@@ -720,9 +738,9 @@ export const cfgRetryWaitForUsageReset = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Wait For Usage Reset"),
+		label: "Wait For Usage Reset",
 		get description() {
-			return t("When a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), sleep until the reset instead of failing fast past retry.maxDelayMs. Waits are abortable ({0}) but also hold subagents, so leave off for unattended runs.", `${formatKeyHint("escape")}`);
+			return `When a provider reports usage-limit exhaustion with a reset time (5-hour or weekly quota windows on any provider), sleep until the reset instead of failing fast past retry.maxDelayMs. Waits are abortable (${formatKeyHint("escape")}) but also hold subagents, so leave off for unattended runs.`;
 		},
 	},
 });
@@ -734,9 +752,9 @@ export const cfgRetryModelFallback = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Retry Model Fallback"),
+		label: "Retry Model Fallback",
 		description:
-			t("Allow retry recovery to switch to models in retry.fallbackChains after provider errors. Independent of Auto-Promote Context"),
+			"Allow retry recovery to switch to models in retry.fallbackChains after provider errors. Independent of Auto-Promote Context",
 	},
 });
 
@@ -748,19 +766,19 @@ export const cfgRetryFallbackOn = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Fallback Trigger"),
-		description: t("Which failed requests may switch to a configured fallback model"),
+		label: "Fallback Trigger",
+		description: "Which failed requests may switch to a configured fallback model",
 		options: [
-			{ value: "any", label: t("Any error"), description: t("Every provider error may switch models") },
+			{ value: "any", label: "Any error", description: "Every provider error may switch models" },
 			{
 				value: "usage-limit",
-				label: t("Usage limits only"),
-				description: t("Switch only on a usage limit; retry other errors on the same model, then surface them"),
+				label: "Usage limits only",
+				description: "Switch only on a usage limit; retry other errors on the same model, then surface them",
 			},
 			{
 				value: "except-usage-limit",
-				label: t("All but usage limits"),
-				description: t("Wait out or surface a usage limit; switch on other errors"),
+				label: "All but usage limits",
+				description: "Wait out or surface a usage limit; switch on other errors",
 			},
 		],
 	},
@@ -773,9 +791,9 @@ export const cfgRetryUsageAwareFallback = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Usage-Aware Fallback"),
+		label: "Usage-Aware Fallback",
 		description:
-			t("Use reliable coding-plan quota reports to prefer same-provider accounts, then configured fallback models, before a hard usage limit. Ordinary configured API keys are excluded."),
+			"Use reliable coding-plan quota reports to prefer same-provider accounts, then configured fallback models, before a hard usage limit. Ordinary configured API keys are excluded.",
 	},
 });
 
@@ -786,16 +804,16 @@ export const cfgRetryUsageReservePct = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Reserve Margin"),
+		label: "Reserve Margin",
 		description:
-			t("Treat a coding-plan model as near its limit below this remaining percentage. Unknown or unmapped usage keeps the primary model."),
+			"Treat a coding-plan model as near its limit below this remaining percentage. Unknown or unmapped usage keeps the primary model.",
 		condition: "usageAwareFallbackEnabled",
 		options: [
-			{ value: "5", label: "5%", description: t("Act only when nearly exhausted") },
-			{ value: "10", label: "10%", description: t("Balanced safety margin") },
-			{ value: "15", label: "15%", description: t("Conservative") },
-			{ value: "20", label: "20%", description: t("Early protection") },
-			{ value: "25", label: "25%", description: t("Very conservative") },
+			{ value: "5", label: "5%", description: "Act only when nearly exhausted" },
+			{ value: "10", label: "10%", description: "Balanced safety margin" },
+			{ value: "15", label: "15%", description: "Conservative" },
+			{ value: "20", label: "20%", description: "Early protection" },
+			{ value: "25", label: "25%", description: "Very conservative" },
 		],
 	},
 });
@@ -808,24 +826,24 @@ export const cfgRetryUsageReservePolicy = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Reserve Policy"),
-		description: t("What to do when every same-provider coding-plan account is inside the reserve margin."),
+		label: "Reserve Policy",
+		description: "What to do when every same-provider coding-plan account is inside the reserve margin.",
 		condition: "usageAwareFallbackEnabled",
 		options: [
 			{
 				value: "confirm",
-				label: t("Confirm interactively"),
-				description: t("Keep interactive sessions on the primary until confirmed; background agents auto-fallback"),
+				label: "Confirm interactively",
+				description: "Keep interactive sessions on the primary until confirmed; background agents auto-fallback",
 			},
 			{
 				value: "auto",
-				label: t("Auto-fallback"),
-				description: t("Always select the next eligible configured fallback"),
+				label: "Auto-fallback",
+				description: "Always select the next eligible configured fallback",
 			},
 			{
 				value: "fail-closed",
-				label: t("Fail closed"),
-				description: t("Do not spend reserve quota or select a fallback"),
+				label: "Fail closed",
+				description: "Do not spend reserve quota or select a fallback",
 			},
 		],
 	},
@@ -838,9 +856,9 @@ export const cfgRetryFallbackChains = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Retry Fallback Chains"),
+		label: "Retry Fallback Chains",
 		description:
-			t("JSON object mapping model roles, model selectors (\"provider/model-id\"), or provider wildcards (\"provider/*\") to ordered fallback selectors, e.g. {\"default\":[\"openai/gpt-4o-mini\"],\"google-antigravity/*\":[\"google/*\",\"google-vertex/*\"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a \"provider/*\" entry keeps the failing model's id and swaps the provider. An id-prefixed wildcard (\"openrouter/google/*\") re-prefixes the failing model's bare id (google-antigravity/gemini-x -> openrouter/google/gemini-x) and, used as a key, matches only that provider's ids under the prefix. A fallback entry may carry an explicit thinking suffix (\"provider/model:low\", \":high\", \":max\", \":off\"); a bare entry inherits the failing turn's effort, and \"provider/*\" entries always inherit."),
+			'JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model\'s id and swaps the provider. An id-prefixed wildcard ("openrouter/google/*") re-prefixes the failing model\'s bare id (google-antigravity/gemini-x -> openrouter/google/gemini-x) and, used as a key, matches only that provider\'s ids under the prefix. A fallback entry may carry an explicit thinking suffix ("provider/model:low", ":high", ":max", ":off"); a bare entry inherits the failing turn\'s effort, and "provider/*" entries always inherit.',
 	},
 });
 
@@ -852,15 +870,15 @@ export const cfgRetryFallbackRevertPolicy = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Fallback Revert Policy"),
-		description: t("When to return to the primary model after a fallback"),
+		label: "Fallback Revert Policy",
+		description: "When to return to the primary model after a fallback",
 		options: [
 			{
 				value: "cooldown-expiry",
-				label: t("Cooldown expiry"),
-				description: t("Return to the primary model after its suppression window ends"),
+				label: "Cooldown expiry",
+				description: "Return to the primary model after its suppression window ends",
 			},
-			{ value: "never", label: t("Never\u0004packages/coding-agent/src/session/settings.ts:cfgRetryFallbackRevertPolicy.ui.options.label"), description: t("Stay on the fallback model until manually changed") },
+			{ value: "never", label: "Never", description: "Stay on the fallback model until manually changed" },
 		],
 	},
 });
@@ -889,9 +907,9 @@ export const cfgProvidersAnthropicServerSideFallback = register({
 	ui: {
 		tab: "model",
 		group: "Retry & Fallback",
-		label: t("Anthropic Server-Side Fallback (Fable 5)"),
+		label: "Anthropic Server-Side Fallback (Fable 5)",
 		description:
-			t("When a Claude Fable 5 / Mythos 5 request is blocked by Anthropic's safety classifier, retry it on Claude Opus 5 server-side (Anthropic `server-side-fallback-2026-06-01` beta). Opt-in — leaving this off preserves the pre-fallback behavior for every request."),
+			"When a Claude Fable 5 / Mythos 5 request is blocked by Anthropic's safety classifier, retry it on Claude Opus 5 server-side (Anthropic `server-side-fallback-2026-06-01` beta). Opt-in — leaving this off preserves the pre-fallback behavior for every request.",
 	},
 });
 
@@ -917,8 +935,8 @@ export const cfgProvidersOllamaCloudMaxConcurrency = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Ollama Cloud Max Concurrency"),
-		description: t("Maximum concurrent Ollama Cloud subagent runs per process; 0 disables the provider-specific limit"),
+		label: "Ollama Cloud Max Concurrency",
+		description: "Maximum concurrent Ollama Cloud subagent runs per process; 0 disables the provider-specific limit",
 	},
 });
 
@@ -929,14 +947,14 @@ export const cfgProvidersWebSearchTimeoutSeconds = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Web Search Timeout"),
-		description: t("Hard timeout for each provider's search transport before web_search advances to the next fallback, in seconds (maximum {0})", `${MAX_WEB_SEARCH_TIMEOUT_SECONDS}`),
+		label: "Web Search Timeout",
+		description: `Hard timeout for each provider's search transport before web_search advances to the next fallback, in seconds (maximum ${MAX_WEB_SEARCH_TIMEOUT_SECONDS})`,
 		options: [
-			{ value: "30", label: t("30 seconds") },
-			{ value: "60", label: t("1 minute") },
-			{ value: "120", label: t("2 minutes") },
-			{ value: "180", label: t("3 minutes") },
-			{ value: "300", label: t("5 minutes") },
+			{ value: "30", label: "30 seconds" },
+			{ value: "60", label: "1 minute" },
+			{ value: "120", label: "2 minutes" },
+			{ value: "180", label: "3 minutes" },
+			{ value: "300", label: "5 minutes" },
 		],
 	},
 });
@@ -949,23 +967,23 @@ export const cfgProvidersAntigravityEndpoint = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Antigravity Endpoint Mode"),
-		description: t("Endpoint routing strategy for google-antigravity providers (chat, search, image, discovery)"),
+		label: "Antigravity Endpoint Mode",
+		description: "Endpoint routing strategy for google-antigravity providers (chat, search, image, discovery)",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("Try production endpoint, fail over to sandbox on 5xx/429"),
+				label: "Auto",
+				description: "Try production endpoint, fail over to sandbox on 5xx/429",
 			},
 			{
 				value: "production",
-				label: t("Production Only"),
-				description: t("Force production endpoint only"),
+				label: "Production Only",
+				description: "Force production endpoint only",
 			},
 			{
 				value: "sandbox",
-				label: t("Sandbox Only"),
-				description: t("Force sandbox endpoint only"),
+				label: "Sandbox Only",
+				description: "Force sandbox endpoint only",
 			},
 		],
 	},
@@ -979,15 +997,15 @@ export const cfgProvidersFireworksTier = register({
 	ui: {
 		tab: "providers",
 		group: "Fireworks",
-		label: t("Fireworks Tier"),
+		label: "Fireworks Tier",
 		description:
-			t("Serving path for Fireworks requests. Priority sends `service_tier: \"priority\"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path."),
+			'Serving path for Fireworks requests. Priority sends `service_tier: "priority"` for higher reliability during peak traffic at a higher price; Standard omits it. Fast (`-fast`) models ignore this — Fast is its own serving path.',
 		options: [
-			{ value: "standard", label: t("Standard"), description: t("Default serving path (no service_tier)") },
+			{ value: "standard", label: "Standard", description: "Default serving path (no service_tier)" },
 			{
 				value: "priority",
-				label: t("Priority"),
-				description: t("Priority serving path: higher reliability, premium per-token pricing"),
+				label: "Priority",
+				description: "Priority serving path: higher reliability, premium per-token pricing",
 			},
 		],
 	},
@@ -1005,9 +1023,9 @@ export const cfgProvidersTinyModelDevice = register({
 	ui: {
 		tab: "providers",
 		group: "Tiny Model",
-		label: t("Tiny Model Device"),
+		label: "Tiny Model Device",
 		description:
-			t("Inference backend for local tiny models (titles + memory): an ONNX execution provider, or `mlx` to download MLX weights and run them through mlx-lm on Apple silicon. Default uses CPU-only ONNX. The PI_TINY_DEVICE env var overrides this."),
+			"Inference backend for local tiny models (titles + memory): an ONNX execution provider, or `mlx` to download MLX weights and run them through mlx-lm on Apple silicon. Default uses CPU-only ONNX. The PI_TINY_DEVICE env var overrides this.",
 		options: TINY_MODEL_DEVICE_SETTING_OPTIONS,
 	},
 });
@@ -1024,9 +1042,9 @@ export const cfgProvidersTinyModelDtype = register({
 	ui: {
 		tab: "providers",
 		group: "Tiny Model",
-		label: t("Tiny Model Precision"),
+		label: "Tiny Model Precision",
 		description:
-			t("ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. Ignored by the MLX backend (its repos are pre-quantized 4-bit). The PI_TINY_DTYPE env var overrides this."),
+			"ONNX quantization/precision for local tiny models. Default uses each model's shipped dtype (q4); lower precision is faster, higher is more faithful. Ignored by the MLX backend (its repos are pre-quantized 4-bit). The PI_TINY_DTYPE env var overrides this.",
 		options: TINY_MODEL_DTYPE_SETTING_OPTIONS,
 	},
 });
@@ -1039,13 +1057,13 @@ export const cfgProvidersAutoThinkingMaxEffort = register({
 	ui: {
 		tab: "model",
 		group: "Thinking",
-		label: t("Auto Thinking Ceiling"),
+		label: "Auto Thinking Ceiling",
 		description:
-			t("Highest effort the `auto` classifier may resolve. `xhigh` keeps the classifier one tier below the top, so only an explicit `ultrathink` reaches `max`; `max` lets a turn the classifier judges exceptional bill the top tier on models that expose it."),
+			"Highest effort the `auto` classifier may resolve. `xhigh` keeps the classifier one tier below the top, so only an explicit `ultrathink` reaches `max`; `max` lets a turn the classifier judges exceptional bill the top tier on models that expose it.",
 		condition: "autoThinkingActive",
 		options: [
-			{ value: "xhigh", label: "xhigh", description: t("Classifier stops at xhigh (default)") },
-			{ value: "max", label: "max", description: t("Classifier may resolve max where the model supports it") },
+			{ value: "xhigh", label: "xhigh", description: "Classifier stops at xhigh (default)" },
+			{ value: "max", label: "max", description: "Classifier may resolve max where the model supports it" },
 		],
 	},
 });
@@ -1058,20 +1076,20 @@ export const cfgFeaturesUnexpectedStopDetection = register({
 	ui: {
 		tab: "interaction",
 		group: "Agent",
-		label: t("Unexpected Stops"),
+		label: "Unexpected Stops",
 		description:
-			t("Automatically recover when the assistant stops without a visible message. Smart also classifies text-only stops with a small model."),
+			"Automatically recover when the assistant stops without a visible message. Smart also classifies text-only stops with a small model.",
 		options: [
-			{ value: "none", label: t("None"), description: t("Disabled\u0004packages/coding-agent/src/modes/settings.ts:cfgDisplayShimmer.ui.options.label") },
+			{ value: "none", label: "None", description: "Disabled" },
 			{
 				value: "mechanical",
-				label: t("Mechanical"),
-				description: t("Retry stops with no visible assistant message; tool calls are excluded (default)"),
+				label: "Mechanical",
+				description: "Retry stops with no visible assistant message; tool calls are excluded (default)",
 			},
 			{
 				value: "smart",
-				label: t("Smart\u0004packages/coding-agent/src/session/settings.ts:cfgFeaturesUnexpectedStopDetection.ui.options.label"),
-				description: t("Mechanical + small-model classification of text-only stops"),
+				label: "Smart",
+				description: "Mechanical + small-model classification of text-only stops",
 			},
 		],
 	},
@@ -1085,10 +1103,10 @@ export const cfgProvidersKimiApiFormat = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("Kimi API Format"),
-		description: t("API format for Kimi Code provider (auto follows live model metadata)"),
+		label: "Kimi API Format",
+		description: "API format for Kimi Code provider (auto follows live model metadata)",
 		options: [
-			{ value: "auto", label: t("Auto"), description: t("Use the model's server-declared protocol") },
+			{ value: "auto", label: "Auto", description: "Use the model's server-declared protocol" },
 			{ value: "openai", label: "OpenAI", description: "api.kimi.com" },
 			{ value: "anthropic", label: "Anthropic", description: "api.moonshot.ai" },
 		],
@@ -1103,12 +1121,12 @@ export const cfgProvidersOpenaiWebsockets = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: "OpenAI WebSocket",
-		description: t("Websocket policy for OpenAI Codex models (auto uses model defaults, on forces, off disables)"),
+		label: "OpenAI WebSockets",
+		description: "Websocket policy for OpenAI Codex models (auto uses model defaults, on forces, off disables)",
 		options: [
-			{ value: "auto", label: t("Auto"), description: t("Use model/provider default websocket behavior") },
-			{ value: "off", label: t("Off"), description: t("Disable websockets for OpenAI Codex models") },
-			{ value: "on", label: t("On"), description: t("Force websockets for OpenAI Codex models") },
+			{ value: "auto", label: "Auto", description: "Use model/provider default websocket behavior" },
+			{ value: "off", label: "Off", description: "Disable websockets for OpenAI Codex models" },
+			{ value: "on", label: "On", description: "Force websockets for OpenAI Codex models" },
 		],
 	},
 });
@@ -1120,9 +1138,9 @@ export const cfgProvidersOpenaiLiveSteering = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("OpenAI Live Steering"),
+		label: "OpenAI Live Steering",
 		description:
-			t("Deliver messages typed while a GPT-6 response streams into that response over the Codex WebSocket, instead of waiting for the next tool boundary"),
+			"Deliver messages typed while a GPT-6 response streams into that response over the Codex WebSocket, instead of waiting for the next tool boundary",
 	},
 });
 
@@ -1134,9 +1152,9 @@ export const cfgProvidersMuseCodeStoreResponses = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("Muse Code Stored Responses"),
+		label: "Muse Code Stored Responses",
 		description:
-			t("Store Muse Code results on Meta's servers so a turn whose connection drops is recovered instead of re-run. Stored runs keep prompts and outputs on Meta's side."),
+			"Store Muse Code results on Meta's servers so a turn whose connection drops is recovered instead of re-run. Stored runs keep prompts and outputs on Meta's side.",
 	},
 });
 // Process-wide too, so side requests that call `completeSimple`/`streamSimple`
@@ -1151,28 +1169,28 @@ export const cfgProvidersCacheRetention = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("Prompt Cache Retention"),
+		label: "Prompt Cache Retention",
 		description:
-			t("Prompt-cache retention forwarded to providers that support it (Anthropic, Bedrock, OpenRouter, OpenAI)"),
+			"Prompt-cache retention forwarded to providers that support it (Anthropic, Bedrock, OpenRouter, OpenAI)",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
+				label: "Auto",
 				description:
-					t("Provider default — Anthropic OAuth subscriber sessions default to 1h, API keys use 5m; PI_CACHE_RETENTION still applies"),
+					"Provider default — Anthropic OAuth subscriber sessions default to 1h, API keys use 5m; PI_CACHE_RETENTION still applies",
 			},
 			{
 				value: "short",
-				label: t("Short (5m)"),
-				description: t("Cheapest cache writes; pair with cache warming to keep short entries alive while idle"),
+				label: "Short (5m)",
+				description: "Cheapest cache writes; pair with cache warming to keep short entries alive while idle",
 			},
 			{
 				value: "long",
-				label: t("Long (1h+)"),
+				label: "Long (1h+)",
 				description:
-					t("Longer TTL where supported (Anthropic/Bedrock 1h, OpenAI GPT-5.6+ Responses 12h); pricier writes, only warmed during active runs"),
+					"Longer TTL where supported (Anthropic/Bedrock 1h, OpenAI GPT-5.6+ Responses 12h); pricier writes, only warmed during active runs",
 			},
-			{ value: "none", label: t("Off"), description: t("Disable prompt caching and cache-affinity routing") },
+			{ value: "none", label: "Off", description: "Disable prompt caching and cache-affinity routing" },
 		],
 	},
 });
@@ -1185,21 +1203,21 @@ export const cfgProvidersCacheWarming = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("Cache Warming"),
+		label: "Cache Warming",
 		description:
-			t("Re-send the last request with a one-token output budget shortly before its prompt-cache entry expires"),
+			"Re-send the last request with a one-token output budget shortly before its prompt-cache entry expires",
 		options: [
-			{ value: "off", label: t("Off"), description: t("Disable cache warming") },
+			{ value: "off", label: "Off", description: "Disable cache warming" },
 			{
 				value: "streaming",
-				label: t("Streaming"),
-				description: t("Protect expensive prefixes during long tool executions; stops when the agent settles"),
+				label: "Streaming",
+				description: "Protect expensive prefixes during long tool executions; stops when the agent settles",
 			},
 			{
 				value: "idle",
-				label: t("Idle\u0004packages/coding-agent/src/session/settings.ts:cfgProvidersCacheWarming.ui.options.label"),
+				label: "Idle",
 				description:
-					t("Also refresh 5-minute entries between runs while the expected savings stay above the cost floor"),
+					"Also refresh 5-minute entries between runs while the expected savings stay above the cost floor",
 			},
 		],
 	},
@@ -1212,15 +1230,15 @@ export const cfgProvidersStreamFirstEventTimeoutSeconds = register({
 	ui: {
 		tab: "providers",
 		group: "Timeouts",
-		label: t("Stream First Event Timeout"),
+		label: "Stream First Event Timeout",
 		description:
-			t("Seconds to wait for the first model stream event; -1 uses provider/env defaults, 0 disables the watchdog"),
+			"Seconds to wait for the first model stream event; -1 uses provider/env defaults, 0 disables the watchdog",
 		options: [
-			{ value: "-1", label: t("Auto"), description: t("Use provider defaults and PI_* timeout env vars") },
-			{ value: "0", label: t("Off"), description: t("Disable first-event timeout") },
-			{ value: "300", label: t("5 minutes") },
-			{ value: "600", label: t("10 minutes") },
-			{ value: "1800", label: t("30 minutes") },
+			{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
+			{ value: "0", label: "Off", description: "Disable first-event timeout" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "600", label: "10 minutes" },
+			{ value: "1800", label: "30 minutes" },
 		],
 	},
 });
@@ -1232,15 +1250,15 @@ export const cfgProvidersStreamIdleTimeoutSeconds = register({
 	ui: {
 		tab: "providers",
 		group: "Timeouts",
-		label: t("Stream Idle Timeout"),
+		label: "Stream Idle Timeout",
 		description:
-			t("Seconds a model stream may stay silent between events; -1 uses provider/env defaults, 0 disables the watchdog"),
+			"Seconds a model stream may stay silent between events; -1 uses provider/env defaults, 0 disables the watchdog",
 		options: [
-			{ value: "-1", label: t("Auto"), description: t("Use provider defaults and PI_* timeout env vars") },
-			{ value: "0", label: t("Off"), description: t("Disable idle timeout") },
-			{ value: "300", label: t("5 minutes") },
-			{ value: "600", label: t("10 minutes") },
-			{ value: "1800", label: t("30 minutes") },
+			{ value: "-1", label: "Auto", description: "Use provider defaults and PI_* timeout env vars" },
+			{ value: "0", label: "Off", description: "Disable idle timeout" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "600", label: "10 minutes" },
+			{ value: "1800", label: "30 minutes" },
 		],
 	},
 });
@@ -1253,18 +1271,18 @@ export const cfgProvidersOpenrouterVariant = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("OpenRouter Routing"),
+		label: "OpenRouter Routing",
 		description:
-			t("Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)"),
+			"Default routing-variant suffix appended to OpenRouter model IDs (overridden when the selector already names a variant)",
 		options: [
-			{ value: "default", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("No suffix; use OpenRouter's default routing") },
-			{ value: "nitro", label: ":nitro", description: t("Prioritize throughput / lowest latency") },
-			{ value: "floor", label: ":floor", description: t("Prioritize cheapest available provider") },
-			{ value: "online", label: ":online", description: t("Enable OpenRouter's web-search plugin") },
+			{ value: "default", label: "Default", description: "No suffix; use OpenRouter's default routing" },
+			{ value: "nitro", label: ":nitro", description: "Prioritize throughput / lowest latency" },
+			{ value: "floor", label: ":floor", description: "Prioritize cheapest available provider" },
+			{ value: "online", label: ":online", description: "Enable OpenRouter's web-search plugin" },
 			{
 				value: "exacto",
 				label: ":exacto",
-				description: t("Cherry-picked high-quality providers (only defined for select models)"),
+				description: "Cherry-picked high-quality providers (only defined for select models)",
 			},
 		],
 	},
@@ -1278,20 +1296,20 @@ export const cfgProvidersFetch = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Fetch Provider"),
-		description: t("Reader backend priority for the fetch/read URL tool"),
+		label: "Fetch Provider",
+		description: "Reader backend priority for the fetch/read URL tool",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("Priority: native > trafilatura > lynx > parallel > firecrawl > jina"),
+				label: "Auto",
+				description: "Priority: native > trafilatura > lynx > parallel > firecrawl > jina",
 			},
-			{ value: "native", label: t("Native"), description: t("In-process HTML→Markdown converter (always available)") },
-			{ value: "trafilatura", label: "Trafilatura", description: t("Auto-installs via uv/pip") },
-			{ value: "lynx", label: "Lynx", description: t("Requires lynx system package") },
-			{ value: "parallel", label: "Parallel", description: t("Requires PARALLEL_API_KEY") },
-			{ value: "firecrawl", label: "Firecrawl", description: t("Requires FIRECRAWL_API_KEY") },
-			{ value: "jina", label: "Jina", description: t("Uses r.jina.ai reader (JINA_API_KEY optional)") },
+			{ value: "native", label: "Native", description: "In-process HTML→Markdown converter (always available)" },
+			{ value: "trafilatura", label: "Trafilatura", description: "Auto-installs via uv/pip" },
+			{ value: "lynx", label: "Lynx", description: "Requires lynx system package" },
+			{ value: "parallel", label: "Parallel", description: "Requires PARALLEL_API_KEY" },
+			{ value: "firecrawl", label: "Firecrawl", description: "Requires FIRECRAWL_API_KEY" },
+			{ value: "jina", label: "Jina", description: "Uses r.jina.ai reader (JINA_API_KEY optional)" },
 		],
 	},
 });
@@ -1305,18 +1323,18 @@ export const cfgCodexResetsAutoRedeem = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Codex Auto-Redeem Saved Resets"),
+		label: "Codex Auto-Redeem Saved Resets",
 		description:
-			t("Spend saved Codex rate-limit resets automatically: restore an account blocked by an exhausted 5h or weekly window when a turn is stuck and no other account can take over, and salvage credits that are about to expire. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables both checks."),
+			"Spend saved Codex rate-limit resets automatically: restore an account blocked by an exhausted 5h or weekly window when a turn is stuck and no other account can take over, and salvage credits that are about to expire. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables both checks.",
 		options: [
 			{
 				value: "unset",
-				label: t("Unset"),
+				label: "Unset",
 				description:
-					t("Check eligibility, then ask before spending the first saved reset. With no prompt UI, spend only a reset expiring within 5 minutes."),
+					"Check eligibility, then ask before spending the first saved reset. With no prompt UI, spend only a reset expiring within 5 minutes.",
 			},
-			{ value: "yes", label: t("Yes"), description: t("Spend eligible saved resets without prompting.") },
-			{ value: "no", label: t("No"), description: t("Do not run the saved-reset auto-redeem check.") },
+			{ value: "yes", label: "Yes", description: "Spend eligible saved resets without prompting." },
+			{ value: "no", label: "No", description: "Do not run the saved-reset auto-redeem check." },
 		],
 	},
 });
@@ -1328,9 +1346,9 @@ export const cfgCodexResetsMinBlockedMinutes = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Codex Auto-Redeem Min Block"),
+		label: "Codex Auto-Redeem Min Block",
 		description:
-			t("Only auto-redeem when the natural unblock — the latest reset among the exhausted 5h/weekly windows — is at least this many minutes away (don't spend a scarce credit to save a short wait). Raise it (e.g. 360) to ignore 5h-only blocks."),
+			"Only auto-redeem when the natural unblock — the latest reset among the exhausted 5h/weekly windows — is at least this many minutes away (don't spend a scarce credit to save a short wait). Raise it (e.g. 360) to ignore 5h-only blocks.",
 	},
 });
 
@@ -1341,9 +1359,9 @@ export const cfgCodexResetsKeepCredits = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Codex Auto-Redeem Reserve"),
+		label: "Codex Auto-Redeem Reserve",
 		description:
-			t("Never auto-spend below this many saved resets (0 = the last credit may be spent automatically). Credits about to expire are exempt — a reserved credit that expires preserves nothing."),
+			"Never auto-spend below this many saved resets (0 = the last credit may be spent automatically). Credits about to expire are exempt — a reserved credit that expires preserves nothing.",
 	},
 });
 
@@ -1354,9 +1372,9 @@ export const cfgCodexResetsSalvageHorizonHours = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Codex Reset Salvage Horizon"),
+		label: "Codex Reset Salvage Horizon",
 		description:
-			t("With auto-redeem enabled, spend a saved Codex reset within this many hours of expiry when either chat window has meaningful usage. 0 disables early salvage; credits expiring within 5 minutes are still attempted regardless of usage."),
+			"With auto-redeem enabled, spend a saved Codex reset within this many hours of expiry when either chat window has meaningful usage. 0 disables early salvage; credits expiring within 5 minutes are still attempted regardless of usage.",
 	},
 });
 
@@ -1380,18 +1398,18 @@ export const cfgClaudeResetsAutoRedeem = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Claude Auto-Redeem Resets"),
+		label: "Claude Auto-Redeem Resets",
 		description:
-			t("Spend eligible Claude Cedar or Juniper resets automatically. Cedar is spent only for covered limits; Juniper can only recover a sole 5-hour block. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables blocked recovery and expiry salvage."),
+			"Spend eligible Claude Cedar or Juniper resets automatically. Cedar is spent only for covered limits; Juniper can only recover a sole 5-hour block. unset asks before the first spend (with no prompt UI, it spends only a reset expiring within 5 minutes), yes spends without prompting, and no disables blocked recovery and expiry salvage.",
 		options: [
 			{
 				value: "unset",
-				label: t("Unset"),
+				label: "Unset",
 				description:
-					t("Check live eligibility, then ask before spending the first Claude reset. With no prompt UI, spend only a reset expiring within 5 minutes."),
+					"Check live eligibility, then ask before spending the first Claude reset. With no prompt UI, spend only a reset expiring within 5 minutes.",
 			},
-			{ value: "yes", label: t("Yes"), description: t("Spend eligible Claude resets without prompting.") },
-			{ value: "no", label: t("No"), description: t("Do not run Claude reset auto-redeem checks.") },
+			{ value: "yes", label: "Yes", description: "Spend eligible Claude resets without prompting." },
+			{ value: "no", label: "No", description: "Do not run Claude reset auto-redeem checks." },
 		],
 	},
 });
@@ -1403,9 +1421,9 @@ export const cfgClaudeResetsMinBlockedMinutes = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Claude Auto-Redeem Min Block"),
+		label: "Claude Auto-Redeem Min Block",
 		description:
-			t("Only auto-redeem when the natural unblock — the latest reset among the exhausted covered windows — is at least this many minutes away. A 5-hour-only reset is never used for a weekly or model-scoped block."),
+			"Only auto-redeem when the natural unblock — the latest reset among the exhausted covered windows — is at least this many minutes away. A 5-hour-only reset is never used for a weekly or model-scoped block.",
 	},
 });
 
@@ -1416,9 +1434,9 @@ export const cfgClaudeResetsKeepCredits = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Claude Auto-Redeem Reserve"),
+		label: "Claude Auto-Redeem Reserve",
 		description:
-			t("Keep at least this many Claude resets banked (0 allows the last eligible reset to be spent automatically). The reserve applies to early salvage, but not to eligible resets expiring within 5 minutes."),
+			"Keep at least this many Claude resets banked (0 allows the last eligible reset to be spent automatically). The reserve applies to early salvage, but not to eligible resets expiring within 5 minutes.",
 	},
 });
 
@@ -1429,9 +1447,9 @@ export const cfgClaudeResetsSalvageHorizonHours = register({
 	ui: {
 		tab: "providers",
 		group: "Services",
-		label: t("Claude Reset Salvage Horizon"),
+		label: "Claude Reset Salvage Horizon",
 		description:
-			t("With auto-redeem enabled, use a server-selected Cedar reset within this many hours of expiry when its covered windows have meaningful usage. 0 disables early salvage; eligible Cedar or Juniper resets expiring within 5 minutes are still attempted regardless of usage or reserve. Provider limit requirements still apply."),
+			"With auto-redeem enabled, use a server-selected Cedar reset within this many hours of expiry when its covered windows have meaningful usage. 0 disables early salvage; eligible Cedar or Juniper resets expiring within 5 minutes are still attempted regardless of usage or reserve. Provider limit requirements still apply.",
 	},
 });
 
@@ -1451,13 +1469,13 @@ export const cfgProviderAppendOnlyContext = register({
 	ui: {
 		tab: "providers",
 		group: "Protocol",
-		label: t("Append-Only Context"),
+		label: "Append-Only Context",
 		description:
-			t("Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Xiaomi/SGLang, Anthropic) hit at maximum rate. Auto enables for known prefix-cache providers."),
+			"Cache system prompt + tool specs and keep an append-only message log so provider prefix caches (DeepSeek, Xiaomi/SGLang, Anthropic) hit at maximum rate. Auto enables for known prefix-cache providers.",
 		options: [
-			{ value: "auto", label: t("Auto"), description: t("Enable for known prefix-cache providers (recommended)") },
-			{ value: "on", label: t("On"), description: t("Always enable append-only context") },
-			{ value: "off", label: t("Off"), description: t("Disable append-only context") },
+			{ value: "auto", label: "Auto", description: "Enable for known prefix-cache providers (recommended)" },
+			{ value: "on", label: "On", description: "Always enable append-only context" },
+			{ value: "off", label: "Off", description: "Disable append-only context" },
 		],
 	},
 });

@@ -5,7 +5,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getBrowserRelayDir } from "@oh-my-pi/pi-utils";
-import { localizeBrowserHtml, localizeBrowserManifest, localizeBrowserScript } from "@oh-my-pi/pi-utils/browser-i18n";
 import backgroundJs from "./extension-assets/background.js.txt" with { type: "text" };
 import licenseText from "./extension-assets/LICENSE.txt" with { type: "text" };
 import manifestJson from "./extension-assets/manifest.json.txt" with { type: "text" };
@@ -22,9 +21,9 @@ export function relayExtensionFiles(ompVersion: string): Record<string, string> 
 		"background.js": stampRelayExtensionScript(backgroundJs, ompVersion),
 		LICENSE: licenseText,
 		// Shown in chrome://extensions.
-		"manifest.json": stampRelayExtensionManifest(localizeBrowserManifest(manifestJson), ompVersion),
-		"options.html": localizeBrowserHtml(optionsHtml),
-		"options.js": localizeBrowserScript(optionsJs),
+		"manifest.json": stampRelayExtensionManifest(manifestJson, ompVersion),
+		"options.html": optionsHtml,
+		"options.js": optionsJs,
 		"THIRD-PARTY-NOTICES.txt": thirdPartyNotices,
 	};
 }

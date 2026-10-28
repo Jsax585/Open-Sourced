@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
@@ -69,23 +68,23 @@ export function formatLocation(snapshot: DebugSessionSnapshot | undefined): stri
 /** Formats the debugger session snapshot for model and terminal output. */
 export function formatSessionSnapshot(snapshot: DebugSessionSnapshot): string[] {
 	const lines = [
-		t("Session {0}", `${snapshot.id}`),
-		t("Adapter: {0}", `${snapshot.adapter}`),
-		t("Status: {0}", `${snapshot.status}`),
-		t("CWD: {0}", `${snapshot.cwd}`),
+		`Session ${snapshot.id}`,
+		`Adapter: ${snapshot.adapter}`,
+		`Status: ${snapshot.status}`,
+		`CWD: ${snapshot.cwd}`,
 	];
-	if (snapshot.program) lines.push(t("Program: {0}", `${snapshot.program}`));
-	if (snapshot.stopReason) lines.push(t("Stop reason: {0}", `${snapshot.stopReason}`));
-	if (snapshot.frameName) lines.push(t("Frame: {0}", `${snapshot.frameName}`));
+	if (snapshot.program) lines.push(`Program: ${snapshot.program}`);
+	if (snapshot.stopReason) lines.push(`Stop reason: ${snapshot.stopReason}`);
+	if (snapshot.frameName) lines.push(`Frame: ${snapshot.frameName}`);
 	if (snapshot.instructionPointerReference) {
-		lines.push(t("Instruction pointer: {0}", `${snapshot.instructionPointerReference}`));
+		lines.push(`Instruction pointer: ${snapshot.instructionPointerReference}`);
 	}
 	const location = formatLocation(snapshot);
-	if (location) lines.push(t("Location: {0}", `${location}`));
+	if (location) lines.push(`Location: ${location}`);
 	if (snapshot.needsConfigurationDone) {
-		lines.push(t("Configuration: pending configurationDone; set breakpoints, then continue."));
+		lines.push("Configuration: pending configurationDone; set breakpoints, then continue.");
 	}
-	if (snapshot.exitCode !== undefined) lines.push(t("Exit code: {0}", `${snapshot.exitCode}`));
+	if (snapshot.exitCode !== undefined) lines.push(`Exit code: ${snapshot.exitCode}`);
 	return lines;
 }
 
@@ -145,27 +144,27 @@ function describeDebugResult(
 ): NativeToolView {
 	const [action, target] = debugCallParts(args, result.details?.action ?? "debug");
 	const output = resultText(result);
-	if (result.isError) return errorView(t("Debug"), output || t("Debug failed"), action, target);
+	if (result.isError) return errorView("Debug", output || "Debug failed", action, target);
 	const snapshot = result.details?.snapshot;
 	const body: NativeChild[] = [];
 	let sessionRows = 0;
 	if (snapshot) {
 		const location = formatLocation(snapshot);
 		const rows: [string, string | undefined][] = [
-			[t("Session"), snapshot.id],
-			[t("Adapter"), snapshot.adapter],
-			[t("Status"), snapshot.status],
-			[t("CWD"), snapshot.cwd],
-			[t("Program"), snapshot.program],
-			[t("Stop reason"), snapshot.stopReason],
-			[t("Frame"), snapshot.frameName],
-			[t("Instruction pointer"), snapshot.instructionPointerReference],
-			[t("Location"), location ?? undefined],
+			["Session", snapshot.id],
+			["Adapter", snapshot.adapter],
+			["Status", snapshot.status],
+			["CWD", snapshot.cwd],
+			["Program", snapshot.program],
+			["Stop reason", snapshot.stopReason],
+			["Frame", snapshot.frameName],
+			["Instruction pointer", snapshot.instructionPointerReference],
+			["Location", location ?? undefined],
 			[
-				t("Configuration"),
-				snapshot.needsConfigurationDone ? t("pending configurationDone; set breakpoints, then continue.") : undefined,
+				"Configuration",
+				snapshot.needsConfigurationDone ? "pending configurationDone; set breakpoints, then continue." : undefined,
 			],
-			[t("Exit code"), snapshot.exitCode !== undefined ? String(snapshot.exitCode) : undefined],
+			["Exit code", snapshot.exitCode !== undefined ? String(snapshot.exitCode) : undefined],
 		];
 		const grid = kv(rows);
 		if (grid) {
@@ -173,9 +172,9 @@ function describeDebugResult(
 			sessionRows = rows.filter(([, value]) => value).length;
 		}
 	}
-	body.push(output ? ansi(output) : noteText(t("No output")));
+	body.push(output ? ansi(output) : noteText("No output"));
 	return {
-		head: toolHead(t("Debug"), action, target),
+		head: toolHead("Debug", action, target),
 		body,
 		preview: { lines: sessionRows + PREVIEW_LIMITS.COLLAPSED_LINES },
 	};
@@ -187,7 +186,7 @@ const debugResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const debugToolRenderer = {
 	animatedPartialResult: true,
 	renderCall(args: DebugRenderArgs, _options: RenderResultOptions, theme: Theme): Component {
-		const text = renderStatusLine({ icon: "pending", title: t("Debug"), description: summarizeDebugCall(args) }, theme);
+		const text = renderStatusLine({ icon: "pending", title: "Debug", description: summarizeDebugCall(args) }, theme);
 		return new Text(text, 0, 0);
 	},
 
@@ -207,7 +206,7 @@ export const debugToolRenderer = {
 			const summaryLines = result.details?.snapshot
 				? formatSessionSnapshot(result.details.snapshot).map(line => replaceTabs(line))
 				: [];
-			const text = result.content.find(block => block.type === "text")?.text ?? t("No output");
+			const text = result.content.find(block => block.type === "text")?.text ?? "No output";
 			const rawLines = replaceTabs(text).split("\n");
 			const previewLimit = options.expanded ? PREVIEW_LIMITS.EXPANDED_LINES : PREVIEW_LIMITS.COLLAPSED_LINES;
 			const displayedLines = rawLines
@@ -224,7 +223,7 @@ export const debugToolRenderer = {
 				phase: options.isPartial ? "partial" : result.isError ? "error" : "success",
 				sections: [
 					...(summaryLines.length > 0 ? [{ label: theme.fg("toolTitle", "Session"), content: summaryLines }] : []),
-					{ label: theme.fg("toolTitle", t("Output")), content: displayedLines },
+					{ label: theme.fg("toolTitle", "Output"), content: displayedLines },
 				],
 				applyBg: false,
 			};
@@ -232,7 +231,7 @@ export const debugToolRenderer = {
 	},
 	describeCall(args: DebugRenderArgs): NativeToolView {
 		const [action, target] = debugCallParts(args, "request");
-		return { head: toolHead(t("Debug"), action, target) };
+		return { head: toolHead("Debug", action, target) };
 	},
 	describeResult(
 		result: ToolRenderResult<DebugToolDetails>,

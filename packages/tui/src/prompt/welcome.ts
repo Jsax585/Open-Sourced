@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { APP_NAME } from "@oh-my-pi/pi-utils/dirs";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { formatDoubleTap, formatKeyHint, formatKeyHints, type KeyName } from "../app-keybindings";
@@ -24,8 +23,7 @@ const NO_TERN_TIP_MARKER = /^\[NO-TERN\]\s*/;
 const TIP_LINES: readonly string[] = tipsText
 	.split("\n")
 	.map(line => line.trim())
-	.filter(line => line.length > 0)
-	.map(line => localize(line));
+	.filter(line => line.length > 0);
 
 /** Tips for the classic renderer: every tip, {@link NO_TERN_TIP_MARKER} stripped. */
 const TIPS: readonly string[] = TIP_LINES.map(line => line.replace(NO_TERN_TIP_MARKER, ""));
@@ -39,7 +37,7 @@ const TSP_TIPS: readonly string[] = TIP_LINES.filter(line => !NO_TERN_TIP_MARKER
 const NEW_TIP_MARKER = /\s*\[NEW\]\s*$/;
 
 /** Visible text rendered in place of {@link NEW_TIP_MARKER}. */
-const NEW_TAG_TEXT = localize("NEW!");
+const NEW_TAG_TEXT = "NEW!";
 
 /** Milliseconds for one full hue rotation of the rainbow "NEW!" tag. */
 const NEW_GLOW_PERIOD_MS = 1500;
@@ -151,7 +149,7 @@ function tipSpans(tip: string): TspSpan[] {
  * `[]` when `width` leaves no room for a useful line.
  */
 export function renderWelcomeTip(tip: string, width: number, phase = 0): string[] {
-	const label = localize("Tip: ");
+	const label = "Tip: ";
 	if (width - visibleWidth(label) < 8) return [];
 
 	const isNew = NEW_TIP_MARKER.test(tip);
@@ -220,7 +218,7 @@ export class WelcomeComponent implements Component {
 		this.#nagRoll ??= Math.random();
 		this.#tipRoll ??= Math.random();
 		if (theme.getSymbolPreset() === "unicode" && this.#nagRoll < 0.1) {
-			return localize("Please use nerdfont 😭.");
+			return "Please use nerdfont 😭.";
 		}
 		return pickWeightedTip(isNativeRendering() ? TSP_TIPS : TIPS, this.#tipRoll) || undefined;
 	}

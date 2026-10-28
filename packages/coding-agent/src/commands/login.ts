@@ -2,7 +2,6 @@
  * Log in to a model provider from the terminal.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { APP_NAME } from "@oh-my-pi/pi-utils";
 import { Args, Command } from "@oh-my-pi/pi-utils/cli";
 import { loginHelp as commandHelp } from "../cli/command-help";
@@ -12,14 +11,14 @@ export default class Login extends Command {
 	static description = commandHelp.description;
 	static args = {
 		provider: Args.string({
-			description: t("OAuth provider id (e.g. anthropic, openai-codex); omit to pick interactively"),
+			description: "OAuth provider id (e.g. anthropic, openai-codex); omit to pick interactively",
 			required: false,
 		}),
 	};
 
 	static examples = [
-		t("# Pick a provider interactively\n  {0} login", `${APP_NAME}`),
-		t("# Log in to a specific provider\n  {0} login anthropic", `${APP_NAME}`),
+		`# Pick a provider interactively\n  ${APP_NAME} login`,
+		`# Log in to a specific provider\n  ${APP_NAME} login anthropic`,
 	];
 
 	async run(): Promise<void> {

@@ -14,7 +14,6 @@
  * — see `commands/complete.ts`. The flag→source mapping below is the only manual
  * knob and is keyed by flag name so it stays stable as flags are added.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ArgDescriptor, CliConfig, CommandMetadata, FlagDescriptor } from "@oh-my-pi/pi-utils/cli";
 import { BUILTIN_TOOL_NAMES } from "../tools/builtin-names";
 
@@ -413,7 +412,7 @@ ${cmdRows}
 
 	// Per-subcommand argument functions.
 	for (const c of spec.commands) {
-		const specs = [t("'(-h --help)'{-h,--help}'[Show help]'"), ...c.flags.map(zshFlagSpec), ...c.args.map(zshArgSpec)];
+		const specs = ["'(-h --help)'{-h,--help}'[Show help]'", ...c.flags.map(zshFlagSpec), ...c.args.map(zshArgSpec)];
 		parts.push(`_omp_cmd_${bashFn(c.name)}() {
 	_arguments -s \\
 		${specs.join(" \\\n\t\t")}
@@ -426,8 +425,8 @@ ${cmdRows}
 		.map(c => `\t\t\t${commandTokens(c).join("|")}) _omp_cmd_${bashFn(c.name)} ;;`)
 		.join("\n");
 	const rootSpecs = [
-		t("'(-h --help)'{-h,--help}'[Show help]'"),
-		t("'(-v --version)'{-v,--version}'[Show version]'"),
+		"'(-h --help)'{-h,--help}'[Show help]'",
+		"'(-v --version)'{-v,--version}'[Show version]'",
 		...spec.root.flags.map(zshFlagSpec),
 		"'1: :_omp_commands'",
 		"'*::arg:->args'",

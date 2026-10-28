@@ -13,7 +13,6 @@
  *
  * Replaces the old SessionObserverOverlayComponent (ctrl+s observer).
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type {
 	TspPickerAction,
@@ -122,12 +121,12 @@ const SECTION_TABS = [
 	{ id: "activity", label: "2 Activity" },
 ] as const satisfies ReadonlyArray<{ id: AgentHubSection; label: string }>;
 const VIEW_TABS = [
-	{ id: "roster", label: t("Flat") },
-	{ id: "tree", label: t("By parent") },
+	{ id: "roster", label: "Flat" },
+	{ id: "tree", label: "By parent" },
 ] as const satisfies ReadonlyArray<{ id: HubViewMode; label: string }>;
 const AGENT_HINTS: Readonly<Record<HubViewMode, readonly NativeHint[]>> = {
-	roster: agentHints(t("by parent")),
-	tree: agentHints(t("flat")),
+	roster: agentHints("by parent"),
+	tree: agentHints("flat"),
 };
 const ACTIVITY_HINTS: readonly NativeHint[] = [
 	{ keys: ["j", "k"], label: "select" },
@@ -145,31 +144,31 @@ const NATIVE_CHILD_IDS = 12;
 
 /** Picker tabs: the two top-level projections (keys 1/2). */
 const PICKER_TABS = [
-	{ id: "agents", label: t("Agents") },
-	{ id: "activity", label: t("Activity") },
+	{ id: "agents", label: "Agents" },
+	{ id: "activity", label: "Activity" },
 ] as const satisfies ReadonlyArray<{ id: AgentHubSection; label: string }>;
 /** Roster fact columns; lower priorities hide first on narrow sheets. */
 const AGENT_COLUMNS: readonly TspPickerColumn[] = [
-	{ id: "cost", head: t("Cost"), format: "price", priority: 6 },
-	{ id: "time", head: t("Time"), format: "elapsed", priority: 5 },
+	{ id: "cost", head: "Cost", format: "price", priority: 6 },
+	{ id: "time", head: "Time", format: "elapsed", priority: 5 },
 	{ id: "req", head: "Req", format: "num", priority: 2 },
-	{ id: "tools", head: t("Tools"), format: "num", priority: 1 },
+	{ id: "tools", head: "Tools", format: "num", priority: 1 },
 	{ id: "tok", head: "Tok", format: "num", priority: 3 },
 	{ id: "ctx", head: "Ctx", format: "bar", priority: 4 },
 ];
 const ACTIVITY_COLUMNS: readonly TspPickerColumn[] = [
 	{ id: "agent", head: "Agent", format: "text", priority: 2 },
-	{ id: "at", head: t("Time"), format: "dim", priority: 1 },
+	{ id: "at", head: "Time", format: "dim", priority: 1 },
 ];
 /** What the roster/activity projections contribute to the picker (the shared head is added once). */
 type PickerBody = Omit<Partial<TspPickerProps>, "title">;
 const ACTIVITY_FILTERS: readonly ActivityFilter[] = ["all", "errors", "responses", "tools"];
 /** Activity filters as the picker's scope column (`f` cycles them). */
 const ACTIVITY_FILTER_SCOPES: readonly TspPickerScope[] = [
-	{ id: "all", label: t("All"), icon: "list", group: t("Show") },
-	{ id: "errors", label: "Errors", icon: "x-circle", group: t("Show") },
-	{ id: "responses", label: "Responses", icon: "message", group: t("Show") },
-	{ id: "tools", label: t("Tools"), icon: "wrench", group: t("Show") },
+	{ id: "all", label: "All", icon: "list", group: "Show" },
+	{ id: "errors", label: "Errors", icon: "x-circle", group: "Show" },
+	{ id: "responses", label: "Responses", icon: "message", group: "Show" },
+	{ id: "tools", label: "Tools", icon: "wrench", group: "Show" },
 ];
 const ACTIVITY_KIND_ICON: Readonly<Record<AgentActivityKind, string>> = {
 	response: "message",
@@ -722,7 +721,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		}
 		const tabs = node("tabs", { items: SECTION_TABS, active: this.#section }, undefined, "section");
 		const body = this.#section === "activity" ? this.#describeActivity() : this.#describeAgents(nativeTree);
-		this.#native = overlayCard("omp.overlay.agentHub", t("Agent Hub"), [tabs, ...body]);
+		this.#native = overlayCard("omp.overlay.agentHub", "Agent Hub", [tabs, ...body]);
 		return this.#native;
 	}
 
@@ -872,7 +871,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	#describePicker(meter: boolean): NativeNode {
 		const activity = this.#section === "activity";
 		const props: TspPickerProps = {
-			title: t("Agents"),
+			title: "Agents",
 			subtitle: this.#pickerSubtitle(),
 			icon: "users",
 			size: "lg",
@@ -887,7 +886,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	/** Roster totals: `$0.389 · 18.7s · 6 req · 114K tok`. */
 	#pickerSubtitle(): string {
 		const metrics = this.#aggregate;
-		if (metrics.reportedAgents === 0) return t("No usage reported yet");
+		if (metrics.reportedAgents === 0) return "No usage reported yet";
 		const parts = [formatCost(metrics.cost)];
 		if (metrics.durationMs > 0) parts.push(formatDuration(metrics.durationMs));
 		parts.push(`${formatNumber(metrics.requests)} req`, `${formatNumber(metrics.tokens)} tok`);
@@ -896,11 +895,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 	#agentPickerProps(): PickerBody {
 		const selected = this.#rows[this.#selectedRow];
-		const readOnly = selected?.kind === "advisor" ? t("Read-only advisor transcript") : undefined;
+		const readOnly = selected?.kind === "advisor" ? "Read-only advisor transcript" : undefined;
 		const actions: TspPickerAction[] = [
 			{
 				id: "open",
-				label: t("Open transcript"),
+				label: "Open transcript",
 				keys: ["enter"],
 				primary: true,
 				disabled: selected ? undefined : true,
@@ -913,25 +912,25 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					readOnly ??
 					(selected?.status === "parked" || selected?.status === "aborted"
 						? undefined
-						: t("Only parked or killed agents can be revived")),
+						: "Only parked or killed agents can be revived"),
 			},
-			{ id: "kill", label: t("Kill"), keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
-			{ id: "view", label: t("By parent"), keys: ["t"], on: this.#viewMode === "tree" },
+			{ id: "kill", label: "Kill", keys: ["x"], danger: true, disabled: readOnly ?? (selected ? undefined : true) },
+			{ id: "view", label: "By parent", keys: ["t"], on: this.#viewMode === "tree" },
 			{ id: "filter", label: "Filter", keys: ["/"] },
 			CLOSE_ACTION,
 		];
 		return {
-			noun: t("agents"),
+			noun: "agents",
 			layout: this.#viewMode === "tree" ? "tree" : "rows",
 			preview: "side",
 			...pickerQuery(this.#agentFilterEditing || this.#agentFilter.getValue() ? this.#agentFilter : null),
-			placeholder: t("Filter agents…"),
+			placeholder: "Filter agents…",
 			columns: AGENT_COLUMNS,
 			items: this.#rows.map(ref => this.#pickerAgentItem(ref)),
 			selected: selected?.id ?? null,
 			total: this.#registry.list().length - (this.#registry.get(MAIN_AGENT_ID) ? 1 : 0),
 			state: this.#rows.length === 0 && this.#loadingPersistedSubagents ? "loading" : "ready",
-			empty: t("No agents in this session. Finished, parked and killed subagents stay with the session that created them."),
+			empty: "No agents in this session. Finished, parked and killed subagents stay with the session that created them.",
 			actions,
 			focus: "list",
 		};
@@ -945,13 +944,13 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const modelRole = observed?.progress?.modelRole ?? ref.history?.modelRole;
 		if (modelRole && this.#getRoleInfo) {
 			const info = this.#getRoleInfo(modelRole);
-			badges.push({ text: sanitizeDisplaySingleLine(info.tag ?? info.name ?? modelRole), title: t("Model role") });
+			badges.push({ text: sanitizeDisplaySingleLine(info.tag ?? info.name ?? modelRole), title: "Model role" });
 		}
 		if (ref.kind === "advisor") badges.push({ text: "read-only", tone: "warning" });
 		const unread = this.#irc.unreadCount(ref.id);
 		if (unread > 0) badges.push({ text: `${unread} unread`, tone: "warning" });
 		if (this.#viewMode === "roster" && ref.parentId && ref.parentId !== MAIN_AGENT_ID) {
-			badges.push({ text: `↳ ${sanitizeDisplaySingleLine(ref.parentId)}`, tone: "muted", title: t("Spawned by") });
+			badges.push({ text: `↳ ${sanitizeDisplaySingleLine(ref.parentId)}`, tone: "muted", title: "Spawned by" });
 		}
 		const model = modelChip(ref, observed);
 		const item: TspPickerItem = {
@@ -1027,7 +1026,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			if (modelRole && this.#getRoleInfo) {
 				model.push(span(theme.sep.dot, "dim"), roleBadgeSpan(modelRole, this.#getRoleInfo(modelRole)));
 			}
-			facts.splice(facts[0]?.k === "Task" ? 1 : 0, 0, { k: t("Model"), v: model });
+			facts.splice(facts[0]?.k === "Task" ? 1 : 0, 0, { k: "Model", v: model });
 		}
 		out.push(node("kv", { items: facts, layout: "grid", role: "omp.hub.kv" }, undefined, "facts"));
 		if (metrics?.contextTokens !== undefined && metrics.contextWindow) {
@@ -1062,7 +1061,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					gap: "sm",
 					align: "baseline",
 					actions: { click: "transcript" },
-					title: t("Open in transcript"),
+					title: "Open in transcript",
 				},
 				[
 					text([span(activityClock(activity.timestamp), "mono dim")]),
@@ -1073,8 +1072,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				key,
 			);
 		});
-		if (rows.length === 0) rows.push(text([span(t("No response or tool activity yet"), "dim")]));
-		out.push(node("section", { head: t("Recent activity"), role: "omp.hub.activity" }, rows, "recentActivity"));
+		if (rows.length === 0) rows.push(text([span("No response or tool activity yet", "dim")]));
+		out.push(node("section", { head: "Recent activity", role: "omp.hub.activity" }, rows, "recentActivity"));
 		return out;
 	}
 
@@ -1082,34 +1081,34 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const agent = this.#rows[this.#selectedRow]?.id;
 		const scope =
 			this.#activityScope === "all"
-				? t("All agents")
+				? "All agents"
 				: this.#activityScope === "agent"
-					? (agent ?? t("Selected agent"))
+					? (agent ?? "Selected agent")
 					: `${agent ?? "Selected"} subtree`;
 		const selected = this.#activityRows[this.#selectedActivityRow];
 		return {
-			noun: t("events"),
+			noun: "events",
 			layout: "rows",
 			preview: "none",
 			...pickerQuery(this.#activitySearchEditing || this.#activitySearch.getValue() ? this.#activitySearch : null),
-			placeholder: t("Search activity…"),
+			placeholder: "Search activity…",
 			scopes: ACTIVITY_FILTER_SCOPES,
 			scope: this.#activityFilter,
 			columns: ACTIVITY_COLUMNS,
 			items: this.#activityRows.map(activity => this.#pickerActivityItem(activity)),
 			selected: selected?.id ?? null,
-			empty: t("No agent activity recorded yet"),
+			empty: "No agent activity recorded yet",
 			actions: [
 				{
 					id: "open",
-					label: t("Open transcript"),
+					label: "Open transcript",
 					keys: ["enter"],
 					primary: true,
 					disabled: selected ? undefined : true,
 				},
 				{ id: "follow", label: "Follow", keys: ["space"], on: this.#activityFollow },
 				{ id: "agents", label: sanitizeDisplaySingleLine(scope), keys: ["s"] },
-				{ id: "filter", label: t("Search"), keys: ["/"] },
+				{ id: "filter", label: "Search", keys: ["/"] },
 				CLOSE_ACTION,
 			],
 			focus: "list",
@@ -1216,7 +1215,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			if (this.#loadingPersistedSubagents) {
 				return node(
 					"spinner",
-					{ ...layout, label: [span(t("Loading saved agents…"), "accent")] },
+					{ ...layout, label: [span("Loading saved agents…", "accent")] },
 					undefined,
 					"loading",
 				);
@@ -1225,12 +1224,12 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 				"col",
 				layout,
 				[
-					text([span(`${theme.status.shadowed} `, "muted"), span(t("No agents in this session"), "strong")]),
+					text([span(`${theme.status.shadowed} `, "muted"), span("No agents in this session", "strong")]),
 					text(
-						[span(t("Finished, parked, and killed subagents remain with the session that created them."), "dim")],
+						[span("Finished, parked, and killed subagents remain with the session that created them.", "dim")],
 						{ wrap: "word" },
 					),
-					text([span(t("Resume that session with omp-dev --continue, or spawn a task here."), "dim")], {
+					text([span("Resume that session with omp-dev --continue, or spawn a task here.", "dim")], {
 						wrap: "word",
 					}),
 				],
@@ -1324,7 +1323,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			gap: "sm",
 			role: "omp.overlay.agentHub.detail",
 		} as const;
-		if (!ref) return node("col", layout, [text([span(t("Select an agent to inspect"), "dim")])], "detail");
+		if (!ref) return node("col", layout, [text([span("Select an agent to inspect", "dim")])], "detail");
 		const observed = this.#observableFor(ref.id);
 		const metrics = this.#metricsFor(ref, observed);
 
@@ -1345,7 +1344,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const duration = metrics ? formatMetricDuration(metrics) : undefined;
 		if (duration) state.push(text([span(duration, "dim")]));
 		state.push(
-			text([span(t("last active"), "dim")]),
+			text([span("last active", "dim")]),
 			node("elapsed", { age: Math.max(0, Date.now() - ref.lastActivity), format: "short" }),
 			text([span("ago", "dim")]),
 		);
@@ -1371,11 +1370,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		out.push(
 			node(
 				"section",
-				{ head: [span(t("Recent activity"), "accent strong")] },
+				{ head: [span("Recent activity", "accent strong")] },
 				[
 					node(
 						"list",
-						{ empty: [span(t("No response or tool activity yet"), "muted")] },
+						{ empty: [span("No response or tool activity yet", "muted")] },
 						recent.map(activity => this.#describeActivityItem(activity)),
 						"recent",
 					),
@@ -1410,10 +1409,10 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			}
 			facts.push({ k: "Current", v: value });
 		}
-		facts.push({ k: t("Usage"), v: metrics ? metricsText(metrics) : [span("usage —", "dim")] });
+		facts.push({ k: "Usage", v: metrics ? metricsText(metrics) : [span("usage —", "dim")] });
 		facts.push({
 			k: "Lineage",
-			v: t("Spawned by {0}{1}", `${sanitizeDisplaySingleLine(ref.parentId ?? MAIN_AGENT_ID)}`, `${children.length > 0 ? `${dot}${children.length} ${children.length === 1 ? "child" : "children"}` : ""}`),
+			v: `Spawned by ${sanitizeDisplaySingleLine(ref.parentId ?? MAIN_AGENT_ID)}${children.length > 0 ? `${dot}${children.length} ${children.length === 1 ? "child" : "children"}` : ""}`,
 		});
 		if (children.length > 0) {
 			const named = children.slice(0, NATIVE_CHILD_IDS).map(child => sanitizeDisplaySingleLine(child.id));
@@ -1435,15 +1434,15 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const artifacts = ref.history;
 		if (artifacts?.outputPath) {
 			facts.push({
-				k: t("Output"),
+				k: "Output",
 				v: [span(shortenPath(artifacts.outputPath), "path", { href: `file://${artifacts.outputPath}` })],
 			});
 		}
 		if (artifacts?.patchPath) facts.push({ k: "Patch", v: [span(shortenPath(artifacts.patchPath), "path")] });
 		for (const nestedPath of artifacts?.nestedPatchPaths ?? []) {
-			facts.push({ k: t("Nested patch"), v: [span(shortenPath(nestedPath), "path")] });
+			facts.push({ k: "Nested patch", v: [span(shortenPath(nestedPath), "path")] });
 		}
-		if (artifacts?.branchName) facts.push({ k: t("Worktree branch"), v: [span(artifacts.branchName, "code")] });
+		if (artifacts?.branchName) facts.push({ k: "Worktree branch", v: [span(artifacts.branchName, "code")] });
 		return facts;
 	}
 
@@ -1475,9 +1474,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const selectedAgent = this.#rows[this.#selectedRow]?.id;
 		const scope =
 			this.#activityScope === "all"
-				? t("all agents")
+				? "all agents"
 				: this.#activityScope === "agent"
-					? (selectedAgent ?? t("selected agent"))
+					? (selectedAgent ?? "selected agent")
 					: `${selectedAgent ?? "selected"} subtree`;
 		const dot = theme.sep.dot;
 		const status: NativeChild[] = [
@@ -1517,7 +1516,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 					grow: 1,
 					empty: [
 						span(
-							this.#activitySearch.getValue() ? t("No matching activity") : t("No agent activity recorded yet"),
+							this.#activitySearch.getValue() ? "No matching activity" : "No agent activity recorded yet",
 							"muted",
 						),
 					],
@@ -1718,9 +1717,9 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const selectedAgent = this.#rows[this.#selectedRow]?.id;
 		const scope =
 			this.#activityScope === "all"
-				? t("all agents")
+				? "all agents"
 				: this.#activityScope === "agent"
-					? (selectedAgent ?? t("selected agent"))
+					? (selectedAgent ?? "selected agent")
 					: `${selectedAgent ?? "selected"} subtree`;
 		const search = this.#activitySearchEditing
 			? theme.fg("accent", `search: ${filterText(this.#activitySearch)}`)
@@ -1740,7 +1739,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			body.push(
 				theme.fg(
 					"muted",
-					this.#activitySearch.getValue() ? t("No matching activity") : t("No agent activity recorded yet"),
+					this.#activitySearch.getValue() ? "No matching activity" : "No agent activity recorded yet",
 				),
 			);
 		} else if (budget > 0) {
@@ -1759,7 +1758,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		}
 		while (body.length < contentRows) body.push("");
 
-		const lines = [topBorder(width, t("Agent Hub"))];
+		const lines = [topBorder(width, "Agent Hub")];
 		for (const line of body.slice(0, contentRows)) lines.push(row(line, width));
 		lines.push(divider(width));
 		lines.push(
@@ -1805,11 +1804,11 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const innerWidth = Math.max(1, width - 4);
 		let topLine: string;
 		if (isSplit) {
-			topLine = topBorderSplit(width, t("Agent Hub"), geometry.left?.width ?? 0);
+			topLine = topBorderSplit(width, "Agent Hub", geometry.left?.width ?? 0);
 		} else if (this.#narrowDetailsOpen && selected) {
 			topLine = topBorder(width, `Agent Hub · ${selected.id}`);
 		} else {
-			topLine = topBorder(width, t("Agent Hub"));
+			topLine = topBorder(width, "Agent Hub");
 		}
 		const dividerLine = isSplit && geometry.left ? dividerSplit(width, geometry.left.width) : divider(width);
 		this.#frameTop.setLines([topLine]);
@@ -1827,7 +1826,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 	}
 
 	#footer(showingNarrowDetails: boolean, availableWidth: number): string {
-		const nextView = this.#viewMode === "roster" ? t("by parent") : "flat";
+		const nextView = this.#viewMode === "roster" ? "by parent" : "flat";
 		const filter = this.#agentFilterEditing
 			? `/${filterText(this.#agentFilter)}  ·  `
 			: this.#agentFilter.getValue()
@@ -1864,14 +1863,14 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		if (this.#rows.length === 0) {
 			if (this.#loadingPersistedSubagents) {
 				if (budget > 0) {
-					lines.push(`${statusGlyph("running")} ${theme.fg("accent", t("Loading saved agents…"))}`);
+					lines.push(`${statusGlyph("running")} ${theme.fg("accent", "Loading saved agents…")}`);
 					hitRows.push(undefined);
 				}
 			} else {
 				const emptyState = [
-					`${theme.fg("muted", theme.status.shadowed)} ${theme.bold(t("No agents in this session"))}`,
-					theme.fg("dim", t("Finished, parked, and killed subagents remain with the session that created them.")),
-					theme.fg("dim", t("Resume that session with omp-dev --continue, or spawn a task here.")),
+					`${theme.fg("muted", theme.status.shadowed)} ${theme.bold("No agents in this session")}`,
+					theme.fg("dim", "Finished, parked, and killed subagents remain with the session that created them."),
+					theme.fg("dim", "Resume that session with omp-dev --continue, or spawn a task here."),
 				];
 				for (const line of emptyState.slice(0, budget)) {
 					lines.push(line);
@@ -1987,8 +1986,8 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const inactive = (label: string): string => theme.fg("muted", ` ${label} `);
 		const projection =
 			this.#viewMode === "roster"
-				? `${active(t("Flat"))}${theme.fg("dim", "/")}${inactive(t("By parent"))}`
-				: `${inactive(t("Flat"))}${theme.fg("dim", "/")}${active(t("By parent"))}`;
+				? `${active("Flat")}${theme.fg("dim", "/")}${inactive("By parent")}`
+				: `${inactive("Flat")}${theme.fg("dim", "/")}${active("By parent")}`;
 		const counts = this.#statusSummary();
 		const header = `${theme.bold("Roster")}${theme.fg("dim", theme.sep.dot)}${projection}${counts ? theme.fg("dim", theme.sep.dot) + counts : ""}`;
 		const lines = wrapTextWithAnsi(header, Math.max(1, width));
@@ -2049,7 +2048,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		rows: number,
 		_observedById: ReadonlyMap<string, ObservableSession>,
 	): string[] {
-		if (!ref) return [theme.fg("dim", t("Select an agent to inspect")), ...Array.from({ length: rows - 1 }, () => "")];
+		if (!ref) return [theme.fg("dim", "Select an agent to inspect"), ...Array.from({ length: rows - 1 }, () => "")];
 		const observed = this.#observableFor(ref.id);
 		const progress = observed?.progress;
 		const metrics = this.#metricsFor(ref, observed);
@@ -2099,7 +2098,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 			}
 		}
 
-		section(t("Usage"), 1);
+		section("Usage", 1);
 		if (metrics) {
 			addWrapped(formatMetrics(metrics), 3);
 			if (metrics.contextTokens !== undefined && metrics.contextWindow) {
@@ -2111,7 +2110,7 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 
 		section("Lineage");
 		add(
-			t("Spawned by {0}{1}", `${sanitizeDisplaySingleLine(ref.parentId ?? MAIN_AGENT_ID)}`, `${children.length > 0 ? ` · ${children.length} children` : ""}`),
+			`Spawned by ${sanitizeDisplaySingleLine(ref.parentId ?? MAIN_AGENT_ID)}${children.length > 0 ? ` · ${children.length} children` : ""}`,
 		);
 		if (children.length > 0) add(theme.fg("dim", formatChildIds(children, width)));
 		add(theme.fg("dim", `Registered ${formatLocalDateTimeWithOffset(new Date(ref.createdAt))}`));
@@ -2128,14 +2127,14 @@ export class AgentHubOverlayComponent<TRecord extends AgentRecordLike = AgentRec
 		const artifacts = ref.history;
 		if (artifacts?.outputPath) addWrapped(`Output ${shortenPath(artifacts.outputPath)}`);
 		if (artifacts?.patchPath) addWrapped(`Patch ${shortenPath(artifacts.patchPath)}`);
-		for (const nestedPath of artifacts?.nestedPatchPaths ?? []) addWrapped(t("Nested patch {0}", `${shortenPath(nestedPath)}`));
-		if (artifacts?.branchName) addWrapped(t("Worktree branch {0}", `${artifacts.branchName}`));
+		for (const nestedPath of artifacts?.nestedPatchPaths ?? []) addWrapped(`Nested patch ${shortenPath(nestedPath)}`);
+		if (artifacts?.branchName) addWrapped(`Worktree branch ${artifacts.branchName}`);
 
 		if (lines.length < rows) add();
-		if (lines.length < rows) add(theme.bold(theme.fg("accent", t("Recent activity"))));
+		if (lines.length < rows) add(theme.bold(theme.fg("accent", "Recent activity")));
 		const activityBudget = Math.max(0, rows - lines.length);
 		const activity = this.#activity.recent(ref.id, activityBudget);
-		if (activity.length === 0 && activityBudget > 0) add(theme.fg("muted", t("No response or tool activity yet")));
+		if (activity.length === 0 && activityBudget > 0) add(theme.fg("muted", "No response or tool activity yet"));
 		else {
 			for (const event of activity) {
 				const title = sanitizeLine(event.kind === "tool" ? (event.toolName ?? event.title) : event.title, width);

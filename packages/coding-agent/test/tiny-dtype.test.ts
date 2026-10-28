@@ -21,7 +21,7 @@ describe("tiny model dtype selection", () => {
 	});
 
 	it("rejects an unsupported precision", () => {
-		expect(() => resolveTinyModelDtypeOverride("int4")).toThrow();
+		expect(() => resolveTinyModelDtypeOverride("int4")).toThrow("Unsupported PI_TINY_DTYPE");
 	});
 });
 

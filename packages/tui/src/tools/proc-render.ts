@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Component } from "../tui";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "../render";
 import {
@@ -91,10 +90,10 @@ export function renderAgentWrite(
 			theme,
 		);
 		if (result?.isError && receipts.length === 0)
-			return [header, formatErrorDetail(firstText(result) || t("Message delivery failed."), theme)];
+			return [header, formatErrorDetail(firstText(result) || "Message delivery failed.", theme)];
 		const lines = [header, ...preview(body, expanded, theme)];
 		if (result && receipts.length === 0)
-			lines.push(theme.fg("muted", firstText(result) || t("No live peers to broadcast to.")));
+			lines.push(theme.fg("muted", firstText(result) || "No live peers to broadcast to."));
 		if (receipts.length > 1 || failed > 0) {
 			lines.push(
 				...renderTreeList(
@@ -167,7 +166,7 @@ export function renderProcWrite(
 			},
 			theme,
 		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || t("Process operation failed."), theme)];
+		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process operation failed.", theme)];
 		const lines = [header];
 		if (content && action === "stdin") lines.push(...preview(content, expanded, theme));
 		if (details && "op" in details && details.op === "cancel") {
@@ -201,7 +200,7 @@ export function renderProcRead(
 	theme: Theme,
 ): Component {
 	return card((_width, expanded) => {
-		const title = id ? `Proc ${safe(id)}` : t("Proc jobs & services");
+		const title = id ? `Proc ${safe(id)}` : "Proc jobs & services";
 		const daemon = details?.daemon;
 		const header = renderStatusLine(
 			{
@@ -211,7 +210,7 @@ export function renderProcRead(
 			},
 			theme,
 		);
-		if (result?.isError) return [header, formatErrorDetail(firstText(result) || t("Process read failed."), theme)];
+		if (result?.isError) return [header, formatErrorDetail(firstText(result) || "Process read failed.", theme)];
 		if (!result) return [header];
 		if (details?.job)
 			return [
@@ -269,7 +268,7 @@ export function renderProcRead(
 				},
 				theme,
 			),
-			...(items.length ? [] : [theme.fg("dim", t("No background jobs or services."))]),
+			...(items.length ? [] : [theme.fg("dim", "No background jobs or services.")]),
 		];
 	}, options);
 }
@@ -346,11 +345,11 @@ export function describeAgentWrite(
 	const head = toolHead("IRC", span(recipient, "accent"), ...meta);
 	const error = result?.isError === true || (failed > 0 && delivered === 0);
 	if (result?.isError && receipts.length === 0) {
-		return { head, tone: "error", body: [errorText(firstText(result) || t("Message delivery failed."))] };
+		return { head, tone: "error", body: [errorText(firstText(result) || "Message delivery failed.")] };
 	}
 	const children = compact<NativeChild>([
 		quotedPreview(body),
-		result !== undefined && receipts.length === 0 && noteText(firstText(result) || t("No live peers to broadcast to.")),
+		result !== undefined && receipts.length === 0 && noteText(firstText(result) || "No live peers to broadcast to."),
 		(receipts.length > 1 || failed > 0) &&
 			node(
 				"list",
@@ -388,7 +387,7 @@ export function describeProcWrite(
 		daemon ? daemonMetaText(daemon) : action === "mode" && content ? safe(content) : undefined,
 	);
 	if (result?.isError) {
-		return { head, tone: "error", body: [errorText(firstText(result) || t("Process operation failed."))] };
+		return { head, tone: "error", body: [errorText(firstText(result) || "Process operation failed.")] };
 	}
 	const body = compact<NativeChild>([content && action === "stdin" ? quotedPreview(content) : undefined]);
 	if (details && "op" in details && details.op === "cancel") {
@@ -425,10 +424,10 @@ export function describeProcRead(
 	details: ProcReadDetails | undefined,
 ): NativeToolView {
 	const daemon = details?.daemon;
-	const title = id ? "Proc" : t("Proc jobs & services");
+	const title = id ? "Proc" : "Proc jobs & services";
 	const head = toolHead(title, id ? span(safe(id), "accent") : undefined, daemon ? daemonMetaText(daemon) : undefined);
 	if (result?.isError) {
-		return { head, tone: "error", body: [errorText(firstText(result) || t("Process read failed."))] };
+		return { head, tone: "error", body: [errorText(firstText(result) || "Process read failed.")] };
 	}
 	if (!result) return { head };
 	if (details?.job) {
@@ -486,6 +485,6 @@ export function describeProcRead(
 	if (agents.length) counts.push(`${agents.length} agents`);
 	return {
 		head: toolHead(title, id ? span(safe(id), "accent") : undefined, counts.join(" · ")),
-		body: [node("list", { empty: t("No background jobs or services."), role: "omp.tool.proc.table" }, items)],
+		body: [node("list", { empty: "No background jobs or services.", role: "omp.tool.proc.table" }, items)],
 	};
 }

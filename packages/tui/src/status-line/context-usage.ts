@@ -1,17 +1,9 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentMessage, Tokenizer } from "@oh-my-pi/pi-agent-core";
 import type { CompactionSettings } from "@oh-my-pi/pi-agent-core/compaction";
 import { effectiveReserveTokens, resolveThresholdTokens } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Tool as AiTool, Model } from "@oh-my-pi/pi-ai";
 import { renderToolExamples } from "@oh-my-pi/pi-ai/dialect";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
-import { formatNumber } from "@oh-my-pi/pi-utils";
-import type { Theme, ThemeColor } from "../theme";
-import { Container } from "../tui";
-import { Text } from "../components/text";
-import type { TspSpan, TspText } from "@oh-my-pi/pi-wire";
-import type { DescribeContext, NativeNode } from "../native/node";
-import { col, node, row, span, text } from "../native/describe";
 
 interface ContextSkill {
 	readonly name: string;
@@ -71,24 +63,12 @@ export interface ContextUsageOptions {
 	snapcompact?: ContextSavingsEstimate;
 }
 
-const GRID_COLS = 20;
-const GRID_ROWS = 10;
-const GRID_CELLS = GRID_COLS * GRID_ROWS;
-const GRID_GUTTER = "   ";
-
-const CELL_FILLED = "⛁";
-const CELL_FILLED_MESSAGES = "⛃";
-const CELL_FREE = "⛶";
-const CELL_BUFFER = "⛝";
-
 type CategoryId = "systemPrompt" | "systemContext" | "systemTools" | "skills" | "messages";
 
 interface CategoryInfo {
 	id: CategoryId;
 	label: string;
 	tokens: number;
-	color: "accent" | "warning" | "success" | "userMessageText" | "customMessageLabel";
-	glyph: string;
 }
 
 export interface ContextBreakdown {
@@ -226,6 +206,56 @@ export function invalidateToolSchemaMetadata(tools: ToolSchemaSource): void {
 	toolSchemaTokenCache(tools).revision++;
 }
 
+/** Provider-visible text of one tool definition, in wire order. */
+export interface ToolSchemaFragments {
+	/** Name, description, wire schema JSON, then rendered examples; fields that cannot be serialized are omitted. */
+	readonly fragments: string[];
+	/** `fragments` with the schema JSON indented for reading; present only when a display indent was requested. */
+	readonly display?: string[];
+	/** Why serialization stopped; the schema or examples after that point are missing from `fragments`. */
+	readonly schemaError?: string;
+}
+
+/**
+ * Provider-visible text of one tool definition. `displayIndent` additionally
+ * returns `display`, the same fragments with the schema JSON indented, from
+ * the same schema conversion.
+ */
+export function toolSchemaFragments(tool: ContextTool, displayIndent?: number): ToolSchemaFragments {
+	// Extension-supplied tools may carry a non-string name/description or a
+	// parameters value whose wire schema stringifies to `undefined` (e.g. a
+	// callable schema that escaped normalization). A non-string fragment is
+	// fatal inside the native tokenizer, so only real strings are kept.
+	const { name, description, parameters } = tool;
+	const fragments: string[] = [];
+	const display: string[] | undefined = displayIndent === undefined ? undefined : [];
+	const push = (wire: string, shown: string = wire): void => {
+		fragments.push(wire);
+		display?.push(shown);
+	};
+	if (typeof name === "string") push(name);
+	if (typeof description === "string") push(description);
+	try {
+		const wireTool: AiTool = {
+			name,
+			description,
+			parameters: parameters as AiTool["parameters"],
+			examples: tool.examples,
+		};
+		const wireSchema = toolWireSchema(wireTool) ?? {};
+		const wireJson = JSON.stringify(wireSchema);
+		if (typeof wireJson === "string")
+			push(wireJson, display ? JSON.stringify(wireSchema, null, displayIndent) : wireJson);
+		// The agent loop appends rendered examples to the wire description.
+		const examplesBlock = renderToolExamples(wireTool);
+		if (examplesBlock) push(examplesBlock);
+	} catch (error) {
+		// Schema may contain functions or cycles.
+		return { fragments, display, schemaError: error instanceof Error ? error.message : String(error) };
+	}
+	return { fragments, display };
+}
+
 /**
  * Estimate provider-visible tool-schema tokens.
  *
@@ -240,33 +270,7 @@ export function estimateToolSchemaTokens(tools: ToolSchemaSource, tokenizer: Tok
 	const cached = cache.byTokenizer.get(tokenizer);
 	if (cached?.revision === cache.revision && cached.sourceRevision === sourceRevision) return cached.tokens;
 
-	const fragments: string[] = [];
-	for (const tool of tools) {
-		// Extension-supplied tools may carry a non-string name/description or a
-		// parameters value whose wire schema stringifies to `undefined` (e.g. a
-		// callable schema that escaped normalization). A non-string fragment is
-		// fatal inside the native tokenizer, so only real strings are counted.
-		const name = tool.name;
-		const description = tool.description;
-		const parameters = tool.parameters;
-		if (typeof name === "string") fragments.push(name);
-		if (typeof description === "string") fragments.push(description);
-		try {
-			const wireTool: AiTool = {
-				name,
-				description,
-				parameters: parameters as AiTool["parameters"],
-				examples: tool.examples,
-			};
-			const wireJson = JSON.stringify(toolWireSchema(wireTool) ?? {});
-			if (typeof wireJson === "string") fragments.push(wireJson);
-			// The agent loop appends rendered examples to the wire description.
-			const examplesBlock = renderToolExamples(wireTool);
-			if (examplesBlock) fragments.push(examplesBlock);
-		} catch {
-			// Schema may contain functions or cycles; ignore.
-		}
-	}
+	const fragments = tools.flatMap(tool => toolSchemaFragments(tool).fragments);
 	const tokens = tokenizer.countTokens(fragments);
 	cache.byTokenizer.set(tokenizer, { revision: cache.revision, sourceRevision, tokens });
 	return tokens;
@@ -453,23 +457,11 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 	}
 
 	const categories: CategoryInfo[] = [
-		{ id: "systemPrompt", label: localize("System prompt"), tokens: systemPromptTokens, color: "accent", glyph: CELL_FILLED },
-		{ id: "systemTools", label: localize("System tools"), tokens: toolsTokens, color: "warning", glyph: CELL_FILLED },
-		{
-			id: "systemContext",
-			label: localize("System context"),
-			tokens: systemContextTokens,
-			color: "customMessageLabel",
-			glyph: CELL_FILLED,
-		},
-		{ id: "skills", label: localize("Skills"), tokens: skillsTokens, color: "success", glyph: CELL_FILLED },
-		{
-			id: "messages",
-			label: localize("Messages"),
-			tokens: messagesTokens,
-			color: "userMessageText",
-			glyph: CELL_FILLED_MESSAGES,
-		},
+		{ id: "systemPrompt", label: "System prompt", tokens: systemPromptTokens },
+		{ id: "systemTools", label: "System tools", tokens: toolsTokens },
+		{ id: "systemContext", label: "System context", tokens: systemContextTokens },
+		{ id: "skills", label: "Skills", tokens: skillsTokens },
+		{ id: "messages", label: "Messages", tokens: messagesTokens },
 	];
 
 	let autoCompactBufferTokens = 0;
@@ -502,521 +494,4 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 		thresholdTokens,
 		snapcompact: options.snapcompact,
 	};
-}
-
-interface CellSpec {
-	glyph: string;
-	color: "accent" | "warning" | "success" | "userMessageText" | "customMessageLabel" | "muted" | "dim";
-}
-
-function planCells(breakdown: ContextBreakdown): CellSpec[] {
-	const cells: CellSpec[] = [];
-	const window = breakdown.contextWindow;
-
-	if (window <= 0) {
-		for (let i = 0; i < GRID_CELLS; i++) {
-			cells.push({ glyph: CELL_FREE, color: "dim" });
-		}
-		return cells;
-	}
-
-	const tokensPerCell = window / GRID_CELLS;
-
-	const ratioCells = (tokens: number): number => {
-		if (tokens <= 0) return 0;
-		return Math.max(1, Math.round(tokens / tokensPerCell));
-	};
-
-	const categoryCounts = breakdown.categories.map(category => ({
-		category,
-		count: ratioCells(category.tokens),
-	}));
-
-	let bufferCount = ratioCells(breakdown.autoCompactBufferTokens);
-
-	let usedCount = categoryCounts.reduce((sum, c) => sum + c.count, 0);
-
-	// Prevent the visualization from over-running the grid.
-	const maxUsable = GRID_CELLS - bufferCount;
-	if (usedCount > maxUsable) {
-		// Scale categories proportionally down to fit.
-		let overflow = usedCount - maxUsable;
-		// Trim from the largest categories first to preserve visibility for small ones.
-		const order = [...categoryCounts].sort((a, b) => b.count - a.count);
-		for (const entry of order) {
-			while (overflow > 0 && entry.count > 1) {
-				entry.count -= 1;
-				overflow -= 1;
-			}
-		}
-		usedCount = categoryCounts.reduce((sum, c) => sum + c.count, 0);
-		if (usedCount + bufferCount > GRID_CELLS) {
-			bufferCount = Math.max(0, GRID_CELLS - usedCount);
-		}
-	}
-
-	for (const { category, count } of categoryCounts) {
-		for (let i = 0; i < count; i++) {
-			cells.push({ glyph: category.glyph, color: category.color });
-		}
-	}
-
-	const freeCount = Math.max(0, GRID_CELLS - cells.length - bufferCount);
-	for (let i = 0; i < freeCount; i++) {
-		cells.push({ glyph: CELL_FREE, color: "dim" });
-	}
-	for (let i = 0; i < bufferCount; i++) {
-		cells.push({ glyph: CELL_BUFFER, color: "warning" });
-	}
-
-	// Pad to exactly GRID_CELLS in case rounding undershot.
-	while (cells.length < GRID_CELLS) {
-		cells.push({ glyph: CELL_FREE, color: "dim" });
-	}
-	return cells.slice(0, GRID_CELLS);
-}
-
-function percentString(part: number, whole: number, fractionDigits = 1): string {
-	if (whole <= 0) return "0%";
-	const pct = (part / whole) * 100;
-	if (pct > 0 && pct < 0.05) return "<0.1%";
-	return `${pct.toFixed(fractionDigits)}%`;
-}
-
-/** One styled run of a legend line: bold (`strong`), a theme color, or plain. */
-interface LegendPart {
-	t: string;
-	s?: ThemeColor | "strong";
-}
-
-/** Legend lines as styled runs, shared by the ANSI panel and the native description. */
-function buildLegendParts(breakdown: ContextBreakdown): LegendPart[][] {
-	const lines: LegendPart[][] = [];
-	const { model, contextWindow, categories, usedTokens, autoCompactBufferTokens, freeTokens } = breakdown;
-
-	const modelName = model?.name ?? model?.id ?? localize("no model");
-	const modelId = model?.id ?? localize("unknown");
-	const windowLabel = formatNumber(contextWindow).toLowerCase();
-
-	lines.push([
-		{ t: `${modelName}`, s: "strong" },
-		{ t: localize(" ({0} context)", `${windowLabel}`), s: "dim" },
-	]);
-	lines.push([{ t: `${modelId}[${windowLabel}]`, s: "muted" }]);
-	lines.push([
-		{ t: formatNumber(usedTokens), s: "strong" },
-		{ t: localize("/{0} tokens", `${windowLabel}`), s: "dim" },
-		{ t: ` (${percentString(usedTokens, contextWindow)})`, s: "muted" },
-	]);
-	lines.push([]);
-	lines.push([{ t: localize("Estimated usage by category"), s: "muted" }]);
-
-	for (const category of categories) {
-		const pct = percentString(category.tokens, contextWindow);
-		lines.push([
-			{ t: category.glyph, s: category.color },
-			{ t: ` ${category.label}: ` },
-			{ t: formatNumber(category.tokens), s: "strong" },
-			{ t: " " },
-			{ t: localize("tokens ({0})", `${pct}`), s: "dim" },
-		]);
-	}
-
-	lines.push([
-		{ t: CELL_FREE, s: "dim" },
-		{ t: localize(" Free space: ") },
-		{ t: formatNumber(freeTokens), s: "strong" },
-		{ t: " " },
-		{ t: `(${percentString(freeTokens, contextWindow)})`, s: "dim" },
-	]);
-
-	if (autoCompactBufferTokens > 0) {
-		lines.push([
-			{ t: CELL_BUFFER, s: "warning" },
-			{ t: localize(" Autocompact buffer: ") },
-			{ t: formatNumber(autoCompactBufferTokens), s: "strong" },
-			{ t: " " },
-			{ t: localize("tokens ({0})", `${percentString(autoCompactBufferTokens, contextWindow)}`), s: "dim" },
-		]);
-	}
-
-	const snap = buildSnapcompactParts(breakdown);
-	if (snap.length > 0) lines.push([], ...snap);
-	return lines;
-}
-
-/** Snapcompact savings lines of the legend; empty when no snapcompact setting is on. */
-function buildSnapcompactParts(breakdown: ContextBreakdown): LegendPart[][] {
-	const lines: LegendPart[][] = [];
-	const { usedTokens } = breakdown;
-	const snap = breakdown.snapcompact;
-	if (snap) {
-		if (!snap.visionCapable) {
-			lines.push([{ t: localize("Snapcompact: inactive (model has no image input)"), s: "muted" }]);
-		} else {
-			lines.push([{ t: localize("Snapcompact (estimated wire savings)"), s: "muted" }]);
-			if (snap.systemPrompt) {
-				const sp = snap.systemPrompt;
-				const scope = sp.scope === "agents-md" ? "AGENTS.md" : localize("all");
-				if (sp.applied) {
-					lines.push([
-						{ t: localize("  System prompt ({0}): saves ", `${scope}`) },
-						{ t: `~${formatNumber(sp.savedTokens)}`, s: "strong" },
-						{ t: " " },
-						{
-							t: localize("({0} text → {1} frame{3} ≈ {2})", `${formatNumber(sp.textTokens)}`, `${sp.frames}`, `${formatNumber(sp.imageTokens)}`, `${sp.frames === 1 ? "" : "s"}`),
-							s: "dim",
-						},
-					]);
-				} else {
-					const reason =
-						sp.reason === "budget"
-							? localize("image budget exhausted")
-							: sp.reason === "empty"
-								? localize("nothing to image")
-								: localize("frames would not save tokens");
-					lines.push([{ t: localize("  System prompt ({0}): ", `${scope}`) }, { t: localize("stays text ({0})", `${reason}`), s: "dim" }]);
-				}
-			}
-			if (snap.toolResults) {
-				const tr = snap.toolResults;
-				if (tr.swapped > 0) {
-					lines.push([
-						{ t: localize("  Tool results: saves ") },
-						{ t: `~${formatNumber(tr.savedTokens)}`, s: "strong" },
-						{ t: " " },
-						{
-							t: localize("({0}/{1} imaged, {2} text → {3} frames ≈ {4})", `${tr.swapped}`, `${tr.total}`, `${formatNumber(tr.textTokens)}`, `${tr.frames}`, `${formatNumber(tr.imageTokens)}`),
-							s: "dim",
-						},
-					]);
-				} else {
-					lines.push([{ t: localize("  Tool results: ") }, { t: localize("none imaged ({0} in history)", `${tr.total}`), s: "dim" }]);
-				}
-			}
-			if (snap.savedTokens > 0) {
-				lines.push([
-					{ t: localize("  Next request: ") },
-					{ t: `~${formatNumber(Math.max(0, usedTokens - snap.savedTokens))}`, s: "strong" },
-					{ t: " " },
-					{ t: localize("tokens on the wire"), s: "dim" },
-				]);
-			}
-		}
-	}
-
-	return lines;
-}
-
-function buildLegendLines(breakdown: ContextBreakdown, theme: Theme): string[] {
-	return buildLegendParts(breakdown).map(line => {
-		let out = "";
-		for (const part of line) {
-			out += part.s === "strong" ? theme.bold(part.t) : part.s ? theme.fg(part.s, part.t) : part.t;
-		}
-		return out;
-	});
-}
-
-/** Stacked meter parts in grid order: the categories, free space as the empty track, then the hatched buffer. */
-function contextMeterParts(
-	breakdown: ContextBreakdown,
-): { value: number; token?: string; label?: string; hatch?: boolean }[] {
-	const window = breakdown.contextWindow;
-	const parts: { value: number; token?: string; label?: string; hatch?: boolean }[] = breakdown.categories
-		.filter(category => category.tokens > 0)
-		.map(category => ({
-			value: category.tokens / window,
-			token: category.color,
-			label: localize("{0} · {1} tokens ({2})", `${category.label}`, `${formatNumber(category.tokens)}`, `${percentString(category.tokens, window)}`),
-		}));
-	parts.push({
-		value: breakdown.freeTokens / window,
-		token: "track",
-		label: localize("Free space · {0} tokens ({1})", `${formatNumber(breakdown.freeTokens)}`, `${percentString(breakdown.freeTokens, window)}`),
-	});
-	if (breakdown.autoCompactBufferTokens > 0) {
-		parts.push({
-			value: breakdown.autoCompactBufferTokens / window,
-			token: "warning",
-			hatch: true,
-			label: localize("Autocompact buffer · {0} tokens ({1})", `${formatNumber(breakdown.autoCompactBufferTokens)}`, `${percentString(breakdown.autoCompactBufferTokens, window)}`),
-		});
-	}
-	return parts;
-}
-
-/**
- * One line of the native `/context` breakdown: a swatch in the part's bar
- * color, its name, its tokens and its share of the window; the exact count
- * is its tooltip.
- */
-function contextShareRow(
-	key: string,
-	role: string,
-	swatch: TspSpan,
-	label: string,
-	tokens: number,
-	window: number,
-): NativeNode {
-	return node(
-		"row",
-		{ role, align: "center", title: localize("{0} · {1} tokens", `${label}`, `${tokens.toLocaleString("en-US")}`) },
-		[
-			text([swatch], { role: "omp.context.swatch", wrap: "none" }),
-			text(label, { role: "omp.context.label", grow: 1, wrap: "none", truncate: "end" }),
-			text(formatNumber(tokens), { role: "omp.context.tokens", wrap: "none" }),
-			text(percentString(tokens, window), { role: "omp.context.share", wrap: "none" }),
-		],
-		key,
-	);
-}
-
-/**
- * The snapcompact estimate as a titled group of lines (what is imaged, how,
- * and what it saves), or a note saying why it is inactive; `undefined` when
- * no snapcompact setting is on.
- */
-function describeSnapcompact(breakdown: ContextBreakdown): NativeNode | undefined {
-	const snap = breakdown.snapcompact;
-	if (!snap) return undefined;
-	const head = text([span("Snapcompact", "strong"), span(localize(" · estimated savings on the wire"), "dim")], {
-		role: "omp.context.snap.head",
-	});
-	if (!snap.visionCapable) {
-		const note = text(localize("Inactive: the model has no image input."), { role: "omp.context.snap.note" });
-		return node("col", { role: "omp.context.snap" }, [head, note], "snapcompact");
-	}
-	const lines: { label: string; detail: string; value?: TspSpan }[] = [];
-	const sp = snap.systemPrompt;
-	if (sp) {
-		const label = localize("System prompt · {0}", `${sp.scope === "agents-md" ? "AGENTS.md" : localize("all")}`);
-		if (sp.applied) {
-			lines.push({
-				label,
-				detail: localize("{0} text → {1} frame{3} ≈ {2}", `${formatNumber(sp.textTokens)}`, `${sp.frames}`, `${formatNumber(sp.imageTokens)}`, `${sp.frames === 1 ? "" : "s"}`),
-				value: span(`−${formatNumber(sp.savedTokens)}`, "success"),
-			});
-		} else {
-			const reason =
-				sp.reason === "budget"
-					? localize("image budget exhausted")
-					: sp.reason === "empty"
-						? localize("nothing to image")
-						: localize("frames would not save tokens");
-			lines.push({ label, detail: localize("Stays text: {0}", `${reason}`) });
-		}
-	}
-	const tr = snap.toolResults;
-	if (tr) {
-		lines.push(
-			tr.swapped > 0
-				? {
-						label: localize("Tool results"),
-						detail: localize("{1} of {0} imaged · {2} text → {3} frames ≈ {4}", `${tr.total}`, `${tr.swapped}`, `${formatNumber(tr.textTokens)}`, `${tr.frames}`, `${formatNumber(tr.imageTokens)}`),
-						value: span(`−${formatNumber(tr.savedTokens)}`, "success"),
-					}
-				: { label: localize("Tool results"), detail: localize("None imaged · {0} in history", `${tr.total}`) },
-		);
-	}
-	if (snap.savedTokens > 0) {
-		lines.push({
-			label: localize("Next request"),
-			detail: localize("tokens on the wire"),
-			value: span(`~${formatNumber(Math.max(0, breakdown.usedTokens - snap.savedTokens))}`, "strong"),
-		});
-	}
-	const rows = lines.map((line, index) =>
-		node(
-			"row",
-			{ role: "omp.context.snap.row", align: "baseline" },
-			[
-				text(line.label, { role: "omp.context.label", wrap: "none" }),
-				text(line.detail, { role: "omp.context.detail", grow: 1, wrap: "none", truncate: "end" }),
-				...(line.value ? [text([line.value], { role: "omp.context.tokens", wrap: "none" })] : []),
-			],
-			`snap-${index}`,
-		),
-	);
-	return node("col", { role: "omp.context.snap" }, [head, ...rows], "snapcompact");
-}
-
-/**
- * The `/context` body for terminals that draw `meter`: the tokens used as
- * the figure that leads, beside the room left before auto-compaction; one
- * stacked bar of the parts (categories, free space as the empty track, the
- * hatched buffer) ticked where compaction fires; the breakdown in the bar's
- * order with free space and the buffer under it; then the snapcompact
- * estimate when one is on. {@link contextUsageHead} names the model.
- */
-function describeContextFrame(breakdown: ContextBreakdown): NativeNode {
-	const { contextWindow: window, usedTokens, freeTokens, autoCompactBufferTokens, thresholdTokens } = breakdown;
-	const parts = contextMeterParts(breakdown);
-	const used = Math.min(1, usedTokens / window);
-	const room =
-		thresholdTokens === undefined
-			? localize("{0} free", `${formatNumber(freeTokens)}`)
-			: usedTokens >= thresholdTokens
-				? localize("Past auto-compaction at {0}", `${percentString(thresholdTokens, window, 0)}`)
-				: localize("{1} left before auto-compaction at {0}", `${percentString(thresholdTokens, window, 0)}`, `${formatNumber(thresholdTokens - usedTokens)}`);
-	const summary = node(
-		"row",
-		{ role: "omp.context.summary", align: "baseline", wrap: true },
-		[
-			text(
-				[
-					span(formatNumber(usedTokens), "strong"),
-					span(localize(" of {0} tokens · {1}", `${formatNumber(window)}`, `${percentString(usedTokens, window, 0)}`), "dim"),
-				],
-				{ role: "omp.context.used", grow: 1, wrap: "none" },
-			),
-			text(room, { role: "omp.context.room", wrap: "none" }),
-		],
-		"summary",
-	);
-	const marks =
-		thresholdTokens !== undefined
-			? [
-					{
-						at: thresholdTokens / window,
-						tone: "warning" as const,
-						title: localize("Auto-compaction at {0} · {1} tokens", `${percentString(thresholdTokens, window, 0)}`, `${formatNumber(thresholdTokens)}`),
-					},
-				]
-			: undefined;
-	const bar = node(
-		"meter",
-		{ value: used, style: "bar", size: "lg", parts, ...(marks ? { marks } : {}), aria: localize("Context usage by category") },
-		undefined,
-		"bar",
-	);
-	const shares = breakdown.categories.map(category =>
-		contextShareRow(
-			category.id,
-			"omp.context.cat",
-			span("■", category.color),
-			category.label,
-			category.tokens,
-			window,
-		),
-	);
-	shares.push(contextShareRow("free", "omp.context.cat.free", span("□", "dim"), localize("Free space"), freeTokens, window));
-	if (autoCompactBufferTokens > 0) {
-		shares.push(
-			contextShareRow(
-				"buffer",
-				"omp.context.cat.buffer",
-				span("▨", "warning"),
-				localize("Autocompact buffer"),
-				autoCompactBufferTokens,
-				window,
-			),
-		);
-	}
-	const children = [summary, bar, node("col", { role: "omp.context.cats" }, shares, "cats")];
-	const snap = describeSnapcompact(breakdown);
-	if (snap) children.push(snap);
-	return col(children, { role: "omp.context" });
-}
-
-/** The `/context` title: the model once one is selected (the body leads with its window). */
-export function contextUsageHead(breakdown: ContextBreakdown): TspText {
-	if (breakdown.contextWindow <= 0) return [span(localize("Context usage"), "strong")];
-	const modelName = breakdown.model?.name ?? breakdown.model?.id ?? localize("no model");
-	return [span(localize("Context"), "strong"), span(` · ${modelName}`, "muted")];
-}
-
-/**
- * Native context-usage panel for terminals without `meter`: the cell grid as
- * unwrapped styled rows beside the legend. The terminal places the legend
- * beside the grid, or below it when narrow.
- */
-export function describeContextUsage(breakdown: ContextBreakdown): NativeNode {
-	if (breakdown.contextWindow <= 0) {
-		return text([{ t: "Context usage is unavailable: no model is selected for this session.", s: "muted" }]);
-	}
-	const cells = planCells(breakdown);
-	const grid: NativeNode[] = [];
-	for (let gridRow = 0; gridRow < GRID_ROWS; gridRow++) {
-		const spans: TspSpan[] = [];
-		for (let gridCol = 0; gridCol < GRID_COLS; gridCol++) {
-			const cell = cells[gridRow * GRID_COLS + gridCol]!;
-			spans.push({ t: gridCol === 0 ? cell.glyph : ` ${cell.glyph}`, s: cell.color });
-		}
-		grid.push(node("text", { spans, wrap: "none" }, undefined, `row-${gridRow}`));
-	}
-	const legend = buildLegendParts(breakdown).map((line, index) =>
-		node("text", { spans: line.length > 0 ? line : [{ t: " " }] }, undefined, `legend-${index}`),
-	);
-	return row([col(grid), col(legend)], {
-		gap: "lg",
-		wrap: true,
-		role: "omp.context.usage",
-	});
-}
-
-/**
- * The `/context` report body, without a frame or title of its own (the panel
- * showing it is titled {@link contextUsageHead}): ANSI renders the cell grid
- * beside the legend; natively it is drawn with `meter`s where the terminal has
- * them and as the glyph grid otherwise.
- */
-export class ContextUsageView extends Container {
-	readonly #breakdown: ContextBreakdown;
-	#native: { meter: boolean; node: NativeNode } | undefined;
-
-	constructor(breakdown: ContextBreakdown, theme: Theme) {
-		super();
-		this.#breakdown = breakdown;
-		this.addChild(new Text(renderContextUsage(breakdown, theme), 0, 0));
-	}
-
-	override describe(cx: DescribeContext): NativeNode {
-		const meter = cx.supports("meter");
-		if (this.#native?.meter === meter) return this.#native.node;
-		const breakdown = this.#breakdown;
-		const described =
-			meter && breakdown.contextWindow > 0 ? describeContextFrame(breakdown) : describeContextUsage(breakdown);
-		this.#native = { meter, node: described };
-		return described;
-	}
-}
-
-/**
- * Render a colorful context-usage panel as ANSI text. Output is a series of
- * lines pairing the grid (left) with the legend (right).
- */
-export function renderContextUsage(breakdown: ContextBreakdown, theme: Theme): string {
-	if (breakdown.contextWindow <= 0) {
-		return theme.fg("muted", "Context usage is unavailable: no model is selected for this session.");
-	}
-
-	const cells = planCells(breakdown);
-	const legend = buildLegendLines(breakdown, theme);
-
-	const totalLines = Math.max(GRID_ROWS, legend.length);
-	const lines: string[] = [];
-
-	for (let row = 0; row < totalLines; row++) {
-		let gridSegment = "";
-		if (row < GRID_ROWS) {
-			const rowCells: string[] = [];
-			for (let col = 0; col < GRID_COLS; col++) {
-				const cell = cells[row * GRID_COLS + col];
-				rowCells.push(theme.fg(cell.color, cell.glyph));
-			}
-			gridSegment = rowCells.join(" ");
-		} else {
-			// Pad with blanks the same visible width as a grid row so legend lines
-			// past the grid stay aligned with their column.
-			const blank = " ".repeat(GRID_COLS * 2 - 1);
-			gridSegment = blank;
-		}
-
-		const legendSegment = legend[row] ?? "";
-		const line = legendSegment.length > 0 ? `${gridSegment}${GRID_GUTTER}${legendSegment}` : gridSegment;
-		lines.push(line);
-	}
-
-	return lines.join("\n");
 }

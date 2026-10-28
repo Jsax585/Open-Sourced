@@ -3,7 +3,6 @@
  * into dense chart series aligned to a bucket axis (see `bucketAxis`).
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ChartSeries } from "../charts/types";
 import { OTHER_COLOR, SERIES_COLORS } from "./colors";
 
@@ -74,7 +73,7 @@ export function pivotSeries<P extends { timestamp: number }>(
 	if (tail.length > 0) {
 		const other = Array.from({ length: opts.buckets.length }, () => 0);
 		for (const entry of tail) for (let i = 0; i < other.length; i++) other[i] += entry.values[i];
-		series.push({ key: "__other__", label: t("Other ({0})", `${tail.length}`), color: OTHER_COLOR, values: other });
+		series.push({ key: "__other__", label: `Other (${tail.length})`, color: OTHER_COLOR, values: other });
 	}
 	return series;
 }

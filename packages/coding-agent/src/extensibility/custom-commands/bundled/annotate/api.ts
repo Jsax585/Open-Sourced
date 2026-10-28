@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	AnnotationDelivery,
 	AnnotationDiffNote,
@@ -37,13 +36,13 @@ async function resolveTextSource(ctx: AnnotationContext, source: AnnotationTextS
 	const sessionId = ctx.sessionManager.getSessionId();
 	switch (source.kind) {
 		case "text":
-			if (source.text.length === 0) throw new Error(t("Annotation text source is empty."));
+			if (source.text.length === 0) throw new Error("Annotation text source is empty.");
 			return promptTextReviewSource(source.text, sessionId, source.label);
 		case "file":
 			return readFileTextReviewSource(source.path, ctx.sessionManager.getCwd?.() ?? ctx.cwd, sessionId);
 		case "last": {
 			const latest = latestAssistantTextReviewSource(ctx.sessionManager.getBranch(), sessionId);
-			if (!latest) throw new Error(t("No non-empty assistant reply is available on the active session branch."));
+			if (!latest) throw new Error("No non-empty assistant reply is available on the active session branch.");
 			return latest;
 		}
 	}
@@ -66,7 +65,7 @@ async function resolveDiffTarget(ctx: AnnotationContext, source: AnnotationDiffS
 			break;
 		case "pr": {
 			const ref = parseReviewPrRef(source.ref);
-			if (!ref) throw new Error(t("Not a GitHub pull request or GitLab merge request reference: {0}", `${source.ref}`));
+			if (!ref) throw new Error(`Not a GitHub pull request or GitLab merge request reference: ${source.ref}`);
 			target = await fetchPrReviewTarget(cwd, ref);
 			break;
 		}
@@ -80,17 +79,17 @@ function matchTextNotes(source: TextReviewSource, notes: readonly AnnotationText
 	const lines = splitTextLines(source.text);
 	return notes.map((entry, index) => {
 		const note = entry.note.trim();
-		if (!note) throw new Error(t("Annotation {0} has an empty note.", `${index + 1}`));
+		if (!note) throw new Error(`Annotation ${index + 1} has an empty note.`);
 		if (entry.line === undefined) return { scope: "text", note };
 		if (!Number.isInteger(entry.line) || entry.line < 1 || entry.line > lines.length) {
 			throw new Error(
-				t("Annotation {0}: line {1} is outside {2} (lines 1-{3}).", `${index + 1}`, `${entry.line}`, `${source.label}`, `${lines.length}`),
+				`Annotation ${index + 1}: line ${entry.line} is outside ${source.label} (lines 1-${lines.length}).`,
 			);
 		}
 		const quote = lines[entry.line - 1]!;
 		if (entry.quote !== undefined && entry.quote !== quote) {
 			throw new Error(
-				t("Annotation {0}: line {2} of {1} no longer matches its quote (expected {3}, found {4}).", `${index + 1}`, `${source.label}`, `${entry.line}`, `${JSON.stringify(entry.quote)}`, `${JSON.stringify(quote)}`),
+				`Annotation ${index + 1}: line ${entry.line} of ${source.label} no longer matches its quote (expected ${JSON.stringify(entry.quote)}, found ${JSON.stringify(quote)}).`,
 			);
 		}
 		return { scope: "line", line: entry.line, quote, note };
@@ -218,7 +217,7 @@ export function createAnnotationsAPI(
 		async open(request) {
 			const ctx = getContext();
 			if (ctx.mode !== "tui") {
-				throw new Error(t("The annotation overlay needs the interactive TUI (mode \"{0}\"); use submit.", `${ctx.mode}`));
+				throw new Error(`The annotation overlay needs the interactive TUI (mode "${ctx.mode}"); use submit.`);
 			}
 			if (isTextRequest(request)) {
 				let source = await resolveTextSource(ctx, request.source);

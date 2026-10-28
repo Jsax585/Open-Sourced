@@ -1,5 +1,4 @@
 /** `grep` (legacy `search`) — ripgrep content search across workspace files. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, InvalidArg, Note, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -35,7 +34,7 @@ function Pattern({ args }: { args: Record<string, unknown> }): ReactNode {
 function Summary({ args }: ToolRenderProps): ReactNode {
 	return (
 		<span>
-			<Pattern args={args} /> <span className="tv-muted">{t("in")}</span>{" "}
+			<Pattern args={args} /> <span className="tv-muted">in</span>{" "}
 			<span className="tv-path">{pathsOf(args).join(", ")}</span> <Badges items={argBadges(args)} />
 		</span>
 	);
@@ -54,21 +53,21 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 		}
 	}
 	const badges = argBadges(args);
-	if (matchCount !== null) badges.push(`${matchCount} ${matchCount === 1 ? t("match") : t("matches")}`);
-	if (fileCount !== null) badges.push(`${fileCount} ${fileCount === 1 ? t("file") : t("files")}`);
+	if (matchCount !== null) badges.push(`${matchCount} ${matchCount === 1 ? "match" : "matches"}`);
+	if (fileCount !== null) badges.push(`${fileCount} ${fileCount === 1 ? "file" : "files"}`);
 	return (
 		<>
 			<div>
-				<Pattern args={args} /> <span className="tv-muted">{t("in")}</span>{" "}
+				<Pattern args={args} /> <span className="tv-muted">in</span>{" "}
 				<span className="tv-path">{pathsOf(args).join(", ")}</span> <Badges items={badges} />
 				{truncated && (
 					<>
 						{" "}
-						<Badge tone="warn">{t("truncated")}</Badge>
+						<Badge tone="warn">truncated</Badge>
 					</>
 				)}
 			</div>
-			{missing.length > 0 && <Note tone="warn">{t("skipped missing: {0}", `${missing.join(", ")}`)}</Note>}
+			{missing.length > 0 && <Note tone="warn">skipped missing: {missing.join(", ")}</Note>}
 			{error !== null && !resultTextOf(result).trim() && <Note tone="err">{error}</Note>}
 			<ResultText result={result} maxLines={14} variant="code" />
 		</>

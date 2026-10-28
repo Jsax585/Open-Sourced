@@ -1,280 +1,298 @@
-# 컨텍스트 압축과 분기 요약
+# Compaction and Branch Summaries
 
-컨텍스트 압축과 분기 요약은 이전 작업 맥락을 잃지 않고 긴 세션을 계속 사용할 수 있게 하는 두 가지 방식입니다.
+Compaction and branch summaries are the two mechanisms that keep long sessions usable without losing prior work context.
 
-- **컨텍스트 압축**은 현재 분기의 오래된 기록을 요약으로 재작성합니다.
-- **분기 요약**은 `/tree` 탐색 중 떠나는 분기의 맥락을 기록합니다.
+- **Compaction** rewrites old history into a summary on the current branch.
+- **Branch summary** captures abandoned branch context during `/tree` navigation.
 
-둘 다 세션 항목으로 저장하며 LLM 입력을 재구성할 때 사용자 컨텍스트 메시지로 변환합니다.
+Both are persisted as session entries and converted back into user-context messages when rebuilding LLM input.
 
-## 주요 구현 파일
+## Key implementation files
 
-- `packages/agent/src/compaction/compaction.ts`(컨텍스트 전체 요약과 인계 생성)
-- `packages/snapcompact/src/snapcompact.ts`(snapcompact 전략: 기록을 고밀도 비트맵 이미지로 보관)
+- `packages/agent/src/compaction/compaction.ts` (context-full summarization and handoff generation)
+- `packages/snapcompact/src/snapcompact.ts` (snapcompact strategy: history archived as dense bitmap images)
 - `packages/agent/src/compaction/branch-summarization.ts`
 - `packages/agent/src/compaction/pruning.ts`
-- `packages/agent/src/compaction/compaction-v2-streaming.ts`(제공업체 네이티브 스트리밍 압축)
-- `packages/agent/src/compaction/shake.ts`(기계적 콘텐츠 생략)
+- `packages/agent/src/compaction/compaction-v2-streaming.ts` (provider-native streaming compaction)
+- `packages/agent/src/compaction/shake.ts` (mechanical content elision)
 - `packages/agent/src/compaction/utils.ts`
 - `packages/agent/src/compaction/openai.ts`
-- `packages/agent/src/compaction/messages.ts`(공통 LLM 변환과 요약 래퍼)
-- `packages/coding-agent/src/session/session-context.ts`(컨텍스트와 대화 기록 구성)
+- `packages/agent/src/compaction/messages.ts` (shared LLM conversion and summary wrappers)
+- `packages/coding-agent/src/session/session-context.ts` (context and transcript assembly)
 - `packages/coding-agent/src/session/session-manager.ts`
 - `packages/coding-agent/src/session/agent-session.ts`
-- `packages/coding-agent/src/session/session-maintenance.ts`(자동 유지 관리 조정)
+- `packages/coding-agent/src/session/session-maintenance.ts` (automatic maintenance orchestration)
 - `packages/coding-agent/src/session/messages.ts`
 - `packages/coding-agent/src/extensibility/hooks/types.ts`
-- `packages/coding-agent/src/session/context-settings.ts`(`compaction.*`, `snapcompact.*`, `branchSummary.*` 정의)
+- `packages/coding-agent/src/session/context-settings.ts` (`compaction.*`, `snapcompact.*`, `branchSummary.*` definitions)
 
-## 세션 항목 모델
+## Session entry model
 
-컨텍스트 압축과 분기 요약은 일반 어시스턴트/사용자 메시지가 아닌 독립적인 세션 항목입니다.
+Compaction and branch summaries are first-class session entries, not plain assistant/user messages.
 
 - `CompactionEntry`
    - `type: "compaction"`
-   - `summary`, 선택적 `shortSummary`
-   - `firstKeptEntryId`(압축 경계)
+   - `summary`, optional `shortSummary`
+   - `firstKeptEntryId` (compaction boundary)
    - `tokensBefore`
-   - 선택적 `details`, `preserveData`, `fromExtension`
-   - 선택적 `method`, `tokensAfter`, `warning`(유지 관리/표시 메타데이터)
-   - 선택적 `providerReplayThroughEntryId`(네이티브 재생 스냅샷이 포함하는 마지막 항목)
+   - optional `details`, `preserveData`, `fromExtension`
+   - optional `method`, `tokensAfter`, `warning` (maintenance/display metadata)
+   - optional `providerReplayThroughEntryId` (last entry covered by a native replay snapshot)
 - `BranchSummaryEntry`
    - `type: "branch_summary"`
    - `fromId`, `summary`
-   - 선택적 `details`, `fromExtension`
+   - optional `details`, `fromExtension`
 
-컨텍스트를 재구성하면(`buildSessionContext`):
+When context is rebuilt (`buildSessionContext`):
 
-1. 활성 경로의 최신 압축을 `compactionSummary` 메시지 하나로 변환합니다.
-2. `firstKeptEntryId`부터 압축 지점까지 유지한 항목을 다시 포함합니다.
-3. 경로의 이후 항목을 추가합니다.
-4. `branch_summary`를 `branchSummary` 메시지로 변환합니다.
-5. `custom_message`를 `custom` 메시지로 변환합니다.
+1. Latest compaction on the active path is converted to one `compactionSummary` message.
+2. Kept entries from `firstKeptEntryId` to the compaction point are re-included.
+3. Later entries on the path are appended.
+4. `branch_summary` entries are converted to `branchSummary` messages.
+5. `custom_message` entries are converted to `custom` messages.
 
-이 사용자 지정 역할은 `convertToLlm()`에서 LLM용 메시지로 바꿉니다. `compactionSummary`와 `branchSummary`는 다음 정적 템플릿으로 렌더링한 사용자 메시지가 됩니다.
+Those custom roles are then transformed into LLM-facing messages in `convertToLlm()`: `compactionSummary` and `branchSummary` become user messages rendered through the static templates
 
 - `packages/agent/src/compaction/prompts/compaction-summary-context.md`
 - `packages/agent/src/compaction/prompts/branch-summary-context.md`
-- `packages/agent/src/compaction/prompts/handoff-summary-context.md`(`method === "handoff"`일 때)
+- `packages/agent/src/compaction/prompts/handoff-summary-context.md` (when `method === "handoff"`)
 
-순서 있는 아카이브 블록을 가진 Snapcompact 요약은 래퍼를 거치지 않고 도입문과 아카이브 블록을 직접 보냅니다. `custom` 메시지는 일반적으로 요약 템플릿 없이 원시 내용을 developer 메시지로 전달합니다.
+Snapcompact summaries with ordered archive blocks bypass these wrappers and send the lead-in plus archive blocks directly. `custom` messages normally pass through as developer messages with their raw content (no summary template).
 
-네이티브 재생에는 일치하는 제공업체와 활성 모델의 Responses 계열 API도 필요합니다. 별도 네이티브 압축 엔드포인트가 있다고 Chat Completions나 Anthropic 인코더가 그 출력을 사용할 수 있는 것은 아닙니다.
+Native replay also requires a matching provider and a Responses-family API on the active model. A separate native compaction endpoint does not give a Chat Completions or Anthropic encoder the ability to consume its output.
 
-향후 네이티브 압축을 꺼도 기존 페이로드의 일반 재생은 꺼지지 않습니다. 압축 준비는 더 엄격한 별도 재사용 정책을 따릅니다. 로컬 요약은 불투명한 자리표시자를 읽을 수 있는 요약으로 간주하지 않고 원본 메시지를 다시 펼쳐야 합니다.
+Disabling future native compaction does not disable normal replay of an existing payload. Compaction preparation has a separate, stricter reuse policy: local summarization must re-expand the original messages rather than treat an opaque placeholder as a readable summary.
 
-## 컨텍스트 압축 파이프라인
+## Compaction pipeline
 
-### 실행 조건
+### Triggers
 
-컨텍스트 압축/유지 관리는 여섯 방식으로 실행합니다.
+Compaction/context maintenance can run in six ways:
 
-1. **수동 압축**: `/compact [instructions]`가 `AgentSession.compact(...)`를 호출합니다.
-2. **자동 오버플로 복구**: 같은 모델의 어시스턴트 오류가 컨텍스트 초과에 해당할 때 실행합니다.
-3. **자동 불완전 출력 복구**: 같은 모델의 메시지가 `stopReason === "length"`로 끝나면 실행합니다(OpenAI/Codex `response.incomplete`, Anthropic 출력/컨텍스트 제한 포함). 아래 출력 한도 검사도 적용합니다.
-4. **자동 임계값 유지 관리**: 성공한 턴 뒤 컨텍스트가 결정된 임계값을 넘으면 실행합니다.
-5. **턴 도중 임계값 유지 관리**: 도구 루프 턴이 임계값을 넘고 `compaction.midTurnEnabled !== false`이면 다음 제공업체 요청 전에 실행합니다. 하위 에이전트는 항상 검사합니다. 전체 할당이 한 턴이므로 턴 후에만 검사하면 실행이 이미 끝난 뒤라서 `createSubagentSettings`가 자식의 `compaction.midTurnEnabled`를 켭니다.
-6. **유휴 유지 관리**: `runIdleCompaction()`이 사유 `"idle"`로 같은 자동 경로를 호출할 수 있습니다.
+1. **Manual context compaction**: `/compact [instructions]` calls `AgentSession.compact(...)`.
+2. **Automatic overflow recovery**: after a same-model assistant error that matches context overflow.
+3. **Automatic incomplete-output recovery**: after a same-model assistant message ends with `stopReason === "length"` (including OpenAI/Codex `response.incomplete` and Anthropic output/context limits), subject to the output-cap checks below.
+4. **Automatic threshold maintenance**: after a successful turn when context exceeds the resolved threshold.
+5. **Mid-turn threshold maintenance**: before the next provider request when a tool-loop turn crosses the threshold and `compaction.midTurnEnabled !== false`. Subagent sessions always run this check: `createSubagentSettings` pins `compaction.midTurnEnabled` on for the child because a whole assignment is one turn, so post-turn maintenance would only fire after the run already ended.
+6. **Idle maintenance**: `runIdleCompaction()` can invoke the same auto-maintenance path with reason `"idle"`.
 
-### 압축 구조 도식
+### Compaction shape (visual)
 
 ```text
-압축 전:
+Before compaction:
 
   entry:  0     1     2     3      4     5     6      7      8     9
         ┌─────┬─────┬─────┬──────┬─────┬─────┬──────┬──────┬─────┬──────┐
         │ hdr │ usr │ ass │ tool │ usr │ ass │ tool │ tool │ ass │ tool │
         └─────┴─────┴─────┴──────┴─────┴─────┴──────┴──────┴─────┴──────┘
                 └────────┬───────┘ └──────────────┬──────────────┘
-               messagesToSummarize            유지할 메시지
+               messagesToSummarize            kept messages
                                    ↑
-                          firstKeptEntryId (항목 4)
+                          firstKeptEntryId (entry 4)
 
-압축 후(새 항목 추가):
+After compaction (new entry appended):
 
   entry:  0     1     2     3      4     5     6      7      8     9      10
         ┌─────┬─────┬─────┬──────┬─────┬─────┬──────┬──────┬─────┬──────┬─────┐
         │ hdr │ usr │ ass │ tool │ usr │ ass │ tool │ tool │ ass │ tool │ cmp │
         └─────┴─────┴─────┴──────┴─────┴─────┴──────┴──────┴─────┴──────┴─────┘
                └──────────┬──────┘ └──────────────────────┬───────────────────┘
-                 LLM에 보내지 않음                   LLM에 전송
+                 not sent to LLM                    sent to LLM
                                                          ↑
-                                              firstKeptEntryId부터 시작
+                                              starts from firstKeptEntryId
 
-LLM이 보는 내용:
+What the LLM sees:
 
   ┌────────┬─────────┬─────┬─────┬──────┬──────┬─────┬──────┐
   │ system │ summary │ usr │ ass │ tool │ tool │ ass │ tool │
   └────────┴─────────┴─────┴─────┴──────┴──────┴─────┴──────┘
        ↑         ↑      └─────────────────┬────────────────┘
-    프롬프트   cmp에서 생성          firstKeptEntryId 이후 메시지
+    prompt   from cmp          messages from firstKeptEntryId
 ```
 
-### 오버플로/불완전 출력 복구와 임계값/유휴 유지 관리
+### Overflow/incomplete recovery vs threshold/idle maintenance
 
-자동 경로는 의도적으로 다르게 동작합니다.
+The automatic paths are intentionally different:
 
-- **오버플로 복구**
-   - 조건: 현재 모델의 어시스턴트 오류가 컨텍스트 초과로 감지되며 최신 압축보다 오래되지 않았을 때
-   - 재시도 전 실패한 어시스턴트 오류 메시지를 활성 상태에서 제거합니다.
-   - 컨텍스트 승격을 먼저 시도하며 설정된 더 큰 모델이 있으면 압축 없이 모델을 전환하고 재시도합니다.
-   - 승격할 수 없고 압축이 켜져 있으면 `reason: "overflow"`, `willRetry: true`로 `compaction.methodOrder`를 순회합니다. 인계 요청은 초과한 입력을 재사용하므로 건너뜁니다.
-   - 성공하면 턴 재시도를 위해 `agent.continue()`를 예약합니다.
+- **Overflow recovery**
+   - Trigger: current-model assistant error is detected as context overflow and the error is not older than the latest compaction.
+   - The failing assistant error message is removed from active agent state before retry.
+   - Context promotion is tried first; if a configured larger model is available, the agent switches model and retries without compacting.
+   - If promotion is unavailable and compaction is enabled, automatic maintenance walks `compaction.methodOrder` with `reason: "overflow"` and `willRetry: true`; handoff is skipped because its request would reuse the overflowing input.
+   - On success, `agent.continue()` is scheduled to retry the turn.
 
-- **불완전 출력 복구**
-   - 조건: 같은 모델의 메시지가 `stopReason === "length"`로 끝나고 최신 압축보다 오래되지 않았을 때
-   - 컨텍스트 창이 압축 임계값 미만이고 턴에 텍스트나 도구 호출이 있으면 잘린 턴을 유지하고 출력 한도 경고를 표시합니다. 압축은 출력 한도를 늘리지 못합니다.
-   - 그 외에는 불완전 어시스턴트를 활성 상태에서 제거하고 컨텍스트 승격을 먼저 시도합니다.
-   - 유지 관리가 켜져 있으면 임계값 미만의 무출력 턴은 압축 없이 재시도합니다. 추론만 하다가 출력 한도로 멈춘 경우에는 더 작은 단계로 행동하라는 developer 알림도 제공합니다.
-   - 임계값 이상이거나 창 크기가 불명확하면 `reason: "incomplete"`, `willRetry: true`로 방법 순서를 순회합니다. 오버플로와 달리 입력은 사용 가능하므로 실행 가능한 `handoff`를 사용할 수 있습니다.
-   - 텍스트나 도구 호출 없는 연속 복구는 세 번으로 제한합니다. 새 사용자 입력이나 실행 가능한 출력은 횟수를 초기화합니다. 한도에 도달하면 자동 이어가기를 막고 조치 가능한 실패를 알립니다.
-   - 복구 성공 시 이어가기를 예약합니다.
+- **Incomplete-output recovery**
+   - Trigger: same-model assistant message ends with `stopReason === "length"` and the message is not older than the latest compaction.
+   - When the window is below the compaction threshold and the turn delivered text or a tool call, the truncated turn is retained and an output-limit warning is shown; compaction cannot raise the output cap.
+   - Otherwise the incomplete assistant is removed from active state, and context promotion is tried first.
+   - With maintenance enabled, no-output turns below threshold retry without compaction; a reasoning-only output-cap stop also receives a developer reminder to act in smaller steps.
+   - Above threshold (or with an unknown window), auto maintenance walks `compaction.methodOrder` with `reason: "incomplete"` and `willRetry: true`. Unlike overflow, a reachable `handoff` may run because the input remains usable.
+   - Consecutive recoveries without text or a tool call are capped at three; new user input or actionable output resets the counter. The terminal cap blocks automatic continuation and reports an actionable failure.
+   - Successful recovery schedules continuation.
 
-- **임계값 유지 관리**
-   - 조건: 오류 없는 성공 메시지의 조정 컨텍스트 토큰이 `resolveThresholdTokens(...)`를 넘을 때. `calculateContextTokens(...)`는 청구되지만 대화 접두사로 재생하지 않는 제공업체 조정 토큰을 빼므로 압축/승격 임계값이 부풀지 않습니다.
-   - `compaction.midTurnEnabled !== false`이면 다음 요청 전 안전한 도구 루프 경계도 검사합니다.
-   - 최초 조건은 저장된 대화 추정치 이상으로 조정된 제공업체 사용량을 사용합니다. 가지치기는 방금 청구된 프롬프트를 소급해 줄이지 않습니다. 회수 토큰은 이후 유지 관리 대상에 반영합니다. 최신 압축 전 사용량 대신 실시간 저장 추정치를 사용합니다.
-   - 턴 후 압축 전에 컨텍스트 승격을 시도합니다.
-   - 승격할 수 없으면 `reason: "threshold"`, `willRetry: false`로 방법 순서를 순회합니다.
-   - `handoff`를 포함한 모든 방식은 인라인 실행합니다. 턴 후 유지 관리는 `agent_end`가 확정되기 전에 인계 문서를 만들고 압축 항목으로 커밋하므로 `willContinue`/`yielded`가 실제 예약 여부를 반영합니다.
-   - 성공하고 `compaction.autoContinue !== false`이면 턴 후 유지 관리가 `prompts/system/auto-continue.md`의 에이전트 작성 developer 자동 이어가기 프롬프트를 예약합니다. 턴 도중 유지 관리는 핵심 루프가 다음 요청을 담당하므로 별도 이어가기를 예약하지 않습니다.
+- **Threshold maintenance**
+   - Trigger: successful, non-error assistant message whose adjusted context tokens exceed `resolveThresholdTokens(...)`. The measured count comes from `calculateContextTokens(...)`, which subtracts provider-side orchestration tokens (billable, but never replayed into the conversation prefix) so auto-compaction and context-promotion thresholds are not inflated by them.
+   - Mid-turn maintenance also checks safe tool-loop boundaries before the next provider request when `compaction.midTurnEnabled !== false`.
+   - The initial trigger uses adjusted provider usage floored by the stored-conversation estimate; pruning does not retroactively reduce the just-billed prompt. Reclaimed tokens affect the subsequent maintenance target. Usage predating the latest compaction is ignored in favor of the live stored estimate.
+   - Context promotion is tried before post-turn compaction.
+   - If promotion is unavailable, auto maintenance walks `compaction.methodOrder` with `reason: "threshold"` and `willRetry: false`.
+   - Every method, `handoff` included, runs inline: post-turn maintenance generates the handoff document and commits it as a compaction entry before the run's `agent_end` settles, so the settle's `willContinue`/`yielded` reflects whether a continuation was actually scheduled.
+   - On success, if `compaction.autoContinue !== false`, post-turn maintenance schedules an agent-authored developer auto-continue prompt from `prompts/system/auto-continue.md`; mid-turn maintenance never schedules a separate continuation because the core loop already owns the next provider request.
 
-- **유휴 유지 관리**
-   - 조건: 스트리밍/압축 중이 아닐 때 `runIdleCompaction()`이 실행됩니다. 요약과 캐시 예열 재생이 경합하지 않도록 대기 예열 갱신부터 취소합니다. 대화형 유휴 타이머는 턴이 빈 입력으로 끝나고 컨텍스트가 `compaction.idleThresholdTokens` 이상일 때 준비합니다. 응답이 장기(1시간, Anthropic 장기 보존) 캐시 읽기/쓰기를 확인했으면 마지막 요청 또는 예열 적중 후 `min(90% of TTL, TTL − 10s)`인 갱신 시점(약 54분)보다 5초 먼저 실행하여 요약 요청도 캐시 접두사를 읽게 합니다. 그 시점을 넘고 만료 전 끝난 턴은 즉시 압축합니다. 5분 캐시는 턴 직후 너무 빨리 만료되어 그 일정에 압축할 가치가 없으므로 타이머 기준으로 삼지 않습니다. 이 경우나 수명이 불명확하거나 이미 만료되었으면 `compaction.idleTimeoutSeconds`를 기다립니다.
-   - 단기 캐시의 의도된 절충: 대체 지연은 턴 종료부터, 캐시 수명은 요청 전송부터 계산하므로 기본 300초 지연의 유휴 요약은 5분 캐시가 만료된 뒤 전체 접두사를 새로 읽는 비용을 냅니다. 짧은 휴식이 압축을 유발하지 않도록 허용한 동작입니다. `compaction.idleTimeoutSeconds`를 줄이면(최소 60초) 캐시 수명 안에 실행할 수도 있습니다.
-   - `reason: "idle"`을 사용하며 이후 자동 이어가기를 하지 않습니다.
+- **Idle maintenance**
+   - Trigger: `runIdleCompaction()` when not streaming or already compacting; it cancels pending cache-warm refreshes first so no warm replay races the summary. The idle timer belongs to the session's idle-maintenance scheduler, which the interactive TUI enables for the session on screen (see [SDK idle maintenance](./sdk.md#idle-maintenance)). It arms once a turn has settled — nothing live, admitted, queued or scheduled, and no background job or delivery that could wake the session — while the editor holds no draft and context is at or above `compaction.idleThresholdTokens`; a draft defers it until the draft is cleared, which re-arms it with a fresh delay. When a response has confirmed a long-tier (1h, Anthropic long retention) prompt-cache entry — it read or wrote the cache — the timer fires 5s before the cache warmer's refresh point, `min(90% of TTL, TTL − 10s)` after the last request or warm hit (about 54 min), so the summary request still reads the cached prefix; a turn that settles past that point but before expiry compacts immediately. A 5-minute entry never drives the timer: it lapses too soon after a turn for compaction to be worth starting on its schedule. In that case, with an unknown lifetime, or once the entry has expired, the timer waits `compaction.idleTimeoutSeconds`.
+   - Short-tier trade-off (deliberate): the fallback delay counts from the moment the turn settles while the cache lifetime counts from the request send, so with the default 300s delay an idle summary after a 5-minute entry always runs on an expired cache and pays a cold full-prefix read. This is accepted so a short break never triggers compaction; shorter `compaction.idleTimeoutSeconds` values (minimum 60s) can still land inside the entry's lifetime.
+   - While the pass rewrites history, prompts, turn-starting custom messages, IRC wakes and background-result deliveries wait for it to finish and then run on the compacted context.
+   - Uses `reason: "idle"` and does not auto-continue afterward.
 
-### 페이로드 거부 보호
+### Payload-rejection guard
 
-HTTP 413/페이로드 거부를 자동으로 토큰 초과로 취급하지 않습니다. 알려진 창에 로컬 추정 여유가 10% 이상이고 제공업체 입력 사용량이 창 안에 있거나, 사용량으로 입증된 초과 없이 명시적 이미지 한도 근거가 있으면 자동 이어가기를 막고 승격/압축 대신 페이로드 예산 경고를 냅니다.
+HTTP 413 / payload rejections are not automatically treated as token overflow. A known window with at least 10% locally estimated headroom and provider input usage within that window, or explicit image-limit evidence without usage-backed overflow, blocks automatic continuation and emits a payload-budget warning rather than promoting or compacting.
 
-사용량이 토큰 초과를 입증하면 컨텍스트를 줄일 수 있습니다. 바이트/미디어 형태의 거부에서는 명시적 미디어 한도 근거 없이 사용량이 토큰 초과를 입증하지 않는 한 Snapcompact를 제외합니다. 창 크기가 불명확하면 실행 가능한 초과 복구 방식을 시도할 수 있습니다. 실행 불가 또는 진전 없는 복구는 같은 기록 재전송 대신 자동 이어가기를 막습니다.
+When provider usage proves token overflow, maintenance can still shrink context. Snapcompact is excluded for byte/media-shaped rejections unless usage proves a token overflow without explicit media-limit evidence. With an unknown window, maintenance may attempt a runnable overflow method; an unavailable or no-progress recovery blocks automatic continuation rather than resubmitting unchanged history.
 
-<a id="experimental-notes-backed-context-windows"></a>
-### 실험적 노트 기반 컨텍스트 창
+### Experimental notes-backed context windows
 
-`/settings`에서 **노트 기반 컨텍스트 창(실험적)**을 켜면 실행 중 세션에 도구가 즉시 추가됩니다. 같은 설정은 다음과 같습니다.
+Enable **Notes-backed context windows (experimental)** in `/settings`; the running session gains the tools immediately. The equivalent configuration is:
 
 ```yaml
 compaction:
    experimentalContextManagement: true
 ```
 
-이 선택 모드는 자동 요약 재압축을 로컬 컨텍스트 창 경계로 대체합니다. 명시적 모드나 집중 지시가 없는 `/compact`에도 적용합니다. 명시적 압축 모드와 집중 지시는 기존 동작을 유지합니다.
+This opt-in mode replaces automatic summary recompression with local context-window
+boundaries. It also applies to `/compact` without an explicit mode or focus text.
+Explicit compaction modes and focused instructions retain their existing behavior.
 
-- `context_notes`는 `text`가 없으면 노트를 읽고, 있으면 대체하며, `text: ""`이면 지웁니다.
-- 노트 버전은 활성 분기의 저널 항목입니다. 재개/포크 후에도 현재 보이는 최신 버전만 모델 컨텍스트에 주입합니다. 컨텍스트 초기화는 보이는 노트를 지웁니다. 대체 한도는 **16,384 UTF-8바이트**이며 초과 쓰기는 기존 노트를 바꾸지 않고 실패합니다.
-- `new_context`는 다음 안전한 도구 루프 경계에서 창 전환을 요청합니다. 요약 모델을 호출하지 않고 완전한 최근 도구 호출/결과 단위와 노트를 유지합니다. 자동 임계값 근처에서는 작업 상태 저장을 창마다 한 번 알립니다.
-- `read`와 `grep`은 `history://current/full`에서 원본 메시지와 도구 출력을 복구할 수 있습니다. 텍스트는 안정적인 항목 ID와 창 경계를 포함합니다. 공통 선택자(예: `history://current/full:1-200`, `history://current/full:raw:1-200`)를 지원합니다. 쿼리, 프래그먼트, 끝 슬래시, 추가 경로 구성요소는 거부합니다.
-- 전체 기록 경로는 호출 세션의 현재 분기에 묶여 있으며 다른 등록 에이전트나 디스크 검색으로 대체하지 않습니다. 기존 `history://<id>`는 간결한 대화 기록 동작을 유지합니다.
+- `context_notes` reads the current notebook when `text` is omitted, replaces it
+  when `text` is supplied, and clears it with `text: ""`.
+- Notebook revisions are journal entries on the active branch. Only the latest
+  visible revision is injected into model context, including after resume or fork.
+  A context reset clears the visible notebook. Each replacement is limited to
+  **16,384 UTF-8 bytes**; oversized writes fail without replacing the notes.
+- `new_context` requests rollover at the next safe tool-loop boundary. Rollover
+  retains complete recent tool-call/result units and the notebook without calling
+  a summarization model. Near the automatic threshold, the model receives a
+  once-per-window reminder to save its working state.
+- `read` and `grep` can recover original messages and tool outputs through
+  `history://current/full`. The text includes stable entry IDs and window
+  boundaries. Shared selectors work, for example
+  `history://current/full:1-200` and `history://current/full:raw:1-200`.
+  Queries, fragments, trailing slashes, and additional path components are rejected.
+- The full-history route is bound to the calling session's current branch. It
+  never falls back to another registered agent or an on-disk session search.
+  Existing `history://<id>` routes retain their concise transcript behavior.
 
-실험적 전환에는 유효 도구 집합에 `context_notes`, `new_context`, `read`, `grep`이 모두 있어야 합니다. 제한 세션에 네 도구가 모두 없으면 기존 유지 관리를 사용합니다. 설정을 끄면 기존 압축으로 돌아가고 실험 도구와 전체 기록 경로를 끕니다. 기존 노트는 저널과 제공업체 컨텍스트에 남습니다.
+Experimental rollover requires the effective tool set to contain `context_notes`,
+`new_context`, `read`, and `grep`. Restricted sessions without all four retain
+legacy maintenance. Disabling the setting restores legacy compaction and disables
+the experimental tools and full-history route; existing notes remain in the journal
+and provider context.
 
-기본값은 `false`입니다. 기존 세션 저널만을 대화 저장소로 사용하는 영속 노트 및 검색 가능한 기록의 독립 구현입니다.[^experimental-context-history]
+The default is `false`. This is an independent implementation of persistent notes
+and searchable history, with the existing session journal as its only transcript
+store.[^experimental-context-history]
 
 [^experimental-context-history]:
-    설정을 켜도 이전 가지치기나 명시적 파괴적 기록 작업을 되돌릴 수 없습니다. 텍스트 기록에서 이미지는 마커로 표현합니다. 노트 품질과 적시 갱신은 모델 책임이며 누락된 노트를 자동 생성하지 않습니다.
+    Earlier pruning or explicit destructive history
+    operations cannot be undone by enabling the setting. Text history represents
+    images as markers. Notebook quality and timely updates remain the model's
+    responsibility; the mode does not automatically generate missing notes.
 
-### Shake 방식
+### Shake method
 
-`compaction.methodOrder`에 `shake`를 넣으면 요약 모델 호출 대신 인라인 로컬 축소를 수행합니다. 최근 토큰 보호 창과 최소 절감 임계값을 적용하여 대상 도구 결과 및 큰 fenced/XML 블록을 복구 가능한 `artifact://` 참조로 바꿉니다. 자동 shake는 `action: "shake"`로 일반 자동 압축 이벤트를 내보냅니다.
+Including `shake` in `compaction.methodOrder` performs an inline, local reduction instead of calling a summarization model. It replaces eligible tool results and large fenced/XML blocks with recoverable `artifact://` references, using a protected recent-token window and minimum-savings threshold. Automatic shake emits the normal auto-compaction events with `action: "shake"`.
 
-shake로 복구 구간 아래까지 충분히 줄이지 못하면 임계값, 불완전 출력, 오버플로 복구는 다음 설정 방식으로 넘어가 무효 shake 반복을 방지합니다. 유휴 shake는 타이머가 다음 실행 전 사용량을 재검사하므로 대체하지 않습니다. 수동 `/shake`는 전체 대상 기록을 지정할 수 있는 더 적극적인 별도 명령입니다.
+Threshold, incomplete-output, and overflow recovery advance to the next configured method when shake cannot reclaim enough context to get below the recovery band; this prevents repeated no-op shake loops. Idle shake does not use that fallback because the idle timer rechecks usage before running again. Manual `/shake` is a separate, more aggressive command that can target all eligible history.
 
-### Snapcompact 방식
+### Snapcompact method
 
-`compaction.methodOrder`에 `snapcompact`를 넣으면 LLM 요약 호출을 로컬 결정적 보관 처리(`@oh-my-pi/snapcompact`의 `compact`)로 대체합니다.
+Including `snapcompact` in `compaction.methodOrder` replaces the LLM summarization call with a local, deterministic archival pass (`compact` from `@oh-my-pi/snapcompact`):
 
-- 버릴 기록을 직렬화하고 공백을 합친 뒤 기본 제공 퍼블릭 도메인 픽셀 글꼴로 모델에 맞춘 PNG 프레임에 그립니다. 프레임 너비는 형태별로 고정하고 높이는 실제 출력한 줄 수에 맞춥니다. 측정된 모델 계열은 **모델 ID**로 형태와 프레임 크기를 결정합니다. Claude는 11px 자간의 X.org `8x13` 글리프를 읽습니다(추가 자간, 검은 글자 `11on16-bw`). 고해상도 계열인 Opus 4.7+·Fable·Mythos에는 Anthropic의 시각 토큰 상한 4,784 아래에서 1932px 프레임을 쓰며 이전 계열은 1568px를 유지합니다. Gemini는 22px 줄 간격의 `8x13` 글리프를 읽습니다(추가 행간, 검은 글자 `8on22-bw`, 2048px). Gemini 3.x는 픽셀 크기와 관계없이 이미지마다 고정 1,120토큰을 과금하기 때문입니다. GPT/Codex는 같은 `8on22-bw`를 1568px로 읽습니다. 패치 과금이 면적에 비례하므로 프레임을 키워도 토큰당 글자 수가 좋아지지 않습니다. Kimi/GLM은 16px 간격의 `8x13` 글리프를 읽습니다(1568px의 `8on16-bw`; Kimi 처리기는 1792px를 넘으면 축소). Vertex나 OpenRouter로 연결한 Claude도 Claude 형태를 유지합니다. 자동 선택은 글꼴도 고려합니다(`resolveShapeForText`). 모델 기본 글꼴이 대화 기록을 안전하게 렌더링하지 못하거나 넓은 CJK 글리프가 대부분이고 `silver16-bw` 격자가 이를 안전하게 렌더링할 수 있으면 `silver16-bw`로 자동 전환합니다. 강제 지정한 변형은 덮어쓰지 않습니다. 측정하지 않은 모델은 전송 API 계열을 따릅니다(Anthropic 계열·알 수 없음 → `11on16-bw`, Google → `8on22-bw`, OpenAI 호환 → `8on22-bw`). 프레임당 토큰 추정은 읽는 모델 계열의 카탈로그 `image-tokenization` 규칙을 따릅니다. Vertex·OpenRouter 뒤의 Claude도 Claude로 계산하며 4.7 이전 Opus/Sonnet/Haiku는 표준 1,568토큰 등급을 적용합니다. 모델 계열 규칙이 없으면 요청을 운반하는 전송 API 카탈로그 규칙을 사용하고 해석된 프레임 크기로 계산합니다. OpenAI 호환 전송에는 `detail: "original"` 힌트도 줍니다. `snapcompact.shape`(기본 `auto`)로 연구 평가 변형을 강제할 수 있습니다. 정사각 격자(`8x8r`/`8x8u`/`6x6u`/`5x8` × 문장별 색조·검은 글자), 모델별 평가 우수 변형(`6x12-dim`, `8x13-bw`, `8on16-bw`, `8on22-bw`, `11on16-bw`, `silver16-bw`), 2열 단어 줄바꿈 `doc-8on16-bw`/`-sent`/`-sent-dim`이 있습니다. `silver16-bw`는 CJK와 비라틴 문자용 내장 Silver TrueType 글꼴을 16px 격자에 쓰며 `dim`은 불용어를 회색으로 표시합니다. 강제 변형은 기하 구조를 유지하되 읽는 모델의 이미지 과금으로 비용을 다시 계산합니다. 모델이 읽기 전에 이미지를 축소하는 호스트(카탈로그 `image-max-edge`; Cursor는 Claude·GPT 이미지를 1024×1024 안에 맞춤)는 강제 변형도 해당 변 길이를 넘지 않도록 프레임 너비를 제한합니다. 같은 설정은 인라인 시스템 프롬프트·도구 결과 이미지화(`snapcompact.systemPrompt`, `snapcompact.toolResults`)도 제어합니다.
-- 직렬화는 보관의 대화 밀도를 높입니다. 도구 결과는 앞·뒤를 남기고 자릅니다(기본 2,000자, 앞부분 비율 0.6). 도구 호출 인수는 값당 500자, 호출당 2,000자로 제한하고 도구 출력은 흐린 회색으로 그려 대화가 도구 잡음보다 잘 보이게 합니다. 모든 예산과 흐림은 `SerializeOptions`의 `toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`로 설정할 수 있습니다.
-- Snapcompact 보관은 `CompactionEntry.preserveData.snapcompact`에 크기가 제한된 원문과 렌더링 프레임으로 저장합니다. 컨텍스트를 재구성할 때마다 가장 오래된 쪽의 일반 텍스트, 가운데 이미지, 가장 최근 쪽의 일반 텍스트 순서로 압축 블록을 복원합니다. 항목의 `summary`는 짧은 재개 안내와 일반 파일 작업 목록뿐입니다.
-- 이후 압축은 오래된 PNG를 그대로 넘기지 않고 제한된 원문 `Archive.text`에서 다시 렌더링합니다. `maxFrames`는 기본 `MAX_FRAMES_DEFAULT`(80)이며 상한으로만 작용합니다. 이미지화한 가운데 부분이 크면 내부에서 고품질·저품질·고품질(HQ/LQ/HQ)로 차등 처리하며 시간순 양쪽 가장자리는 원문 텍스트를 유지합니다.
-- 모델 호출, API 키, 네트워크를 사용하지 않으므로 오버플로 복구에도 안전합니다. 현재 모델은 이미지를 지원해야 합니다(`model.input`에 `"image"` 포함). 그렇지 않으면 자동 유지 관리는 이를 건너뛰고 다음 설정 방식으로 진행합니다. 수동 `/compact`는 사용자 지정 지침이 없으면 방식 순서를 따릅니다. 사용자 지정 지침은 목적을 지정한 LLM 요약을 뜻합니다.
-- 근거: 형태 표는 `packages/snapcompact`의 20만 토큰 평가에서 나왔습니다. 시각 지원 모델에서는 비트맵 프레임이 원시 텍스트보다 낮은 과금 토큰 비용으로 QA 회상 성능을 유지했습니다.
+- The discarded history is serialized, whitespace-collapsed, and printed onto model-aware PNG frames (frame width fixed per shape; frame height hugs the rows actually printed) using bundled public-domain pixel fonts. The shape — and frame size — resolve from the **model id** when the model line was measured: Claude reads X.org `8x13` glyphs on an 11px advance (extra letter-spacing, black ink — `11on16-bw`; high-res lines — Opus 4.7+, Fable, Mythos — get 1932px frames under Anthropic's 4,784 visual-token cap, older lines stay at 1568px), Gemini reads `8x13` glyphs on a 22px pitch (extra leading, black ink — `8on22-bw` at 2048px, since Gemini 3.x bills a fixed 1,120-token budget per image at any pixel size), GPT/Codex read the same `8on22-bw` shape at 1568px (patch billing is area-proportional, so larger frames cannot improve chars per token), and Kimi/GLM read `8x13` glyphs on a 16px pitch (`8on16-bw` at 1568px — kimi's processor downscales past 1792px). A Claude routed through Vertex or OpenRouter keeps its Claude shape. Auto selection is also font-aware (`resolveShapeForText`): when the model-default font cannot safely render the transcript, or wide CJK glyphs dominate it and the `silver16-bw` grid can render it safely, auto switches to `silver16-bw`; forced variants are never overridden. Unmeasured models fall back to their wire API family (Anthropic-family/unknown → `11on16-bw`, Google → `8on22-bw`, OpenAI-compatible → `8on22-bw`); the per-frame token estimate follows the reading model's lineage, from its catalog `image-tokenization` rule (a Claude behind Vertex or OpenRouter is priced as Claude, and Opus/Sonnet/Haiku before 4.7 under the standard 1,568-token tier), falling back to the catalog rule for the wire API carrying the request when the lineage has none, computed for the resolved frame size. OpenAI-compatible wires also get the `detail: "original"` hint. The `snapcompact.shape` setting (default `auto`) forces one of the research-eval variants instead: square grids (`8x8r`/`8x8u`/`6x6u`/`5x8` × sentence-hue/black ink) or the per-model eval winners (`6x12-dim`, `8x13-bw`, `8on16-bw`, `8on22-bw`, `11on16-bw`, `silver16-bw` — the embedded Silver TrueType font on a 16px grid for CJK and other non-Latin text — and the two-column word-wrapped `doc-8on16-bw`/`-sent`/`-sent-dim`, where `dim` prints stopwords in gray). A forced variant keeps its geometry but is re-priced for the reading model's image billing. A host that downscales images before the model reads them (catalog `image-max-edge`; Cursor fits Claude and GPT images into 1024×1024) gets frames no wider than that edge, forced variants included. The same setting governs inline system-prompt/tool-result imaging (`snapcompact.systemPrompt`, `snapcompact.toolResults`).
+- Serialization keeps the archive conversation-dense: tool results are truncated head+tail (default 2,000 chars at a 0.6 head ratio), tool-call argument values are capped per value (500) and per call (2,000), and tool output is printed in dim gray ink so conversation reads louder than tool noise. All budgets and the dimming are configurable via `SerializeOptions` (`toolResultMaxChars`, `toolArgMaxChars`, `toolCallMaxChars`, `truncateHeadRatio`, `dimToolResults`).
+- The snapcompact archive persists under `CompactionEntry.preserveData.snapcompact` as bounded source text plus rendered frames. On each context rebuild it is reconstructed into ordered compaction blocks: plain text at the oldest edge, an imaged middle, then plain text at the newest edge. The entry's `summary` is just the short resume lead-in plus the usual file-operation list.
+- Later compactions re-render from that bounded source text (`Archive.text`), not by carrying old PNGs forward blindly. `maxFrames` now defaults to `MAX_FRAMES_DEFAULT` (80) and acts only as an upper limit; when the imaged middle is large it foveates internally (HQ/LQ/HQ), while both chronological edges stay verbatim text.
+- No model, API key, or network is involved, so snapcompact is also safe for overflow recovery. It requires a vision-capable current model (`model.input` includes `"image"`); otherwise automatic maintenance skips it and advances to the next configured method. Manual `/compact` honors the method order unless custom instructions are given (those imply a directed LLM summary).
+- Rationale: the shape table comes from the snapcompact 200k-token evals in `packages/snapcompact`, where bitmap frames preserved QA recall at lower billed-token cost than raw text for vision-capable models.
 
-보관 크기는 컨텍스트 창 전체가 아니라 압축 실행 임계값 아래의 여유 공간을 기준으로 정합니다. 활성 모델의 `compaction.modelThresholds`를 반영한 임계값에서 시스템 프롬프트, 도구, 보존할 최근 턴(실행 조건과 같은 방식으로 계산하며 불투명한 추론 재생 서명은 제외), 보관 텍스트, 프롬프트 전 처리라면 대기 중 프롬프트를 뺀 나머지의 절반을 프레임에 배정합니다. 압축된 전체 컨텍스트와 프롬프트를 임계값의 60% 이내로 맞추고 컨텍스트 창도 넘지 않게 합니다. 최소 한 프레임은 허용하며, 버릴 텍스트가 텍스트 가장자리 영역에 들어가면 텍스트 전용 보관이 됩니다. 최소 한 프레임조차 여유를 남기지 못하면 경고를 기록하고 한 프레임을 렌더링합니다. 모델 카탈로그의 `image-tokenization` 규칙이 제공업체 과금과 대조해 `verified`로 확인되었다면 각 프레임에는 활성 모델에 대한 해당 형태의 비용을 적용합니다. 그렇지 않으면 그 비용과 `FRAME_TOKEN_ESTIMATE`(5,024) 중 큰 값을 적용합니다. 여유 공간과 관계없이 기본 80프레임 한도, 배포 카탈로그의 `image-count-budget`, 프레임 페이로드 예산이 상한을 정합니다. 프레임 페이로드 예산 `frameDataBytesBudget`은 배포 카탈로그의 `inline-image-byte-budget` 절반이며 공식 Anthropic·Codex 엔드포인트에서는 12MB, 그 외에는 3,000,000바이트입니다. 형태별 프레임 추정치로 크기를 계산합니다. 컨텍스트를 재구성할 때마다 활성 모델의 프레임 페이로드 예산에 맞춰 보관을 첨부하고, 요청마다 해당 모델 예산을 넘는 가장 오래된 프레임부터 제거하므로 예산이 작은 호스트로 모델을 전환해도 이전의 큰 보관을 보내지 않습니다. 60%는 목표이지 보장이 아닙니다. 렌더링 결과가 목표 또는 프레임 페이로드 예산을 넘으면 둘 다 충족할 것으로 추정한 프레임 수로 가장 오래된 프레임을 제거하며 최대 두 번 다시 렌더링합니다. 바이트 예산 계산은 `frames × budget / payload`를 사용하며 한 프레임까지 줄어든 보관은 더 줄일 수 없습니다. 이후 결과를 요청한 경로가 적합성을 판단합니다. 여전히 바이트 예산이나 컨텍스트 창을 넘으면 사용할 수 없는 프롬프트로 저장하는 대신 거부하거나 건너뜁니다. 임계값 처리 결과와 대기 중 프롬프트가 복구 기준인 80%를 넘으면 경고와 함께 다음 설정 방식으로 넘어갑니다. 이후 `shake` 외에 실행 가능한 방식이 없고 대기 중 프롬프트를 포함해 컨텍스트 창에는 들어간다면 경고와 함께 결과를 유지합니다. 오버플로 및 불완전 출력 복구는 턴을 재시도하며 창에 들어가는지만 요구합니다. 수동 `/compact`는 축소 여부와 창 크기 충족 여부만 검사합니다.
+The archive is sized from the room under the compaction trigger, not from the window. The plan gives the frames half of what the resolved threshold (the active model's `compaction.modelThresholds` entry applied) leaves after the system prompt, tools, kept recent turns (counted as the trigger counts them, without opaque reasoning replay signatures), the archive's text and, for a pre-prompt pass, the pending prompt, keeps the whole compacted context plus that prompt within 60% of the threshold, and never goes past what fits the window; it always allows at least one frame (a text-only archive when the discarded text fits the text edges), so when even that leaves no room it only logs a warning and renders one frame. Each frame is charged the shape's own price for the active model when the model's catalog `image-tokenization` rule is `verified` against provider billing, and otherwise that price or `FRAME_TOKEN_ESTIMATE` (5,024), whichever is higher. The 80-frame default, the deployment's catalog `image-count-budget`, and the frame payload budget (`frameDataBytesBudget`: half the deployment's catalog `inline-image-byte-budget`, 12 MB on the official Anthropic and Codex endpoints, else 3,000,000 bytes; sized from a per-shape frame estimate) cap the result whatever the room. Every context rebuild attaches the archive at the active model's frame payload budget, and every request drops the oldest archive frames past the request model's budget, so a model switch to a host with a smaller budget never sends the larger archive. 60% is a sizing target, not a guarantee: a render that lands above it or over the frame payload budget is re-rendered with the oldest frames dropped, at most twice, at the frame count estimated to fit both (`frames × budget / payload` for bytes), and a one-frame archive cannot shrink further. The result is then judged by the path that asked for it: a render still over the byte budget or the window is rejected/skipped rather than committed as an unusable prompt; a threshold pass whose result (plus its pending prompt) is above the 80% recovery band moves to the next configured method with a warning notice, or, when no later method other than `shake` can run, keeps that result with a warning notice as long as it still fits the window with the pending prompt; overflow and incomplete recovery retry the turn and need only the window fit, and manual `/compact` keeps only its reduction and window-fit checks.
 
-<a id="maintenance-progress-guard"></a>
-### 유지 관리 진전 보호
+### Maintenance progress guard
 
-자동 유지 관리는 이어가기를 예약하기 전에 재작성한 컨텍스트가 실제 여유를 만드는지 확인합니다. 일반적으로 해석된 임계값의 80% 이하여야 합니다. 진전이 없으면 기존 Snapcompact 보관을 더 작은 프레임 예산으로 다시 렌더링하거나, 큰 블록을 복구 가능한 결과물 참조로 치환하거나, 첨부 이미지를 제거하는 로컬 복구를 시도할 수 있습니다. 보관 복구는 가장 오래된 원문을 잘라낼 수 있으며 이미지 제거는 파괴적입니다. 그래도 여유를 만들지 못하면 경고를 내고 자동 이어가기를 차단하여 같은 초대형 컨텍스트로 반복하지 않습니다.
+Automatic maintenance checks that the rewritten context creates real headroom (normally at or below 80% of the resolved threshold) before scheduling continuation. No-progress passes can try local rescue: re-render an existing snapcompact archive with a smaller frame budget, elide heavy blocks to recoverable artifacts, or drop attached images. Archive rescue can truncate the oldest carried source text; image dropping is destructive. If maintenance still cannot create headroom, it emits a warning and blocks automatic continuation instead of looping on the same oversized context.
 
-<a id="display-transcript"></a>
-### 표시용 대화 기록
+### Display transcript
 
-컨텍스트 압축이 더 이상 화면의 대화를 처음부터 다시 시작하지 않습니다. TUI는 **표시용 대화 기록**(`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`)을 렌더링합니다. 경로의 모든 항목을 시간순으로 표시하고 각 압축이 발생한 자리에 `── 📷 compacted · ctrl+o ──` 같은 얇은 구분선을 삽입합니다. Ctrl+O로 펼치면 요약이 나타납니다. 압축 경계에서 초기화되는 것은 LLM 컨텍스트뿐이며 구분선 위의 스크롤 기록은 세션을 재개한 뒤에도 유지됩니다.
+Compaction no longer visually restarts the conversation. The TUI renders the **display transcript** (`buildSessionContext({ transcript: true })` / `AgentSession.buildTranscriptSessionContext()`): every path entry in chronological order, with each compaction shown inline as a slim divider — `── 📷 compacted · ctrl+o ──` — at the point it fired. Expanding (ctrl+o) reveals the summary. Only the LLM context resets at the compaction boundary; the scrollback above the divider stays intact, including across session resume.
 
-<a id="pre-compaction-pruning"></a>
-### 압축 전 가지치기
+### Pre-compaction pruning
 
-압축 검사 전에 도구 결과 가지치기(`pruneToolOutputs`)를 실행할 수 있습니다.
+Before compaction checks, tool-result pruning may run (`pruneToolOutputs`).
 
-기본 가지치기 정책:
+Default prune policy:
 
-- 가장 최근 도구 출력 `40_000`토큰을 보호합니다.
-- 추정 절감량 합계가 최소 `20_000`토큰이어야 합니다.
-- `50`토큰(`MIN_PRUNE_TOKENS`) 미만의 결과는 비우지 않습니다. `[Output truncated - N tokens]` 자리표시자 자체가 약 8토큰이므로 작은 결과를 치환하면 컨텍스트가 늘고 프롬프트 캐시만 불필요하게 바뀝니다. 대체된 결과와 무의미한 결과는 별도 규칙을 따릅니다. 무의미한 결과 수집기는 이미 절감이 없는 후보를 제외하며, 대체된 읽기 결과는 정확성을 위해 크기에 관계없이 가지치기합니다.
-- `skill` 도구 결과, `skill://` 경로의 `read` 결과, 활성 계획 참조 파일 읽기는 가지치기하지 않습니다. 계획 보호는 `AgentSession`이 추가합니다.
+- Protect newest `40_000` tool-output tokens.
+- Require at least `20_000` total estimated savings.
+- Never blank a result below `50` tokens (`MIN_PRUNE_TOKENS`): the `[Output truncated - N tokens]` placeholder costs ~8 tokens, so pruning a sub-floor result would grow the context and churn the prompt cache for nothing. (Superseded and useless results keep their own rules — the useless collector already drops no-savings candidates; superseded reads prune for correctness regardless of size.)
+- Never prune `skill` tool results, `read` results of `skill://` paths, or reads of the active plan reference file (added via `AgentSession`'s plan protection).
 
-가지치기한 도구 결과는 다음으로 치환합니다.
+Pruned tool results are replaced with:
 
 - `[Output truncated - N tokens]`
 
-가지치기로 항목이 바뀌면 세션 저장소를 재작성하고 에이전트 메시지 상태를 갱신한 뒤 압축 여부를 결정합니다.
+If pruning changes entries, session storage is rewritten and agent message state is refreshed before compaction decisions.
 
-<a id="useless-result-elision"></a>
-### 무의미한 결과 생략
+### Useless-result elision
 
-도구는 검색 결과가 없거나 `wait`의 안전 상한에 도달했지만 실행 중인 작업만 반환된 경우처럼 완료된 결과를 컨텍스트상 무의미하다고 표시할 수 있습니다. 표시는 도구 결과의 `AgentToolResult.useless`에서 시작합니다. `ToolResultBuilder.useless()` 또는 반환 객체에 직접 설정하며, 에이전트 루프가 저장되는 `ToolResultMessage`에 복사합니다. 오류가 항상 우선하므로 `isError`와 함께 저장하지 않습니다. 이 표시는 다음 세 곳에서 사용합니다.
+Tools can flag a finished result as contextually useless — a search with zero matches or a `wait` safety cap that returned only still-running work. The flag originates on the tool result (`AgentToolResult.useless`, set via `ToolResultBuilder.useless()` or directly on the returned object), is copied by the agent loop onto the persisted `ToolResultMessage` (never together with `isError` — errors always win), and is consumed in three places:
 
-- **턴별 오래된 결과 처리**(`pruneSupersededToolResults`, 기본 활성화된 `compaction.dropUseless`로 제어): 표시된 결과를 정확히 `[Uneventful result elided]`(`USELESS_NOTICE`)로 비웁니다. 대체된 읽기와 같은 캐시 인식 시점을 적용합니다. 후보 이후 구간이 작고(약 8천 토큰 이하), 프롬프트 캐시 되돌아보기 범위를 아는 모델에서는 보수적인 상한 안에 있거나, 세션 유휴 시간이 제공업체의 프롬프트 캐시 수명을 넘었을 때만 처리합니다. 되돌아보기는 카탈로그 `prompt-cache-lookback`이며 Claude는 20위치입니다. 상한 계산 시 후보를 발행한 어시스턴트 턴, 해당 도구 결과 묶음, 그 이후 전체를 세션의 `convertToLlm`으로 투영하므로 파일 언급, 이미지가 있는 명령 출력, 사용자 지정 메시지의 이미지 분할도 전송 형태대로 반영합니다. 위치는 Anthropic 방식으로 셉니다. 연속된 `tool_use` 또는 `tool_result` 블록은 한 위치이며 오류 결과에서 끌어올린 이미지와 채움 턴도 포함합니다. 다음 요청 입력과 계산하지 않는 투영(고아 결과 안내, 재생된 압축 파일 메타데이터, 도구 변경 제어)에 6위치를 남기기 위해 최대 되돌아보기 범위에서 6을 뺀 값까지만 허용합니다. 이 여유보다 큰 입력이나 투영은 여전히 캐시 재구성을 한 번 유발할 수 있습니다. 알려진 되돌아보기 범위가 없는 모델은 상한을 생략합니다. 임계값 가지치기의 활성 캐시 보호도 같은 제한을 적용합니다. 안내문 자체보다 작은 결과는 절감이 없으므로 비우지 않으며 보호된 도구는 제외합니다.
-- **임계값 가지치기**(`pruneToolOutputs`): 표시된 결과는 대체된 읽기와 마찬가지로 최근 결과 보호 창을 우회하며 토큰 수 자리표시자 대신 `USELESS_NOTICE`로 치환합니다.
-- **요약 직렬화**: 에이전트와 Snapcompact의 `serializeConversation`은 요약기/보관 입력에서 도구 호출·결과 쌍 전체를 제외합니다. 요약 뒤 원본 영역을 버리므로 이 제외는 캐시 비용을 발생시키지 않습니다.
+- **Per-turn stale-result pass** (`pruneSupersededToolResults`, gated by `compaction.dropUseless`, default on): flagged results are blanked to the exact placeholder `[Uneventful result elided]` (`USELESS_NOTICE`) with the same cache-aware timing as superseded reads — only when the suffix after the candidate is small (≤ ~8k tokens) and, for models with a known prompt-cache lookback (catalog `prompt-cache-lookback`; Claude: 20 positions), sits within a conservative bound on it, or the session has idled past the provider prompt-cache lifetime. The bound projects the candidate's issuing assistant turn, its tool-result batch and everything after it through the session's `convertToLlm` (so file mentions, command output with images and custom-message image splits count as sent) and counts positions the way Anthropic does (a run of consecutive `tool_use` or `tool_result` blocks is one position; images hoisted out of error results and padding turns count). It allows at most the lookback minus 6, keeping 6 positions for the next request's input and for request projections it does not count (orphan-result notes, replayed compaction file metadata, tool-change controls). An input or projection larger than that margin can still cost one cache rebuild. Models without a known lookback skip the bound. The threshold prune's warm-cache guard applies the same limit. Results smaller than the notice itself are never blanked (no savings), and protected tools are exempt.
+- **Threshold prune** (`pruneToolOutputs`): flagged results bypass the protect-recent window, same as superseded reads, and receive `USELESS_NOTICE` instead of the token-count placeholder.
+- **Summary serialization**: `serializeConversation` (agent and snapcompact) drops the whole tool call/result pair from summarizer/archive input — the source region is discarded after summarization anyway, so the exclusion costs no cache.
 
-이 표시는 제공업체 전송 형식에 전달되지 않으며 표시된 쌍은 기록에서 삭제하지 않고 제자리에서 비우기만 합니다. 따라서 도구 호출·결과 짝과 제공업체 네이티브 기록 재생은 유지됩니다.
+The flag never reaches provider wire formats, and flagged pairs are never removed from history (only blanked in place), so tool-call/result pairing and provider-native history replay stay intact.
 
-<a id="boundary-and-cut-point-logic"></a>
-### 경계 및 분할 지점 로직
+### Boundary and cut-point logic
 
-`prepareCompaction()`은 추정, 분할 지점 선택, 기록 요약·턴 접두부·보존 메시지 영역에 사용할 하나의 유효 메시지 열을 만듭니다.
+`prepareCompaction()` builds one effective message sequence for estimation, cut-point selection, and the history-summary, turn-prefix, and retained-message regions.
 
-1. 활성 모델이 요약 또는 제공업체 네이티브 기록을 재사용할 수 있는 가장 최근 압축을 찾습니다.
-2. 가장 최근 `/clear`의 `reset_boundary`를 따릅니다. 더 새로운 초기화는 이전 요약을 버리며, 더 오래된 초기화도 보존 메시지를 복구할 수 있는 하한으로 남습니다.
-3. 로컬 요약에서는 `firstKeptEntryId`부터 이전 압축 레코드 직전까지 원본 항목을 복구하고 그 레코드 뒤 항목을 덧붙입니다.
-4. 재사용 가능한 제공업체 네이티브 기록에서는 `providerReplayThroughEntryId`가 이전 스냅샷을 가리키면 그 다음부터 시작하되 최신 초기화 경계를 넘지 않습니다. 네이티브 재생에 이미 포함된 원본 메시지가 아니라 스냅샷부터 커밋까지의 미포함 구간을 복구합니다. 마지막에 네이티브 압축 레코드가 있다고 이 구간이 이미 압축된 것은 아닙니다.
-5. 압축 레코드와 기타 비메시지 메타데이터를 제외합니다. 이전 요약은 `previousSummary`로 별도 전달하고 메시지를 담는 `custom_message`와 `branch_summary` 항목은 유지합니다.
-6. 실측 사용량 비율로 `keepRecentTokens`를 조정한 뒤 `findCutPoint()`를 실행하고 같은 메시지 열을 `messagesToSummarize`, `turnPrefixMessages`, `recentMessages`로 나눕니다.
+1. Find the latest compaction whose summary or provider-native history is reusable by the active model.
+2. Honor the latest `/clear` `reset_boundary`: a newer reset discards the previous summary, and an older reset remains the lower bound for recovering retained messages.
+3. For a local summary, recover the original entries from `firstKeptEntryId` up to the previous compaction record, then append entries after that record.
+4. For reusable provider-native history, start after `providerReplayThroughEntryId` when it identifies an older snapshot, without crossing the latest reset boundary. This recovers the uncovered snapshot-to-commit interval, not the original messages already covered by native replay. A trailing native compaction record does not make that interval already compacted.
+5. Exclude compaction records and other non-message metadata. Pass the previous summary separately through `previousSummary`; retain message-bearing `custom_message` and `branch_summary` entries.
+6. Adapt `keepRecentTokens` using the measured usage ratio, then run `findCutPoint()` and partition that same sequence into `messagesToSummarize`, `turnPrefixMessages`, and `recentMessages`.
 
-로컬 요약을 갱신할 때 모든 유효 원본 메시지는 세 영역 중 정확히 하나에 속합니다. 예를 들어 `summary(A) + B`가 `summary(A) + B + C`로 늘어나면 다음 준비는 C만이 아니라 B와 C 모두를 분배합니다. 새 `firstKeptEntryId`는 원본 항목을 가리키며 준비 과정은 저널 항목을 이동·복제·재작성하지 않습니다. 이는 로컬 요약 준비의 보장이지 제공업체 네이티브 또는 추측 실행 네이티브 재생의 종단 간 보장은 아닙니다.
+When updating a local summary, every effective original message belongs to exactly one of those three regions. For example, after `summary(A) + B` grows to `summary(A) + B + C`, the next preparation distributes both B and C, not just C. The new `firstKeptEntryId` refers to an original entry; preparation does not move, duplicate, or rewrite journal entries. This is a local-summary preparation guarantee, not an end-to-end guarantee for provider-native or speculative native replay.
 
-유효한 분할 지점:
+Valid cut points include:
 
-- `user`, `assistant`, `bashExecution`, `hookMessage`, `branchSummary`, `compactionSummary` 역할의 메시지 항목
-- `custom_message` 항목
-- `branch_summary` 항목
+- message entries with roles: `user`, `assistant`, `bashExecution`, `hookMessage`, `branchSummary`, `compactionSummary`
+- `custom_message` entries
+- `branch_summary` entries
 
-필수 규칙: `toolResult`에서는 절대 나누지 않습니다.
+Hard rule: never cut at `toolResult`.
 
-준비 과정은 보존 메시지 경계를 고르기 전에 순수 메타데이터(`model_change`, `thinking_level_change`, 라벨 등)를 제외합니다. 이 레코드는 저널에 남지만 대화 입력에는 포함되지 않습니다.
+Preparation filters out pure metadata (`model_change`, `thinking_level_change`, labels, etc.) before selecting the retained-message boundary. Those records remain in the journal but are not conversation input.
 
-<a id="split-turn-handling"></a>
-### 턴 중간 분할 처리
+### Split-turn handling
 
-분할 지점이 사용자 턴 시작이 아니면 압축은 이를 턴 중간 분할로 취급합니다.
+If cut point is not at a user-turn start, compaction treats it as a split turn.
 
-턴 시작 감지는 다음을 사용자 턴 경계로 봅니다.
+Turn start detection treats these as user-turn boundaries:
 
 - `message.role === "user"`
 - `message.role === "bashExecution"`
-- `custom_message` 항목
-- `branch_summary` 항목
+- `custom_message` entry
+- `branch_summary` entry
 
-턴 중간 분할 압축은 두 요약을 만듭니다.
+Split-turn compaction generates two summaries:
 
-1. 기록 요약(`messagesToSummarize`)
-2. 턴 접두부 요약(`turnPrefixMessages`)
+1. History summary (`messagesToSummarize`)
+2. Turn-prefix summary (`turnPrefixMessages`)
 
-최종 저장 요약은 다음과 같이 합칩니다.
+Final stored summary is merged as:
 
 ```markdown
 <history summary>
@@ -286,74 +304,71 @@ shake로 복구 구간 아래까지 충분히 줄이지 못하면 임계값, 불
 <turn prefix summary>
 ```
 
-<a id="summary-generation"></a>
-### 요약 생성
+### Summary generation
 
-`compact(...)`는 직렬화한 대화 텍스트로 요약을 만듭니다.
+`compact(...)` builds summaries from serialized conversation text:
 
-1. `convertToLlm()`으로 메시지를 변환합니다.
-2. 대상 모델이 선호하는 표현 형식으로 `serializeConversationForSummary()`를 사용해 직렬화합니다.
-3. `<conversation>...</conversation>`으로 감쌉니다.
-4. 선택적으로 `<previous-summary>...</previous-summary>`를 포함합니다.
-5. 선택적으로 확장 훅 컨텍스트와 활성 메모리 백엔드의 압축 컨텍스트를 `<additional-context>` 항목으로 삽입합니다.
-6. `SUMMARIZATION_SYSTEM_PROMPT`를 사용해 요약 프롬프트를 실행합니다.
+1. Convert messages via `convertToLlm()`.
+2. Serialize with `serializeConversationForSummary()` using the target model's preferred dialect.
+3. Wrap in `<conversation>...</conversation>`.
+4. Optionally include `<previous-summary>...</previous-summary>`.
+5. Optionally inject extension hook context and active memory-backend compaction context as `<additional-context>` entries.
+6. Execute summarization prompt with `SUMMARIZATION_SYSTEM_PROMPT`.
 
-큰 로컬 요약 입력은 예산에 맞는 대화 창으로 나눠 처리하며 각 요약을 다음 갱신으로 넘깁니다. 제공업체가 컨텍스트 초과로 거부하면 해당 창을 절반으로 줄이고 최소 입력 예산까지 다시 계획합니다. 그 외 실패는 그대로 보고합니다.
+Oversized local-summary input is folded through budgeted conversation windows, carrying each summary into the next update. Provider context-overflow rejections halve and re-plan the rejected window down to a minimum input budget; other failures surface normally.
 
-프롬프트 선택:
+Prompt selection:
 
-- 첫 압축: `compaction-summary.md`
-- 이전 요약을 갱신하는 반복 압축: `compaction-update-summary.md`
-- 턴 중간 분할의 두 번째 처리: `compaction-turn-prefix.md`
-- 짧은 UI 요약: `compaction-short-summary.md`
-- 인계 문서: `handoff-document.md`(직렬화 압축이 아닌 `generateHandoff(...)`에서 사용)
+- first compaction: `compaction-summary.md`
+- iterative compaction with prior summary: `compaction-update-summary.md`
+- split-turn second pass: `compaction-turn-prefix.md`
+- short UI summary: `compaction-short-summary.md`
+- handoff document: `handoff-document.md` (used by `generateHandoff(...)`, not serialized compaction)
 
-원격 요약 방식은 다음 순서로 확인하며, 다음 방식이 있으면 각 단계에서 대체 경로로 진행합니다.
+Remote summarization modes, consulted in order (each stage falls back to the next while one is available):
 
-- **V2 스트리밍 Responses 압축**(우선 시도하며 `compaction.remoteStreamingV2Enabled`로 기본 활성화): 적격 모델은 `shouldUseCompactionV2Streaming(...)`으로 판단합니다. `openai-responses`, `azure-openai-responses`, `openai-codex-responses` API, 활성화된 `remoteCompaction.v2StreamingEnabled`(아래 Amazon Bedrock OpenAI 경로에서는 기본 활성화), 해석 가능한 Responses 엔드포인트가 필요합니다. 제공업체 네이티브 도구 호출 기록 재생을 포함한 전체 대화 끝에 `compaction_trigger` 입력 항목을 붙여 모델의 일반 Responses 스트리밍 엔드포인트로 보내고, 정확히 하나의 스트리밍 `compaction` 출력 항목을 요구합니다. 요청에는 세션 라우팅·프롬프트 캐시 식별자(라우팅/세션 ID 헤더와 `prompt_cache_key`)가 들어가며 추론 수준은 일반 턴과 같은 방식으로 결정합니다. 대체 기록은 Codex 방식입니다. `compaction.v2RetainedMessageBudget`(기본 `64000`토큰이며 이 상한 이하로 제한) 안에서 실제 사용자 메시지를 보존한 뒤 압축 항목을 붙이고 `preserveData.openaiRemoteCompaction`에 버전 `"v2"`로 저장합니다. 일시적 스트림 오류는 V1과 동일한 5분 제한(`V2_COMPACTION_TIMEOUT_MS`) 안에서 지수 백오프로 최대 `V2_COMPACTION_MAX_RETRIES`(`2`)회 재시도합니다. 사용자 취소는 재시도하지 않습니다.
-- **V1 네이티브 `/responses/compact`**: OpenAI 모델, 호환되는 명시적 `remoteCompaction.endpoint`가 있는 OpenAI Codex 모델, Amazon Bedrock OpenAI 경로의 `openai-responses` 모델(`shouldUseOpenAiRemoteCompaction`)이 대상입니다. 원격 압축이 켜져 있고 V2가 적격하지 않거나 실패하여 실행되지 않았다면 제공업체 네이티브 `/responses/compact` 엔드포인트를 시도합니다. 대체 기록은 `preserveData.openaiRemoteCompaction`에 보존합니다. 네이티브 실패 시 일반 요약으로 조용히 바꾸지 않고 전송 오류를 보고합니다. 다만 `compaction.remoteEndpoint`가 설정되어 있으면 해당 엔드포인트 또는 로컬 요약으로 진행합니다.
-- **Anthropic 요청형 압축**(`compact-2026-09-04` 베타): 베타가 지원하는 모델 계열(`compat.supportsServerCompaction` 카탈로그 규칙: `anthropic`, `google-vertex`, `amazon-bedrock`, `bedrock-mantle` 제공업체의 Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5+)이고 실효 엔드포인트가 이를 구현하며 원격 압축이 켜져 있고 OpenAI 경로가 적용되지 않을 때 사용합니다. `shouldUseAnthropicNativeCompaction`이 Claude API, Vertex, Foundry, Claude Platform on AWS, Amazon Bedrock `/anthropic` 경로를 판별합니다. 다른 제공업체가 앞의 네 서비스 중 하나에 연결하면 `remoteCompaction.enabled`가 필요하며 알 수 없는 게이트웨이 URL은 제외합니다. 요약할 기록을 현재 대화의 시스템 프롬프트·도구·추론 설정과 함께 보내고, 하네스 요약 프롬프트를 담은 최상위 `compaction: { type: "summarize", instructions }` 매개변수를 추가합니다. API는 서명된 `compaction` 블록 하나(`stop_reason: "compaction"`)를 반환하며 이를 `anthropicCompaction` 페이로드로 노출합니다. 일반 텍스트 요약은 파일 작업 목록과 함께 항목의 `summary`이자 `preserveData.anthropicCompaction`이 됩니다. 이후 압축 지원 엔드포인트 요청은 블록을 변경 없이 첫 블록으로 돌려보내며 다른 제공업체는 요약 텍스트를 읽습니다. 요약 범위의 순 도구 추가·제거를 담는 서명된 `tool_changes`도 저장하고 그대로 재생합니다. 분할 지점 뒤의 보존 구간은 로컬 요약처럼 세션 항목에서 재생합니다. 거부, 출력 한도, 요약 중 도구 호출 등 서명된 요약이 없는 응답은 OpenAI 경로와 마찬가지로 네이티브 실패입니다. 이전 `compact-2026-01-12` 임계값 베타의 `encryptedContent` 블록은 재생만 지원합니다.
-   - Amazon Bedrock에서는 `https://bedrock-runtime.<region>.amazonaws.com/anthropic` 또는 `https://bedrock-mantle.<region>.api.aws/anthropic`을 사용하세요([설정](./models.md#claude-on-bedrocks-anthropic-messages-api-anthropic)). 아래 OpenAI 경로의 FIPS·PrivateLink 호스트명도 해당합니다. 이 조건은 해당 `baseUrl`에서 감지한 `compat.bedrockMessagesApi`를 읽습니다. 프록시나 `ANTHROPIC_BASE_URL` 우회 경로를 포함하려면 `models.yml`에 이를 설정하고, Bedrock 경로를 제외하려면 `false`로 설정하세요.
-   - 모델 카드에 베타가 표시된 Bedrock Converse 모델(`bedrock-converse-stream`, `compat.supportsServerCompaction`; `providers/amazon-bedrock.kdl` 규칙상 Haiku 4.5/5.5, Sonnet 5/5.5, Opus 4.7/4.8/5/5.5)은 같은 Anthropic Messages 본문을 담은 Bedrock Runtime `InvokeModelWithResponseStream` 보조 요청으로 압축합니다. Converse 자체는 베타를 거부합니다([AWS 압축 가이드](https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html)). 일반 턴은 Converse를 유지하며 요약 텍스트를 읽고 서명된 블록은 이후 압축 요청에만 재생합니다. AWS bedrock-runtime 원본(공개·FIPS·PrivateLink)은 기본 적격입니다. 다른 `baseUrl`은 Converse만 구현할 수 있는 게이트웨이로 취급하므로 `remoteCompaction.enabled: true`가 필요합니다. `remoteCompaction.enabled: false`는 모델을 제외합니다.
-- **사용자 지정 원격 엔드포인트**: `compaction.remoteEndpoint`가 설정되고 원격 압축이 활성화되어 있으면 로컬 요약 생성은 두 전송 형식 중 하나로 POST합니다.
-   - 사용자 지정 omp 요약기 엔드포인트는 `{ systemPrompt, prompt, maxTokens }`를 받으며 최소 `{ summary }`를 포함한 JSON을 반환해야 합니다.
-   - 경로가 `/chat/completions`로 끝나는 OpenAI 호환 엔드포인트는 `{ model, messages, stream: false, max_tokens }`를 받습니다. `messages`에는 시스템 프롬프트와 사용자 프롬프트가 하나씩 들어갑니다. 요약은 `choices[0].message.content`에서 읽으므로 llama.cpp·vLLM 같은 자체 호스팅 서버를 별도 요약기 호환 계층 없이 원격 압축기로 사용할 수 있습니다.
+- **V2 streaming Responses compaction** (tried first, on by default via `compaction.remoteStreamingV2Enabled`): for eligible models — `shouldUseCompactionV2Streaming(...)`: `openai-responses`, `azure-openai-responses`, or `openai-codex-responses` APIs with `remoteCompaction.v2StreamingEnabled` (on by default for Amazon Bedrock's OpenAI routes, see below) and a resolvable Responses endpoint — compaction forwards the full conversation, including provider-native tool-call history replay, to the model's normal Responses streaming endpoint with a trailing `compaction_trigger` input item, and requires exactly one streamed `compaction` output item. The request carries session routing and prompt-cache identifiers (routing/session-id headers plus `prompt_cache_key`) and resolves the model's reasoning effort the same way a normal turn does. Replacement history is Codex-style: retained real user messages within the `compaction.v2RetainedMessageBudget` (default `64000` tokens, clamped to that ceiling) followed by the compaction item, stored in `preserveData.openaiRemoteCompaction` (version `"v2"`). Transient stream errors retry up to `V2_COMPACTION_MAX_RETRIES` (`2`) times with exponential backoff under a five-minute timeout (`V2_COMPACTION_TIMEOUT_MS`, same as V1); user aborts are never retried.
+- **V1 native `/responses/compact`**: for OpenAI models, OpenAI Codex models with an explicit compatible `remoteCompaction.endpoint`, and `openai-responses` models on Amazon Bedrock's OpenAI routes (`shouldUseOpenAiRemoteCompaction`), when remote compaction is enabled and V2 did not run (ineligible or failed), compaction tries the provider-native `/responses/compact` endpoint. It preserves provider replacement history in `preserveData.openaiRemoteCompaction`. A native failure surfaces its transport error instead of silently switching to generic summarization — unless `compaction.remoteEndpoint` is set, in which case summary generation falls through to that endpoint/local summarization.
+- **Anthropic on-demand compaction** (`compact-2026-09-04` beta): for model lines the beta supports (`compat.supportsServerCompaction`, a catalog rule: Opus 4.6+, Sonnet 4.6+, Fable/Mythos 5+ on the `anthropic`, `google-vertex`, `amazon-bedrock`, and `bedrock-mantle` providers) whose effective endpoint implements it (`shouldUseAnthropicNativeCompaction`: the Claude API, Vertex, Foundry, Claude Platform on AWS, and Amazon Bedrock's `/anthropic` routes; another provider reaching one of the first four needs `remoteCompaction.enabled`, and unknown gateway URLs stay excluded), when remote compaction is enabled and no OpenAI lane applies. Compaction sends the history to summarize with the live conversation's system prompt, tools, and thinking settings, plus a top-level `compaction: { type: "summarize", instructions }` parameter carrying the harness summary prompt. The API answers with one signed `compaction` block (`stop_reason: "compaction"`), surfaced as an `anthropicCompaction` payload. Its plain-text summary becomes the entry `summary` (plus the file-operation list) **and** `preserveData.anthropicCompaction`; later requests on a compaction-capable endpoint send the block back unchanged as the first block, while every other provider reads the summary text. A block's signed `tool_changes` (net tool additions/removals across the summarized range) are persisted and replayed verbatim with it. The retained tail after the cut point is replayed from session entries like a local summary. A response without a signed summary, such as a refusal, an output limit, or a tool call during summarization, is a native failure, like the OpenAI lanes. Blocks written by the older `compact-2026-01-12` threshold beta (`encryptedContent`) are replay-only.
+   - On Amazon Bedrock, use `https://bedrock-runtime.<region>.amazonaws.com/anthropic` or `https://bedrock-mantle.<region>.api.aws/anthropic` ([setup](./models.md#claude-on-bedrocks-anthropic-messages-api-anthropic)); the FIPS and PrivateLink hostnames listed below for the OpenAI routes count too. The gate reads `compat.bedrockMessagesApi`, detected from such a `baseUrl`; set it in `models.yml` to opt a proxy or an `ANTHROPIC_BASE_URL` reroute in, or `false` to opt a Bedrock route out.
+   - Bedrock Converse models (`bedrock-converse-stream`) whose model card lists the beta (`compat.supportsServerCompaction`, a `providers/amazon-bedrock.kdl` rule: Haiku 4.5/5.5, Sonnet 5/5.5, Opus 4.7/4.8/5/5.5) compact through a Bedrock Runtime `InvokeModelWithResponseStream` side request carrying the same Anthropic Messages body; Converse itself rejects the beta ([AWS compaction guide](https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html)). Ordinary turns stay on Converse and read the summary text; the signed block is replayed only to later compaction requests. AWS bedrock-runtime origins (public, FIPS, PrivateLink) qualify by default; any other `baseUrl` is treated as a gateway that may implement only Converse and needs `remoteCompaction.enabled: true`. `remoteCompaction.enabled: false` opts a model out.
+- **Custom remote endpoint**: if `compaction.remoteEndpoint` is set and remote compaction is enabled, local summary generation POSTs one of two wire formats:
+   - custom omp summarizer endpoints receive `{ systemPrompt, prompt, maxTokens }` and must return JSON containing at least `{ summary }`.
+   - OpenAI-compatible endpoints whose path ends in `/chat/completions` receive `{ model, messages, stream: false, max_tokens }`, where `messages` contains one system prompt and one user prompt. The summary is read from `choices[0].message.content`, which lets self-hosted servers such as llama.cpp and vLLM act as remote compactors without a separate summarizer shim.
 
-Amazon Bedrock OpenAI 경로는 별도 활성화 없이 두 OpenAI 압축 경로를 모두 사용합니다. 제공업체 ID와 관계없이 `api: openai-responses`인 모델의 `baseUrl`에서 경로를 감지합니다(`packages/catalog/src/hosts.ts`의 `isBedrockOpenAIUrl`). `bedrock-runtime` 또는 `bedrock-mantle` 엔드포인트의 HTTPS `/openai/…` 경로, 또는 문서화된 Mantle `/v1` 기본 경로가 대상입니다. 호스트명은 공개 호스트(`bedrock-runtime.<region>.amazonaws.com`, FIPS의 `bedrock-runtime-fips.<region>.amazonaws.com`, `bedrock-mantle.<region>.api.aws`; 기본 제공 `bedrock-mantle`의 `{region}` 템플릿 포함)와 AWS PrivateLink 엔드포인트별 이름(`<vpce-id>[-<az>].bedrock-runtime[-fips].<region>.vpce.amazonaws.com` 또는 `….bedrock-mantle.<region>.vpce.amazonaws.com`)입니다. 비공개 DNS를 쓰는 VPC 엔드포인트는 공개 이름에 응답합니다([Amazon Bedrock 지원 엔드포인트](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html), [Bedrock 서비스 엔드포인트](https://docs.aws.amazon.com/general/latest/gr/bedrock.html), [Bedrock VPC 엔드포인트](https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html), [PrivateLink DNS 이름](https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-aws-services.html)). `/anthropic`, bedrock-runtime의 `/v1`, Converse 루트 등 다른 Bedrock 경로는 해당하지 않습니다. 이 Bedrock 경로에서만 `prepareBedrockCompactionRequest`(`packages/agent/src/compaction/bedrock.ts`)가 두 압축 요청을 일반 Bedrock 턴과 같은 형태로 만듭니다. 설정 헤더를 해석하고 전송 fetch(제공업체 프록시, 추가 CA, User-Agent, 요청 기록)를 적용하며 제공업체 자체 요청 훅을 실행합니다. 따라서 기본 제공 `bedrock-mantle`은 `{region}`을 채우고 Bearer 토큰 또는 SigV4 서명을 사용합니다. 다른 제공업체의 압축 요청은 자체 전송을 유지합니다. `models.yml`에서 모델이나 제공업체의 기본 동작을 끄려면 `remoteCompaction.enabled: false`(두 경로) 또는 `remoteCompaction.v2StreamingEnabled: false`(V1만 사용)를 설정하세요. AWS는 두 엔드포인트의 [Responses API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html)를 문서화하며 OpenAI는 [Amazon Bedrock의 OpenAI 모델](https://developers.openai.com/api/docs/guides/amazon-bedrock) 기능 지원 범위를 제공합니다. 이 페이지들은 압축을 언급하지 않습니다. 대신 원문 기준 2026-09-25에 Bedrock API 키(SigV4 아님)와 공개 `/openai/v1` 기본 경로로 실제 지원을 확인했습니다. `us-east-1`의 bedrock-runtime(`us.openai.gpt-6-astra`, `-sol`, `-luna`)과 bedrock-mantle(`openai.gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.5`, `gpt-5.4`)에서 V1 `POST {base}/responses/compact`는 `object: "response.compaction"`을 반환했고 V2는 `compaction` 출력 항목을 스트리밍했습니다. FIPS, PrivateLink, Mantle `/v1` 기본 경로는 같은 서비스에 연결하지만 실제 검증하지 않았습니다. Mantle의 `openai.gpt-oss-120b`는 Responses API를 지원하지 않습니다.
+Amazon Bedrock's OpenAI routes get both OpenAI lanes without an opt-in. The route is detected from the model `baseUrl` (`isBedrockOpenAIUrl` in `packages/catalog/src/hosts.ts`), for any provider id with `api: openai-responses`: an HTTPS `/openai/…` path on a `bedrock-runtime` or `bedrock-mantle` endpoint, or Mantle's documented `/v1` base. Endpoint hostnames are the public ones (`bedrock-runtime.<region>.amazonaws.com`, FIPS `bedrock-runtime-fips.<region>.amazonaws.com`, `bedrock-mantle.<region>.api.aws`, including the bundled `bedrock-mantle` provider's `{region}` template) and AWS PrivateLink endpoint-specific names (`<vpce-id>[-<az>].bedrock-runtime[-fips].<region>.vpce.amazonaws.com` or `….bedrock-mantle.<region>.vpce.amazonaws.com`); a VPC endpoint with private DNS answers on the public names ([Endpoints supported by Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints.html), [Bedrock service endpoints](https://docs.aws.amazon.com/general/latest/gr/bedrock.html), [Bedrock VPC endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/vpc-interface-endpoints.html), [PrivateLink DNS names](https://docs.aws.amazon.com/vpc/latest/privatelink/privatelink-access-aws-services.html)). Other Bedrock paths, such as `/anthropic`, `/v1` on bedrock-runtime, or the Converse root, do not count. On these Bedrock routes only, both compaction requests are shaped like a normal Bedrock turn by `prepareBedrockCompactionRequest` (`packages/agent/src/compaction/bedrock.ts`): configured headers are resolved, the transport fetch applies (provider proxy, extra CA, User-Agent, request recording), and the provider's own request hooks run. So the bundled `bedrock-mantle` provider fills in `{region}` and uses its bearer token or SigV4 signing. Other providers' compaction requests keep their own transport. To turn the default off for a model or provider in `models.yml`, set `remoteCompaction.enabled: false` (both lanes) or `remoteCompaction.v2StreamingEnabled: false` (V1 only). AWS documents the Responses API on both endpoints ([Responses API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-responses-api.html)), and OpenAI lists Bedrock's feature coverage ([OpenAI models in Amazon Bedrock](https://developers.openai.com/api/docs/guides/amazon-bedrock)). None of these pages mention compaction. Support was verified live instead, on 2026-09-25 with a Bedrock API key (not SigV4) on the public `/openai/v1` bases: in `us-east-1`, V1 `POST {base}/responses/compact` returned `object: "response.compaction"` and V2 streamed a `compaction` output item on `bedrock-runtime` (`us.openai.gpt-6-astra`, `-sol`, `-luna`) and on `bedrock-mantle` (`openai.gpt-6-sol`, `gpt-6-luna`, `gpt-5.6-terra`, `gpt-5.5`, `gpt-5.4`). FIPS, PrivateLink, and Mantle `/v1` bases reach the same services but were not verified live. `openai.gpt-oss-120b` on Mantle does not support the Responses API.
 
-네이티브 원격 압축(V2·V1·Anthropic)이 성공하면 로컬 LLM 요약은 완전히 건너뜁니다. OpenAI 경로의 영구 기록은 제공업체 재생 페이로드에 있으며 저장 `summary`는 자리표시자 안내와 파일 작업 목록입니다. Anthropic 경로는 실제 요약 텍스트를 저장하므로 이후 다른 제공업체도 이를 바탕으로 압축할 수 있습니다.
+When a native remote compaction (V2, V1, or Anthropic) succeeds, local LLM summarization is skipped entirely. For the OpenAI lanes the durable history lives in the provider replay payload and the stored `summary` is a placeholder lead-in plus the file-operation list; the Anthropic lane stores the real summary text, so a later compaction by any provider can build on it.
 
-일반 로컬 요약에서 네이티브 압축을 시작하면 준비된 대화와 함께 그 요약을 컨텍스트 메시지로 넣습니다. 이후 네이티브 처리는 자리표시자 요약을 다시 삽입하지 않고 제공업체 페이로드를 재사용합니다. Snapcompact 원문은 별도 보관 마이그레이션 경로를 유지합니다.
+When native compaction starts from an ordinary local summary, that summary is included as a context message alongside the prepared conversation. Later native passes reuse the provider payload instead of re-injecting its placeholder summary. Snapcompact source text keeps its separate archive migration path.
 
-추측 실행 네이티브 압축에서 `providerReplayThroughEntryId`는 나중 커밋 위치가 아닌 스냅샷의 마지막 항목을 기록합니다. 컨텍스트 재구성과 다음 압축 준비는 두 위치 사이에 추가한 메시지와 커밋 이후 메시지를 순서대로 포함합니다. 네이티브 페이로드와 미포함 구간은 각각 한 번씩 재생합니다. `/clear`가 해당 압축보다 나중이면 둘 다 버립니다.
+For speculative native compaction, `providerReplayThroughEntryId` records the snapshot's last entry, not the later commit position. Context rebuilding and the next compaction preparation both include messages appended between those positions, followed by post-commit messages. The native payload and uncovered interval are replayed once each; `/clear` discards both when it supersedes that compaction.
 
-조언자 런타임은 이후 유지 관리를 위해 네이티브 `preserveData`를 보존하고 다음 모델 요청의 메모리 내 압축 요약에 제공업체 페이로드를 첨부합니다. 네이티브 재생에 보존 구간이 이미 들어 있으므로 같은 구간을 원시 메시지로 다시 덧붙이지 않습니다. 로컬 요약은 최근 메시지를 별도 유지합니다. 조언자 요청도 공유 메시지 변환기를 사용하므로 텍스트 압축 요약과 네이티브 페이로드가 모두 제공업체에 전달됩니다.
+Advisor runtimes retain native `preserveData` for subsequent maintenance and attach its provider payload to the in-memory compaction summary for the next model request. Native replay already contains the retained tail, so advisors do not also append that tail as raw messages. Local summaries still keep recent messages separately. Advisor requests use the shared message converter so both textual compaction summaries and native payloads reach the provider.
 
-<a id="handoff-generation"></a>
-### 인계 생성
+### Handoff generation
 
-`packages/agent/src/compaction/compaction.ts`는 `generateHandoff(...)`와 `generateHandoffFromContext(...)`를 내보냅니다. Coding-agent는 `SessionHandoff`를 통해 컨텍스트 인식 함수를 사용합니다. 보조 요청에는 기본 시스템 프롬프트, 정규화한 도구, 변환한 현재 기록, 현재 프롬프트 캐시 키, 고유 보조 세션 ID, 마지막의 에이전트 귀속 `user` 인계 프롬프트가 들어갑니다. `toolChoice: "none"`으로 시작하며 명시적 도구 선택 호환성 거부가 있을 때만 `"auto"`로 한 번 재시도합니다. 결합한 텍스트 블록만 반환하고 도구는 실행하지 않습니다. [인계 파이프라인](./handoff-generation-pipeline.md)을 참고하세요.
+`packages/agent/src/compaction/compaction.ts` exports `generateHandoff(...)` and `generateHandoffFromContext(...)`. Coding-agent uses the context-aware function through `SessionHandoff`: the side request uses the base system prompt, normalized tools, transformed live history, and live prompt-cache key, with a unique side session id and trailing agent-attributed `user` handoff prompt. It starts with `toolChoice: "none"` and retries once with `"auto"` only after an explicit-tool-choice compatibility rejection. Only joined text blocks are returned; tools are never dispatched. See [the handoff pipeline](./handoff-generation-pipeline.md).
 
-인계는 현재 세션에 일반 `CompactionEntry`를 저장합니다. `SessionMaintenance.handoff()`(수동 `/handoff`)와 자동 유지 관리의 `handoff` 방식은 모두 `SessionHandoff.generateDocument()`로 문서를 만들고, `prepareCompaction`의 `firstKeptEntryId`와 함께 압축 요약으로 저장합니다. 따라서 최근 기록은 보존하며 세션 ID, 대화 기록, 제공업체 캐시 키는 바뀌지 않습니다.
+Handoff commits a regular `CompactionEntry` on the current session: `SessionMaintenance.handoff()` (manual `/handoff`) and the auto-maintenance `handoff` method both generate the document via `SessionHandoff.generateDocument()` and store it as the compaction summary with `firstKeptEntryId` from `prepareCompaction`, so recent history is kept and the session id, transcript, and provider cache key are unchanged.
 
-`compaction.handoffSaveToDisk`가 켜져 있으면 **자동 실행된** 인계는 저장된 세션의 결과물 디렉터리에 `handoff-<ISO timestamp>.md`도 씁니다. 이 설정은 수동 인계를 파일로 쓰지 않으며 저장하지 않는 세션에는 결과물 디렉터리가 없습니다.
+When `compaction.handoffSaveToDisk` is enabled, an **automatically triggered** handoff also writes `handoff-<ISO timestamp>.md` in the persisted session's artifact directory. Manual handoffs are not written by this setting, and non-persisted sessions have no artifact directory.
 
-<a id="file-operation-context-in-summaries"></a>
-### 요약의 파일 작업 컨텍스트
+### File-operation context in summaries
 
-압축은 어시스턴트 도구 호출로 누적 파일 작업을 추적합니다.
+Compaction tracks cumulative file activity using assistant tool calls:
 
-- `read(path)` → 읽은 파일 집합
-- `write(path)` → 수정한 파일 집합
-- `edit(path)` → 수정한 파일 집합
+- `read(path)` → read set
+- `write(path)` → modified set
+- `edit(path)` → modified set
 
-누적 동작:
+Cumulative behavior:
 
-- 이전 항목이 pi에서 생성된 경우(`fromExtension !== true`)에만 이전 압축 세부 정보를 포함합니다.
-- 턴 중간 분할에서는 턴 접두부의 파일 작업도 포함합니다.
-- `details.readFiles`에서는 수정도 한 파일을 제외하고 `details.modifiedFiles`에 나머지를 담습니다. 저장 형식은 바뀌지 않습니다.
+- Includes prior compaction details only when prior entry is pi-generated (`fromExtension !== true`).
+- In split turns, includes turn-prefix file ops too.
+- `details.readFiles` excludes files also modified; `details.modifiedFiles` carries the rest (persisted shape is unchanged).
 
-파일 목록은 공통 접두부를 접은 그룹별 디렉터리 트리(find 도구 형태)이며 파일별 접근 표시를 붙입니다. 읽기만 한 파일은 `(Read)`, 한 번도 읽지 않고 수정한 파일은 `(Write)`, 수정했고 누적 읽기 집합에도 있는 파일은 `(RW)`입니다. 최대 20파일로 제한하고 나머지는 `[…N files elided…]` 줄로 표시합니다. LLM 요약 방식은 `upsertFileOperations`를 통해 `<files>` 태그로 덧붙이며 Snapcompact는 요약 템플릿 안의 `FILES` 구역에 렌더링합니다.
+The file list is a grouped, prefix-folded directory tree (find-tool shape) with a per-file access marker — `(Read)` for read-only files, `(Write)` for modified files never read, `(RW)` for modified files also present in the cumulative read set. Capped at 20 files with an `[…N files elided…]` line. LLM-summary strategies append it as a `<files>` tag (via `upsertFileOperations`); snapcompact renders it inside its summary template as a `FILES` section instead.
 
 ```xml
 <files>
@@ -365,172 +380,163 @@ file-operations.md (Write)
 </files>
 ```
 
-이전 버전이 쓴 요약의 `<read-files>`/`<modified-files>` 태그는 `<files>`와 함께 제거한 뒤 다시 덧붙이므로 다음 압축 때 오래된 요약도 자동으로 정리됩니다.
+Legacy `<read-files>`/`<modified-files>` tags from summaries written by earlier versions are stripped (alongside `<files>`) before re-appending, so old summaries self-heal on the next compaction.
 
-<a id="persist-and-reload"></a>
-### 저장 및 다시 로드
+### Persist and reload
 
-요약을 생성하거나 훅이 요약을 제공한 뒤 에이전트 세션은 다음을 수행합니다.
+After summary generation (or hook-provided summary), agent session:
 
-1. `appendCompaction(...)`으로 `CompactionEntry`를 추가합니다. 인계 방식은 같은 세션에 생성한 문서를 항목의 요약으로 저장합니다.
-2. 활성 리프에서 `buildDisplaySessionContext()`로 표시 컨텍스트를 재구성합니다.
-3. 실행 중 에이전트 메시지를 재구성한 컨텍스트로 교체합니다.
-4. 재구성한 분기에서 활성 할 일 단계를 동기화하고 기록을 재작성한 제공업체 세션을 닫습니다.
-5. `session_compact` 훅 이벤트를 발생시킵니다.
+1. Appends `CompactionEntry` with `appendCompaction(...)`; the handoff method commits the generated document as the entry's summary on the same session.
+2. Rebuilds display context from the active leaf via `buildDisplaySessionContext()`.
+3. Replaces live agent messages with rebuilt context.
+4. Synchronizes active todo phases from the rebuilt branch and closes provider sessions whose history was rewritten.
+5. Emits `session_compact` hook event.
 
-<a id="branch-summarization-pipeline"></a>
-## 분기 요약 파이프라인
+## Branch summarization pipeline
 
-분기 요약은 토큰 초과가 아닌 트리 탐색에 연결됩니다.
+Branch summarization is tied to tree navigation, not token overflow.
 
-<a id="trigger"></a>
-### 실행 조건
+### Trigger
 
-`navigateTree(...)` 실행 중:
+During `navigateTree(...)`:
 
-1. `collectEntriesForBranchSummary(...)`로 이전 리프부터 공통 조상까지 떠나는 항목을 계산합니다.
-2. 호출자가 요약을 요청했으면(`options.summarize`) 리프를 바꾸기 전에 요약을 생성합니다.
-3. 요약이 있으면 `branchWithSummary(...)`로 탐색 대상에 붙입니다.
+1. Compute abandoned entries from old leaf to common ancestor using `collectEntriesForBranchSummary(...)`.
+2. If caller requested summary (`options.summarize`), generate summary before switching leaf.
+3. If summary exists, attach it at the navigation target using `branchWithSummary(...)`.
 
-보통 `branchSummary.enabled`가 켜져 있을 때 `/tree` 흐름으로 실행합니다.
+Operationally this is commonly driven by `/tree` flow when `branchSummary.enabled` is enabled.
 
-<a id="branch-switch-shape-visual"></a>
-### 분기 전환 구조 도식
+### Branch switch shape (visual)
 
 ```text
-탐색 전 트리:
+Tree before navigation:
 
-         ┌─ B ─ C ─ D (이전 리프, 떠날 분기)
+         ┌─ B ─ C ─ D (old leaf, being abandoned)
     A ───┤
-         └─ E ─ F (대상)
+         └─ E ─ F (target)
 
-공통 조상: A
-요약할 항목: B, C, D
+Common ancestor: A
+Entries to summarize: B, C, D
 
-요약을 포함한 탐색 후:
+After navigation with summary:
 
-         ┌─ B ─ C ─ D (떠난 분기, 변경 없음)
+         ┌─ B ─ C ─ D (abandoned branch, unchanged)
     A ───┤
-         └─ E ─ F ─ [B,C,D 요약] (새 리프)
+         └─ E ─ F ─ [summary of B,C,D] (new leaf)
 ```
 
-<a id="preparation-and-token-budget"></a>
-### 준비 및 토큰 예산
+### Preparation and token budget
 
-`generateBranchSummary(...)`는 다음과 같이 예산을 계산합니다.
+`generateBranchSummary(...)` computes budget as:
 
 - `tokenBudget = (model.contextWindow || 128000) - branchSummary.reserveTokens`
 
-이후 `prepareBranchEntries(...)`는 다음을 수행합니다.
+`prepareBranchEntries(...)` then:
 
-1. 첫 번째 처리: 이전 pi 생성 `branch_summary` 세부 정보를 포함해 요약할 모든 항목의 누적 파일 작업을 수집합니다.
-2. 두 번째 처리: 최신에서 오래된 순서로 순회하며 토큰 예산에 도달할 때까지 메시지를 추가합니다.
-3. 최근 컨텍스트 보존을 우선합니다.
-4. 연속성을 위해 예산 경계 근처의 큰 요약 항목도 포함할 수 있습니다.
+1. First pass: collect cumulative file ops from all summarized entries, including prior pi-generated `branch_summary` details.
+2. Second pass: walk newest → oldest, adding messages until token budget is reached.
+3. Prefer preserving recent context.
+4. May still include large summary entries near budget edge for continuity.
 
-분기 요약 입력에는 압축 항목을 메시지(`compactionSummary`)로 포함합니다.
+Compaction entries are included as messages (`compactionSummary`) during branch summarization input.
 
-<a id="summary-generation-and-persistence"></a>
-### 요약 생성 및 저장
+### Summary generation and persistence
 
-분기 요약:
+Branch summarization:
 
-1. `serializeConversationForSummary()`와 대상 모델의 선호 표현 형식으로 선택한 메시지를 변환·직렬화합니다.
-2. `<conversation>`으로 감쌉니다.
-3. 사용자 지정 지침이 있으면 사용하고 없으면 `branch-summary.md`를 사용합니다.
-4. `SUMMARIZATION_SYSTEM_PROMPT`와 출력 한도 2,048토큰으로 요약 모델을 호출합니다.
-5. `branch-summary-preamble.md`를 앞에 붙입니다.
-6. 파일 작업 태그를 덧붙입니다.
+1. Converts and serializes selected messages with `serializeConversationForSummary()` and the target model's preferred dialect.
+2. Wraps in `<conversation>`.
+3. Uses custom instructions if supplied, otherwise `branch-summary.md`.
+4. Calls summarization model with `SUMMARIZATION_SYSTEM_PROMPT` and a 2,048-token output limit.
+5. Prepends `branch-summary-preamble.md`.
+6. Appends file-operation tags.
 
-결과는 선택적 세부 정보(`readFiles`, `modifiedFiles`)와 함께 `BranchSummaryEntry`로 저장합니다.
+Result is stored as `BranchSummaryEntry` with optional details (`readFiles`, `modifiedFiles`).
 
-<a id="extension-and-hook-touchpoints"></a>
-## 확장 기능 및 훅 연동 지점
+## Extension and hook touchpoints
 
 ### `session_before_compact`
 
-압축 전 훅입니다.
+Pre-compaction hook.
 
-가능한 동작:
+Can:
 
-- 압축 취소(`{ cancel: true }`)
-- 완전한 사용자 지정 압축 페이로드 제공(`{ compaction: CompactionResult }`)
+- cancel compaction (`{ cancel: true }`)
+- provide full custom compaction payload (`{ compaction: CompactionResult }`)
 
-훅의 `customInstructions`에는 공개 사용자 초점만 담깁니다. 현재 계획 모드의 “승인 후 컨텍스트 압축” 정제 프롬프트 같은 내부 요약기 지침은 `CompactOptions`의 별도 `internalGuidance` 채널로 전달합니다. 이 채널은 네이티브 요약에만 도달하며 이 훅이나 `session.compacting`에는 전달되지 않습니다. 둘 다 설정되어 있으면 요약기는 `internalGuidance`를 사용하지만 훅에는 공개 `customInstructions`가 계속 보입니다(이슈 #4359).
+The hook's `customInstructions` carries only the public user focus. Internal summarizer guidance — currently the plan-mode "Approve and compact context" distillation prompt — travels a separate `internalGuidance` channel on `CompactOptions` that reaches only native summarization, never this hook or `session.compacting`; when both are set the summarizer uses `internalGuidance` while hooks still see the public `customInstructions` (issue #4359).
 
 ### `session.compacting`
 
-기본 압축의 프롬프트·컨텍스트 사용자 지정 훅입니다.
+Prompt/context customization hook for default compaction.
 
-반환 가능한 값:
+Can return:
 
-- `prompt`: 기본 요약 프롬프트 재정의
-- `context`: `<additional-context>`에 삽입할 추가 컨텍스트 줄
-- `preserveData`: 압축 항목에 저장할 데이터
+- `prompt` (override base summary prompt)
+- `context` (extra context lines injected into `<additional-context>`)
+- `preserveData` (stored on compaction entry)
 
 ### `session_compact`
 
-저장된 `compactionEntry`와 `fromExtension` 표시를 포함하는 압축 후 알림입니다.
+Post-compaction notification with saved `compactionEntry` and `fromExtension` flag.
 
 ### `session_before_tree`
 
-트리 탐색 시 기본 분기 요약 생성 전에 실행합니다.
+Runs on tree navigation before default branch summary generation.
 
-가능한 동작:
+Can:
 
-- 탐색 취소
-- 사용자가 요약을 요청했을 때 사용할 사용자 지정 `{ summary: { summary, details } }` 제공
+- cancel navigation
+- provide custom `{ summary: { summary, details } }` used when user requested summarization
 
 ### `session_tree`
 
-이전·새 리프와 선택적 요약 항목을 노출하는 탐색 후 이벤트입니다.
+Post-navigation event exposing new/old leaf and optional summary entry.
 
-<a id="runtime-behavior-and-failure-semantics"></a>
-## 런타임 동작 및 실패 의미
+## Runtime behavior and failure semantics
 
-- 수동 압축은 먼저 현재 에이전트 작업을 중단합니다. 실행 중 턴을 끊었다면 요약을 저장한 뒤 이어갑니다. 세션이 너무 작거나 이미 압축되어 아무 변경도 하지 않는 경우에는 기록이 바뀌지 않으므로 즉시 이어갑니다. 대기 중인 방향 수정·후속 메시지가 있으면 우선 사용하고 없으면 자동 이어가기 프롬프트를 사용합니다. 훅 취소나 요약기 실패 시에는 이어가지 않습니다. `compaction.autoContinue`가 `false`이거나 호출자가 `suppressContinuation`을 전달하면 이어가기를 생략합니다. 계획 모드 승인은 자체 실행 턴을 보냅니다. 유휴 상태에서 실행한 수동 압축은 턴을 시작하지 않습니다. 압축 중 제출한 프롬프트는 압축 완료를 기다리며, 턴을 시작하거나 대기열에 넣으면 기존 이어가기를 대체합니다. 로컬에서 처리하는 확장·사용자 지정 명령은 이어가기를 다시 넘겨주지만, 해당 명령이 유발한 턴(`pi.sendMessage(..., { triggerTurn: true })`, `pi.sendUserMessage()`), 이후 프롬프트 또는 다른 턴이 먼저 시작되면 그렇지 않습니다. 이렇게 이어가기가 보류된 동안 두 번째 수동 압축을 시작하면 새 압축이 이어가기를 넘겨받습니다.
-- `abortCompaction()`은 수동 압축, 자동 압축, 인계 생성 컨트롤러를 취소합니다.
-- 자동 압축은 UI·상태 갱신용 시작·종료 세션 이벤트를 발생시킵니다.
-- 자동 압축은 여러 모델 후보와 일시적 실패 재시도를 시도할 수 있습니다. 재시도 대기 시간이 길면 사용 가능한 다음 후보를 우선합니다.
-- 오버플로 오류는 컨텍스트 승격·압축으로 처리하므로 일반 재시도 경로에서 제외합니다.
-- 자동 압축 실패 시:
-   - 오버플로 경로는 `Context overflow recovery failed: ...`를 발생시킵니다.
-   - 불완전 출력 경로는 `Incomplete response recovery failed: ...`를 발생시킵니다.
-   - 임계값·유휴 경로는 `Auto-compaction failed: ...`를 발생시킵니다.
-- 준비된 추측 실행 결과를 포함한 자동 요약 후보는 저장 전에 컨텍스트 감소 여부를 확인합니다. 크기를 줄이지 못한 후보는 다음 설정 방식으로 넘어가며, 어느 방식도 진전하지 못하면 압축 항목을 저장하지 않습니다. 새 추측 요청을 포함한 턴 중 재시도는 보존 기록의 절단 지점이 앞으로 이동할 때까지 억제됩니다.
-  네이티브 Responses 재생은 불투명한 암호화 상태 바이트가 아닌 표시되는 대체 기록과 이미지 추정치를 계산합니다. 비교 양쪽 모두 재구축한 활성 컨텍스트를 사용하므로 `/clear` 이전 기록이 감소 기준을 부풀릴 수 없습니다. 이는 로컬 추정치이며 제공업체 청구 토큰 수가 아닙니다.
-- 분기 요약은 Escape 같은 중단 신호로 취소할 수 있으며 취소·중단된 탐색 결과를 반환합니다.
+- Manual compaction aborts current agent operation first. If that abort cut a turn in flight, the compaction resumes it once the summary is committed — or immediately when it rejects as a no-op (session too small / already compacted), since that pass makes no history change — using a queued steer/follow-up first, otherwise the auto-continue prompt. A hook cancel or summarizer failure does not resume. The resume is skipped when `compaction.autoContinue` is `false` or the caller passed `suppressContinuation` (plan-mode approval dispatches its own execution turn). A manual compaction issued while idle never starts a turn. A prompt submitted while the compaction runs waits for it and, if it starts or queues a turn, replaces the resume; a locally handled extension/custom command hands the resume back — unless a turn it triggered (`pi.sendMessage(..., { triggerTurn: true })`, `pi.sendUserMessage()`), a later prompt, or any other turn starts first. A second manual compaction started while such a resume is still withheld takes it over.
+- `abortCompaction()` cancels manual compaction, auto-compaction, and handoff generation controllers.
+- Auto compaction emits start/end session events for UI/state updates.
+- Auto compaction can try multiple model candidates and retry transient failures; long retry delays prefer the next candidate when one is available.
+- Overflow errors are excluded from generic retry path because they are handled by context promotion/compaction.
+- If auto-compaction fails:
+   - overflow path emits `Context overflow recovery failed: ...`
+   - incomplete-output path emits `Incomplete response recovery failed: ...`
+   - threshold/idle paths emit `Auto-compaction failed: ...`
+- Automatic summary candidates, including armed speculative results, are checked for context reduction before commit. Non-shrinking candidates advance to the next configured method; if none makes progress, no compaction entry is committed. Mid-turn retries, including new speculative requests, stay suppressed until the retained-history cut point advances.
+  Native Responses replay counts visible replacement history and image estimates, not opaque encrypted-state bytes. Both sides use the rebuilt active context, so history before `/clear` cannot inflate the reduction baseline. These are local estimates, not provider-billed token counts.
+- Branch summarization can be cancelled via abort signal (e.g., Escape), returning canceled/aborted navigation result.
 
-<a id="settings-and-defaults"></a>
-## 설정 및 기본값
+## Settings and defaults
 
-`packages/coding-agent/src/session/context-settings.ts`에 정의합니다.
+Defined in `packages/coding-agent/src/session/context-settings.ts`:
 
 - `compaction.enabled` = `true`
-- `compaction.experimentalContextManagement` = `false`. 선택적으로 영구 노트, 분기 종속 원시 기록 조회, 로컬 컨텍스트 창 전환을 사용합니다. 토글하면 실행 중인 세션에 `context_notes`/`new_context`를 추가하거나 제거합니다.
-- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`. `remote`는 가능할 때 제공업체 네이티브 서버 압축(OpenAI Responses 압축, Bedrock Converse Runtime 보조 요청을 포함하는 Anthropic 압축 베타)을 사용합니다. 사용할 수 없거나 실패한 방식은 다음 선호 방식으로 넘어갑니다.
-- `compaction.asyncEnabled` = `true`. 비동기(추측 실행) 압축입니다. 컨텍스트가 임계값 직전 구간 `[threshold − lead, threshold)`에 들어가면(`lead = clamp(threshold × 0.125, 8192, 32000)`) 유지 관리는 분기 스냅샷을 바탕으로 설정된 첫 LLM 기반 방식(`remote`, `handoff`, `soft`)의 백그라운드 요약을 시작합니다. 보조 세션 ID로 현재 턴과 격리합니다. 실제 임계값을 넘으면 준비한 결과를 즉시 저장해 요약 지연을 숨기며 스냅샷 이후 턴은 변경 없이 요약 뒤에 붙입니다. 분기 접두부가 바뀌거나(새 압축, 초기화 경계, `/tree` 탐색), 활성 모델이 제공업체 네이티브 재생 페이로드를 더 이상 읽을 수 없거나, 계산 이후 컨텍스트가 `keepRecentTokens` 이상 늘면 준비한 결과를 버립니다. 마지막 경우에는 새 추측 실행으로 대체합니다. 확장 기능이 `session_before_compact`를 등록했으면 추측 실행을 생략합니다. 실행 중에는 상태 표시줄의 자동 압축 아이콘이 맥동하고 결과가 준비되면 강조색을 유지합니다.
-- `compaction.reserveTokens`는 기본 미설정입니다. 실효 예약량은 `max(floor(contextWindow × 0.15), configuredReserve ?? 16384)`입니다. 작은 창에서 미설정 기본값이 부적절하거나 실효 예약량이 창 전체 이상이면 예산 검사는 비례 예약량을 사용합니다. 그 외 명시적 예약량도 최소 15%를 유지합니다.
-- `compaction.keepRecentTokens` = `20000`. 준비 과정에서는 압축된 컨텍스트가 복구 구간(트리거의 80%)에 들어가도록 이 예산을 제한합니다. 상한은 `0.8 × trigger − reserveFloor`이며, `reserveFloor`는 실효 예산 예약량과 `compaction.reserveTokens`(미설정 시 `16384`) 중 작은 값입니다. 하한만으로 구간을 채우면 구간의 절반을 사용합니다. 측정 사용량에 따른 조정 전에 이 상한을 적용하므로 작은 창이나 제공업체가 제한한 창에서 트리거가 낮으면 즉시 다시 압축하는 대신 더 적은 기록을 유지합니다.
+- `compaction.experimentalContextManagement` = `false`. Opt-in persistent notes, branch-bound raw-history retrieval, and local context-window rollover; toggling it adds or removes `context_notes`/`new_context` in the running session.
+- `compaction.methodOrder` = `["remote", "snapcompact", "handoff", "shake", "soft"]`. `remote` uses provider-native server compaction (OpenAI Responses compact, Anthropic compaction beta, including Bedrock Converse's Runtime side request) when available; unavailable or failed methods advance to the next preference.
+- `compaction.asyncEnabled` = `true`. Async (speculative) compaction: when context enters the pre-threshold band `[threshold − lead, threshold)` (lead = `clamp(threshold × 0.125, 8192, 32000)`), maintenance starts a background summarization for the first configured LLM-backed method (`remote`, `handoff`, or `soft`) off a branch snapshot, isolated from the live turn by a side session id. The armed result is committed instantly when the threshold is actually crossed, hiding summarization latency; post-snapshot turns are appended after the summary unchanged. Armed results are discarded when the branch prefix changes (new compaction, reset boundary, `/tree` navigation), when a provider-native replay payload is no longer readable by the active model, or when context grows past `keepRecentTokens` since compute (a fresh speculation replaces it). Speculation is skipped while an extension registers `session_before_compact`. The status line pulses the auto-compact icon while a speculation runs and holds it in accent when a result is armed.
+- `compaction.reserveTokens` is unset by default. The effective reserve is `max(floor(contextWindow × 0.15), configuredReserve ?? 16384)`. Budget checks use the proportional reserve when the unset default is impractical on a small window, or when the effective reserve reaches/exceeds the whole window. Explicit reserves otherwise retain the 15% floor.
+- `compaction.keepRecentTokens` = `20000`. Preparation caps this budget so the compacted context lands in the recovery band (80% of the trigger): at most `0.8 × trigger − reserveFloor`, where `reserveFloor` is the smaller of the effective budget reserve and `compaction.reserveTokens` (or `16384` when unset), or half the band when the floor alone fills it. The cap applies before adjusting for measured usage, so a low trigger on a small or provider-capped window keeps less history instead of compacting again right away.
 - `compaction.autoContinue` = `true`
-- `compaction.midTurnEnabled` = `true`. `false`는 해당 설정을 지정한 세션에만 적용하며 생성한 하위 에이전트에는 적용하지 않습니다. 각 하위 에이전트는 실행 중 검사를 유지하므로 단일 턴 작업도 설정한 임계값에서 압축합니다.
+- `compaction.midTurnEnabled` = `true`; a `false` value applies to the session that configured it, not to spawned subagents — each subagent keeps mid-run checks so its single-turn assignment still compacts at the configured threshold.
 - `compaction.handoffSaveToDisk` = `false`
-- `handoff` 방식은 현재 캐시의 보조 요청 파이프라인으로 인계 문서를 만들고 현재 세션의 압축 항목으로 저장합니다. 새 세션은 만들지 않으며 `/handoff`는 같은 작업을 수동 실행합니다.
+- The `handoff` method generates a handoff document through the live-cache side-request pipeline and commits it as a compaction entry on the current session (no new session is created); `/handoff` does the same manually.
 - `compaction.remoteEndpoint` = `undefined`
 - `compaction.remoteStreamingV2Enabled` = `true`
 - `compaction.v2RetainedMessageBudget` = `64000`
-- `compaction.thresholdPercent` = `-1`, `compaction.thresholdTokens` = `-1`. 양수 고정 토큰 한도가 백분율보다 우선하며 그렇지 않으면 예약량 기반 임계값을 사용합니다.
-- `compaction.modelThresholds` = `{}`. `provider/model-id` 또는 `provider/…*` 접두부를 활성 모델의 토큰 기준값, 고정 실행 조건(`"f90000"`), 두 임계값을 대체할 백분율에 매핑합니다. 토큰 기준값은 창 대신 임계값 정책의 배율 기준이 되며 전역 `thresholdTokens`는 제외합니다. `/models` 역할 화면(`k`)에서 편집할 수 있습니다. [설정](./settings.md#context-compaction-and-memory)을 참고하세요.
-- `task.agentCompactionThresholdOverrides` = `{}`. 정확한 이름의 task/eval 에이전트를 해당 에이전트의 두 임계값을 대체할 토큰 수(`90000`) 또는 백분율(`"80%"`)에 매핑합니다. [설정](./settings.md#context-compaction-and-memory)을 참고하세요.
+- `compaction.thresholdPercent` = `-1` and `compaction.thresholdTokens` = `-1`; a positive fixed token limit takes precedence over percentage, and otherwise the reserve-based threshold is used.
+- `compaction.modelThresholds` = `{}`; `provider/model-id` or `provider/…*` prefix → a token base the threshold policy scales in place of the window (dropping a global `thresholdTokens`), a fixed trigger (`"f90000"`), or a percentage replacing both thresholds, while that model is active. Editable from the `/models` Roles view (`k`). See [Settings](./settings.md#context-compaction-and-memory).
+- `task.agentCompactionThresholdOverrides` = `{}`; exact-name task/eval agent → token count (`90000`) or percentage (`"80%"`) replacing both thresholds for that agent only. See [Settings](./settings.md#context-compaction-and-memory).
 - `compaction.idleEnabled` = `false`
 - `compaction.idleThresholdTokens` = `200000`
-- `compaction.idleTimeoutSeconds` = `300`(확인된 1시간 프롬프트 캐시 항목이 시간을 정하지 않을 때의 대체값)
+- `compaction.idleTimeoutSeconds` = `300` (fallback unless a confirmed 1h prompt-cache entry sets the timing)
 - `compaction.supersedeReads` = `true`
 - `compaction.dropUseless` = `true`
-- `snapcompact.systemPrompt` = `"none"`(`"agents-md"`와 `"all"`은 일시적인 시스템 프롬프트 이미지화를 활성화)
-- `snapcompact.toolResults` = `false`(최신 결과를 포함한 큰 도구 결과의 일시적 이미지화). 모델 카탈로그 규칙이 `snapcompact-image-reads`(Opus 5.5+)를 지정하지 않으면 `read` 결과는 텍스트로 유지합니다. 프레임은 공백을 합치므로 이미지화된 `read`는 각 줄의 앞쪽 들여쓰기를 개수 표시로 그립니다. 예를 들어 `[»2]`는 탭 두 개, `[·4]`는 공백 네 개입니다. 편집할 때 복사할 수 있도록 `[path#TAG]` 헤더는 프레임 옆에 텍스트로 유지합니다. 계획기는 `snapcompact.*` 설정·모델·이전 기록이 바뀌거나 이후 이미지가 제공업체 이미지 상한을 초과할 때까지 결과를 처음 전송한 형태로 유지합니다. 이후 요청 바이트 한도로 오래된 인라인 프레임이 제거될 수 있으며 다른 인라인 이미지도 같습니다.
+- `snapcompact.systemPrompt` = `"none"` (`"agents-md"` and `"all"` opt into transient system-prompt imaging)
+- `snapcompact.toolResults` = `false` (transient imaging of large tool results, the newest one included; `read` results stay text unless the model's catalog rule sets `snapcompact-image-reads` (Opus 5.5+). An imaged `read` draws each row's leading indentation as a count bracket (`[»2]` two tabs, `[·4]` four spaces) because frames collapse whitespace, and keeps its `[path#TAG]` header as text beside the frames, so edits can copy both. The planner keeps a result in the form it was first sent in until the `snapcompact.*` settings, the model or earlier history change, or later images push the request past the provider's image cap; a downstream request-byte limit can still drop older inline frames, as it can any inline image)
 - `snapcompact.shape` = `"auto"`
 - `branchSummary.enabled` = `false`
 - `branchSummary.reserveTokens` = `16384`
 
-이 값은 런타임에서 `AgentSession`, `SessionMaintenance`, 압축·분기 요약 모듈이 사용합니다.
+These values are consumed at runtime by `AgentSession`, `SessionMaintenance`, and the compaction/branch-summarization modules.

@@ -18,7 +18,6 @@
  * `name@marketplace`) routes to `plugin install`.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
@@ -46,18 +45,18 @@ export default class Install extends Command {
 	static description = commandHelp.description;
 	static args = {
 		targets: Args.string({
-			description: t("Local path, npm spec, or marketplace ref (e.g. ./my-ext, my-pkg@1.2.3, name@marketplace)"),
+			description: "Local path, npm spec, or marketplace ref (e.g. ./my-ext, my-pkg@1.2.3, name@marketplace)",
 			required: false,
 			multiple: true,
 		}),
 	};
 
 	static flags = {
-		json: Flags.boolean({ description: t("Output JSON") }),
-		force: Flags.boolean({ description: t("Force install") }),
-		"dry-run": Flags.boolean({ description: t("Show actions without applying changes") }),
+		json: Flags.boolean({ description: "Output JSON" }),
+		force: Flags.boolean({ description: "Force install" }),
+		"dry-run": Flags.boolean({ description: "Show actions without applying changes" }),
 		scope: Flags.string({
-			description: t("Install scope: \"user\" (default) or \"project\" (marketplace installs only)"),
+			description: 'Install scope: "user" (default) or "project" (marketplace installs only)',
 			options: ["user", "project"],
 		}),
 	};
@@ -67,7 +66,7 @@ export default class Install extends Command {
 		const targets = Array.isArray(args.targets) ? args.targets : args.targets ? [args.targets] : [];
 
 		if (targets.length === 0) {
-			process.stderr.write(t("Usage: omp install <path | npm-spec | name@marketplace> [...]\n"));
+			process.stderr.write("Usage: omp install <path | npm-spec | name@marketplace> [...]\n");
 			process.exit(1);
 		}
 

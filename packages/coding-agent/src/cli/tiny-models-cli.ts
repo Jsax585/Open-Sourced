@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatBytes } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import {
@@ -80,7 +79,7 @@ export function resolveModels(model: string | undefined, mlx = tinyWorkerUsesMlx
 		).map(spec => spec.key);
 	if (!isTinyLocalModelKey(model)) {
 		const values = TINY_LOCAL_MODELS.map(spec => spec.key).join(", ");
-		throw new Error(t("Unknown tiny local model: {0}. Expected one of: {1}, {2}, all", `${model}`, `${values}`, `${SMOLLM_KEY}`));
+		throw new Error(`Unknown tiny local model: ${model}. Expected one of: ${values}, ${SMOLLM_KEY}, all`);
 	}
 	return [model];
 }
@@ -89,7 +88,7 @@ async function listModels(json: boolean | undefined): Promise<void> {
 	const wordCompletion = {
 		key: SMOLLM_KEY,
 		label: SMOLLM_LABEL,
-		description: t("Word completion (spelling.autocomplete auto/smollm)"),
+		description: "Word completion (spelling.autocomplete auto/smollm)",
 		bytes: SMOLLM_TOTAL_BYTES,
 		dir: getSmolLmModelDir(),
 		ready: await smolLmWeightsReady(),
@@ -98,13 +97,13 @@ async function listModels(json: boolean | undefined): Promise<void> {
 		writeLine(JSON.stringify({ models: TINY_LOCAL_MODELS, wordCompletion }));
 		return;
 	}
-	writeLine(chalk.bold(t("Tiny local models")));
+	writeLine(chalk.bold("Tiny local models"));
 	for (const spec of TINY_LOCAL_MODELS) {
-		const defaultMark = spec.key === DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY ? chalk.cyan(t(" default")) : "";
+		const defaultMark = spec.key === DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY ? chalk.cyan(" default") : "";
 		writeLine(`${chalk.cyan(spec.key)}${defaultMark}`);
 		writeLine(`  ${spec.label} — ${spec.description}`);
 	}
-	const status = wordCompletion.ready ? chalk.green(t("downloaded")) : chalk.dim(t("not downloaded"));
+	const status = wordCompletion.ready ? chalk.green("downloaded") : chalk.dim("not downloaded");
 	writeLine(`${chalk.cyan(SMOLLM_KEY)}`);
 	writeLine(`  ${SMOLLM_LABEL} — ${wordCompletion.description}, ${formatBytes(SMOLLM_TOTAL_BYTES)}, ${status}`);
 	writeLine(`  ${chalk.dim(wordCompletion.dir)}`);
@@ -127,7 +126,7 @@ function makeProgressReporter(label: string, json: boolean | undefined): Progres
 		const pct = progress >= 0 ? `${Math.floor(progress).toString().padStart(3, " ")}%` : " --%";
 		const bytes = event.loaded && event.total ? ` ${formatBytes(event.loaded)}/${formatBytes(event.total)}` : "";
 		const file = event.file ? ` ${event.file.split("/").at(-1) ?? event.file}` : "";
-		const statusLabel = event.ready ? t("Ready") : t("Downloading");
+		const statusLabel = event.ready ? "Ready" : "Downloading";
 		const line = `${chalk.cyan(statusLabel)} ${label} [${bar}] ${pct}${bytes}${file}`;
 		process.stdout.write(`\r${line.padEnd(lastWidth)}`);
 		lastWidth = line.length;
@@ -135,7 +134,7 @@ function makeProgressReporter(label: string, json: boolean | undefined): Progres
 	return {
 		onProgress: render,
 		finish(ok) {
-			const suffix = ok ? chalk.green(t("done\u0004packages/coding-agent/src/cli/gallery-cli.ts:GALLERY_STATE_LABELS.success")) : chalk.red(t("failed"));
+			const suffix = ok ? chalk.green("done") : chalk.red("failed");
 			process.stdout.write(`\r${`${label}: ${suffix}`.padEnd(lastWidth)}\n`);
 		},
 	};
@@ -143,7 +142,7 @@ function makeProgressReporter(label: string, json: boolean | undefined): Progres
 
 async function downloadOne(modelKey: TinyLocalModelKey, json: boolean | undefined): Promise<DownloadResult> {
 	const label = getTinyLocalModelSpec(modelKey)?.label ?? modelKey;
-	if (!json && !process.stdout.isTTY) writeLine(t("Downloading {0} ({1})...", `${label}`, `${modelKey}`));
+	if (!json && !process.stdout.isTTY) writeLine(`Downloading ${label} (${modelKey})...`);
 	const progress = makeProgressReporter(label, json);
 	const result = await tinyTitleClient.downloadModel(modelKey, {
 		onProgress: event => {
@@ -154,16 +153,16 @@ async function downloadOne(modelKey: TinyLocalModelKey, json: boolean | undefine
 	progress.finish(result.ok);
 	const error = downloadErrorSummary(result.error);
 	if (!json && !process.stdout.isTTY) {
-		writeLine(result.ok ? t("Downloaded {0}.", `${label}`) : t("Failed to download {0}{1}.", `${label}`, `${error ? `: ${error}` : ""}`));
+		writeLine(result.ok ? `Downloaded ${label}.` : `Failed to download ${label}${error ? `: ${error}` : ""}.`);
 	} else if (!json && !result.ok && error) {
-		writeLine(t("{0} failed: {1}", `${label}`, `${error}`));
+		writeLine(`${label} failed: ${error}`);
 	}
 	return result.error ? { model: modelKey, ok: result.ok, error: result.error } : { model: modelKey, ok: result.ok };
 }
 
 /** Fetch the word-completion model the composer would otherwise download on first use. */
 async function downloadSmolLm(json: boolean | undefined): Promise<DownloadResult> {
-	if (!json && !process.stdout.isTTY) writeLine(t("Downloading {0} ({1})...", `${SMOLLM_LABEL}`, `${SMOLLM_KEY}`));
+	if (!json && !process.stdout.isTTY) writeLine(`Downloading ${SMOLLM_LABEL} (${SMOLLM_KEY})...`);
 	const progress = makeProgressReporter(SMOLLM_LABEL, json);
 	try {
 		await ensureSmolLmWeights({
@@ -177,12 +176,12 @@ async function downloadSmolLm(json: boolean | undefined): Promise<DownloadResult
 				}),
 		});
 		progress.finish(true);
-		if (!json && !process.stdout.isTTY) writeLine(t("Downloaded {0} to {1}.", `${SMOLLM_LABEL}`, `${getSmolLmModelDir()}`));
+		if (!json && !process.stdout.isTTY) writeLine(`Downloaded ${SMOLLM_LABEL} to ${getSmolLmModelDir()}.`);
 		return { model: SMOLLM_KEY, ok: true };
 	} catch (error) {
 		progress.finish(false);
 		const message = error instanceof Error ? error.message : String(error);
-		if (!json) writeLine(t("{0} failed: {1}", `${SMOLLM_LABEL}`, `${message}`));
+		if (!json) writeLine(`${SMOLLM_LABEL} failed: ${message}`);
 		return { model: SMOLLM_KEY, ok: false, error: message };
 	}
 }
@@ -209,6 +208,6 @@ export async function runTinyModelsCommand(command: TinyModelsCommandArgs): Prom
 		writeLine(JSON.stringify({ results }));
 	}
 	if (results.some(result => !result.ok)) {
-		throw new Error(t("One or more tiny title models failed to download"));
+		throw new Error("One or more tiny title models failed to download");
 	}
 }

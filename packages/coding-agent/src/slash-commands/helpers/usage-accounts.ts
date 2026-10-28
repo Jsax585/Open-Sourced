@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AuthStorage, UsageReport } from "@oh-my-pi/pi-ai";
 
 /** Identity slice of a stored credential, for "every account" coverage. */
@@ -163,8 +162,8 @@ export function collectUnreportedAccounts(
 
 /** Compose the account label from parts, masking each part individually so `--redact` cannot be bypassed by the composite string. */
 export function accountIdentityLabel(account: UsageAccountIdentity, redaction?: Map<string, string>): string {
-	if (account.type === "api_key") return t("API key");
-	const base = account.email ?? account.accountId ?? account.projectId ?? account.enterpriseUrl ?? t("OAuth account");
+	if (account.type === "api_key") return "API key";
+	const base = account.email ?? account.accountId ?? account.projectId ?? account.enterpriseUrl ?? "OAuth account";
 	const masked = redaction?.get(base) ?? base;
 	// orgId fallback: the uuid is the actual scoped identity; a token response
 	// can carry it without a display name, and two same-email rows must still

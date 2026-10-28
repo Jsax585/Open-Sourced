@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { prompt } from "@oh-my-pi/pi-utils";
 import jevifyNotice from "../prompts/system/jevify-notice.md" with { type: "text" };
 import orchestrateNotice from "../prompts/system/orchestrate-notice.md" with { type: "text" };
@@ -26,6 +25,12 @@ export interface MagicKeywordContext {
 	scoutAvailable: boolean;
 	/** `eval.tools.enabled`: whether `@tool`-defined kernel tools exist. */
 	evalTools: boolean;
+	/** `eval.py`: whether the Python eval backend is enabled. */
+	py: boolean;
+	/** `eval.js`: whether the JS eval backend is enabled. */
+	js: boolean;
+	/** `eval.workpool.freshAgents`: whether workpools spawn a new agent per item instead of reusing workers. */
+	freshAgents: boolean;
 }
 
 /** One magic keyword: trigger word, gradient, settings copy, and the notice it injects. */
@@ -62,8 +67,11 @@ export function renderWorkflowNotice({
 	taskBatch,
 	scoutAvailable,
 	evalTools,
-}: Pick<MagicKeywordContext, "taskBatch" | "scoutAvailable" | "evalTools">): string {
-	return prompt.render(workflowNotice, { taskBatch, scoutAvailable, evalTools }).trim();
+	py,
+	js,
+	freshAgents,
+}: Pick<MagicKeywordContext, "taskBatch" | "scoutAvailable" | "evalTools" | "py" | "js" | "freshAgents">): string {
+	return prompt.render(workflowNotice, { taskBatch, scoutAvailable, evalTools, py, js, freshAgents }).trim();
 }
 
 export const MAGIC_KEYWORDS = [
@@ -71,8 +79,8 @@ export const MAGIC_KEYWORDS = [
 		id: "ultrathink",
 		word: "ultrathink",
 		hue: [0, 330],
-		label: t("Ultrathink Keyword"),
-		description: t("Let standalone ultrathink request maximum automatic thinking and append its hidden notice"),
+		label: "Ultrathink Keyword",
+		description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
 		requires: [],
 		notice: () => ULTRATHINK_NOTICE,
 	},
@@ -80,8 +88,8 @@ export const MAGIC_KEYWORDS = [
 		id: "orchestrate",
 		word: "orchestrate",
 		hue: [150, 280],
-		label: t("Orchestrate Keyword"),
-		description: t("Let standalone orchestrate append its hidden multi-agent orchestration notice"),
+		label: "Orchestrate Keyword",
+		description: "Let standalone orchestrate append its hidden multi-agent orchestration notice",
 		// The contract is entirely about `task` subagent dispatch.
 		requires: ["task"],
 		notice: renderOrchestrateNotice,
@@ -90,8 +98,8 @@ export const MAGIC_KEYWORDS = [
 		id: "workflow",
 		word: "workflowz",
 		hue: [30, 150],
-		label: t("Workflow Keyword"),
-		description: t("Let standalone workflowz append its hidden eval workflow notice"),
+		label: "Workflow Keyword",
+		description: "Let standalone workflowz append its hidden eval workflow notice",
 		requires: ["task", "eval"],
 		notice: renderWorkflowNotice,
 	},
@@ -99,8 +107,8 @@ export const MAGIC_KEYWORDS = [
 		id: "jevify",
 		word: "jevify",
 		hue: [300, 420],
-		label: t("Jevify Keyword"),
-		description: t("Let standalone jevify append its hidden bulk-judge classification notice"),
+		label: "Jevify Keyword",
+		description: "Let standalone jevify append its hidden bulk-judge classification notice",
 		// The contract is entirely about the eval kernel's `judge()` helper.
 		requires: ["eval"],
 		notice: () => JEVIFY_NOTICE,

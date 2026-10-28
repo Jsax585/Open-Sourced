@@ -158,6 +158,7 @@ describe("read group tool node", () => {
 		const tool = group.describe(toolCx);
 		expect(tool.k).toBe("tool");
 		expect(tool.k === "tool" ? tool.p : undefined).toMatchObject({
+			target: "2 files",
 			frame: "inline",
 			status: "error",
 			collapsed: true,
@@ -246,6 +247,7 @@ describe("lsp native view", () => {
 		);
 		expect(view?.tone).toBe("error");
 		expect(view?.inline).not.toBe(true);
+		expect((view?.tool?.meta ?? []).map(plain).join(" ")).not.toContain("No issues");
 		expect(collect(view?.body, n => role(n) === "omp.tool.error")).toHaveLength(1);
 	});
 

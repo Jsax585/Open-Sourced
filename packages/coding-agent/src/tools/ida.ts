@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import { type } from "@oh-my-pi/omptype";
 import type {
@@ -86,13 +85,13 @@ export class IdaTool implements AgentTool<typeof idaSchema, IdaToolDetails> {
 		return "write";
 	};
 	readonly formatApprovalDetails = (args: unknown): string[] => {
-		const lines = [t("Action: {0}", `${stringArg(args, "action") ?? t("(missing)\u0004packages/coding-agent/src/tools/bash.ts:BashTool.formatApprovalDetails.command")}`)];
+		const lines = [`Action: ${stringArg(args, "action") ?? "(missing)"}`];
 		const db = stringArg(args, "db");
 		if (db) lines.push(`DB: ${truncateForPrompt(db)}`);
 		const target = stringArg(args, "target");
-		if (target) lines.push(t("Target: {0}", `${truncateForPrompt(target)}`));
+		if (target) lines.push(`Target: ${truncateForPrompt(target)}`);
 		const code = stringArg(args, "code");
-		if (code) lines.push(t("Code: {0}", `${truncateForPrompt(code)}`));
+		if (code) lines.push(`Code: ${truncateForPrompt(code)}`);
 		return lines;
 	};
 	readonly label = "IDA";

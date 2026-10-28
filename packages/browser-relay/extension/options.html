@@ -2,7 +2,7 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<title data-omp-i18n>OMP Browser Relay settings</title>
+		<title>OMP Browser Relay settings</title>
 		<style>
 			body {
 				font-family: system-ui, sans-serif;
@@ -40,13 +40,14 @@
 	<body>
 		<h1>OMP Browser Relay</h1>
 		<p class="hint">
-			<span data-omp-i18n>The extension connects to a local</span> <code>omp-browser-relay</code> <span data-omp-i18n>process. Values here must match the flags the relay was started with.</span>
+			The extension connects to a local <code>omp-browser-relay</code> process. Values here must match the flags the
+			relay was started with.
 		</p>
-		<label for="port" data-omp-i18n>Relay port</label>
+		<label for="port">Relay port</label>
 		<input id="port" type="number" min="1" max="65535" />
-		<label for="token" data-omp-i18n>Token (optional)</label>
+		<label for="token">Token (optional)</label>
 		<input id="token" type="text" autocomplete="off" />
-		<button id="save" data-omp-i18n>Save</button><span id="status"></span>
+		<button id="save">Save</button><span id="status"></span>
 		<script src="options.js"></script>
 	</body>
 </html>

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { formatInteger } from "../data/formatters";
@@ -16,15 +15,15 @@ export function LiveChip() {
 		body = (
 			<>
 				<Dot tone="warn" />
-				<span>{t("Reconnecting")}</span>
+				<span>Reconnecting</span>
 			</>
 		);
-		title = t("Lost the live connection to the stats server; retrying");
+		title = "Lost the live connection to the stats server; retrying";
 	} else if (sync.phase === "syncing") {
 		body = (
 			<>
 				<RefreshCw size={13} className="spin" />
-				<span>{t("Syncing")}</span>
+				<span>Syncing</span>
 				{sync.total > 0 && (
 					<span className="live-chip-count">
 						{formatInteger(sync.current)}/{formatInteger(sync.total)}
@@ -32,33 +31,33 @@ export function LiveChip() {
 				)}
 			</>
 		);
-		title = t("Ingesting session files");
+		title = "Ingesting session files";
 	} else if (sync.phase === "error") {
 		body = (
 			<>
 				<Dot tone="bad" />
-				<span>{t("Sync failed")}</span>
+				<span>Sync failed</span>
 			</>
 		);
-		title = t("{0} — click to retry", `${sync.error ?? t("Sync failed")}`);
+		title = `${sync.error ?? "Sync failed"} — click to retry`;
 	} else if (indexingHours > INDEXING_VISIBLE_HOURS) {
 		body = (
 			<>
 				<RefreshCw size={13} className="spin" />
-				<span>{t("Indexing")}</span>
-				<span className="live-chip-count">{t("{0}h left", `${formatInteger(indexingHours)}`)}</span>
+				<span>Indexing</span>
+				<span className="live-chip-count">{formatInteger(indexingHours)}h left</span>
 			</>
 		);
-		title = t("Building hourly rollups; older ranges fill in as it goes");
+		title = "Building hourly rollups; older ranges fill in as it goes";
 	} else {
 		body = (
 			<>
 				<Dot tone="live" pulse />
-				<span>{t("Live")}</span>
+				<span>Live</span>
 				{sync.lastSyncedAt !== null && <span className="live-chip-count">{ago(now - sync.lastSyncedAt)}</span>}
 			</>
 		);
-		title = t("Click to sync session files now");
+		title = "Click to sync session files now";
 	}
 
 	return (
@@ -90,9 +89,9 @@ function useNow(intervalMs: number | null): number {
 
 function ago(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
-	if (s < 45) return t("just now");
+	if (s < 45) return "just now";
 	const m = Math.round(s / 60);
-	if (m < 60) return t("{0}m ago", `${m}`);
+	if (m < 60) return `${m}m ago`;
 	const h = Math.round(m / 60);
-	return h < 24 ? t("{0}h ago", `${h}`) : t("{0}d ago", `${Math.round(h / 24)}`);
+	return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }

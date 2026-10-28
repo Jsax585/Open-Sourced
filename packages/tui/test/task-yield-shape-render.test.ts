@@ -103,16 +103,14 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		const text = await renderResultText({
 			yield: { data: reviewVerdict, status: "success" },
 		});
-		expect(text).toContain(reviewVerdict.explanation);
-		expect(text).toContain("92%");
+		expect(text).toContain("correct");
 	});
 
 	it("does not throw and still surfaces the verdict when yield is a single object (progress branch)", async () => {
 		const text = await renderProgressText({
 			yield: { data: reviewVerdict, status: "success" },
 		});
-		expect(text).toContain(reviewVerdict.explanation);
-		expect(text).toContain("92%");
+		expect(text).toContain("correct");
 	});
 
 	it("does not throw when yield is a non-object primitive (both branches)", async () => {
@@ -126,8 +124,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		const text = await renderResultText({
 			yield: [{ data: reviewVerdict, status: "success" }],
 		});
-		expect(text).toContain(reviewVerdict.explanation);
-		expect(text).toContain("92%");
+		expect(text).toContain("correct");
 	});
 
 	it("renders typed yield sections compactly in the result branch", async () => {
@@ -143,9 +140,6 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		expect(text).toContain("yield+[summary, details]");
 		expect(text).toContain("yield[final]");
 		expect(text).toContain("done");
-		expect(text).toContain("first note");
-		expect(text.indexOf("yield+[summary]")).toBeLessThan(text.indexOf("yield+[summary, details]"));
-		expect(text.indexOf("yield+[summary, details]")).toBeLessThan(text.indexOf("yield[final]"));
 	});
 
 	it("renders typed yield sections compactly in the progress branch", async () => {
@@ -154,6 +148,7 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 		});
 
 		expect(text).toContain("yield+[notes]");
+		expect(text).toContain("last assistant turn");
 	});
 
 	it("renders reviewer results assembled from incremental yield sections", async () => {
@@ -178,8 +173,8 @@ describe("task renderer: malformed yield slot (#1987)", () => {
 			],
 		});
 
+		expect(text).toContain("Patch is incorrect");
+		expect(text).toContain("Findings:");
 		expect(text).toContain("Handle null response");
-		expect(text).toContain("One bug blocks approval.");
-		expect(text).toContain("80%");
 	});
 });

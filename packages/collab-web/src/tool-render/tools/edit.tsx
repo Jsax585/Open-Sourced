@@ -1,5 +1,4 @@
 /** `edit` / `apply_patch` — hashline patch application rendered as colored diffs. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, DiffBlock, InvalidArg, Kv, KvGrid, Note, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -114,13 +113,15 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 			{paths.length > 1 && (
 				<>
 					{" "}
-					<Badge>{t("+{0} more", `${paths.length - 1}`)}</Badge>
+					<Badge>+{paths.length - 1} more</Badge>
 				</>
 			)}
 			{opCount > 0 && (
 				<>
 					{" "}
-					<Badge>{t("{0} op{1}", `${opCount}`, `${opCount === 1 ? "" : "s"}`)}</Badge>
+					<Badge>
+						{opCount} op{opCount === 1 ? "" : "s"}
+					</Badge>
 				</>
 			)}
 			{stats !== null && stats.added > 0 && (
@@ -138,7 +139,7 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 			{result?.isError === true && (
 				<>
 					{" "}
-					<Badge tone="err">{t("failed")}</Badge>
+					<Badge tone="err">failed</Badge>
 				</>
 			)}
 		</>
@@ -170,7 +171,7 @@ function FileSection({ entry, fallbackPath }: { entry: FileEntry; fallbackPath?:
 						{entry.isError && (
 							<>
 								{" "}
-								<Badge tone="err">{t("failed")}</Badge>
+								<Badge tone="err">failed</Badge>
 							</>
 						)}
 					</span>
@@ -230,7 +231,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					)}
 				</KvGrid>
 			)}
-			{input !== null && input.length > 0 && <Output text={input} variant="code" maxLines={10} title={t("input")} />}
+			{input !== null && input.length > 0 && <Output text={input} variant="code" maxLines={10} title="input" />}
 			{input === null && (args.input !== undefined || args._input !== undefined) && <InvalidArg what="input" />}
 		</>
 	);

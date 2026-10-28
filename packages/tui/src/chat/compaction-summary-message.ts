@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { Box } from "../components/box";
 import { Disclosure } from "../components/disclosure";
 import { type Component } from "../tui";
@@ -11,15 +10,14 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { md, node, span, text } from "../native/describe";
 import { type NativeChild, type NativeNode, type NativeUiEvent, rootToggleExpanded } from "../native/node";
 import { Memo } from "../native/memo";
-import { truncateToWidth } from "../utils";
 
 /** Divider labels per compaction method; unknown/legacy methods fall back to "compacted". */
 const COMPACTION_METHOD_LABELS: Record<string, string> = {
-	remote: localize("remote-compacted"),
-	soft: localize("soft-compacted"),
-	handoff: localize("handed-off"),
-	snapcompact: localize("snap-compacted"),
-	shake: localize("shaken"),
+	remote: "remote-compacted",
+	soft: "soft-compacted",
+	handoff: "handed-off",
+	snapcompact: "snap-compacted",
+	shake: "shaken",
 };
 
 /** `256K→20K` amount badge, or undefined when the entry predates `tokensAfter`. */
@@ -76,8 +74,8 @@ class DividerSummary implements Component {
 		// ` label hint ` framed by rules on both sides.
 		const remaining = width - plainWidth - 2;
 		if (remaining < 4) {
-			// Keep the bare label within the viewport even with wide glyphs.
-			return theme.fg("muted", truncateToWidth(label, width));
+			// Too narrow for a framed rule — emit the bare label.
+			return theme.fg("muted", label);
 		}
 		const left = Math.floor(remaining / 2);
 		const right = remaining - left;
@@ -218,13 +216,13 @@ export class CompactionSummaryMessageComponent extends SummaryMessageComponent {
 
 /** The divider chip: `Soft-compacted · 19K → 6.9K tokens`, the arrow dimmed. */
 function compactionNativeLabel(message: CompactionSummaryMessage): TspSpan[] {
-	const name = (message.method && COMPACTION_METHOD_LABELS[message.method]) || localize("compacted");
+	const name = (message.method && COMPACTION_METHOD_LABELS[message.method]) || "compacted";
 	const spans = [span(`${name[0]!.toUpperCase()}${name.slice(1)}`, "muted")];
 	if (message.tokensAfter !== undefined && message.tokensBefore > 0) {
 		spans.push(
 			span(` · ${formatNumber(message.tokensBefore)}`, "muted mono"),
 			span(" → ", "dim"),
-			span(localize("{0} tokens\u0004packages/tui/src/chat/compaction-summary-message.ts:compactionNativeLabel", `${formatNumber(message.tokensAfter)}`), "muted mono"),
+			span(`${formatNumber(message.tokensAfter)} tokens`, "muted mono"),
 		);
 	}
 	if (message.warning) spans.push(span(` ${theme.icon.warning}`, "warning"));
@@ -236,8 +234,8 @@ function compactionNativeDetail(message: CompactionSummaryMessage): NativeChild[
 	const frames = message.images?.length ?? 0;
 	const caption =
 		frames > 0
-			? localize("Summary · {0} snapcompact frame{1} attached", `${frames}`, `${frames === 1 ? "" : "s"}`)
-			: localize("Summary of the earlier conversation");
+			? `Summary · ${frames} snapcompact frame${frames === 1 ? "" : "s"} attached`
+			: "Summary of the earlier conversation";
 	const detail: NativeChild[] = [text([span(caption, "dim")], { role: "omp.compaction.caption", key: "caption" })];
 	if (message.warning) detail.push(text([span(message.warning, "warning")], { wrap: "word", key: "warning" }));
 	detail.push(md(message.summary, { key: "summary" }));
@@ -245,7 +243,7 @@ function compactionNativeDetail(message: CompactionSummaryMessage): NativeChild[
 }
 
 function compactionLabel(message: CompactionSummaryMessage): string {
-	const name = (message.method && COMPACTION_METHOD_LABELS[message.method]) || localize("compacted");
+	const name = (message.method && COMPACTION_METHOD_LABELS[message.method]) || "compacted";
 	let label = `${theme.icon.camera} ${name}`;
 	const amount = compactionAmount(message);
 	if (amount) label += `${theme.sep.dot}${amount}`;
@@ -257,15 +255,15 @@ function compactionDetailMarkdown(message: CompactionSummaryMessage): string {
 	const tokenLine =
 		message.tokensBefore > 0
 			? message.tokensAfter !== undefined
-				? localize("Compacted from {0} to {1} tokens", `${message.tokensBefore.toLocaleString()}`, `${message.tokensAfter.toLocaleString()}`)
-				: localize("Compacted from {0} tokens", `${message.tokensBefore.toLocaleString()}`)
+				? `Compacted from ${message.tokensBefore.toLocaleString()} to ${message.tokensAfter.toLocaleString()} tokens`
+				: `Compacted from ${message.tokensBefore.toLocaleString()} tokens`
 			: message.tokensAfter !== undefined
-				? localize("Compacted to {0} tokens", `${message.tokensAfter.toLocaleString()}`)
-				: localize("Compacted context");
+				? `Compacted to ${message.tokensAfter.toLocaleString()} tokens`
+				: "Compacted context";
 	const frameCount = message.images?.length ?? 0;
 	const frameNote =
-		frameCount > 0 ? localize("\n\n_{0} snapcompact frame{1} attached_", `${frameCount}`, `${frameCount === 1 ? "" : "s"}`) : "";
-	const warningNote = message.warning ? localize("\n\n{0} **Warning:** {1}", `${theme.icon.warning}`, `${message.warning}`) : "";
+		frameCount > 0 ? `\n\n_${frameCount} snapcompact frame${frameCount === 1 ? "" : "s"} attached_` : "";
+	const warningNote = message.warning ? `\n\n${theme.icon.warning} **Warning:** ${message.warning}` : "";
 	return `**${tokenLine}**${warningNote}\n\n${message.summary}${frameNote}`;
 }
 
@@ -277,12 +275,12 @@ function compactionDetailMarkdown(message: CompactionSummaryMessage): string {
 export class HandoffSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: CustomMessage<unknown>) {
 		super({
-			label: () => localize("{0} handed-off", `${theme.icon.context}`),
-			nativeLabel: () => [span(localize("Handed off"), "muted")],
+			label: () => `${theme.icon.context} handed-off`,
+			nativeLabel: () => [span("Handed off", "muted")],
 			role: "omp.handoff",
 			detailMarkdown: () => {
 				const document = extractHandoffDocument(getCustomMessageText(message));
-				return localize("**Handoff context**\n\n{0}", `${document || localize("_No handoff content._")}`);
+				return `**Handoff context**\n\n${document || "_No handoff content._"}`;
 			},
 		});
 	}
@@ -306,10 +304,10 @@ export function createHandoffSummaryMessageComponent(
 export class BranchSummaryMessageComponent extends SummaryMessageComponent {
 	constructor(message: BranchSummaryMessage) {
 		super({
-			label: () => localize("{0} branch", `${theme.icon.branch}`),
-			nativeLabel: () => [span(localize("Branch summarized"), "muted")],
+			label: () => `${theme.icon.branch} branch`,
+			nativeLabel: () => [span("Branch summarized", "muted")],
 			role: "omp.branch",
-			detailMarkdown: () => localize("**Branch summary**\n\n{0}", `${message.summary}`),
+			detailMarkdown: () => `**Branch summary**\n\n${message.summary}`,
 		});
 	}
 }

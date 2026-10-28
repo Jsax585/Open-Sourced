@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { AgentTool, AgentToolResult } from "@oh-my-pi/pi-agent-core";
@@ -21,7 +20,7 @@ export type MemoryEditParams = typeof memoryEditSchema.infer;
 export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 	readonly name = "memory_edit";
 	readonly approval = "read" as const;
-	readonly label = t("Memory Edit");
+	readonly label = "Memory Edit";
 	get description(): string {
 		return prompt.render(memoryEditDescription, {
 			toolRefs: sessionMemoryToolRefs(this.session),
@@ -43,10 +42,10 @@ export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 	async execute(_id: string, params: MemoryEditParams): Promise<AgentToolResult> {
 		const state = this.session.getMnemopiSessionState?.();
 		if (!state) {
-			throw new Error(t("Mnemopi backend is not initialised for this session."));
+			throw new Error("Mnemopi backend is not initialised for this session.");
 		}
 		if (params.op === "update" && params.content === undefined && params.importance === undefined) {
-			throw new Error(t("memory_edit update requires content or importance."));
+			throw new Error("memory_edit update requires content or importance.");
 		}
 
 		const importance = params.importance === undefined ? undefined : Math.max(0, Math.min(1, params.importance));
@@ -58,10 +57,10 @@ export class MemoryEditTool implements AgentTool<typeof memoryEditSchema> {
 		const location = result.bank ? ` in bank ${result.bank}${result.store ? ` (${result.store})` : ""}` : "";
 		const text =
 			result.status === "not_found"
-				? t("Memory {0} was not found{1}.", `${params.id}`, `${location}`)
+				? `Memory ${params.id} was not found${location}.`
 				: result.status === "not_editable"
-					? t("Memory {0} is a read-only fact{1}; it cannot be edited. Read it with memory://{2}.", `${params.id}`, `${location}`, `${params.id}`)
-					: t("Memory {0} {1}{2}.", `${params.id}`, `${result.status}`, `${location}`);
+					? `Memory ${params.id} is a read-only fact${location}; it cannot be edited. Read it with memory://${params.id}.`
+					: `Memory ${params.id} ${result.status}${location}.`;
 		return {
 			content: [{ type: "text", text }],
 			details: result,

@@ -16,7 +16,6 @@
  * using the judge the omp host registered through `startServer`. Standalone
  * `omp-stats` has none and only shows the regex fallback.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Judge, judgeQuestions, type Model } from "@oh-my-pi/pi-ai";
 import { compareRevision, parseRevision } from "@oh-my-pi/pi-catalog/compat/revision";
 import { classifyModel } from "@oh-my-pi/pi-catalog/compat/taxonomy";
@@ -80,8 +79,8 @@ const ATTEMPTS_PER_TEXT = 3;
 const CIRCUIT_BREAKER_FAILURES = 25;
 
 const NO_PROVIDER_REASON =
-	t("This dashboard was started without a judge (standalone omp-stats). Run `omp stats` to classify.");
-const NO_MODEL_REASON = t("No judge model is available. Configure the `judge` model role.");
+	"This dashboard was started without a judge (standalone omp-stats). Run `omp stats` to classify.";
+const NO_MODEL_REASON = "No judge model is available. Configure the `judge` model role.";
 
 let judgeProvider: StatsJudgeProvider | undefined;
 let judgePromise: Promise<StatsJudge> | undefined;
@@ -208,7 +207,7 @@ export async function estimateFrustrationRun(range?: string | null): Promise<Fru
 	try {
 		judge = await loadJudge(judgeProvider);
 	} catch (error) {
-		return { available: false, reason: t("The judge could not be loaded: {0}", `${errorMessage(error)}`) };
+		return { available: false, reason: `The judge could not be loaded: ${errorMessage(error)}` };
 	}
 	const model = judge.primaryModel();
 	if (!model) return { available: false, reason: NO_MODEL_REASON };
@@ -237,7 +236,7 @@ export type StartFrustrationRunResult =
  */
 export async function startFrustrationRun(range?: string | null): Promise<StartFrustrationRunResult> {
 	if (starting || currentJob.state === "running") {
-		return { started: false, status: 409, error: t("A frustration judge run is already in progress.") };
+		return { started: false, status: 409, error: "A frustration judge run is already in progress." };
 	}
 	const provider = judgeProvider;
 	if (!provider) return { started: false, status: 503, error: NO_PROVIDER_REASON };
@@ -247,7 +246,7 @@ export async function startFrustrationRun(range?: string | null): Promise<StartF
 		try {
 			judge = await loadJudge(provider);
 		} catch (error) {
-			return { started: false, status: 503, error: t("The judge could not be loaded: {0}", `${errorMessage(error)}`) };
+			return { started: false, status: 503, error: `The judge could not be loaded: ${errorMessage(error)}` };
 		}
 		const model = judge.primaryModel();
 		if (!model) return { started: false, status: 503, error: NO_MODEL_REASON };

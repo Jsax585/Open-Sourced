@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
@@ -47,8 +46,8 @@ const CONDITIONS: Record<string, () => boolean> = {
 function envNote(setting: AnySetting): string {
 	if (!setting.envName || setting.envValue() === undefined) return "";
 	return setting.envFallback
-		? t(" Unset, it falls back to ${0}.", `${setting.envName}`)
-		: t(" ${0} overrides this setting while it is set.", `${setting.envName}`);
+		? ` Unset, it falls back to $${setting.envName}.`
+		: ` $${setting.envName} overrides this setting while it is set.`;
 }
 
 /**
@@ -76,7 +75,7 @@ export function createSettingsHost(): SettingsHost {
 	}
 	const resolve = (path: string): AnySetting => {
 		const setting = lookup(path);
-		if (!setting) throw new Error(t("Unknown setting: {0}", `${path}`));
+		if (!setting) throw new Error(`Unknown setting: ${path}`);
 		return setting;
 	};
 	return {

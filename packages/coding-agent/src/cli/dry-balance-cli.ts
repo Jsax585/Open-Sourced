@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type {
 	Api,
 	ApiKeyResolver,
@@ -207,7 +206,7 @@ function normalizePositiveInteger(name: string, value: number | undefined, fallb
 function getErrorMessage(error: unknown): string {
 	if (error instanceof Error && error.message) return error.message;
 	const message = String(error);
-	return message ? message : t("Unknown error");
+	return message ? message : "Unknown error";
 }
 
 function extractAccount(access: {
@@ -568,7 +567,7 @@ async function resolveDryBalanceModel(
 	const allowedModels = await resolveAllowedModels(modelRegistry, settings, preferences);
 	if (allowedModels.length === 0) {
 		throw new Error(
-			t("No models available. Use --model to select a model or configure enabledModels/default model settings."),
+			"No models available. Use --model to select a model or configure enabledModels/default model settings.",
 		);
 	}
 
@@ -588,7 +587,7 @@ async function resolveDryBalanceModel(
 	return {
 		model: allowedModels[0],
 		warning:
-			t("No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model."),
+			"No allowed model had usable credentials during default resolution; dry-balance will report OAuth failures for the first allowed model.",
 	};
 }
 
@@ -815,7 +814,7 @@ export async function runDryBalanceCommand(
 		let summaryConcurrency = concurrency;
 		if (isBench) {
 			const targets = await resolveBenchTargets(model, runtime.modelRegistry.authStorage);
-			if (targets.length === 0) throw new Error(t("No OAuth accounts resolved for provider {0}", `${model.provider}`));
+			if (targets.length === 0) throw new Error(`No OAuth accounts resolved for provider ${model.provider}`);
 			summarySamples = targets.length;
 			summaryConcurrency = targets.length;
 			const progressWrite = command.flags.json ? writeStderr : writeStdout;

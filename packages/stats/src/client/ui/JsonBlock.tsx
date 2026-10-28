@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Check, ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -45,7 +44,7 @@ export function JsonBlock({ data, title = "JSON", initialCollapsed = false }: Js
 				</button>
 				<button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={copy}>
 					{copied ? <Check size={13} /> : <Copy size={13} />}
-					{copied ? t("Copied") : t("Copy")}
+					{copied ? "Copied" : "Copy"}
 				</button>
 			</div>
 			{!collapsed && (

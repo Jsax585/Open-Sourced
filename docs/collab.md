@@ -1,203 +1,205 @@
-# Collab: 실시간 세션 공유
+# Collab: Live Session Sharing
 
-`/collab`은 실행 중인 세션을 다른 omp 인스턴스와 실시간으로 공유합니다. 게스트는 터미널 화면을 미러링하는 대신 **자신의 TUI에서 동일한 세션을 기본 기능으로 렌더링**합니다. 어시스턴트 텍스트 스트리밍, 도구 호출 카드, 하단 상태(작업 디렉터리, 모델, 컨텍스트 %, 비용), ctrl+o 확장, `/dump`를 사용할 수 있습니다. 게스트는 에이전트에 프롬프트를 보내거나 실행을 중단할 수 있으며, 에이전트와 모든 도구는 호스트 컴퓨터에서 실행됩니다.
+`/collab` shares your running session with other omp instances in real time. Guests render the **same session natively in their own TUI** — streaming assistant text, tool-call cards, footer state (cwd, model, context %, cost), ctrl+o expansion, `/dump` — no terminal mirroring. Guests can prompt and interrupt the agent; the host machine runs the agent and all tools.
 
-## 빠른 시작
+## Quick start
 
-호스트에서 실행합니다.
+Host:
 
 ```
 /collab
 ```
 
-다음과 같은 안내가 출력됩니다.
+prints
 
 ```
-Collab 세션을 시작했습니다!
- • 다른 터미널에서 참여: omp join "mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
- • 웹 브라우저에서 참여: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
+Collab session started!
+ • Join from another terminal: omp join "mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30"
+ • or any web browser: my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJUbTovD94ofDaa8YvhY0-ty16w4fn8PgB6PLnoA30
 ```
 
-브라우저 안내는 클릭하여 참여할 수 있는 링크입니다(전체 `https://` 딥 링크를 가리키는 OSC 8 하이퍼링크). 릴레이는 `/`에서 웹 게스트 클라이언트를 제공하고, 방 ID와 키는 URL 프래그먼트에 담깁니다. 다른 omp에서는 디렉터리나 컴퓨터에 관계없이 두 형식 모두 사용할 수 있습니다.
+The browser line is click-to-join (an OSC 8 hyperlink to the full `https://` deep link): the relay serves the web guest client at `/`, and the room id + key ride in the URL fragment. From another omp (any directory, any machine), either form works:
 
-`/collab` 또는 `/collab view`는 호스팅 세션을 시작하거나 현재 세션을 표시하며, 터미널/브라우저 참여 링크와 브라우저 URL의 QR 코드를 출력합니다. `/collab`은 제어 권한을 요청하므로 현재 방이 읽기 전용이면 새 방으로 교체합니다. `/collab view`는 어느 권한 수준의 방이든 재사용하고 읽기 전용 링크만 출력합니다.
+Running `/collab` or `/collab view` starts or displays the active hosting session, rendering terminal/browser join links and a QR code for the browser URL. `/collab` requests control access: if the active room was started view-only, it replaces that room. `/collab view` reuses either access level and prints only the read-only link.
 
 ```
 /join my.omp.sh/#mgAYTZwEnpRQtca0CTgn-Q.gdJU…
 ```
 
-`/leave`를 실행하거나 호스트가 공유를 중지하면 게스트의 이전 세션이 복원됩니다.
+The guest's previous session is restored on `/leave` (or when the host stops).
 
-### 명령어
+### Commands
 
-| 명령어 | 동작 |
-| --- | --- |
-| `/collab` | 모든 제어 권한으로 공유 시작. 제어 가능한 방은 재사용하고 읽기 전용 방은 교체 |
-| `/collab <relay>` | 지정한 릴레이로 공유 시작 (`relay.example.com`, `ws://localhost:7475`) |
-| `/collab view [relay]` | 읽기 전용 공유 시작 또는 기존 방의 읽기 전용 링크/QR 출력 |
-| `/collab status` | 링크와 참여자 표시 |
-| `/collab stop` | 공유 중지 |
-| `/collab list` | 활성 로컬 Collab 호스트 전체 나열(링크 제외) |
-| `/join <link>` | 게스트로 공유 세션 참여 |
-| `/leave` | 게스트는 나가기, 호스트는 공유 중지 |
+| Command           | Effect                                                                              |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `/collab`         | Start full-control sharing; reuse a control room or replace a view-only room        |
+| `/collab <relay>` | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
+| `/collab view [relay]` | Start read-only sharing, or print the existing room's read-only link/QR        |
+| `/collab status`  | Show link + participants                                                            |
+| `/collab stop`    | Stop sharing                                                                        |
+| `/collab list`    | List every active local Collab host (no links)                                      |
+| `/join <link>`    | Join a shared session as a guest                                                    |
+| `/leave`          | Leave (guest) or stop sharing (host)                                                |
 
-`/collab start [relay]`도 사용할 수 있습니다. 재사용 가능한 방이 활성화된 상태에서 릴레이를 지정해도 해당 방이 다른 릴레이로 옮겨지지 않습니다. 릴레이를 변경하려면 먼저 공유를 중지하세요.
+`/collab start [relay]` is also accepted. Passing a relay while a reusable room is active does not move that room to another relay; stop it first to change the relay.
 
-### 모든 세션 자동 공유
 
-명시적인 `/collab stop`과 `/leave`는 세션 전환으로 이미 대기 중인 방 교체도 취소합니다. 이후 별도의 세션 변경에는 저장된 자동 시작 정책이 다시 적용됩니다. 게스트는 시작 대화상자에 응답할 수 있지만, 설정 UI와 대화 기록 재생을 포함한 전체 시작 절차가 성공적으로 끝나기 전에는 프롬프트 전송, 실행 중단, 에이전트 제어를 할 수 없습니다.
+### Sharing every session automatically
 
-전용 참여 모드에서도 세션 변경 감시는 유지됩니다. 참여에 실패하면 저장된 자동 시작 정책으로 즉시 돌아가며, `/leave` 또는 호스트 연결 종료 시 로컬 세션과 이후 교체 세션의 자동 호스팅이 복원됩니다. 원격 복제본 재동기화는 로컬 호스트를 시작하지 않습니다.
+Explicit `/collab stop` and `/leave` also cancel any replacement already queued by a session transition. A later, distinct session change still follows the saved auto-start policy. Guests can answer startup dialogs, but cannot prompt, interrupt, or control agents until the outer startup—including setup UI and transcript replay—has completed successfully.
 
-명시적인 `omp join <link>` 실행은 자동 시작보다 우선합니다. 임시 로컬 호스트를 게시하지 않고 게스트로 초기화하며, 저장된 자동 시작 설정은 변경하지 않습니다. 호스트 설치 후 대화형 시작이 실패하면 터미널 정리 전에 해당 방을 종료하고 등록을 해제한 뒤 시작 오류를 다시 던집니다.
+Dedicated joins retain session-change observation: a failed join returns to the saved auto-start policy immediately, and `/leave` or host disconnection restores automatic hosting for the local session and its later replacements. Remote replica resynchronization never starts a local host.
 
-`collab.autoStart`를 `view` 또는 `control`로 설정하면 `/collab`을 실행하지 않아도 모든 대화형 세션이 시작할 때 `collab.relayUrl`을 통해 자신을 호스팅합니다. 방은 확장 기능의 `session_start` 훅보다 먼저 생성됩니다. 따라서 시작 시 확장 기능이 묻는 질문은 보관되었다가 처음 참여하는 쓰기 권한 게스트에게 전달됩니다. 릴레이 연결은 백그라운드에서 진행되므로 느리거나 연결할 수 없는 릴레이가 프롬프트를 지연시키지 않습니다(실패는 흐린 상태 줄로 표시). 게스트는 자동 시작된 방에 참여하여 시작 질문에 바로 응답할 수 있지만, 같은 이유로 Enter가 제한되는 로컬 입력창과 마찬가지로 시작이 끝날 때까지 프롬프트 전송, 중단, 하위 에이전트 제어를 할 수 없습니다. 이런 프레임은 호스트 시작이 완료될 때까지 사용할 수 없다는 오류로 거부됩니다. 자동 시작된 각 세션은 아래의 로컬 호스트 레지스트리에 등록됩니다. 설정값은 레지스트리가 제공할 수 있는 최대 권한입니다(`view`: 읽기 전용 링크만, `control`: 프롬프트 전송과 중단이 가능한 링크). `/collab`은 기존처럼 현재 방을 다시 출력하거나, 제어 권한을 요청하면 읽기 전용 방을 모든 제어 권한이 있는 방으로 교체합니다.
+An explicit `omp join <link>` launch takes precedence over auto-start: it initializes as a guest without publishing a temporary local host, and leaves the saved auto-start setting unchanged. If interactive startup fails after a host has been installed, that room is shut down and withdrawn before terminal teardown and the startup error is rethrown.
 
-방은 프로세스가 아니라 세션을 따릅니다. `/new`, `/resume`, `/fork`, 분기는 현재 방을 중지하고 게스트에게 종료를 알리며 레지스트리 항목을 제거한 뒤, 현재 자동 시작 정책에 따라 교체 방을 시작합니다. 이전 링크를 가진 게스트에게 다른 세션이 노출되지는 않습니다. 아직 확정되지 않은 `/resume`에서는 대상 세션이 임시로 활성화된 동안 기존 방을 일시 중단합니다. 롤백하면 별도 콜백 없이 원래 방에 대한 접근이 복원됩니다. 종료 시 방은 즉시 사용 불가능해지고 세션을 폐기하기 전에 정리가 끝납니다. 세션 변경 실패 후 `/collab`과 `/join`은 현재 세션의 호스팅 상태를 사용하고 오래된 소유 방을 정리한 뒤 진행합니다. 참여 작업이 활성 호스트를 교체하는 것은 여전히 거부됩니다.
+Set `collab.autoStart` to `view` or `control` and every interactive session hosts itself as it starts, through `collab.relayUrl`, without running `/collab`. The room is created before extension `session_start` hooks run — a question an extension asks at startup is retained and delivered to the first writer that joins — and the relay connection proceeds in the background, so a slow or unreachable relay never delays the prompt (a failure is shown as a dim status line). Guests can join an auto-started room and answer a startup question straight away, but — like the local composer, whose Enter is gated for the same reason — they cannot prompt, interrupt, or drive subagents until startup has finished; such a frame is refused with `… is unavailable until the host finishes starting up`. Each auto-started session publishes itself to the local host registry below; the setting's value is the highest access the registry will hand out for it (`view`: read-only links only; `control`: links that can prompt and interrupt). `/collab` still works as before: it re-prints the current room, or replaces a view-only room with a full-control one when you ask for control.
 
-명시적 중지는 저장된 정책을 바꾸지 않으면서 대기 중인 자동 시작도 취소합니다. 대기열에 있거나 암호화 중인 애플리케이션 프레임은 버리고 마지막 종료 인사만 전송을 마칩니다. 이미 전송 계층에 넘긴 바이트는 회수할 수 없습니다. 이후 별도의 세션 변경이나 수동 시작으로 다시 호스팅할 수 있습니다.
+Rooms follow the session, not the process. `/new`, `/resume`, `/fork`, and branching stop the current room — guests are told goodbye and its registry entry is withdrawn — before starting a replacement under the live auto-start policy. A guest holding the old link never sees a different session. During an uncommitted `/resume`, the old room instead suspends while the target session is provisionally active; rollback restores access to the original room without needing a callback. Shutdown makes the room unavailable immediately and finishes its cleanup before disposing the session. After a failed session change, `/collab` and `/join` use current-session hosting state and retire any stale owned room before proceeding; joining still refuses to replace a live host.
 
-방이 스스로 종료될 수도 있습니다. 릴레이가 방을 영구 종료하거나 호스트의 전송 대기량이 한도를 넘는 경우입니다(Collab 종료 안내가 표시됨). 게스트는 재동기화를 위해 다시 참여해야 하지만 세션은 현재 자동 시작 정책을 계속 따릅니다. 종료된 방의 등록이 해제되면 같은 세션의 다음 세대 방을 호스팅합니다. 릴레이에 연결할 수 없거나 연결 시간이 초과되어 한 번도 열리지 않은 자동 시작 방도 같은 방식으로 재시도합니다. 게스트나 레지스트리 조회자가 본 적이 없으므로 이 재시도에서는 세대를 재사용하고, 복구된 세션은 여전히 1세대부터 게시합니다. 첫 교체는 즉시 진행됩니다. 방 종료나 릴레이 연결 실패가 5분 이내 간격으로 반복되면 이후 교체의 대기 시간이 두 배씩 늘어납니다(1초, 2초, 4초, … 최대 60초). `/collab`, 세션 전환, `/collab stop`, 종료는 이 대기에 막히지 않습니다. 자동 시작이 `off`이면 이렇게 종료된 수동 방은 `/collab`을 다시 실행할 때까지 중지 상태로 남습니다.
+Explicit stop also cancels pending automatic launches without changing the saved policy. Application frames still queued or being encrypted are discarded; only the final goodbye drains. Bytes already handed to the transport cannot be recalled. A later distinct session change or manual start can host again.
 
-게스트 소유권은 복제본 활성화 전부터 시작하여 이전 로컬 세션 복원까지 유지됩니다. 참여, 재동기화, 참여 실패 중 어느 경우에도 복제본을 로컬 호스트로 게시해서는 안 됩니다. 나가기는 복원을 기다립니다. 복원에 실패하면 오류를 알리고 호스팅을 계속 차단합니다. 복원 중 명시적으로 중지하면 복원 자체는 취소하지 않고 대기 중인 자동 재시작만 억제합니다.
+A room can also end on its own: the relay closes it for good, or the host's send backlog exceeds its limit (`Collab ended: …`). Its guests must rejoin to resync, but the session keeps following the live auto-start policy: once the ended room has withdrawn, a replacement room (next generation) is hosted for the same session. An auto-started room the relay never opens — the relay is unreachable, or the connection times out — is retried the same way; no guest or registry reader ever saw it, so the retry reuses its generation and a session that recovers still publishes generation 1 first. The first replacement is immediate; if rooms keep ending, or the relay stays unavailable, within five minutes of each other, each further replacement waits twice as long (1 s, 2 s, 4 s, … up to 60 s). `/collab`, a session switch, `/collab stop`, and shutdown are not held behind that wait. With auto-start `off`, a manually started room that ends this way stays down until `/collab` is run again.
 
-### 활성 로컬 호스트 나열
+Guest ownership begins before replica activation and lasts through restoration of the previous local session. Neither joining, resynchronizing, nor a failed join may publish the replica as a local host. Leaving waits for restoration; a restoration failure is reported and keeps hosting blocked. An explicit stop during restoration suppresses its pending automatic restart without cancelling the restoration itself.
 
-일시 중단은 세션 데이터, 참여, 게스트 동작을 차단하지만 해당 방의 기존 대화상자 종료까지 막지는 않습니다. 종료된 대화상자는 요청 ID만 전달하므로 나중에 `/resume`이 롤백되더라도 게스트가 닫을 수 있습니다. 대상 세션이 임시 상태인 동안 기존 대화상자에 도착한 첫 인증 응답은 보관되며, 원래 방이 재개되고 응답자의 쓰기 권한이 여전히 유효할 때만 적용됩니다. 확정, 중지, 로컬 취소로 해당 응답이 다른 세션에 적용될 수는 없습니다. 이 임시 구간의 참여 요청은 전환이 끝난 뒤 재시도해야 합니다. `/collab status`는 방의 공개 권한 수준을 출력하므로 읽기 전용 방의 내부 제어 링크가 상태 출력에 노출되지 않습니다.
+### Listing active local hosts
 
-이미 승인된 작업은 방을 닫아도 일반적으로 되돌리지 않습니다. 특히 하위 에이전트 재활성화는 로컬 호출자와 공유되며 원래 에이전트 참조와 대화 기록에 묶여 유지됩니다. 방이 닫힌 후 끝날 수도 있지만 이전 게스트의 후속 프롬프트는 버립니다. 방 종료가 로컬 호출자의 병합된 재활성화를 취소하지는 않습니다.
+Suspension suppresses session data, joins, and guest actions; it does not suppress termination of an existing room-local dialog. An ended dialog carries only its request ID, so guests can dismiss it even if `/resume` later rolls back. The first authenticated answer to an existing dialog is retained while the target session is provisional and applied only if the original room resumes with the writer still authorized. Commit, stop, and local cancellation cannot apply that answer to another session. Joins during that provisional window must be retried once it settles. `/collab status` prints the room's published access level, so a view-only room never exposes its internal control link through status.
 
-교체 방은 세션 작업의 훅, 대화 기록 교체, 롤백이 모두 끝난 뒤 연결합니다. 현재 세션의 대화 기록 초기화나 트리 탐색 중에는 기존 게스트에게 복제 데이터를 계속 보내지만, 작업이 끝날 때까지 프롬프트와 에이전트 제어 명령을 거부합니다. 이 구간에는 새 참여와 레지스트리 검색도 사용할 수 없습니다. 앞서 승인한 프롬프트를 실행 전에 버리면 유지되는 방의 게스트에게 오류를 보냅니다. 종료되는 방에서는 대화에 나타나지 않은 프롬프트를 다시 참여한 뒤 재전송해야 한다는 종료 안내를 보냅니다. 임시 전환이 끝나야 어떤 안내를 보낼지 결정할 수 있습니다.
+Already-admitted work is not generally undone by closing a room. In particular, subagent revival is shared with local callers and remains bound to the original agent reference and transcript; it may finish after closure, but the old guest's follow-up prompt is discarded. Closing a room does not cancel a local caller's coalesced revival.
 
-`omp collab list`(TUI 안에서는 `/collab list`)는 같은 omp 설정 루트를 쓰는 로컬 컴퓨터의 모든 활성 Collab 호스트를 나열합니다. 터미널, 프로젝트, 프로필을 가리지 않습니다. 목록에는 메타데이터만 포함되며 링크를 출력하거나 전송하지 않습니다.
+Replacement rooms wait for the session operation to finish its hooks, transcript replacement, and any rollback before connecting. During an in-place transcript reset or tree navigation, existing guests continue receiving replication, but prompts and agent-control commands are refused until the operation settles; new joins and registry discovery are unavailable during that interval. If a previously admitted prompt is discarded before execution, its guest receives an error in a retained room. A retiring room instead sends a goodbye explaining that prompts absent from the conversation must be resubmitted after rejoining. A provisional switch must settle before deciding which notification applies.
+
+`omp collab list` (and `/collab list` inside a TUI) enumerates every live Collab host on the local machine under the same omp configuration root — across terminals, projects, and profiles. Listing is metadata only; it never prints or transmits a link:
 
 ```
-omp collab list                          # 호스트당 한 행, 링크 제외
+omp collab list                          # one row per host, no links
 omp collab list --json                   # {"version": 1, "hosts": [...]}
-omp collab link <instanceId|pid>         # 해당 호스트의 모든 제어 권한 브라우저 URL 출력
-omp collab link <instanceId|pid> --view  # 읽기 전용 브라우저 URL 출력
+omp collab link <instanceId|pid>         # print that host's full-control browser URL
+omp collab link <instanceId|pid> --view  # print its view-only browser URL
 omp collab link <instanceId> --json      # {"version": 1, "instanceId", "generation", "access", "url"}
 ```
 
-각 호스트 행에는 안정적인 `instanceId`(프로세스마다 무작위로 생성하고 해당 프로세스의 방이 바뀌어도 유지), 방의 `generation`(예: `/resume`으로 프로세스가 새 방을 시작할 때마다 증가), PID, 세션 ID와 이름, 작업 디렉터리, 모델, 시작 시각, 참여자 수, 현재 릴레이 연결 여부, 쓰기 권한 게스트를 기다리는 호스트 질문 여부(`inputRequired`), 세션의 턴 실행 여부(`busy`, 화면에는 `working` 또는 `idle`로 표시), 레지스트리가 제공할 수 있는 최대 `access`(`view` 또는 `control`)가 포함됩니다. 시작 시각, PID, 인스턴스 ID 순으로 정렬합니다. 활성 Collab 호스트가 없다는 빈 결과도 오류가 아니라 성공입니다.
+Each host row carries a stable `instanceId` (random per process, kept across the rooms that process hosts), the room `generation` (increments every time the process starts a new room, e.g. on `/resume`), PID, session ID and name, working directory, model, start time, participant count, whether the relay connection is currently open, whether a host-side question is waiting for a writable guest (`inputRequired`), whether the session is running a turn (`busy`, rendered `working` or `idle`), and the highest `access` the registry will hand out (`view` or `control`). Hosts are sorted by start time, then PID, then instance ID. An empty result ("No active Collab hosts.") is a successful outcome, not an error.
 
-`busy`는 응답 스트리밍과 도구 실행을 포함한 턴 전체 동안 true이며 에이전트가 끝나면 false입니다. 따라서 대시보드는 이를 주기적으로 조회하여 계속 등록된 세션이 실행을 멈췄는지 알 수 있습니다. 목록에서 호스트가 사라지는 것은 종료되었거나 연결 불가능해진 것으로, 이와 다릅니다. 이 필드가 도입되기 전 omp 호스트에서는 `null`이며 알 수 없는 상태를 유휴 상태로 해석해서는 안 됩니다. `busy`는 예정된 작업이 아니라 진행 중인 턴을 나타냅니다. 대기 중인 후속 요청, 비동기 작업 대기, 컨텍스트 압축 같은 스케줄링 일시 정지 중에는 세션이 스스로 재개되더라도 false입니다. 따라서 `true`→`false` 전환은 턴 종료이지 작업 완료를 뜻하지 않습니다.
+`busy` is true for the whole turn — response streaming and tool execution alike — and false once the agent ends, so polling it is how a dashboard notices that a still-published session stopped working; a host that vanishes from the listing has died or become unreachable, which is a different thing. It is `null` from a host running an omp older than the field, and unknown must not be read as idle. `busy` reports a turn in flight, not scheduled work: it reads false during scheduling pauses (queued follow-ups, async-job waits, compaction) even when the session resumes on its own, so a `true`→`false` edge means the turn ended, not that the work finished.
 
-링크 제공은 호스트별로 명시적으로 수행하는 작업입니다. `omp collab link`는 목록 조회 시 관찰한 세대에 묶인 URL 하나를 선택한 호스트에 요청합니다. 그 사이 호스트가 세션 전환으로 새 방을 시작했다면 후속 방 링크를 주는 대신 `stale_generation`으로 실패하므로 목록을 다시 조회해야 합니다. `view` 권한으로 게시된 호스트는 `control`을 거부합니다. PID가 여러 활성 호스트와 일치하거나 아무것과도 일치하지 않으면 후보 인스턴스 ID와 함께 거부되므로 인스턴스 ID를 사용하세요. 출력된 URL은 표시된 권한을 부여합니다. 제어 URL은 `/collab` 링크 자체처럼 취급하세요.
+A link is a deliberate per-host act. `omp collab link` asks the selected host for one URL, bound to the generation observed while listing: if the host has since started a new room (a session switch), the request fails with `stale_generation` instead of handing out the successor room, and you list again. A host published with `view` access refuses `control`. A PID that matches more than one live host (or none) is rejected with the candidate instance IDs; use the instance ID. The printed URL grants whatever its access says — treat a control URL like the `/collab` link itself.
 
-동작 방식: 릴레이 연결이 성공하면 각 방은 비공개 IPC 엔드포인트를 게시합니다(macOS/Linux에서는 Unix 도메인 소켓, Windows에서는 명명된 파이프이며 TCP 포트는 사용하지 않음). 방 교체 시 새 아티팩트 이름으로 게시하므로 이전 방의 등록 해제가 후속 방을 방해할 수 없습니다. 모든 제어 권한/읽기 전용 URL, 방 키, 쓰기 토큰은 호스트 프로세스 메모리에만 남습니다. 디스크의 `~/.omp/run/collab-hosts`에는 검색 메타데이터(프로토콜 버전, 인스턴스 ID, PID, 엔드포인트, 생성 시각, 무작위 bearer 토큰)만 저장합니다. macOS/Linux에서는 게시할 때마다 소유자 전용 권한으로 제한합니다. Windows는 설정 루트의 ACL을 상속하므로 해당 루트를 사용자 전용으로 유지해야 합니다. 엔드포인트에는 인증된 작업 두 가지가 있습니다. `snapshot`은 호스트 상태를 조회하며 특이한 세션 제목 때문에 호스트가 목록에서 누락되지 않도록 자유 형식 문자열 길이를 제한합니다. `link`는 `access`와 `generation`을 받아 URL 하나를 반환합니다. 목록 조회는 짧은 개별 제한 시간으로 모든 활성 호스트를 동시에 조회하고, 응답하지 않거나 버전이 다른 항목은 건너뛰며, 비정상 종료한 호스트의 메타데이터를 정리합니다. 일시적 소켓 오류(`EMFILE`, `EACCES`, …)로 활성 호스트를 정리하지는 않습니다. 중지한 방은 즉시 사라집니다. 레지스트리는 이력을 보관하지 않고 게스트나 원격 호스트를 나열하지 않으며 릴레이 변경도 필요 없습니다. 타사 대시보드와 브리지는 `omp collab list --json`과 `omp collab link`를 기반으로 구축하거나 줄바꿈으로 구분된 JSON 엔드포인트와 직접 통신할 수 있으며, omp 자체 원격 제품이 필요하지 않습니다.
+How it works: each room publishes its own private IPC endpoint (a Unix domain socket on macOS/Linux, a named pipe on Windows — never a TCP port) once its relay connection succeeds; a rotation publishes under fresh artifact names, so withdrawing the old room can never disturb its successor. Full-control and view-only URLs, the room key, and the write token stay in the host process's memory; disk holds only discovery metadata (protocol version, instance ID, PID, endpoint, creation time, and a random bearer token) under `~/.omp/run/collab-hosts`. On macOS/Linux, permissions are tightened to owner-only on every publication. Windows inherits the configuration root's ACL, so that root must remain private to the user. Two authenticated operations exist over the endpoint: `snapshot` (host state, with free-form strings bounded so an unusual session title cannot make a host unlistable) and `link` (`access` + `generation` → one URL). Listing queries every live host concurrently with short independent deadlines, skips unresponsive or foreign-version entries, and prunes metadata left behind by crashed hosts; a transient socket error (`EMFILE`, `EACCES`, …) never prunes a live host. Stopped rooms disappear immediately — the registry keeps no history, lists no guests or remote hosts, and requires no relay change. Third-party dashboards and bridges can build on `omp collab list --json` plus `omp collab link` — or speak the newline-delimited JSON endpoint directly — without omp shipping a remote product of its own.
 
-레지스트리 디렉터리가 없으면 활성 호스트가 없는 것입니다. 읽을 수 없거나 심볼릭 링크인 레지스트리 디렉터리는 빈 성공 결과가 아니라 목록 조회 오류이며, POSIX에서는 다른 사용자 소유 디렉터리도 거부합니다. 연결할 수 없거나 형식이 잘못된 개별 호스트 항목은 각각 생략합니다. 디렉터리 오류 시 CLI는 0이 아닌 코드로 종료합니다. `/collab list`는 정제되고 길이가 제한된 오류를 표시하며 TUI를 계속 사용할 수 있게 합니다.
+A missing registry directory means no active hosts. An unreadable or symlinked registry directory is a listing error, not a successful empty result; POSIX also rejects foreign-owned directories. Individual unreachable or malformed host entries are still omitted independently. The CLI exits nonzero for a directory error; `/collab list` displays a sanitized, bounded error and leaves the TUI usable.
 
-## 링크 형식
+## Link format
 
-`/join <link>`와 `omp join "<link>"`는 다음 형식을 지원합니다.
+Accepted by `/join <link>` and `omp join "<link>"`:
 
 ```
-<roomId>.<key>                                                    → 기본 릴레이 (wss://my.omp.sh)
-<roomId>#<key>                                                    → 이전 기본 형식
-host[:port]/r/<roomId>.<key>                                     → 사용자 지정 릴레이, wss:// 추론
-host[:port]/r/<roomId>#<key>                                     → 이전 직접 릴레이 형식
-https://host[:port]/r/<roomId>.<key>                             → 직접 릴레이 URL, wss://로 정규화
-wss://host[:port]/r/<roomId>.<key>                               → 직접 WebSocket 릴레이 URL
-ws://localhost:7475/r/<roomId>.<key>                             → 암호화하지 않은 직접 ws, localhost만 허용
-https://host[:port]/#<link>                                      → 웹 UI와 릴레이의 호스트가 같은 브라우저 딥 링크
-https://web-host[:port][/<path>]/#<relay-link>                   → 프래그먼트에 릴레이 링크를 담은 브라우저 UI 래퍼
-https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → 웹 UI와 릴레이의 호스트가 서로 다른 경우
+<roomId>.<key>                                                    → default relay (wss://my.omp.sh)
+<roomId>#<key>                                                    → legacy bare form
+host[:port]/r/<roomId>.<key>                                     → custom relay, wss:// inferred
+host[:port]/r/<roomId>#<key>                                     → legacy direct relay form
+https://host[:port]/r/<roomId>.<key>                             → direct relay URL, normalized to wss://
+wss://host[:port]/r/<roomId>.<key>                               → direct websocket relay URL
+ws://localhost:7475/r/<roomId>.<key>                             → direct plain ws, localhost only
+https://host[:port]/#<link>                                      → browser deep link when web UI and relay share a host
+https://web-host[:port][/<path>]/#<relay-link>                   → browser UI wrapper with relay link in the fragment
+https://web.example/collab/#relay.example.com/r/<roomId>.<key>   → web UI and relay on different hosts
 ```
 
-`<link>` / `<relay-link>`는 위에서 지원하는 링크 형식으로 재귀적으로 해석됩니다. 해석 가능한 프래그먼트가 있는 `http(s)` 브라우저 래퍼는 HTTP 호스트/경로를 릴레이로 처리하기 전에 프래그먼트를 우선합니다. 따라서 `https://web.example/collab/#relay.example.com/r/<roomId>.<key>`는 `web.example`에서 웹 UI를 열면서 `wss://relay.example.com/r/<roomId>`에 참여합니다. 프래그먼트가 완전한 collab 링크가 아니면 이전 직접 릴레이 형식으로 해석하므로 `https://relay.example.com/r/<roomId>#<key>`는 여전히 `relay.example.com` 릴레이를 뜻합니다.
+`<link>` / `<relay-link>` are parsed recursively as any accepted link above. For `http(s)` browser wrappers with a parseable fragment, the fragment wins before the HTTP host/path are treated as a relay. This lets `https://web.example/collab/#relay.example.com/r/<roomId>.<key>` open the web UI at `web.example` while joining `wss://relay.example.com/r/<roomId>`. If the fragment is not a complete collab link, parsing falls back to the legacy direct relay form, so `https://relay.example.com/r/<roomId>#<key>` still means relay `relay.example.com`.
 
-끝의 `.<key>` 또는 `#<key>` 부분은 base64url로 인코딩한 방 비밀값이며 두 가지 권한 수준이 있습니다.
+The trailing `.<key>` or `#<key>` part is the room secret, base64url-encoded, in one of two strengths:
 
-- **전체 링크** — 48바이트: 32바이트 AES-256-GCM 방 키 뒤에 16바이트 쓰기 토큰이 붙습니다. 프롬프트 전송, 중단, 하위 에이전트 제어 권한을 부여합니다.
-- **읽기 전용 링크** — 쓰기 토큰 없는 32바이트 키입니다. 실시간 읽기 권한만 부여합니다. 토큰 도입 전 링크는 읽기 전용으로 해석됩니다.
+- **Full link** — 48 bytes: the 32-byte AES-256-GCM room key followed by a 16-byte write token. Grants prompting, interrupting, and subagent control.
+- **View-only link** — the bare 32-byte key, no write token. Grants live read access only. Pre-token links parse as view-only.
 
-RFC 3986은 URL 프래그먼트 안의 원시 `#`를 허용하지 않으므로 새 링크는 방 비밀값을 점으로 연결합니다. 파서는 이전 `#` 형식과 `%23`으로 변형된 이전 딥 링크도 계속 지원합니다.
+The room secret is dot-joined in newly generated links because RFC 3986 forbids a raw `#` inside a URL fragment; parsers still accept legacy `#` forms and `%23`-mangled legacy deep links.
 
-## 종단 간 암호화
+## End-to-end encryption
 
-모든 세션 페이로드(항목, 이벤트, 상태, 프롬프트)는 소켓에 전달되기 전에 AES-256-GCM으로 암호화됩니다. 릴레이에 보이는 것은 다음뿐입니다.
+Every session payload (entries, events, state, prompts) is sealed with AES-256-GCM before it touches the socket. The relay sees only:
 
-- 방 ID와 연결 수
-- 내용이 드러나지 않는 암호문 프레임과 크기
-- 프레임을 받을 게스트를 지정하는 4바이트 라우팅 접두사
+- room ids and connection counts,
+- opaque ciphertext frames and their sizes,
+- a 4-byte routing prefix (which guest a frame targets).
 
-링크 소지가 신뢰 경계입니다. 전체 링크는 세션을 읽고 제어하며, 읽기 전용 링크는 읽기만 합니다. 두 링크 모두 비밀정보처럼 공유하세요.
+Possession of the link is the trust boundary: a full link reads and steers the session, a view-only link reads it. Share both like secrets.
 
-## 게스트 권한 모델
+## Guest permission model
 
-링크 자체가 두 신뢰 수준을 강제합니다. 호스트는 참여 시 16바이트 쓰기 토큰을 검증하고 토큰이 없는 참여자의 쓰기 요청을 거부합니다. 이들은 참여자 목록에 읽기 전용으로 표시되며 참여 알림에도 안내됩니다.
+Two trust levels, enforced by the link itself — the host verifies the 16-byte write token at join and rejects writes from peers without it (they appear as read-only in the participants list, and the join notice says so).
 
-전체 링크가 있는 게스트는 다음을 할 수 있습니다.
+Guests with a full link can:
 
-- 세션 전체 읽기(참여 시 이전 대화 기록 포함)
-- 에이전트에 프롬프트 전송(모든 참여자의 대화 기록에 이름 배지가 표시됨. LLM에는 프롬프트 텍스트가 그대로 전달되며 이름은 표시용일 뿐)
-- 에이전트 중단(Esc)
-- 호스트의 하위 에이전트에 [Agent Hub](./agent-hub.md) 사용: 실시간 표와 진행 상황, 채팅(호스트의 하위 에이전트에 지시), 종료, 재활성화, 대화 기록 보기(필요할 때 호스트에서 가져옴)
-- 호스트의 대화형 `select` 및 `editor` 요청에 응답. 호스트는 대기 중인 요청을 쓰기 권한 게스트에게만 방송하며, 처음 제출되거나 취소된 응답으로 요청을 확정하고 다른 화면의 요청도 닫습니다.
+- read the entire session (including the back-transcript at join time),
+- prompt the agent (rendered with their name badge on every participant's transcript; the LLM sees the prompt text verbatim — names are display-only),
+- interrupt the agent (Esc),
+- use [Agent Hub](./agent-hub.md) against the host's subagents: live table and progress, chat (steers the host's subagent), kill, revive, and transcript viewing (fetched from the host on demand).
+- answer host interactive `select` and `editor` requests. The host broadcasts each pending request only to writable guests; the first submitted or cancelled response settles it and dismisses the other presentations.
 
-읽기 전용 링크가 있는 게스트는 이전 대화 기록, 스트리밍 텍스트, 도구 카드, 하위 에이전트 기록을 모두 실시간으로 읽을 수 있지만, 호스트가 프롬프트 전송, 중단, 에이전트 제어를 거부합니다.
+Guests with a view-only link can read everything live — back-transcript, streaming text, tool cards, subagent transcripts — but the host rejects prompting, interrupting, and agent control from them.
 
-자문 에이전트 기록은 게스트에게 보이는 하위 에이전트가 아닙니다. 명단 스냅샷과 대화 기록 조회에서 제외되며 자문 에이전트의 채팅/종료/재활성화 명령도 거부됩니다.
+Advisor records are not guest-visible subagents: they are excluded from roster snapshots and transcript fetches, and advisor chat/kill/revive commands are rejected.
 
-`/model`, `/compact`, `/resume`, `/branch`, bash(`!`), python(`$`), 스킬 등 다른 세션/컴퓨터 명령은 호스트만 사용할 수 있습니다. 게스트에게는 작은 로컬 허용 목록(`/dump`, `/export`, `/copy`, `/open`, `/help`, `/hotkeys`, `/theme`, `/settings`, `/leave`, `/collab`, `/exit`, `/quit`)만 제공됩니다.
 
-어시스턴트 턴 중 게스트가 참여하면 진행 중인 턴은 그다음 첫 `message_update`에 표시됩니다. 게스트는 델타를 전달하기 전에 업데이트에 누적된 전체 메시지에서 누락된 `message_start`를 합성합니다. 참여 후 해당 턴의 추가 업데이트가 없으면 실시간 구성요소를 합성할 근거가 없습니다. 영구 항목은 복제본의 메시지 상태에 도달하지만 항목 프레임은 의도적으로 렌더링하지 않으므로, 이런 경계 상황에서는 실시간 TUI에 해당 턴이 나타나지 않을 수 있습니다.
+Other session/machine commands remain host-only: `/model`, `/compact`, `/resume`, `/branch`, bash (`!`), python (`$`), skills, etc. Guests keep a small local allowlist (`/dump`, `/export`, `/copy`, `/open`, `/help`, `/hotkeys`, `/theme`, `/settings`, `/leave`, `/collab`, `/exit`, `/quit`).
 
-## 웹 클라이언트
+When a guest joins during an assistant turn, that in-flight turn appears on the first subsequent `message_update`: the guest synthesizes the missing `message_start` from the update's full accumulating message before forwarding the delta. If the host emits no further update for that turn after the guest joins, there is no update from which to synthesize the live component. The durable entry still reaches the replica's message state, but entry frames are intentionally not rendered, so that edge case can remain absent from the live TUI.
 
-`packages/collab-web`은 같은 링크를 사용하는 독립 브라우저 클라이언트로, 게스트 측에 omp를 설치할 필요가 없습니다. 릴레이가 `/`에서 제공하므로 `/collab` 딥 링크를 클릭하면 참여할 수 있습니다. `https://<relay>/#<link>`가 클라이언트를 불러오고 프래그먼트를 이용해 자동 연결합니다. 실시간 대화 기록(스트리밍 텍스트, 추론, 도구 카드), 필요할 때 기록을 불러오는 하위 에이전트 패널, 같은 게스트 권한(프롬프트 전송, 중단, 허브 동작)의 입력창을 렌더링합니다. 패키지에서 `bun run dev`를 실행하면 로컬 인스턴스가 시작되고, `bun run mock-host`는 개발용 오프라인 스크립트 호스트를 실행하며, `bun run build`는 어디에나 배포할 수 있는 정적 `dist/`를 생성합니다(WebCrypto에는 HTTPS 필요). 클라이언트는 릴레이 외의 대상과 통신하지 않으며 키는 URL 프래그먼트에 남습니다.
+## Web client
 
-브라우저 UI를 WebSocket 릴레이와 별도로 호스팅하면 `collab.webUrl`을 설정하세요. 비어 있으면 `/collab`이 `collab.relayUrl`에서 `http(s)://host[:port]`를 유도합니다. 명시적인 웹 UI URL은 localhost/루프백 `http://` 개발 출처를 제외하면 `https://`를 사용해야 하며 쿼리 문자열이나 프래그먼트를 포함할 수 없습니다. 생성되는 브라우저 URL에는 여전히 릴레이별 collab 링크가 프래그먼트에 담깁니다.
+`packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. The relay serves it at `/`, which is what makes the `/collab` deep link click-to-join: `https://<relay>/#<link>` loads the client and auto-connects from the fragment. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
 
-## 설정
+Set `collab.webUrl` when the browser UI is hosted separately from the websocket relay. When empty, `/collab` derives `http(s)://host[:port]` from `collab.relayUrl`; explicit web UI URLs must use `https://` except for localhost/loopback `http://` development origins, and cannot contain a query string or fragment. The generated browser URL still carries the relay-specific collab link in the fragment.
 
-| 설정 | 기본값 | 의미 |
-| --- | --- | --- |
-| `collab.relayUrl` | `wss://my.omp.sh` | 인라인 릴레이를 지정하지 않은 `/collab`이 사용할 릴레이 |
-| `collab.webUrl` | 비어 있음 | `/collab` 링크의 브라우저 UI URL. 비어 있으면 릴레이에서 유도하며 명시적 `http://`는 localhost만 허용 |
-| `collab.displayName` | OS 사용자 이름 | 다른 참여자에게 표시할 이름 |
-| `collab.autoStart` | `off` | `view` / `control`: 모든 대화형 세션을 시작 시 호스팅하고 로컬 레지스트리에 게시 |
-| `share.serverUrl` | `https://my.omp.sh/s` | `/share`의 뷰어/업로드 기준 URL(링크는 `<base>/<id>#<key>`) |
-| `share.store` | `blob` | `/share`는 blob 서버에 업로드. `gist`는 인증된 비공개 gist를 사용하고 실패 시 blob으로 대체 |
-| `share.redactSecrets` | `true` | 업로드 전 `/share` 스냅샷에 비밀정보 난독화 실행 |
+## Settings
 
-## 릴레이 자체 호스팅
+| Setting               | Default               | Meaning                                                                                                        |
+| --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay used by `/collab` when no relay is passed inline                                                         |
+| `collab.webUrl`       | empty                 | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
+| `collab.displayName`  | OS username           | Name shown to other participants                                                                               |
+| `collab.autoStart`    | `off`                 | `view` / `control`: host every interactive session as it starts and publish it to the local registry            |
+| `share.serverUrl`     | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`)                                      |
+| `share.store`         | `blob`                | `/share` uploads to the blob server; `gist` uses an authenticated secret gist with blob fallback             |
+| `share.redactSecrets` | `true`                | Run the secret obfuscator over `/share` snapshots before upload                                                |
 
-프로덕션 릴레이는 현재 자체 호스팅용으로 배포되지 않습니다. Go 소스와 독립 실행 바이너리는 공개되지 않았습니다. 아래 엔드포인트 목록은 설치 가능한 릴리스가 아니라 호스팅 서비스의 네트워크 계약을 설명합니다.
+## Self-hosting the relay
 
-로컬 프로토콜 개발을 위해 저장소에는 소스를 볼 수 있는 WebSocket 전용 대체 구현 [`packages/collab-web/scripts/local-relay.ts`](../packages/collab-web/scripts/local-relay.ts)가 포함되어 있습니다. `packages/collab-web`에서 `bun run relay`를 실행하면 `ws://localhost:7466`에서 수신합니다. `/r/<roomId>`는 구현하지만 브라우저 클라이언트, `/share` blob, `/healthz`는 제공하지 않으므로 프로덕션 서비스의 대체재는 아닙니다.
+The production relay is not currently distributed for self-hosting: its Go source and standalone binaries are not published. The endpoint list below documents the hosted service's network contract, not an installable release.
 
-릴레이는 내용을 볼 수 없는 작은 Go 서비스입니다. 활성 연결 외의 상태는 유지하지 않으며 다음을 제공합니다.
+For local protocol development, this repository includes a source-available, WebSocket-only stand-in at [`packages/collab-web/scripts/local-relay.ts`](../packages/collab-web/scripts/local-relay.ts). Run `bun run relay` from `packages/collab-web` to listen on `ws://localhost:7466`. It implements `/r/<roomId>` but does not serve the browser client, `/share` blobs, or `/healthz`, so it is not a replacement for the production service.
 
-- `GET /` — 정적 collab-web 게스트 클라이언트(`/collab` 딥 링크의 대상)
-- `GET /r/<roomId>?role=host|guest` — WebSocket 업그레이드
-- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob 업로드, 뷰어 페이지, blob 가져오기
-- `GET /healthz` — 생존 상태 확인
+The relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
 
-## 구현 파일
+- `GET /` — the static collab-web guest client (target of the `/collab` deep link),
+- `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
+- `POST /s` / `GET /s/<id>` / `GET /s/<id>/raw` — `/share` blob upload, viewer page, and blob fetch,
+- `GET /healthz` — liveness.
 
-- [`src/slash-commands/builtin-collaboration.ts`](../packages/coding-agent/src/slash-commands/builtin-collaboration.ts) — TUI 명령과 참여 링크 표시
-- [`src/collab/controller.ts`](../packages/coding-agent/src/collab/controller.ts) — 자동 시작과 방 교체
-- [`src/collab/host.ts`](../packages/coding-agent/src/collab/host.ts), [`guest.ts`](../packages/coding-agent/src/collab/guest.ts) — 권위 있는 호스트와 로컬 복제본
-- [`src/collab/protocol.ts`](../packages/coding-agent/src/collab/protocol.ts), [`crypto.ts`](../packages/coding-agent/src/collab/crypto.ts), [`relay-client.ts`](../packages/coding-agent/src/collab/relay-client.ts) — 프레임, 링크, 암호화, 전송
-- [`src/collab/registry.ts`](../packages/coding-agent/src/collab/registry.ts) — 비공개 로컬 호스트 검색
-- [`src/collab/settings.ts`](../packages/coding-agent/src/collab/settings.ts) — `collab.*` 기본값
-- [`packages/collab-web`](../packages/collab-web/) — 브라우저 게스트와 로컬 개발 릴레이
+## Implementation files
 
-## 아키텍처 참고
+- [`src/slash-commands/builtin-collaboration.ts`](../packages/coding-agent/src/slash-commands/builtin-collaboration.ts) — TUI commands and join-link presentation
+- [`src/collab/controller.ts`](../packages/coding-agent/src/collab/controller.ts) — auto-start and room rotation
+- [`src/collab/host.ts`](../packages/coding-agent/src/collab/host.ts), [`guest.ts`](../packages/coding-agent/src/collab/guest.ts) — authoritative host and local replica
+- [`src/collab/protocol.ts`](../packages/coding-agent/src/collab/protocol.ts), [`crypto.ts`](../packages/coding-agent/src/collab/crypto.ts), [`relay-client.ts`](../packages/coding-agent/src/collab/relay-client.ts) — frames, links, encryption, and transport
+- [`src/collab/registry.ts`](../packages/coding-agent/src/collab/registry.ts) — private local host discovery
+- [`src/collab/settings.ts`](../packages/coding-agent/src/collab/settings.ts) — `collab.*` defaults
+- [`packages/collab-web`](../packages/collab-web/) — browser guest and local development relay
 
-허브 토폴로지에서는 호스트가 권위 있는 상태를 유지하며 게스트끼리 직접 연결하지 않습니다.
+## Architecture notes
 
-1. `welcome` + `snapshot-chunk` 프레임 — 초기 상태와 대화 기록. 기록을 바이트 제한 청크로 나누어 각 청크 도착 시 게스트의 진행 제한 시간을 갱신합니다. 너무 큰 복제 항목은 전송 전에 축소합니다.
-2. `entry` 프레임 — 영구 세션 항목. blob 외부화 전에 방송하여 이미지를 인라인으로 유지합니다(게스트는 호스트의 blob 참조를 해석할 수 없음). 게스트는 ID를 보존하여 `~/.omp/collab/<roomId>.jsonl`의 복제 세션 파일과 에이전트의 메시지 배열에 추가합니다. 이 덕분에 `/dump`와 컨텍스트 추정이 작동합니다.
-3. `event` 프레임 — 실시간 에이전트 이벤트. 게스트의 일반 이벤트 컨트롤러에 직접 전달하며 중복 렌더링 방지를 위해 이벤트만 렌더링합니다.
-4. `state` 프레임 — 디바운스된 하단 상태 스냅샷. 스트리밍 플래그, 호스트의 전체 모델 객체와 추론 수준(게스트 복제 에이전트 상태에 적용하여 모델 표시와 컨텍스트 창 계산을 기본 기능으로 처리), 호스트 컨텍스트 수치, 참여자를 포함합니다.
-5. `bus` 프레임 — 미러링된 작업 하위 에이전트 수명 주기/진행 EventBus 트래픽. 게스트의 로컬 버스에 다시 게시하여 하위 에이전트 HUD와 상태 줄 개수가 기본적으로 작동하게 합니다.
-6. `agents` 프레임 — 게스트 로컬 레지스트리에 공급하는 에이전트 레지스트리 스냅샷. Agent Hub 표에 호스트의 하위 에이전트를 표시합니다.
-7. `ui-request` / `ui-request-end` 프레임 — 모든 제어 권한 게스트에게 표시하고 확정 시 모든 화면에서 닫는 호스트 선택/편집 요청. 게스트는 `ui-response`로 응답합니다.
+Hub topology — the host is authoritative, guests never peer:
 
-게스트→호스트: `hello`, `prompt`, `abort`, `agent-cmd`(허브 채팅/종료/재활성화), `fetch-transcript`(대상 지정 `transcript` 프레임으로 응답하는 하위 에이전트 기록 증분 조회), `ui-response`. 복제본은 일반 `/resume` 절차로 불러오므로 테마, ctrl+o, 대화 기록 동작은 구조적으로 기본 기능을 그대로 사용합니다. 게스트 프로세스는 호스트 경로로 작업 디렉터리를 변경하지 않습니다.
+1. `welcome` + `snapshot-chunk` frames — initial state and transcript. The transcript is byte-bounded into chunks so each arrival resets the guest's progress timeout; oversized replicated entries are shrunk before transmission.
+2. `entry` frames — durable session entries, broadcast pre-blob-externalization so images stay inline (guests cannot resolve host blob refs). Guests append them with ids preserved to a replica session file under `~/.omp/collab/<roomId>.jsonl` and into the agent's message array, which is why `/dump` and context estimates work.
+3. `event` frames — live agent events, fed straight into the guest's normal event controller; rendering is events-only to prevent double-render.
+4. `state` frames — debounced footer snapshots: streaming flag, the host's full model object and thinking level (applied to the guest's replica agent state, so model display and context-window math are native), host context numbers, and participants.
+5. `bus` frames — mirrored task-subagent lifecycle/progress EventBus traffic, republished on the guest's local bus so the subagent HUD and status-line count work natively.
+6. `agents` frames — agent-registry snapshots feeding a guest-local registry, so the Agent Hub table renders host subagents.
+7. `ui-request` / `ui-request-end` frames — host select/editor prompts presented to full-control guests and dismissed everywhere once settled. Guests answer with `ui-response`.
 
-대화 기록 조회는 응답당 4 MiB로 제한되며 완전한 JSONL 줄에서 끝납니다. 게스트는 `newSize`부터 이어서 조회합니다. 항목 하나가 한도를 넘으면 끝없는 빈 응답 재시도 대신 최종 대화 기록 오류를 반환합니다.
+Guest→host: `hello`, `prompt`, `abort`, `agent-cmd` (hub chat/kill/revive), `fetch-transcript` (incremental subagent-transcript reads answered by targeted `transcript` frames), and `ui-response`. The replica loads through the regular `/resume` machinery, so theming, ctrl+o, and transcript behavior are native by construction; the guest process never chdirs to host paths.
+
+Transcript fetches are capped at 4 MiB per reply and end on complete JSONL lines. Guests continue from `newSize`; a single entry exceeding the cap produces a terminal transcript error instead of an endless empty-read retry.

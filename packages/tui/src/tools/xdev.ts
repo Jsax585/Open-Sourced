@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { ToolTier } from "@oh-my-pi/pi-agent-core";
 import { parseStreamingJson } from "@oh-my-pi/pi-utils";
 import { type Component, Container, Text } from "../index";
@@ -187,7 +186,7 @@ export function describeXdevCall(
 	const args = decodeInnerArgs(content);
 	if (!options.executionStarted) {
 		return describeDefaultToolExecution({
-			label: t("queued {0}", `${displayDeviceLabel(name, mounted)}`),
+			label: `queued ${displayDeviceLabel(name, mounted)}`,
 			args: displayDeviceArgs(args),
 			options: { ...options, isPartial: true, spinnerFrame: undefined },
 		});

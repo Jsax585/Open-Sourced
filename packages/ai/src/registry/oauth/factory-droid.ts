@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { factoryDroidApiBaseUrl, resolveFactoryDroidInferenceRegion } from "@oh-my-pi/pi-catalog/wire/factory-droid";
 import * as AIError from "../../error";
 import { isRecord } from "../../utils";
@@ -27,7 +26,7 @@ async function lookupWorkOSOrganization(
 		const [orgId] = body.workosOrgIds;
 		return typeof orgId === "string" && orgId ? orgId : undefined;
 	} catch {
-		if (context.signal?.aborted) throw new AIError.LoginCancelledError(t("Login cancelled"));
+		if (context.signal?.aborted) throw new AIError.LoginCancelledError("Login cancelled");
 		return undefined;
 	}
 }
@@ -44,7 +43,7 @@ async function readWhoami(
 ): Promise<{ identity: OAuthCredentials; accepted: boolean; failure?: AIError.OAuthError }> {
 	const unresolved = () =>
 		context.phase === "login" && !identity.orgId
-			? new AIError.OAuthError(t("Factory login did not resolve an organization"), {
+			? new AIError.OAuthError("Factory login did not resolve an organization", {
 					kind: "validation",
 					provider: context.provider,
 				})
@@ -60,7 +59,7 @@ async function readWhoami(
 		});
 		if (!response.ok && context.phase === "login") {
 			const failure = new AIError.OAuthError(
-				t("Factory identity check failed ({0}): {1}", `${response.status}`, `${await response.text()}`),
+				`Factory identity check failed (${response.status}): ${await response.text()}`,
 				{ kind: "validation", provider: context.provider, status: response.status },
 			);
 			return { identity, accepted: false, failure };
@@ -81,19 +80,19 @@ async function readWhoami(
 			}
 		}
 	} catch (error) {
-		if (context.signal?.aborted) throw new AIError.LoginCancelledError(t("Login cancelled"));
+		if (context.signal?.aborted) throw new AIError.LoginCancelledError("Login cancelled");
 		if (context.phase === "login") throw error;
 		// Preserve identity only when this is still the same selected organization.
 	}
-	if (context.signal?.aborted) throw new AIError.LoginCancelledError(t("Login cancelled"));
+	if (context.signal?.aborted) throw new AIError.LoginCancelledError("Login cancelled");
 	return { identity, accepted: false, failure: unresolved() };
 }
 
 /** Resolve canonical Factory identity; residency chooses the host, inference scope chooses eligible routes. */
 export const attachFactoryDroidRegion: AfterExchangeHook = async (credentials, context) => {
-	if (context.signal?.aborted) throw new AIError.LoginCancelledError(t("Login cancelled"));
+	if (context.signal?.aborted) throw new AIError.LoginCancelledError("Login cancelled");
 	if (!isRecord(context.raw) || typeof context.raw.refresh_token !== "string" || !credentials.refresh) {
-		throw new AIError.OAuthError(t("Factory token response missing refresh token"), { kind: "validation" });
+		throw new AIError.OAuthError("Factory token response missing refresh token", { kind: "validation" });
 	}
 	const selectedOrg =
 		typeof context.raw.organization_id === "string"
@@ -137,7 +136,7 @@ export const attachFactoryDroidRegion: AfterExchangeHook = async (credentials, c
 				);
 			} catch {
 				// Fall through: the identity check reports why the bearer is unusable.
-				if (context.signal?.aborted) throw new AIError.LoginCancelledError(t("Login cancelled"));
+				if (context.signal?.aborted) throw new AIError.LoginCancelledError("Login cancelled");
 			}
 			if (scoped) {
 				// The scoped grant rotated the refresh token, so a refresh keeps it either way.

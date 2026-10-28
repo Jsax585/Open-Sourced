@@ -4,12 +4,11 @@
  * running-agents roster for activity with no job entry.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 
 import type { AsyncJob, AsyncJobDetails, AsyncJobManager, AsyncJobType } from "./job-manager";
 
-import { renderStructuredJson, structuredStatusLabel } from "../session/async-job-delivery";
+import { renderStructuredJson, structuredStatusLabel, taskAgentHandles } from "../session/async-job-delivery";
 import { USER_INTERRUPT_LABEL } from "../session/messages";
 import type { StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
@@ -156,6 +155,8 @@ interface TrackedJobLike {
 	resultText?: string;
 	errorText?: string;
 	structured?: StructuredSubagentOutput;
+	/** See {@link AsyncJob.agentOutputPublished}. */
+	agentOutputPublished?: boolean;
 }
 
 export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobSnapshot[] {
@@ -246,6 +247,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 			...(!resultConsumed && latest.latestDetails?.meta ? { meta: latest.latestDetails.meta } : {}),
 			...(!resultConsumed && latest.structured ? { structured: latest.structured } : {}),
 			...(latest.type === "task" ? { agentUrlId: current?.agentId ?? latest.id } : {}),
+			...(latest.agentOutputPublished !== undefined ? { agentOutputPublished: latest.agentOutputPublished } : {}),
 		};
 	});
 }
@@ -265,17 +267,17 @@ function finiteNumber(value: unknown): number | undefined {
 export function runningTaskProgressSuffix(job: JobSnapshot, options: { duration: boolean }): string {
 	if (job.type !== "task" || job.status !== "running") return "";
 	const parts: string[] = [];
-	if (job.requests !== undefined && job.requests > 0) parts.push(t("{0} req\u0004packages/coding-agent/src/async/job-control.ts:runningTaskProgressSuffix", `${job.requests}`));
+	if (job.requests !== undefined && job.requests > 0) parts.push(`${job.requests} req`);
 	if (job.cost !== undefined && job.cost > 0) parts.push(job.cost < 0.005 ? "<$0.01" : `$${job.cost.toFixed(2)}`);
 	if (job.contextTokens !== undefined && job.contextTokens > 0) {
 		parts.push(
 			job.contextWindow !== undefined && job.contextWindow > 0
-				? t("ctx {0}/{1}", `${formatNumber(job.contextTokens)}`, `${formatNumber(job.contextWindow)}`)
-				: t("ctx {0}", `${formatNumber(job.contextTokens)}`),
+				? `ctx ${formatNumber(job.contextTokens)}/${formatNumber(job.contextWindow)}`
+				: `ctx ${formatNumber(job.contextTokens)}`,
 		);
 	}
 	if (job.completionPercent !== undefined) parts.push(`~${job.completionPercent}%`);
-	if (job.stage) parts.push(t("stage: {0}", `${job.stage.replace(/\s+/g, " ")}`));
+	if (job.stage) parts.push(`stage: ${job.stage.replace(/\s+/g, " ")}`);
 	if (parts.length === 0) return "";
 	if (options.duration) parts.unshift(formatDuration(job.durationMs));
 	return ` — ${parts.join(" · ")}`;
@@ -324,13 +326,21 @@ export function buildJobResult(
 		for (const j of completed) {
 			lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
 			lines.push(`Label: ${j.label}`);
+			const handles = taskAgentHandles(j.id, j, j.agentUrlId);
+			if (handles) {
+				lines.push(
+					handles === "agent"
+						? `Agent: agent://${j.agentUrlId}, history://${j.agentUrlId}`
+						: `Agent: history://${j.agentUrlId}`,
+				);
+			}
 			if (j.status !== "cancelled") {
 				lines.push(
 					alreadyConsumed.has(j.id)
 						? "Delivery: already delivered or recovered."
 						: watchedByWait.has(j.id)
-							? t("Delivery: delivered directly to wait.")
-							: t("Delivery: not auto-delivered; recovered by this snapshot."),
+							? "Delivery: delivered directly to wait."
+							: "Delivery: not auto-delivered; recovered by this snapshot.",
 				);
 			}
 			if (j.resultText) {

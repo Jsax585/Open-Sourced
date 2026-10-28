@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -236,7 +235,7 @@ async function buildToolResult(
 
 export const imageGenTool: CustomTool<typeof imageGenSchema, ImageGenToolDetails> = {
 	name: "generate_image",
-	label: t("GenerateImage"),
+	label: "GenerateImage",
 	strict: false,
 	approval: "write",
 	description: prompt.render(imageGenDescription),

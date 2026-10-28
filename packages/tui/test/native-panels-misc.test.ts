@@ -276,7 +276,7 @@ describe("BtwHistoryPanel native events", () => {
 		// action, which copies the button's own label and never reaches the panel.
 		const copyAct = findNode(
 			history.describe(),
-			node => node.p?.role === "omp.btn" && node.p?.actions?.click === "copy-answer",
+			node => node.p?.role === "omp.btn" && String(node.p?.title).startsWith("Copy answer"),
 		)?.p?.actions?.click;
 		expect(copyAct).toBeDefined();
 		expect(copyAct).not.toBe("copy");
@@ -418,6 +418,7 @@ describe("BtwHistoryPanel native events", () => {
 		history.handleInput("\t");
 		const screen = Bun.stripANSI(history.render(80).join("\n"));
 		expect(screen).toContain("answer to only question");
+		expect(screen).not.toContain("switch pane");
 	});
 });
 

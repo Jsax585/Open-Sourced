@@ -1,12 +1,10 @@
-<a id="advisor-watchdogmd-and-watchdogyml"></a>
-# 어드바이저, WATCHDOG.md, WATCHDOG.yml
+# Advisor, WATCHDOG.md, and WATCHDOG.yml
 
-어드바이저 하위 시스템은 선택적인 검토 모델을 하나 이상 세션에 연결합니다. 각 어드바이저는 기본 에이전트의 대화 기록 업데이트를 검토하고, 자체 도구로 작업 공간을 살펴보며, 간결한 조언을 기본 세션에 주입합니다.
+The advisor subsystem attaches one or more optional reviewer models to a session. Each advisor reviews primary-agent transcript updates, can inspect the workspace with its own tools, and injects concise advice back into the primary session.
 
-어드바이저는 작업을 승인하거나 기본 세션 상태를 직접 변경하지 않습니다. 기본 조사 도구는 `read`, `grep`, `glob`이며 활성 메모리 백엔드가 제공하면 `recall`도 포함됩니다. 다만 `WATCHDOG.yml` 명단 항목은 `edit`, `write`, `bash`, `eval` 같은 변경 도구를 비롯한 모든 내장 도구를 허용할 수 있습니다. 이 도구들은 격리된 어드바이저 `ToolSession`에서 실행되지만 세션의 일반 승인 모드와 도구별 정책을 따릅니다. 어드바이저 모델과 작업 공간을 신뢰할 때만 허용하세요([도구와 격리](#tools-and-isolation) 참고).
+An advisor does not approve actions or mutate primary session state directly. Its default investigative toolset is `read`, `grep`, and `glob`, plus `recall` when the active memory backend provides it, but a `WATCHDOG.yml` roster entry may grant any built-in — including mutating tools such as `edit`, `write`, `bash`, and `eval`. Those tools run in an isolated advisor `ToolSession`, but they honor the session's normal approval mode and per-tool policies; grant them only when the advisor model and workspace are trusted (see [Tools and isolation](#tools-and-isolation)).
 
-<a id="implementation-files"></a>
-## 구현 파일
+## Implementation files
 
 - [`src/advisor/runtime.ts`](../packages/coding-agent/src/advisor/runtime.ts)
 - [`src/advisor/advise-tool.ts`](../packages/coding-agent/src/advisor/advise-tool.ts)
@@ -19,22 +17,21 @@
 - [`src/session/session-advisors.ts`](../packages/coding-agent/src/session/session-advisors.ts)
 - [`src/session/agent-session.ts`](../packages/coding-agent/src/session/agent-session.ts)
 - [`src/slash-commands/builtin-registry.ts`](../packages/coding-agent/src/slash-commands/builtin-registry.ts)
-- [`src/advisor/settings.ts`](../packages/coding-agent/src/advisor/settings.ts) — `advisor.*` 설정 정의
+- [`src/advisor/settings.ts`](../packages/coding-agent/src/advisor/settings.ts) — `advisor.*` setting definitions
 
 ---
 
-<a id="enabling-the-advisor"></a>
-## 어드바이저 활성화
+## Enabling the advisor
 
-이 하위 시스템에는 `advisor.enabled: true`가 필요합니다. RPC 및 ACP 호스트는 로컬 대화형 환경설정을 상속하지 않고 `advisor.*`의 프로토콜 기본값을 사용합니다. 따라서 해당 호스트가 명시적으로 활성화하지 않으면 어드바이저는 비활성 상태로 시작합니다.
+The subsystem requires `advisor.enabled: true`. RPC and ACP hosts use protocol defaults for `advisor.*` instead of inheriting local interactive preferences: the advisor starts disabled unless that host explicitly opts in.
 
-모델 선택은 명단에 따라 달라집니다.
+Model selection depends on the roster:
 
-- 발견된 `WATCHDOG.yml` 어드바이저 항목이 없으면 OMP는 기존/기본 어드바이저를 만들고 `advisor` 역할을 확인합니다.
-- 명단이 있으면 활성화된 각 항목은 명시적 `model`이 있으면 이를, 없으면 `advisor` 역할을 사용합니다. 해석할 수 없는 항목은 `no_model`로 보고하며 다른 항목의 실행을 막지 않습니다.
-- `advisors[].enabled: false`는 항목을 일시 중지 상태로 표시하되 런타임은 만들지 않습니다.
+- Without any discovered `WATCHDOG.yml` advisor entries, OMP creates the legacy/default advisor and resolves the `advisor` role.
+- With a roster, each enabled entry uses its explicit `model` when present, otherwise the `advisor` role. An unresolvable entry is reported as `no_model` without preventing other entries from running.
+- `advisors[].enabled: false` keeps an entry visible as paused but does not build its runtime.
 
-예시:
+Example:
 
 ```yaml
 modelRoles:
@@ -44,16 +41,15 @@ advisor:
   enabled: true
 ```
 
-모델 선택자는 공급자 접두사가 있는 ID, 정규 ID, 대체 목록, 선택적 사고 수준 접미사를 포함하는 일반 역할/모델 해석 규칙을 사용합니다.
+Model selectors use normal role/model resolution, including provider-prefixed ids, canonical ids, fallback lists, and optional thinking suffixes.
 
-`modelRoles.advisor`가 설정되어 있으면 우선하며, 잘못된 값이라고 해서 조용히 대체 모델로 넘어가지 않습니다. 미설정이면 설정된 `slow` 역할, 그다음 내장 느린 모델 우선순위 체인을 사용합니다. 단순히 기본 모델을 상속하지는 않습니다.
+A configured `modelRoles.advisor` wins without silently falling back when it is invalid. When unset, advisor-role resolution uses a configured `slow` role, then the built-in slow priority chain; it does not simply inherit the primary model.
 
-추론 노력 접미사가 없으면 어드바이저는 `medium`을 요청하고 모델의 지원 범위에 맞게 조정합니다. `:auto`는 별도 어드바이저 분류기를 실행하는 대신 검토 경계에서 기본 에이전트의 결정된 추론 노력을 따릅니다. 추론 노력을 제어할 수 없는 모델은 일반적인 추론 동작을 그대로 사용합니다.
+Without an effort suffix, advisors request `medium`, clamped to the model's supported range. `:auto` follows the primary agent's resolved effort at review boundaries rather than running a separate advisor classifier. Models without controllable effort inherit their normal reasoning behavior.
 
-<a id="backup-reviewer"></a>
-### 예비 검토자
+### Backup reviewer
 
-어드바이저 모델이 장애, 속도 제한, 엔드포인트 연결 불가로 실패하면 `retry.fallbackChains` 항목의 다음 모델로 전환하여 같은 검토를 다시 시도합니다. 체인 키에는 `advisor` 역할이나 어드바이저의 정확한 모델 선택자를 사용합니다.
+When the advisor's model fails (outage, rate limit, unreachable endpoint), the advisor switches to the next model in its `retry.fallbackChains` entry and retries the same review. Key the chain on the `advisor` role, or on the advisor's exact model selector:
 
 ```yaml
 modelRoles:
@@ -66,103 +62,99 @@ retry:
       - google-vertex/gemini-3-pro
 ```
 
-기본 에이전트의 대체 모델과 같은 규칙을 따릅니다. `retry.enabled`와 `retry.modelFallback`이 켜져 있어야 하며, 아직 대기 시간 중이거나 자격 증명이 없거나 네이티브 어드바이저 기록과 호환되지 않는 후보는 건너뜁니다. `retry.fallbackRevertPolicy: cooldown-expiry`이면 대기 시간이 끝날 때 원래 모델로 돌아갑니다. 모델 전환 전에 자격 증명 교체를 시도합니다. 짧은 사용량 제한은 `retry.maxDelayMs`와 재시도 예산 안에서 기다릴 수도 있으며, 더 길거나 예산을 소진한 제한은 어드바이저를 일시 중지합니다.
+This follows the same rules as the primary's fallback: `retry.enabled` and `retry.modelFallback` must be on, candidates still cooling down, without credentials, or incompatible with native advisor history are skipped, and `retry.fallbackRevertPolicy: cooldown-expiry` returns the advisor to its primary model once the cooldown ends. Credential rotation is attempted before switching models. Short usage-limit blocks can instead be waited out within `retry.maxDelayMs` and the retry budget; longer/exhausted blocks pause the advisor.
 
-어드바이저의 원래 모델이 분류기 거부(예: Anthropic의 `Refusal (cyber)`)를 반환하면 모델 실패가 아니라 검토 내용에 대한 판단으로 취급합니다. 해당 모델에 대기 시간을 적용하지 않고 어드바이저를 대체 모델에 고정합니다. 세션 또는 어드바이저 자체의 압축, 인계, 새 대화로 해당 내용이 교체될 때까지 고정되며, 다음 검토에서 `retry.fallbackRevertPolicy`에 따라 원래 모델을 재시도합니다. 대체 모델의 거부는 일반 대기 시간을 적용하여 건너뛰고 고정하지 않으므로, 원래 모델이 다른 이유로만 실패했다면 대기 시간이 끝나면 돌아갑니다.
+A classifier refusal by the advisor's primary model (for example Anthropic's `Refusal (cyber)`) is treated as a judgment of the reviewed content rather than a model failure: it puts no cooldown on that model and pins the advisor to its fallback. The pin lasts until a compaction (the session's or the advisor's own), a handoff, or a new conversation replaces that content; the next review then retries the primary under `retry.fallbackRevertPolicy`. A fallback model that refuses is skipped with the usual cooldown and does not pin, so a primary that only failed for another reason still returns once its cooldown ends.
 
-`tier.advisor`는 모든 어드바이저의 서비스 등급을 제어합니다. 기본값은 `none`(표준 처리)이며, `inherit`는 `/fast` 변경을 포함해 기본 에이전트의 현재 모델 계열별 등급을 따릅니다. 구체적인 값(`auto`, `default`, `flex`, `scale`, `priority`, `ultrafast`)은 어드바이저 모델의 공급자 계열이 지원할 때만 적용합니다.
+`tier.advisor` controls service tier for all advisors. It defaults to `none` (standard processing); `inherit` follows the primary's live per-family tier, including `/fast` changes. Concrete values (`auto`, `default`, `flex`, `scale`, `priority`, `ultrafast`) are applied only when the advisor model's provider family supports them.
 
-`retry.fallbackOn`은 모델 전환이 가능한 어드바이저 실패도 결정합니다. `usage-limit`에서는 사용량 제한일 때만 체인을 순회하며, 다른 실패는 어드바이저 자체 모델에서 일반 재시도를 거친 뒤 검토를 버립니다. `except-usage-limit`에서는 사용량 제한 시 모델을 바꾸는 대신 자격 증명을 교체하거나 기다리거나 어드바이저를 일시 중지합니다.
+`retry.fallbackOn` also decides which advisor failures may switch models: under `usage-limit` only a usage limit walks the chain, and any other failure stays on the advisor's own model with its usual retries before the review is dropped; under `except-usage-limit` a usage limit rotates credentials, waits, or pauses the advisor instead of switching.
 
-<a id="default-advisor-settings"></a>
-### 기본 어드바이저 설정
+### Default advisor settings
 
-`WATCHDOG.yml` 명단이 없으면 기본 어드바이저는 모델 탭의 다음 설정을 사용합니다.
+When no `WATCHDOG.yml` roster is present, the default advisor uses these settings from the Model tab:
 
-- `advisor.reviewMode` — 검토 주기입니다. `turn`(기본값)은 기본 에이전트의 매 턴을 검토하고, `agent-end`는 최종 제어 반환만 검토합니다.
-- `advisor.reviewInterval` — 대상 업데이트 N개마다 검토합니다(기본값 `1`). 건너뛴 업데이트는 기본 에이전트가 본 그대로 기록하여 다음 예정 검토에 보냅니다.
-- `advisor.maxNotesPerUpdate` — 어드바이저 업데이트당 허용할 `blocker`가 아닌 조언의 최대 개수입니다(기본값 `4`, 범위 1–32). `blocker`는 예외입니다.
-- `advisor.syncBacklog` — 밀린 검토 동기화 정책입니다(기본값 `off`). 숫자 임계값에는 시간 제한이 있지만 `strict`는 실제 경과 시간 제한 없이 기다립니다.
+- `advisor.reviewMode` — review cadence: `turn` (default) reviews every primary turn; `agent-end` reviews only final yields.
+- `advisor.reviewInterval` — review every Nth eligible update (default `1`). Skipped updates are captured as the primary saw them and sent with the next scheduled review.
+- `advisor.maxNotesPerUpdate` — maximum non-blocker advice notes accepted per advisor update (default `4`, range 1–32). Blockers are exempt.
+- `advisor.syncBacklog` — catch-up policy (default `off`); numeric thresholds are bounded, while `strict` waits without a wall-clock cap.
 
-이 설정을 수정하면 런타임을 재구축하지 않고 다음 기본 에이전트 경계에서 실행 중인 어드바이저에 적용합니다.
+Edits to these settings apply to the running advisor at its next primary boundary without rebuilding it.
 
-명단 항목은 자체 주기를 설정합니다. `reviewMode`를 생략하면 위 설정과 무관하게 `turn`, `reviewInterval`을 생략하면 `1`입니다. `syncBacklog`를 생략하면 `advisor.syncBacklog`를 상속하며, `maxNotesPerUpdate`를 생략하면 공유 `WATCHDOG.yml` 최상위 값, 그다음 `advisor.maxNotesPerUpdate`를 상속합니다. 명시적 `syncBacklog: off`는 전역 `strict`보다 우선합니다.
+Roster entries set their own cadence: an omitted `reviewMode` means `turn` and an omitted `reviewInterval` means `1`, regardless of the settings above. An omitted `syncBacklog` inherits `advisor.syncBacklog`, and an omitted `maxNotesPerUpdate` inherits the shared `WATCHDOG.yml` top-level value, then `advisor.maxNotesPerUpdate`. An explicit `syncBacklog: off` overrides a global `strict`.
 
-어드바이저를 재구축해도(`/advisor configure` 저장, 모델 역할 또는 컨텍스트 변경) 주기 때문에 건너뛴 업데이트는 유지됩니다. 재구축된 각 어드바이저는 다음 예정 검토에서 이를 받습니다.
+Rebuilding advisors (saving `/advisor configure`, model-role or context changes) keeps updates the cadence skipped: each rebuilt advisor receives them with its next scheduled review.
 
-<a id="headless-runs"></a>
-### 헤드리스 실행
+### Headless runs
 
-`advisor.enabled`를 영구 저장하지 않고 출력 모드 프로세스 하나에서 어드바이저를 활성화하려면
-`--advisor`를 사용합니다.
+Use `--advisor` to enable the advisor for one print-mode process without
+persisting `advisor.enabled`:
 
 ```sh
 omp -p --advisor "Review this task."
 ```
 
-기본 프롬프트가 실행 중이면 전달 가능한 어드바이저 조언이 실행 방향을 조정할 수 있습니다. 최종 프롬프트가 끝나면 출력 모드는 숨겨진 기본 턴을 시작하지 않고 늦게 도착한 조언을 보존하며, 검토 주기로 건너뛴 업데이트를 보낸 뒤(`agent-end` 또는 간격 기반 검토자도 최종 답변을 검토하도록), 세션을 폐기하기 전 최종 검토를 최대 10분간 기다립니다. 이 대기에는 실패한 어드바이저의 재시도와 [예비 검토자](#backup-reviewer) 전환이 포함되므로 원래 모델에서 실패한 검토도 포기하지 않고 대체 모델에서 마칩니다. 오류 종료에는 30초의 배출 예산을 적용하여 실패한 자동화가 종료될 수 있도록 합니다. 동기화 정책이 `strict`인 어드바이저는 두 예산과 무관하게 기다리지만, 중단, 정지, 할당량 일시 중지는 대기를 끝냅니다. 예산이 만료되거나 어드바이저가 영구적으로 멈추면(정지 또는 할당량 일시 중지), OMP는 폐기 시 포기할 검토를 로그에 남깁니다. 완료된 검토의 대화 기록과 토큰/비용 사용량은 유지됩니다.
+While a primary prompt is running, eligible advisor notes can steer that run. After the final prompt settles, print mode preserves late advisor notes without starting hidden primary turns, sends updates the review cadence skipped (so an `agent-end` or interval reviewer still reviews the final answer), then waits up to ten minutes for final reviews before disposing the session. That wait covers a failing advisor's retries and [backup reviewer](#backup-reviewer) switch, so a review that fails on the advisor's model finishes on its fallback instead of being abandoned. Error exits use a 30-second drain budget so failed automation can terminate. An advisor whose catch-up policy is `strict` is waited on without either budget; aborts, halts, and quota pauses still end its wait. If a budget expires, or the advisor stops for good (halted or quota-paused), OMP logs the reviews that disposal will abandon; completed reviews retain their transcript and token/cost usage.
 
-슬래시 명령:
+Slash commands:
 
-| 명령 | 효과 |
+| Command              | Effect                                                                                                                               |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `/advisor` | 이 세션의 어드바이저 하위 시스템을 전환합니다. 세션 범위 재정의이며 저장된 `advisor.enabled`는 변경하지 않습니다. |
-| `/advisor on` | 이 세션에서 설정된/기본 어드바이저 런타임을 활성화합니다. 세션 범위이며 설정에 저장하지 않습니다. |
-| `/advisor off` | 이 세션의 어드바이저 하위 시스템을 비활성화하고 런타임을 중지합니다. 세션 범위이며 설정에 저장하지 않습니다. |
-| `/advisor status` | 각 어드바이저의 런타임 상태, 모델, 컨텍스트 사용량, 토큰 사용량, 비용을 표시합니다. |
-| `/advisor dump` | TUI에서는 간결한 대화 기록(명단이 있으면 모든 활성 어드바이저)을 클립보드에 복사하고, 다른 호스트에서는 텍스트로 반환합니다. |
-| `/advisor dump raw` | 시스템 프롬프트, 도구, 사고 내용, 호출을 포함한 전체 덤프를 복사/반환합니다. |
-| `/advisor configure` | 프로젝트 또는 사용자 수준 `WATCHDOG.yml`의 대화형 TUI 편집기를 엽니다. TUI가 아닌 명령 호스트는 TUI 전용이라고 알립니다. |
+| `/advisor`           | Toggle the advisor subsystem for this session (session-scoped override; does not change persisted `advisor.enabled`).                |
+| `/advisor on`        | Enable the configured/default advisor runtimes for this session. Session-scoped; not persisted to config.                            |
+| `/advisor off`       | Disable the advisor subsystem for this session and stop its runtimes. Session-scoped; not persisted to config.                       |
+| `/advisor status`    | Show each advisor's runtime state, model, context usage, token usage, and cost.                                                      |
+| `/advisor dump`      | In the TUI, copy the compact transcript (all active advisors when a roster is present) to the clipboard; other hosts return the text. |
+| `/advisor dump raw`  | Copy/return the full dump, including system prompt, tools, thinking, and calls.                                                      |
+| `/advisor configure` | Open the interactive TUI editor for project- or user-level `WATCHDOG.yml`. Non-TUI command hosts report that the editor is TUI-only. |
 
-하위 시스템이 활성화되어 있어도 기존/기본 또는 명단의 모델을 하나도 찾지 못하면, 상태에 설정된 어드바이저를 비활성/`no_model`로 표시합니다.
+If the subsystem is enabled but no legacy/default or roster model resolves, status reports the configured advisors as inactive/`no_model`.
 
-시작 시 `no_model`인 항목은 백그라운드 모델 검색이 끝난 뒤 다시 시도하므로, 카탈로그에 늦게 나타난 모델도 수동 전환 없이 시작할 수 있습니다.
+Entries left at `no_model` during startup are retried after background model discovery settles, so a model that arrives late in the catalog can start without a manual toggle.
 
-<a id="what-the-advisor-sees"></a>
-## 어드바이저가 보는 내용
+## What the advisor sees
 
-기본 에이전트가 업데이트될 때마다 `AdvisorRuntime`은 이전 업데이트 이후 새로 추가된 대화 기록 차이만 받습니다. 차이는 추론, 도구 의도, 관찰 대상 역할 마커, 확장된 기본 에이전트 제약 컨텍스트와 함께 렌더링되므로, 사용자에게 보이는 텍스트, 도구 호출 및 결과뿐 아니라 어시스턴트의 추론도 검토할 수 있습니다. 공급자에게 보낼 메시지와 도구 인수/결과는 어드바이저 모델에 도달하기 전에 세션 비밀 정보 난독화기를 거칩니다.
+At each primary update, `AdvisorRuntime` receives only the new transcript delta since its previous update. Deltas are rendered with reasoning, tool intent, watched-role markers, and expanded primary constraint context, so advisors can review assistant reasoning as well as user-visible text, tool calls, and tool results. Provider-bound messages and tool arguments/results are passed through the session secret obfuscator before reaching the advisor model.
 
-숨겨진 `custom` 메시지 대부분은 차이에서 한 줄 요약으로 축약합니다. 반면 기본 에이전트에 주입된 제약 컨텍스트(`plan-mode-context`, `plan-mode-reference`)는 XML 이스케이프된 `<primary-context kind="…">` 래퍼 안에 원문 그대로 렌더링하고 반복된 사본은 중복 제거합니다. 어드바이저는 기본 에이전트가 발견한 프로젝트 컨텍스트 파일(`AGENTS.md` 및 관련 상시 지침)도 `<project-context>` 시스템 프롬프트 블록으로 받으며, 활성 메모리 백엔드의 공유 개발자 지침도 받습니다. 이 지침은 도구를 허용하지 않으며 명시적 도구 목록은 바뀌지 않습니다. 세션 cwd가 Git 밖에 있고 바로 아래 저장소가 정확히 하나면 추가 watchdog 블록이 활성 프로젝트인 하위 디렉터리를 알려줍니다.
+Most hidden `custom` messages collapse to a one-line summary in the delta. The primary agent's injected constraint context (`plan-mode-context` and `plan-mode-reference`) is instead rendered verbatim inside an XML-escaped `<primary-context kind="…">` wrapper, while repeated copies are deduplicated. Advisors also receive the primary's discovered project context files (`AGENTS.md` and related standing instructions) in a `<project-context>` system-prompt block and the active memory backend's shared developer instructions. Those instructions do not grant tools; explicit tool lists remain unchanged. If the session cwd is outside Git with exactly one direct child repository, an additional watchdog block tells the advisor which child is the active project.
 
-이미 기본 대화 기록에 주입한 어드바이저 메시지는 다음 차이를 렌더링하기 전에 걸러냅니다. 따라서 어드바이저가 자기 조언을 재귀적으로 검토하지 않습니다.
+Advisor messages already injected into the primary transcript are filtered out before the next delta is rendered. This prevents the advisor from recursively reviewing its own advice.
 
-기본 대화 기록이 다시 작성되면 어드바이저 런타임을 초기화합니다.
+When the primary transcript is rewritten, the advisor runtime is reset:
 
-- 압축
-- 세션 전환/재개
-- 분기/포크 방식의 기록 교체
-- 어드바이저 자체 컨텍스트가 맞지 않을 때 컨텍스트 유지보수를 위한 재초기화
+- compaction
+- session switch/resume
+- branch/fork style history replacement
+- context-maintenance re-prime when the advisor's own context cannot fit
 
-초기화하면 어드바이저 전용 메모리 내 대화 기록을 비우고 커서를 되돌립니다. 다음 어드바이저 업데이트는 다시 쓰기 전의 오래된 컨텍스트를 이어 쓰지 않고 현재의 제한된 기본 대화 기록을 재생합니다.
+Reset clears the advisor's private in-memory transcript and rewinds its cursor. The next advisor update replays the current bounded primary transcript instead of continuing from stale pre-rewrite context.
 
-세션 도중 어드바이저를 활성화하면 커서를 현재 기본 대화 기록 길이로 설정합니다. 따라서 활성화 후 첫 턴에 과거 대화 전체를 재생하지 않습니다.
+When the advisor is enabled mid-session, the cursor seeds to the current primary transcript length. That avoids replaying the whole old conversation on the first enabled turn.
 
-<a id="tools-and-isolation"></a>
-## 도구와 격리
+## Tools and isolation
 
-어드바이저는 자체 `Agent` 인스턴스와 ID에 `-advisor` 접미사가 붙은 별도의 `ToolSession`을 가진 완전한 에이전트입니다. 기본 에이전트의 파일 스냅샷, 확인한 줄 추적, 충돌 상태, 요약 캐시를 공유하지 않습니다.
+The advisor is a full agent with its own `Agent` instance and a distinct `ToolSession` whose id is suffixed `-advisor`. It does not share the primary agent's file snapshots, seen-lines tracking, conflict state, or summary cache.
 
-모든 어드바이저는 기본 대화 기록에 조언을 전달하는 `advise` 도구를 가집니다. `tools`를 생략하면 다음 조사 도구를 허용합니다.
+Every advisor has the `advise` tool for surfacing notes into the primary transcript. When `tools` is omitted, its investigative grant is:
 
 - `read`
 - `grep`
 - `glob`
-- 활성 메모리 백엔드(Hindsight 또는 Mnemopi)가 구성할 때만 `recall`
+- `recall`, only when the active memory backend constructs it (Hindsight or Mnemopi)
 
-`WATCHDOG.yml` 명단 항목은 세션에서 실제로 생성된 내장 도구의 부분집합을 선택할 수 있습니다(사용할 수 없는 `lsp`처럼 팩터리가 `null`을 반환한 도구는 제외). 명시적 빈 `tools: []`는 조사 도구를 허용하지 않지만 `advise`는 유지합니다. 알 수 없는 이름만 있는 목록은 경고와 함께 제거하며 현재는 기본 부분집합으로 돌아갑니다. 허용 가능한 이름에는 `edit`, `write`, `bash`, `eval`, `debug`, `ast_edit`, `task`, 메모리 도구 같은 변경 도구와 읽기 승인 도구인 `wait`가 포함됩니다. 활성화된 브라우저/컴퓨터 프렐류드는 도구로 허용하는 것이 아니라 `eval`을 통해 접근합니다.
+A `WATCHDOG.yml` roster entry may select any subset of built-ins that were actually constructed for the session (a factory that returned `null`, such as unavailable `lsp`, is absent). An explicit empty `tools: []` grants no investigative tools; `advise` remains available. Unknown-only lists are dropped with a warning and currently fall back to the default subset. Grantable names include mutating tools such as `edit`, `write`, `bash`, `eval`, `debug`, `ast_edit`, `task`, and memory tools, plus the read-approved `wait` tool. Enabled browser/computer preludes are reached through `eval`, not granted as tools.
 
-어드바이저 도구는 격리된 어드바이저 `ToolSession`을 기준으로 만들고 `ExtensionToolWrapper`로 감쌉니다. 따라서 `tools.approvalMode`, 도구별 승인 정책, `autoApprove`가 레지스트리 도구와 동일하게 적용됩니다. Cursor의 서버 측 실행 브리지도 같은 승인 컨텍스트를 사용하며, 해당 어드바이저 권한이 있을 때만 삭제/편집/검색 기능을 노출합니다.
+Advisor tools are built against the isolated advisor `ToolSession` and wrapped with `ExtensionToolWrapper`, so `tools.approvalMode`, per-tool approval policies, and `autoApprove` apply just as they do to registry tools. Cursor's server-side exec bridge uses the same approval context and only exposes delete/edit/search capabilities when the corresponding advisor grant exists.
 
-`advise` 도구는 조언 하나와 선택적 심각도를 받습니다.
+The `advise` tool accepts one note and an optional severity:
 
-| 심각도 | 전달 방식 | 용도 |
+| Severity        | Delivery                                                                                                                                                             | Intended use                                                                 |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| 생략 / `nit` | 실행을 중단하지 않는 부연으로, 다음 턴 경계에서 기본 대화 기록에 일괄 추가합니다. 최종 답변 뒤에는 `advisor.continueSeverity`가 `nit`가 아닌 한 보이는 카드로 남습니다. | 정리, 단순화, 위험이 낮은 경계 사례. |
-| `concern` | 전달 제약이 허용하면 실행을 중단하여 방향을 조정합니다. 최종 답변 뒤에는 기본 `advisor.continueSeverity`에서 계속 실행을 요청합니다. 대신 보이는 카드로 남기려면 임계값을 `blocker`로 설정하세요. | 중대한 위험, 잘못된 방향일 가능성, 누락된 제약, 환각으로 만든 API. |
-| `blocker` | 아래 전달 제약이 허용하면 실행을 중단하는 방향 조정 메시지입니다. 최종 답변이 있어도 새 턴을 촉발할 수 있습니다. | 계속하면 명백히 작업을 낭비하거나 잘못된 출력을 만드는 경우. |
+| omitted / `nit` | Non-interrupting aside, batched into the primary transcript at the next turn boundary. After a terminal answer it leaves a visible card unless `advisor.continueSeverity` is `nit`. | Cleanup, simplification, low-risk edge cases.                                |
+| `concern`       | Interrupting steering when delivery constraints permit it. After a terminal answer it requests a continuation at the default `advisor.continueSeverity`; set the threshold to `blocker` to leave a visible card instead. | Material risk, likely wrong direction, missing constraint, hallucinated API. |
+| `blocker`       | Interrupting steering message when the delivery constraints below permit it. A terminal answer never prevents it from triggering a turn.                            | Continuing would clearly waste work or produce broken output.                |
 
-허용된 조언은 XML 이스케이프된 `<advisory>` 요소로 기본 대화 기록에 렌더링합니다. 이름이 있는 명단 어드바이저에는 `advisor` 속성을 추가합니다.
+Accepted notes are rendered into the primary transcript as XML-escaped `<advisory>` elements. Named roster advisors add an `advisor` attribute:
 
 ```text
 <advisory advisor="Architecture" severity="concern" guidance="weigh, don't blindly obey">
@@ -170,73 +162,71 @@ note text
 </advisory>
 ```
 
-의도적으로 에이전트를 중단하면(Esc 또는 collab, ACP, RPC, SDK, 확장에서 취소), 어드바이저는 자동 재개를 멈춥니다. 실행이 멈춘 동안 발생한 중단형 `concern`/`blocker`는 턴을 다시 시작하지 않고 보이는 어드바이저 카드로 기록합니다. 중단 당시 이미 전달 중이던 concern도 같은 방식으로 보존하여 뜻밖의 재개를 막습니다. 다음에 새 메시지, `.`/`c` 계속 단축키, 방향 조정/후속 메시지로 재개할 때 조언이 컨텍스트에 다시 들어갑니다.
+When you deliberately interrupt the agent (Esc, or a cancel from collab, ACP, RPC, the SDK, or an extension), the advisor stops auto-resuming it. An interrupting `concern`/`blocker` raised while the run is stopped is recorded as a visible advisor card instead of restarting the turn, and a concern already in flight when you interrupt is preserved the same way rather than driving a surprise resume. The advice re-enters context the next time you resume — a new message, the `.`/`c` continue shortcut, or a steer/follow-up.
 
-에이전트 스스로 제어를 반환하는 일반적인 경우는 의도적 중단과 다르게 취급하지만, 무조건 방향을 조정하고 재개하는 것은 아닙니다. 먼저 루프 상태와 완료된 턴으로 일반 전달 경로를 결정합니다.
+A normal yield the agent drove itself is treated differently from a deliberate interrupt, but it is not a blanket "always steers and resumes". The loop state and completed turn first determine the normal delivery path:
 
-- **루프가 아직 스트리밍 중이면**, blocker는 진행 중인 턴에 방향 조정을 전달할 수 있습니다. 진행 중인 검토의 nit와 concern은 최종 경계까지 미룹니다.
-- **루프가 제어를 반환하고 유휴 상태가 되면**, 턴이 끝난 방식에 따라 전달합니다.
-  - 기본 에이전트의 마지막 출력이 **대기 작업 없는 최종 텍스트 답변**이면 `advisor.continueSeverity`(기본값 `concern`)로 결정합니다. 임계값 이상의 조언은 한 번의 계속 실행을 요청합니다. 미만인 조언은 완료된 턴을 다시 말하게 하려고 에이전트를 깨우지 않고 대화 기록 끝에 보이는 카드로 보존하며(#4840), 다음 사용자 메시지와 함께 전달합니다. 모든 중지, 대기 시간, 계획 모드, 클라이언트 제약은 여전히 적용되며, 이 때문에 막힌 계속 실행도 카드로 보존합니다.
-  - 그 외(작업 도중 제어를 반환했고 최종 답변이 없는 경우)에는 유휴 상태의 `concern`/`blocker`가 보통 새 턴을 촉발하여 즉시 조언을 반영합니다.
+- **While the loop is still streaming**, blockers can steer into the live turn. Nits and concerns from an in-progress review remain deferred until a final boundary.
+- **Once the loop has yielded and gone idle**, delivery keys on how the turn ended:
+  - If the primary's tail is a **terminal text answer with no queued work**, `advisor.continueSeverity` (default `concern`) decides: a note at or above it requests one continuation; a note below it is preserved as a visible card at the end of the transcript rather than waking the agent to restate a completed turn (#4840), and reaches the agent with your next message. All stop, cooldown, plan-mode, and client constraints still apply; a continuation they block is preserved as a card.
+  - Otherwise (the agent yielded mid-work, no terminal answer), an idle `concern`/`blocker` normally triggers a fresh turn so the advice is acted on immediately.
 
-세션/클라이언트 제약으로 인해 일반적으로 방향 조정으로 전달할 조언을 보존할 수 있습니다.
+Session/client constraints can preserve a note whose normal delivery path is steering:
 
-- **계획 모드:** 사용자 주도 턴만 질문/해결 흐름으로 수렴하므로, 기본 루프가 스트리밍 중이어도 모든 어드바이저 방향 조정을 보이는 카드로 보존합니다.
-- **에이전트 시작 턴을 지연하는 ACP:** `deferAgentInitiatedTurns`가 켜져 있고 브리지가 에이전트 시작 턴을 허용하지 않았으면, 클라이언트가 촉발된 턴을 작업 중으로 표현할 수 없으므로 유휴 상태의 방향 조정을 보존합니다. 기본 루프가 이미 스트리밍 중일 때 발생한 조언은 진행 중인 턴에 전달할 수 있습니다.
+- **Plan mode:** every would-be advisor steer is preserved as a visible card, even while the primary loop is streaming, because only user-driven turns converge on ask/resolve.
+- **ACP with deferred agent-initiated turns:** when `deferAgentInitiatedTurns` is enabled and the bridge has not allowed agent-initiated turns, an idle would-be steer is preserved because the client cannot represent the triggered turn as busy. Advice raised while the primary loop is already streaming can still steer into that live turn.
 
-따라서 어드바이저는 **실행 중이거나 작업 도중 제어를 반환한 상태이며 현재 모드/클라이언트가 방향 조정을 허용할 때**, 에이전트 스스로 끝낸 실행을 조정하고 재개할 수 있습니다. 방향 조정이 막히면 위의 최종 답변, 계획 모드, 지연 ACP 사례에서는 카드로 보존합니다. 실행 중이거나 작업 도중 제어를 반환한 상태의 concern은 `advisor.immuneTurns` 대기 기간 동안 중단 없는 부연으로 낮춰 전달합니다. 어느 쪽이든 에이전트를 깨우지 않고 다음 턴 경계나 재개를 기다립니다.
+So the advisor can steer and resume a run the agent ended on its own **while it is running or yielded mid-work and the current mode/client permits steering**. When steering is blocked instead, the note is either preserved as a card (the terminal-answer, plan-mode, and deferred-ACP cases above) or, for a concern while the agent is running or yielded mid-work, downgraded to a non-interrupting aside during the `advisor.immuneTurns` cooldown; either way it waits for the next turn boundary or resume rather than waking the agent.
 
-`advisor.immuneTurns`는 검토 주기와 별개로 concern의 중단 빈도를 제한합니다. 어드바이저가 방향 조정 채널로 `concern` 또는 `blocker`를 성공적으로 전달한 뒤에는 설정된 수의 기본 턴이 완료될 때까지 이후 concern을 중단 없는 부연으로 전달합니다. `agent-end` 검토자에서도 도구 루프의 계속 실행은 이 대기 기간에 포함됩니다. 기본값은 `3`입니다. blocker는 이 대기 기간의 예외이지만 의도적 중단이나 계획 모드 같은 보존 제약은 따릅니다. `nit` 조언은 바뀌지 않습니다.
+`advisor.immuneTurns` limits concern interruption frequency independently of review cadence. After the advisor successfully delivers a `concern` or `blocker` through the steering channel, later concerns are routed as non-interrupting asides until the configured number of primary turns has completed. Tool-loop continuations count toward that cooldown even for an `agent-end` reviewer. The default is `3`. Blockers are exempt from this cooldown, but still obey preservation constraints such as deliberate interrupts and plan mode. `nit` notes are unchanged.
 
-어드바이저 업데이트가 아직 진행 중인 작업을 검토할 때 `AdviseTool`은 `nit` 및 `concern` 호출을 최종 경계까지 미루며, `blocker`만 미완료 작업을 중단할 수 있습니다. 미룬 조언은 예약 전에 출력 가드를 통과합니다. 더 높은 심각도의 조언이 같은 검토에서 대기 중인 낮은 심각도 조언을 대체할 수 있지만, 이전 검토의 조언을 대체하거나 이미 전달한 조언을 철회할 수는 없습니다. 최종 경계에서는 주기 때문에 새 검토를 건너뛰더라도 현재 검토의 예산을 초기화하지 않고 대기 조언을 비웁니다.
+While an advisor update reviews work still in progress, `AdviseTool` defers `nit` and `concern` calls until a final boundary; only a `blocker` may interrupt partial work. Deferred notes pass the emission guard before reservation. A higher-severity note may displace a pending lower-severity note from the same review, but cannot displace notes from earlier reviews or retract routed advice. A final boundary flushes pending notes even when cadence skips a new review, without resetting the current review's budget.
 
-<a id="emission-guard"></a>
-### 출력 가드
+### Emission guard
 
-각 어드바이저는 `AdviseTool`에서 YieldQueue/방향 조정 채널로 이어지는 경로에 자체 `AdvisorEmissionGuard`(`src/advisor/emission-guard.ts`)를 둡니다. 시스템 프롬프트의 업데이트별 비-blocker 조언 예산과 반복 금지 규칙을 적용합니다.
+Each advisor has its own `AdvisorEmissionGuard` (`src/advisor/emission-guard.ts`) on the route from `AdviseTool` to the YieldQueue/steer channel. It enforces the system prompt's per-update non-blocker advice budget and no-repeat rules:
 
-1. **정규화.** 소문자화와 NFKC를 적용하고 영숫자가 아닌 문자의 연속을 공백 하나로 축약한 뒤 양끝 공백을 제거합니다. `"Stop."`, `"*Stop*"`, `"  stop  "`은 모두 `stop` 키가 됩니다.
-2. **구체적 내용 없는 문구 필터.** `stop`, `done`, `complete`, `no issue continue`, `lgtm`, `nothing to add`처럼 구체적인 이유 없는 짧은 문구를 억제합니다.
-3. **심각도를 고려한 중복 제거.** 정규화한 조언이 반복되면 심각도가 같거나 낮을 때 버립니다. 심각도를 높여 다시 제기하면(`nit` → `concern` → `blocker`) 이전 조언을 전달한 뒤에도 허용 대상입니다. 프롬프트는 더 엄격하여, 새 대화 기록의 근거가 `blocker` 기준을 충족할 때만 이전 비-blocker 조언을 `blocker`로 다시 제기하도록 허용합니다. FIFO 기록은 최대 4096개 항목을 보관합니다.
-4. **업데이트별 우선순위 예산.** 각 어드바이저 모델의 `prompt()` 주기당 비-blocker 조언을 최대 N개 허용합니다(기본값 4, 설정 범위 1–32). 한도에 도달하면 더 높은 심각도의 조언이 같은 업데이트에서 아직 대기 중인 최하위 조언을 대체할 수 있습니다. 이미 전달한 조언은 슬롯을 유지하고 이전 업데이트의 대기 조언도 예약을 유지합니다. blocker는 예외이며 억제된 잡음은 예산을 쓰지 않습니다. 우선순위는 어드바이저별 설정 > 공유 `WATCHDOG.yml` 최상위 값 > `advisor.maxNotesPerUpdate` 설정 > 기본값 4입니다. 별도의 전체 백로그 예산은 없습니다.
+1. **Normalization.** Lowercase, NFKC, collapse every run of non-alphanumeric characters to one space, then trim. `"Stop."`, `"*Stop*"`, and `"  stop  "` all key to `stop`.
+2. **Content-free phrase filter.** Short phrases with no concrete reason — `stop`, `done`, `complete`, `no issue continue`, `lgtm`, `nothing to add`, and similar — are suppressed.
+3. **Severity-aware dedupe.** A repeated normalized note is dropped at equal or lower severity. A higher-severity re-raise (`nit` → `concern` → `blocker`) remains eligible even after the earlier note was delivered. The prompt is stricter: it permits re-raising prior non-blocker advice only as a `blocker`, once new transcript evidence meets `blocker` criteria. The FIFO history holds at most 4096 entries.
+4. **Per-update rank budget.** Up to N non-blocker notes per advisor model `prompt()` cycle (default 4, configurable from 1–32). At capacity, a higher-severity note may replace the lowest-rank still-pending note from the same update. Routed notes retain their slots; earlier updates' pending notes remain reserved. Blockers are exempt, and suppressed noise consumes no budget. Precedence: per-advisor config > shared `WATCHDOG.yml` top-level > `advisor.maxNotesPerUpdate` setting > default 4. There is no additional aggregate backlog budget.
 
-응답은 허용, 조건부 지연, 중복, 잡음, 예산 억제를 구분합니다. 허용은 호스트가 기본 에이전트에 전달하도록 수락했다는 뜻이지 기본 모델이 읽었다는 뜻은 아닙니다. 지연 허용 응답은 같은 검토의 더 심각한 발견이 조언을 대체할 수 있다고 경고합니다. 거부된 조언에는 전달을 보장하지 않으며, 어드바이저는 가드를 우회하려고 거부된 발견을 바꿔 말해서는 안 됩니다.
+Acknowledgments distinguish acceptance, conditional deferral, duplicates, noise, and budget suppression. Acceptance means the host accepted the note for primary delivery, not that the primary model consumed it. Deferred acceptance warns that a higher-severity finding from the same review may displace the note. A rejected note receives no delivery promise; the advisor should not rephrase rejected findings to evade the guard.
 
-가드의 전체 상태(중복 제거 기록과 업데이트별 제한)는 어드바이저 초기화(압축, 세션 전환, `/new`)마다 지워집니다. 따라서 다시 초기화된 검토자는 다시 쓰인 대화 기록에 대해 이전에 제기한 문제를 다시 제기할 수 있습니다.
+The guard's full state — dedupe history and per-update gate — clears on every advisor reset (compaction, session switch, `/new`), so a re-primed reviewer can re-raise issues it already raised against the rewritten transcript.
 
-<a id="catch-up-with-advisorsyncbacklog"></a>
-## `advisor.syncBacklog`로 밀린 검토 동기화
+## Catch-up with `advisor.syncBacklog`
 
-동기화 정책은 기본 에이전트가 예정된 각 어드바이저를 얼마나 기다릴지 제어하며 검토 빈도를 제어하지 않습니다. 각 `WATCHDOG.yml` 항목에 `syncBacklog`를 설정할 수 있고, 생략하면 현재 전역 `advisor.syncBacklog`를 상속합니다.
+Catch-up policy controls how long the primary waits for each scheduled advisor, not how often that advisor reviews. Each `WATCHDOG.yml` entry may set `syncBacklog`; omission inherits the current global `advisor.syncBacklog` setting.
 
-허용 값:
+Allowed values:
 
-- `off` — 어드바이저의 밀린 검토를 기다리지 않습니다(기본값).
+- `off` — never wait for advisor catch-up (default)
 - `1`
 - `3`
 - `5`
-- `strict` — 예정된 어드바이저 검토가 끝날 때까지 기다립니다. 실제 경과 시간 제한은 없지만 중단과 어드바이저 실패는 기본 에이전트의 대기를 해제합니다.
+- `strict` — wait until scheduled advisor reviews finish; no wall-clock timeout, but aborts and advisor failures still release the primary
 
-기본 턴이 끝나면:
+On primary turn end:
 
-1. 모든 어드바이저가 기본 대화 기록 차이를 캡처합니다. 검토 예정인 어드바이저는 마지막 검토 이후 주기 때문에 보류한 업데이트와 함께 이를 큐에 넣습니다.
-2. 어드바이저 배출 루프가 백그라운드에서 시작되거나 계속됩니다.
-3. 예정된 각 어드바이저는 자체 재정의 또는 전역 정책을 확인합니다. `off`가 아니면 백로그가 해당 임계값 이상인 동안 기본 에이전트가 기다립니다.
-4. 제한된 값은 최대 30초간 기다리고, `strict`는 실제 경과 시간 제한 없이 기다립니다.
-5. 어드바이저가 처리하여 임계값 아래로 내려가면 기본 에이전트가 즉시 계속합니다.
-6. 중단, 실패, 할당량 일시 중지, 세션 전환 일시 중지, 폐기는 대기자를 해제합니다. 일시 중지된 전환은 새 대기도 거부합니다.
+1. every advisor captures the primary delta; an advisor whose review is scheduled queues it together with any updates its cadence held since its last review
+2. the advisor drain loop starts or continues in the background
+3. each scheduled advisor resolves its own override or the global policy; unless it is `off`, the primary waits while that advisor's backlog is at or above its threshold
+4. bounded values cap the wait at 30 seconds; `strict` waits without a wall-clock cap
+5. if the advisor catches up below the threshold, the primary continues immediately
+6. abort, failure, quota pause, session-transition pause, or disposal releases waiters; paused transitions also reject new waits
 
-실무적인 의미:
+Practical interpretation:
 
-- `off`는 기본 에이전트의 최대 처리량을 우선합니다.
-- `1`은 동기식 검토에 가장 가깝습니다. 어드바이저 차이를 큐에 넣을 때마다 백로그가 0이 될 때까지 최대 30초 기다립니다.
-- `3`과 `5`는 기본 에이전트가 멈추기 전 더 많은 어드바이저 지연을 허용합니다.
+- `off` favors maximum primary throughput.
+- `1` is the closest mode to synchronous review: after each queued advisor delta, the primary waits up to 30 seconds for backlog to return to zero.
+- `3` and `5` allow more advisor lag before the primary pauses.
 
-`agent-end` 어드바이저에 `strict`를 설정하면 동기식 최종 검토를 제공합니다. 기본 에이전트가 최종 경계에 도달하면 어드바이저가 누적 실행을 검토한 뒤 기본 에이전트가 마칠 수 있습니다. 그 경계에서 전달된 조언은 최신 턴 우선, 그다음 심각도(`blocker` → `concern` → `nit`) 순으로 하나의 메시지에 합칩니다. 이전 턴의 조언에는 `turns_ago` 속성과 심각도와 어드바이저 이름 사이의 흐린 `T-N` 대화 기록 마커가 붙습니다. 첫 병합 전달과 이후 기본 턴 50개당 최대 한 번, 발견이 오래되었거나 틀릴 수 있고 무시해도 된다는 안내를 포함합니다.
+`strict` with an `agent-end` advisor provides synchronous final review: the primary reaches its final boundary, the advisor reviews the accumulated run, then the primary can finish. Notes delivered at that boundary merge into one message, ordered newest turn first, then severity (`blocker` → `concern` → `nit`). Notes about earlier turns carry a `turns_ago` attribute and a dim `T-N` transcript marker between severity and advisor name. The first merged delivery, then at most once every 50 primary turns, includes guidance that findings may be outdated or wrong and may be ignored.
 
-`advisor.continueSeverity` 이상의 조언이 포함된 배치는 여러 어드바이저가 함께 발견을 보고해도 허용된 계속 실행을 최대 한 번 요청할 수 있습니다. 중지/중단 억제, concern 대기 기간, 계획 모드 정책, 클라이언트 보존 제약은 버퍼된 전달과 실시간 전달 모두에 적용됩니다. 그 외에는 기본 에이전트를 다시 시작하지 않고 조언을 보이게 유지합니다. 어드바이저 전달로 시작한 계속 실행은 새 검토를 예약하거나 주기를 진행시키지 않습니다. 해당 업데이트는 캡처하여 다음 검토에 보내되 어드바이저 조언을 다시 입력으로 넣지 않습니다.
+A batch containing a note at or above `advisor.continueSeverity` can request at most one permitted continuation, even when several advisors report findings together. Stop/abort suppression, concern cooldown, plan-mode policy, and client preservation constraints apply to both buffered and live delivery. Otherwise the notes remain visible without restarting the primary. A continuation an advisor delivery starts does not schedule another review or advance cadence; its updates are captured and sent with the next review, without feeding advisor notes back into them.
 
-턴 검토는 비동기로 유지하면서 최종 검토만 기다리는 설정:
+Keep turn reviews asynchronous while waiting for final reviews:
 
 ```yaml
 advisors:
@@ -248,30 +238,33 @@ advisors:
     syncBacklog: strict
 ```
 
-어드바이저 실패가 기본 에이전트를 영구적으로 멈추게 하지는 않습니다. 호스트는 먼저 자격 증명/대체 모델 복구를 시도합니다. 재시도 가능한 실패는 최대 세 번 시도한 뒤 해당 백로그를 버립니다. 백로그 폐기 주기가 세 번 발생하면 명시적 초기화까지 런타임을 정지하며, 영구적인 요청 거부는 한 주기만으로 정지할 수 있습니다. 자격 증명 교체, 대체 모델, 제한된 대기 시간으로 복구할 수 없는 할당량/사용량 제한 실패는 배치를 유지한 채 런타임을 초기화하거나 재구축할 때까지 어드바이저를 일시 중지합니다. 압축, 이미지 제거, shake, 세션 전환이나 새 세션, `/advisor` 재구축, 설정 다시 로드 또는 재시작으로 해제됩니다. 도구 출력 가지치기는 일시 중지를 유지하며 타이머로 자동 재개되지 않습니다. 기본 에이전트의 동기화 대기자(`advisor.syncBacklog`)는 어드바이저가 실패하는 즉시 해제하며, 헤드리스 종료 배출만 복구를 기다립니다.
+Advisor failures do not permanently stall the primary. The host first attempts its credential/fallback recovery. Retriable failures are attempted up to three times before that backlog is dropped; three dropped-backlog cycles halt the runtime until an explicit reset, and a permanent request rejection can halt it after one cycle. A quota/usage-limit failure that cannot recover through credential rotation, model fallback, or a bounded cooldown wait pauses the advisor with its batch retained until its runtime is reset or rebuilt: compaction, dropping images, a shake, a session switch or new session, an `/advisor` rebuild, a configuration reload, or a restart. Tool-output pruning keeps the pause, and no timer resumes it. The primary's catch-up waiters (`advisor.syncBacklog`) are released as soon as an advisor is failing; only the headless shutdown drain waits through recovery.
 
-어드바이저는 `model.toolCallLoopGuard.*`로 동일 도구 호출의 반복도 제한합니다. 루프를 한 번 감지하면 교정 메시지를 주입하고, 같은 검토에서 동일 한도에 다시 걸리면 공급자 실패로 취급하거나 대체 모델 복구를 시작하지 않고 검토를 중단합니다. 감지기는 다음 검토/컨텍스트 경계에서 초기화됩니다.
+The advisor also uses `model.toolCallLoopGuard.*` to bound repeated identical tool calls. One detected loop injects a corrective; if the same bound trips again during that review, the review is aborted without treating the stop as a provider failure or starting fallback recovery. The detector resets at the next review/context boundary.
 
-안전하지 않은 어드바이저 출력은 위의 3회 요청 재시도 정책 대신 별도의 격리 경로를 따릅니다.
-허용되지 않은 도구 호출에는 `Tool <name> not found` 결과를 반환하여 모델이 스스로 수정하게 하며, 턴을 격리하지는 않습니다.
-도구를 실행하기 전에 출력에만 존재하는 파괴적 셸 지시를 감지하거나, 파괴적 셸, 지침 덮어쓰기,
-거부 지시, 계정 삭제 주장 중 출력에만 존재하는 위험 유형이 세 가지 이상 일치하면
-생성된 텍스트/조언을 격리합니다.
-새 지침 덮어쓰기와 입력에 인용된 파괴적 명령의 조합도 해당합니다.
-실행 전에 조언을 포함한 어드바이저 턴 전체를 버립니다.
+Unsafe Advisor output follows a separate quarantine path rather than that
+three-attempt request-retry policy. Calls to tools not granted to the advisor receive `Tool <name> not found`
+results so the model can correct itself; they do not quarantine a turn.
+Before tool dispatch, the runtime quarantines generated text/advice when an output-only destructive-shell
+directive is detected, or when at least three output-only hazard classes match
+among destructive shell, instruction override, denial instruction, and
+account-deletion claim. A new instruction override paired with a destructive
+command quoted in the input also qualifies. The entire Advisor turn, including
+any advice in it, is discarded before dispatch.
 
-첫 연속 격리는 최신 대기 컨텍스트로 어드바이저를 조용히 초기화하고 다시 준비합니다.
-두 번째 연속 격리는 중복 제거된 호스트 경고 하나를 내보내고 해당 배치를 버린 뒤,
-루프를 끊기 위해 어드바이저 컨텍스트를 초기화합니다.
-어드바이저 턴이 한 번이라도 성공하면 격리 카운터를 초기화합니다.
+The first consecutive quarantine silently resets and re-primes the Advisor with
+the latest pending context. A second consecutive quarantine emits one
+deduplicated host warning, drops the affected batch, and resets the Advisor
+context to break the loop. Any successful Advisor turn resets the quarantine
+counter.
 
 ## WATCHDOG.md
 
-`WATCHDOG.md`는 어드바이저 전용 지침입니다. 어드바이저 시스템 프롬프트에 추가되며 기본 에이전트의 일반 컨텍스트에는 주입되지 않고 `AGENTS.md`, `RULES.md` 또는 다른 컨텍스트 파일처럼 동작하지 않습니다.
+`WATCHDOG.md` is advisor-only guidance. It is appended to the advisor system prompt; it is not injected into the primary agent's normal context and does not behave like `AGENTS.md`, `RULES.md`, or other context files.
 
-검토 우선순위에 사용하세요. 어드바이저가 주의할 위험, 프로젝트별 함정, 위험한 API, 아키텍처 경계, 주 실행자에게는 너무 번잡하지만 검토자에게 유용한 품질 기준 등을 담습니다.
+Use it for review priorities: risks the advisor should watch for, project-specific traps, dangerous APIs, architectural boundaries, and quality bars that are useful to a reviewer but too noisy for the main executor.
 
-예시:
+Example:
 
 ```markdown
 # Watchdog notes
@@ -283,40 +276,37 @@ Especially watch for:
 - New worker spawns that do not re-enter the CLI host.
 ```
 
-<a id="discovery-locations"></a>
-### 검색 위치
+### Discovery locations
 
-`discoverWatchdogFiles(cwd, agentDir)`는 다음 위치에서 읽을 수 있는 모든 후보를 로드합니다.
+`discoverWatchdogFiles(cwd, agentDir)` loads every readable candidate from these locations:
 
-1. 사용자 수준: `<active agent dir>/WATCHDOG.md`(기본값 `~/.omp/agent/WATCHDOG.md`, `PI_CODING_AGENT_DIR`로 변경).
-2. `cwd`에서 Git 저장소 루트까지, 저장소 루트를 찾지 못하면 홈 디렉터리까지 위로 탐색하는 프로젝트 수준:
+1. user level: `<active agent dir>/WATCHDOG.md` (`~/.omp/agent/WATCHDOG.md` by default; relocated by `PI_CODING_AGENT_DIR`)
+2. project levels while walking from `cwd` upward to the git repository root, or to the home directory when no repo root is found:
    - `<dir>/WATCHDOG.md`
    - `<dir>/.omp/WATCHDOG.md`
 
-네이티브 컨텍스트 파일과 달리 watchdog 검색은 가장 가까운 프로젝트 파일에서 멈추지 않습니다. 여러 프로젝트 watchdog 파일을 함께 로드할 수 있습니다.
+Unlike native context files, watchdog discovery does not stop at the nearest project file. Multiple project watchdog files can load together.
 
-파일이 `.omp` 디렉터리 안에 있지 않으면 숨김 소유 디렉터리의 후보는 무시합니다. 따라서 `.omp/WATCHDOG.md`는 허용하면서 무관한 점 디렉터리 관례를 우연히 가져오지 않습니다.
+Candidates in hidden owner directories are ignored unless the file is inside an `.omp` directory. This keeps unrelated dot-directory conventions from being picked up accidentally while still allowing `.omp/WATCHDOG.md`.
 
-<a id="-imports"></a>
-### `@` 가져오기
+### `@` imports
 
-`WATCHDOG.md` 내용은 컨텍스트 파일과 동일한 `@` 가져오기 도우미로 확장합니다.
+`WATCHDOG.md` content is expanded with the same `@` import helper used by context files:
 
-- 상대 가져오기는 가져오는 파일의 디렉터리를 기준으로 해석합니다.
-- `~/`는 사용자 홈 디렉터리를 기준으로 해석합니다.
-- fenced 코드 블록 및 인라인 코드 안의 가져오기는 문자 그대로 유지합니다.
-- 재귀 가져오기는 최대 5단계까지 확장하며, 순환 및 반복 경로는 원래 토큰을 제거하지 않고 건너뜁니다.
-- 없거나 읽을 수 없는 가져오기는 원래 `@path` 텍스트를 유지합니다.
+- relative imports resolve from the importing file's directory
+- `~/` resolves from the user's home directory
+- imports inside fenced code blocks and inline code spans stay literal
+- recursive imports are expanded up to five hops; cycles and repeated paths are skipped without removing the literal token
+- missing or unreadable imports leave the original `@path` text in place
 
-<a id="prompt-order"></a>
-### 프롬프트 순서
+### Prompt order
 
-로드한 watchdog 블록은 다음 순서로 정렬합니다.
+Loaded watchdog blocks are sorted as:
 
-1. 사용자 수준 `WATCHDOG.md`
-2. 먼 상위 디렉터리에서 `cwd` 방향으로 내려오는 프로젝트 수준 파일
+1. user-level `WATCHDOG.md`
+2. project-level files from farther ancestors down toward `cwd`
 
-각 파일은 다음 형태로 어드바이저 시스템 프롬프트에 추가합니다.
+Each file is appended to the advisor system prompt as:
 
 ```xml
 Especially pay attention to:
@@ -325,17 +315,17 @@ Especially pay attention to:
 </attention>
 ```
 
-뒤쪽 프로젝트 파일은 어드바이저 프롬프트 끝에 더 가까이 놓이므로, 좁은 디렉터리 지침이 넓은 상위 디렉터리 지침보다 더 두드러집니다.
+Later project files sit closer to the end of the advisor prompt, so narrower directory guidance is more prominent than broad ancestor guidance.
 
 ## WATCHDOG.yml
 
-`WATCHDOG.yml`(또는 `WATCHDOG.yaml`)은 어드바이저 명단입니다. 이름이 있는 각 항목은 자체 활성 상태, 모델, 도구, 전문화 프롬프트를 설정할 수 있으며 `WATCHDOG.md`는 공유 검토 지침을 제공합니다.
+`WATCHDOG.yml` (or `WATCHDOG.yaml`) is the advisor roster. Each named entry can set its own enabled state, model, tools, and specialization prompt; `WATCHDOG.md` supplies shared review guidance.
 
-검색과 `/advisor configure`는 동일한 항목별 검증을 사용합니다. 잘못된 항목은 이름이 포함된 경고와 함께 건너뛰고 정상 어드바이저는 계속 사용할 수 있습니다. 잘못된 YAML이나 매핑이 아닌 문서는 파일 경고와 함께 건너뜁니다. 문제는 시작/편집기 통합 경고에 나타나고 프로젝트/사용자 범위를 전환한 뒤에도 편집기 안에 계속 표시됩니다. 편집기 문서를 저장하면 유효한 항목만 기록합니다.
+Discovery and `/advisor configure` use the same per-entry validation: malformed entries are skipped with named warnings while healthy advisors remain usable. Invalid YAML or a non-mapping document is skipped with a file warning. Problems appear in an aggregated startup/editor warning and remain visible inside the editor after switching project/user scope. Saving the editor document writes only valid entries.
 
-편집기의 프로젝트 범위는 저장소 루트의 `WATCHDOG.yml`을 대상으로 합니다(저장소 밖이면 cwd). 사용자 범위는 활성 에이전트 디렉터리를 대상으로 합니다. 해당 범위에 `.yml`은 없고 `.yaml`이 있으면 경쟁 파일을 새로 만들지 않고 기존 `.yaml`을 직접 편집합니다.
+The editor's Project scope targets the repository-root `WATCHDOG.yml` (cwd when outside a repository); User scope targets the active agent directory. It edits an existing `.yaml` in place when no `.yml` exists at that scope, rather than creating a competing file.
 
-예시:
+Example:
 
 ```yaml
 instructions: |
@@ -357,7 +347,7 @@ advisors:
       You may edit and run tests to prove a fix locally, then advise.
 ```
 
-완료된 기본 턴 세 개마다 실행하는 최종 제어 반환 검토자:
+For a final-yield reviewer that runs every third completed primary turn:
 
 ```yaml
 advisors:
@@ -368,77 +358,75 @@ advisors:
       Review the complete turn. Stay silent unless concrete evidence shows a material problem.
 ```
 
-필드:
+Fields:
 
-- `instructions`(최상위): `WATCHDOG.md`와 함께 모든 어드바이저 시스템 프롬프트 앞에 붙이는 공유 프롬프트입니다. 발견한 모든 `WATCHDOG.yml` 파일에서 이어 붙입니다.
-- `advisors[].name`: 사람이 읽는 이름이며, 세션 ID와 `__advisor.<slug>.jsonl` 파일명에 사용할 슬러그로 변환합니다. 파일 간 중복 슬러그는 `WATCHDOG.md` 검색과 같은 구체성 규칙(프로젝트 말단 > 프로젝트 상위 > 사용자)으로 해결합니다.
-- `advisors[].enabled`: 선택적 어드바이저별 스위치로 기본값은 `true`입니다. `false`이면 상태/설정에 일시 중지로 표시합니다.
-- `advisors[].model`: 선택적 `:level` 사고 접미사를 포함할 수 있는 선택적 모델 선택자입니다(예: `x-ai/grok-code-fast:high`). 생략하면 `modelRoles.advisor`를 사용합니다.
-- `advisors[].tools`: 허용할 내장 도구 이름의 선택적 목록입니다. 생략하면 `read`/`grep`/`glob` 및 활성 메모리 백엔드가 제공하는 `recall`을 허용합니다. 명시적 `[]`는 조사 도구를 허용하지 않습니다. 변경 도구를 포함해 [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts)의 모든 이름을 허용합니다. 기존 별칭(`search`→`grep`, `find`→`glob`)은 정규화합니다. 알 수 없는 이름은 경고와 함께 버립니다. 비어 있지 않은 입력에서 유효한 이름이 하나도 남지 않으면 현재 구현은 생략한 것으로 취급하여 기본 부분집합을 사용합니다.
-- `advisors[].reviewMode`: 선택적 검토 주기 모드입니다. `turn`(기본값)은 기본 에이전트의 모든 턴, 즉 `willContinue: true` 도구 루프 계속 실행을 포함한 매 도구 호출 라운드를 검토합니다. `agent-end`는 `willContinue`가 true가 아닌 최종 제어 반환만, 즉 실행당 한 번 검토합니다.
-- `advisors[].reviewInterval`: 선택적 양의 안전 정수(최대 `9007199254740991`)이며 기본값은 `1`입니다. 대상 업데이트 N개마다 검토하며, 건너뛴 업데이트를 누적하여 다음 예정 검토에 보냅니다. 완료된 실행 N개마다 검토하려면 `reviewMode: agent-end`와 함께 사용합니다. 주기 때문에 검토를 건너뛰어도 지연된 조언은 최종 경계에서 전달 대상이 됩니다.
-- `advisors[].syncBacklog`: 선택적 `off`, `1`, `3`, `5`, `strict`입니다. 숫자 임계값은 따옴표 없는 YAML 숫자여도 됩니다. 생략하면 현재 전역 `advisor.syncBacklog`를 상속하며, 명시적 `off`는 항상 해당 어드바이저의 대기를 비활성화합니다. 편집기는 유효 정책을 표시하고 재정의를 제거하는 `inherit`를 제공합니다.
-- `maxNotesPerUpdate`(최상위 또는 어드바이저별): 프롬프트 업데이트당 허용할 비-blocker 조언 수이며 기본값은 `4`입니다. 어드바이저별 값이 최상위 값보다 우선하고, 최상위 값은 `advisor.maxNotesPerUpdate` 설정보다 우선합니다.
-- `advisors[].instructions`: 공유 기본 지침 뒤에 붙이는 해당 어드바이저의 전문화 지침입니다. 두 지침 필드 모두 `WATCHDOG.md`처럼 `@path` 가져오기를 확장합니다.
+- `instructions` (top level): shared prompt prepended to every advisor's system prompt alongside `WATCHDOG.md`. Concatenated across all discovered `WATCHDOG.yml` files.
+- `advisors[].name`: human label; slugified for the session id and its `__advisor.<slug>.jsonl` filename. Duplicate slugs across files are resolved by the same specificity rule as `WATCHDOG.md` discovery (project leaf > project ancestor > user).
+- `advisors[].enabled`: optional per-advisor switch, default `true`. `false` leaves the advisor visible as paused in status/configuration.
+- `advisors[].model`: optional model selector with optional `:level` thinking suffix (e.g. `x-ai/grok-code-fast:high`). Omitted → the advisor uses `modelRoles.advisor`.
+- `advisors[].tools`: optional list of built-in tool names to grant. Omitted → `read`/`grep`/`glob`, plus `recall` when the active memory backend provides it; explicit `[]` → no investigative tools. Any name in [`BUILTIN_TOOL_NAMES`](../packages/coding-agent/src/tools/builtin-names.ts) is accepted, including mutating tools. Legacy aliases (`search`→`grep`, `find`→`glob`) are normalized. Unknown names are dropped with a warning; if that leaves a nonempty input with no valid names, the implementation currently treats the result as omitted and uses the default subset.
+- `advisors[].reviewMode`: optional cadence mode. `turn` (default) reviews every primary turn — every tool-call round, including `willContinue: true` tool-loop continuations; `agent-end` reviews only final yields where `willContinue` is not true, i.e. once per run.
+- `advisors[].reviewInterval`: optional positive safe integer (at most `9007199254740991`), default `1`. Reviews every Nth eligible update; skipped updates accumulate and are sent in the next scheduled review. For a review every Nth completed run, combine `reviewMode: agent-end` with this field. Deferred advice still becomes eligible for delivery at final boundaries even when cadence skips that review.
+- `advisors[].syncBacklog`: optional `off`, `1`, `3`, `5`, or `strict`. Numeric thresholds may be unquoted YAML numbers. Omitted → inherit the current global `advisor.syncBacklog`; explicit `off` always disables waiting for this advisor. The editor shows the effective policy and offers `inherit` to remove an override.
+- `advisors[].scope`: optional `main`, `subagent`, or `all` (default `all`). Restricts which session kinds build this advisor: `main` attaches only to the top-level session, while `subagent` attaches only to advised spawned subagent sessions.
+- `advisors[].includeReasoning`: optional boolean, default `true`. When `false`, assistant `_thinking:_` blocks from the primary transcript are omitted from deltas sent to this advisor so reviews evaluate observable actions, tool I/O, and outputs without anchoring on the primary model's chain-of-thought.
+- `maxNotesPerUpdate` (top level or per advisor): accepted non-blocker notes per prompt update, default `4`. A per-advisor value overrides the top-level value, which overrides the `advisor.maxNotesPerUpdate` setting.
+- `advisors[].instructions`: this advisor's specialization, appended after the shared baseline. Both instruction fields expand `@path` imports like `WATCHDOG.md`.
 
-어드바이저 전달 자체가 시작한 계속 실행(기본 에이전트가 유휴 상태이거나 최종 경계를 지난 뒤의 방향 조정)은 자체 최종 경계를 통과할 때도 검토를 예약하거나 간격 카운터를 진행시키지 않습니다. 따라서 전달이 검토자를 다시 깨워 어드바이저→기본 에이전트→어드바이저 연쇄를 만들지 않습니다. 업데이트는 여전히 캡처하여 다음 예정 검토에 보냅니다. 다른 원인(todo 알림, 비동기 작업 깨우기, 실시간 위임, 사용자 입력)으로 시작한 계속 실행은 일반 주기로 검토하므로 `agent-end` 검토자도 todo 알림이 재개한 실행을 검토합니다. 전달 자체는 멈추지 않으며 이미 생성된 조언은 계속 기본 에이전트에 방향 조정, 일괄 전달 또는 부연으로 전달됩니다.
+A continuation an advisor delivery itself starts — a steer while the primary is idle or past its final boundary — neither schedules reviews nor advances interval counters through its own final boundary, so advisor deliveries cannot re-wake reviewers into an advisor→primary→advisor cascade. Its updates are still captured and reach the next scheduled review. Continuations started by anything else (todo reminders, async job wakes, live delegations, user input) are reviewed under the normal cadence, so an `agent-end` reviewer also reviews the run a todo reminder resumes. Delivery itself never pauses: advice already produced still steers, flushes, or rides asides to the primary.
 
-<a id="discovery-locations-1"></a>
-### 검색 위치
+### Discovery locations
 
-`WATCHDOG.yml`/`WATCHDOG.yaml`은 `WATCHDOG.md`와 같은 사용자 및 프로젝트 검색 경로를 사용합니다. 사용자 수준 `<active agent dir>/WATCHDOG.yml`과, `cwd`에서 저장소 루트(루트를 찾지 못하면 홈 디렉터리)까지 위로 탐색하며 만나는 모든 `WATCHDOG.yml`/`.omp/WATCHDOG.yml`을 검색합니다. 발견한 모든 파일을 함께 로드하며, 더 구체적인 파일(프로젝트 말단 > 프로젝트 상위 > 사용자)이 같은 어드바이저 슬러그의 이전 항목을 교체합니다.
+`WATCHDOG.yml`/`WATCHDOG.yaml` share the same user + project search path as `WATCHDOG.md`: the user-level `<active agent dir>/WATCHDOG.yml` plus every `WATCHDOG.yml`/`.omp/WATCHDOG.yml` encountered while walking from `cwd` up to the repository root (or the home directory when no repo root is found). All discovered files are loaded together; a more-specific file (project leaf > project ancestor > user) replaces an earlier entry with the same advisor slug.
 
-같은 디렉터리 깊이에서는 `.yml` 후보가 `.yaml` 후보보다 먼저이며, `.omp/<filename>`이 독립된 `<filename>`보다 먼저입니다. 슬러그 충돌은 나중 항목이 이기며 최상위 지침은 계속 이어 붙입니다.
+At the same directory depth, `.yml` candidates precede `.yaml` candidates, and `.omp/<filename>` precedes the standalone `<filename>`. Later entries win slug collisions; top-level instructions still concatenate.
 
-<a id="subagents"></a>
-## 하위 에이전트
+## Subagents
 
-하위 에이전트는 기본적으로 조언 없이 실행됩니다. 어드바이저는 일괄 전환이 아니라 **에이전트별로** 선택하여 활성화합니다.
+Subagents run unadvised by default; advisors are opted in **per agent** instead of via a blanket toggle:
 
-- 에이전트 정의 프런트매터 `advisor`: `true`이면 `advisor` 역할로 해석한 모델이 해당 에이전트의 생성된 세션에 조언합니다. 문자열(예: `advisor: "deepseek/deepseek-v4-flash"` 또는 `advisor: "@smol:high"`)이면 선택적 `:level` 사고 접미사를 포함한 명시적 어드바이저 모델 패턴을 설정합니다.
-- `task.agentAdvisor` 설정 레코드(에이전트 이름 → `"on"` / `"off"` / 모델 패턴)는 프런트매터보다 우선하며 `/agents` 허브에서 에이전트별로 설정합니다. 에이전트에서 Enter를 누르면 속성 줄을 열며, 어드바이저 줄에서 켜기/끄기, 모델 브라우저 선택, 원시 패턴을 제공합니다.
+- Agent definition frontmatter `advisor`: `true` advises spawned sessions of that agent with the model resolved for the `advisor` role; a string (e.g. `advisor: "deepseek/deepseek-v4-flash"` or `advisor: "@smol:high"`) sets an explicit advisor model pattern with an optional `:level` thinking suffix.
+- The `task.agentAdvisor` settings record (agent name → `"on"` / `"off"` / model pattern) overrides the frontmatter, and is configured per agent from the `/agents` hub: Enter on an agent opens its property strip; the advisor strip offers on/off, a model-browser pick, or a raw pattern.
 
-기존 `advisor.subagents: true` 설정은 `task.agentAdvisor: { task: "on" }`으로 마이그레이션됩니다. 번들된 범용 `task` 에이전트는 어드바이저를 유지하고 다른 에이전트는 조언 없이 시작합니다.
+The legacy `advisor.subagents: true` setting migrates to `task.agentAdvisor: { task: "on" }` — the bundled generic `task` agent keeps its advisor, other agents start unadvised.
 
-조언이 활성화된 하위 에이전트 세션은 같은 설정/모델 역할 해석 규칙으로 자체 어드바이저 하위 시스템을 만듭니다(명시적 패턴은 생성된 세션의 `modelRoles.advisor`에 적용). 그다음 해당 하위 에이전트 세션의 `cwd`와 에이전트 디렉터리에서 `WATCHDOG.md` 및 `WATCHDOG.yml` 검색을 다시 실행합니다. 하위 에이전트 어드바이저도 기본 어드바이저와 마찬가지로 자신의 기본 도구 세션에서 격리됩니다.
+An advised subagent session builds its own advisor subsystem with the same settings/model-role resolution (an explicit pattern lands on the spawned session's `modelRoles.advisor`), then reruns both `WATCHDOG.md` and `WATCHDOG.yml` discovery for that subagent session's `cwd` and agent directory. Subagent advisors remain isolated from the subagent's primary tool session in the same way the main advisor is isolated from the main agent.
 
-<a id="cost-and-context-behavior"></a>
-## 비용과 컨텍스트 동작
+## Cost and context behavior
 
-어드바이저 사용량은 별도의 모델 사용량입니다. `/advisor status`는 어드바이저의 실시간 대화 기록으로 토큰/컨텍스트 수를 계산하지만 비용은 세션별 누적 원장에서 가져옵니다. 이 원장은 어드바이저 초기화 후에도 유지되며 재개 시 저장된 어드바이저 대화 기록에서 복원합니다. 따라서 토큰 수는 누적 지출과 독립적으로 초기화되거나 줄어들 수 있습니다.
+Advisor usage is separate model usage. `/advisor status` computes token/context counts from the advisor's live transcript, while cost comes from a cumulative per-session ledger that survives advisor resets and is restored from persisted advisor transcripts on resume. Token counts can therefore reset or shrink independently of accumulated spend.
 
-`advisor.evictStaleResults`의 기본값은 `true`입니다. 각 검토 전에 이전 검토의 조사용 `read`/`grep`/`glob` 결과를 짧은 자리표시자로 교체하며 최신 검토의 결과는 유지합니다. 이전 도구 결과를 어드바이저의 실시간 컨텍스트에 유지하려면 `false`로 설정하세요.
+`advisor.evictStaleResults` defaults to `true`. Before each review, investigative `read`/`grep`/`glob` results from older reviews are replaced with short placeholders; the latest review's results remain. Set it to `false` to retain those older tool results in the advisor's live context.
 
-접두사에 종속된 사고 모델에서는 이 제거 과정이 가지치기 경계 이후의 서명된 추론도 삭제하며 최신 검토의 추론도 포함됩니다. 기본 에이전트 차이와 조언은 제거하지 않습니다.
+On prefix-bound thinking models, that eviction also drops signed reasoning after the pruning boundary, including reasoning in the latest review. Primary deltas and advice notes are not evicted.
 
-어드바이저는 자체 추가 전용 컨텍스트를 가집니다. 각 어드바이저 프롬프트 전에 `AgentSession`은 들어올 토큰을 추정하고 다음과 같이 컨텍스트를 유지보수할 수 있습니다.
+The advisor has its own append-only context. Before each advisor prompt, `AgentSession` estimates incoming tokens and may maintain advisor context:
 
-1. 활성화되어 있고 호환되는 더 큰 모델을 사용할 수 있으면 모델 수준 컨텍스트 승격을 시도합니다.
-2. 승격으로 충분한 컨텍스트를 확보하지 못하면 어드바이저 자체 메시지 기록을 압축합니다.
-3. 읽을 수 있는 기록에서 압축 후보가 없거나 여전히 맞지 않으면 현재의 제한된 기본 대화 기록으로 다시 초기화합니다.
+1. try model-level context promotion when enabled and a larger compatible model is available
+2. if promotion cannot fit enough context, compact the advisor's own message history
+3. for readable history, re-prime from the current bounded primary transcript if compaction has no candidates or still cannot fit
 
-네이티브 압축은 활성 모델이 해당 공급자와 Responses API 형식을 재생할 수 있을 때만 어드바이저 기록을 교체합니다. 다른 공급자의 네이티브 지원 요약기는 읽을 수 있는 기록에 이식 가능한 텍스트 요약을 대신 사용합니다. 어드바이저가 네이티브 기록을 보유하면 호환되지 않는 요약기, 재시도 대체 모델, 대기 시간 후 복귀, 컨텍스트 승격은 건너뜁니다. 유지보수 실패 시 다시 초기화하여 기록을 없애지 않고 보존하며, 일반 어드바이저 요청 실패 처리는 계속 적용됩니다.
+Native compaction replaces advisor history only when the active model can replay its provider and Responses API format. A foreign native-enabled summarizer uses portable text summarization for readable history instead. Once the advisor holds native history, incompatible summarizers, retry fallbacks, cooldown restorations, and context promotions are skipped. Maintenance failure preserves that history rather than re-priming it away; normal advisor request-failure handling still applies.
 
-재생 호환성을 위해 새 네이티브 압축이 활성화되어 있을 필요는 없습니다. 같은 공급자의 Responses 모델은 자체 압축 엔드포인트가 비활성화되어 있어도 대체 모델 전환, 대기 시간 후 복귀, 승격 시 기존 네이티브 기록을 받을 수 있습니다. 새 네이티브 결과 생성에는 여전히 `compaction.methodOrder`의 `remote`와 적합한 기록 모델이 필요합니다. 별도의 호환 기록 모델이 네이티브 엔드포인트가 비활성화된 읽기 모델의 컨텍스트를 유지보수할 수 있습니다.
+Replay compatibility does not require new native compaction to be enabled. Same-provider Responses models can receive existing native history during fallback, cooldown restoration, or promotion even when their own compaction endpoint is disabled. Creating a new native result still requires `remote` in `compaction.methodOrder` and an eligible writer; a separate compatible writer can maintain a reader whose native endpoint is disabled.
 
-어드바이저의 실시간 컨텍스트는 메모리에만 있는 추가 전용 기록입니다. 세션 실행 중 유지되어 `/advisor dump`로 살펴볼 수 있으며, 위에서 설명한 대로 독립적으로 승격/압축/재초기화됩니다. 기본 에이전트의 영구 저장 대화 기록을 대체하지는 않습니다.
+The advisor's live context is in-memory and append-only; it is retained while the session runs so `/advisor dump` can inspect it, and is independently promoted/compacted/re-primed (above). It is not a replacement for the primary persisted transcript.
 
-<a id="transcript-persistence-and-observability"></a>
-## 대화 기록 영구 저장과 관찰 가능성
+## Transcript persistence and observability
 
-어드바이저는 자체 모델 사용량을 가진 수동 검토자입니다. 따라서 작업 하위 에이전트와 마찬가지로 확정된 모든 어드바이저 턴을 소유 세션의 아티팩트 디렉터리 안 JSONL에 추가합니다.
+The advisor is a passive reviewer with its own model usage, so — like a task subagent — every finalized advisor turn is appended to JSONL inside the owning session's artifacts directory:
 
-- 기존/기본 어드바이저: `<session>/__advisor.jsonl`
-- 이름이 있는 어드바이저: `<session>/__advisor.<slug>.jsonl`
-- 하위 에이전트 어드바이저(프런트매터 `advisor` / `task.agentAdvisor`): `<session>/<SubId>/__advisor[.<slug>].jsonl`
+- legacy/default advisor: `<session>/__advisor.jsonl`
+- named advisor: `<session>/__advisor.<slug>.jsonl`
+- subagent advisor (frontmatter `advisor` / `task.agentAdvisor`): `<session>/<SubId>/__advisor[.<slug>].jsonl`
 
-경로는 공유 아티팩트 루트가 아니라 소유 세션 파일에서 파생하므로 각 기본/하위 에이전트 어드바이저는 별도 파일에 기록합니다. 예약된 `__advisor` 이름 줄기는 작업 하위 에이전트 ID와 충돌할 수 없습니다.
+Paths derive from the owning session file (not the shared artifacts root), so each primary/subagent advisor writes a distinct file. The reserved `__advisor` stem cannot collide with a task subagent id.
 
-파일을 사용하는 이유:
+Why a file:
 
-- **사용량 귀속.** `omp stats`는 각 세션 폴더를 재귀적으로 탐색하므로 어드바이저의 어시스턴트 턴과 사용량/비용은 다른 하위 에이전트처럼 같은 프로젝트/세션에 귀속됩니다. 어드바이저의 "session update" 프롬프트는 에이전트에 귀속된 `synthetic` 사용자 메시지로 저장하므로 사용자 메시지 지표를 부풀리지 않습니다.
-- **관찰 가능성.** [에이전트 허브](./agent-hub.md)는 열릴 때 기존 및 이름이 있는 `__advisor*.jsonl` 파일을 발견하여 각각 소유 세션 아래 읽기 전용 `advisor` 종류의 대화 기록으로 표시합니다.
+- **Usage attribution.** `omp stats` scans each session folder recursively, so advisor assistant turns (with their usage/cost) are attributed to the same project/session like any other subagent. Advisor "session update" prompts are persisted as `synthetic`, agent-attributed user messages so they never inflate user-message metrics.
+- **Observability.** [Agent Hub](./agent-hub.md) discovers legacy and named `__advisor*.jsonl` files on open and shows each as a read-only `advisor`-kind transcript under its owning session.
 
-파일은 세션 전환을 따릅니다. `/new`, 재개/전환, 분기 시 기록기는 다음 어드바이저 턴에 새 세션 경로를 다시 엽니다. `/delete`가 이전 아티팩트 디렉터리를 삭제하기 전에는 기록기 입력을 분리하고 비워, 큐에 남은 쓰기가 삭제된 파일을 다시 만들지 않도록 합니다. 디스크 로그는 추가 전용이며 메모리 내 컨텍스트와 독립적이므로 재초기화나 압축으로 잘라내지 않습니다.
+The file follows session switches: on `/new`, resume/switch, and branch the recorder reopens at the new session's path on the next advisor turn; before a `/delete` deletes the old artifacts dir the recorder feed is detached and drained so a queued write cannot recreate the deleted file. The on-disk log is append-only and independent of the in-memory context — re-primes and compaction never truncate it.
 
-어드바이저는 절대 동료 에이전트가 아닙니다. `advisor` 종류의 레지스트리 참조는 에이전트용 동료 명단, `agent://all` 브로드캐스트, 하위 에이전트 동료 프롬프트, `history://` 인덱스/조회/자동완성에서 제외됩니다. `write agent://<id>`나 collab 채팅으로 메시지를 보낼 수도 없으며, [에이전트 허브에서 되살리거나 종료](./agent-hub.md#persisted-agents-and-advisors)하거나 collab에서 처리할 수도 없습니다. 어떤 도구를 허용했든 동료로 접근할 수 없습니다.
+The advisor is never a peer. The `advisor`-kind registry ref is excluded from agent-facing peer rosters and `agent://all` broadcasts, the subagent peer prompt, and the `history://` index/lookup/completions — and cannot be messaged through `write agent://<id>` or collab chat, nor [revived or killed from Agent Hub](./agent-hub.md#persisted-agents-and-advisors) or collab. It is not addressable as a peer, regardless of what tools it has been granted.

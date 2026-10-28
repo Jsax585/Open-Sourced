@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Box } from "../components/box";
@@ -1652,8 +1651,8 @@ export class ToolExecutionComponent extends Container {
 					const pendingText = renderStatusLine(
 						{
 							iconOverride: spinner,
-							title: localize("Edit"),
-							description: theme.fg("dim", localize("{0} more file{1} pending…", `${remaining}`, `${remaining > 1 ? "s" : ""}`)),
+							title: "Edit",
+							description: theme.fg("dim", `${remaining} more file${remaining > 1 ? "s" : ""} pending…`),
 						},
 						theme,
 					);

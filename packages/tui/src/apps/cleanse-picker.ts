@@ -5,7 +5,6 @@
  * prompts, resolved on select/submit/cancel so the command can keep writing
  * plain stdout afterwards.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem } from "../components/select-list";
 import { promptStandaloneText, selectStandaloneItem } from "./standalone-picker";
 
@@ -29,7 +28,7 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 	const items: SelectItem[] = [
 		{
 			value: "all",
-			label: t("Run all {0} discovered checker{1}\u0004packages/tui/src/apps/cleanse-picker.ts:pickCleanseTarget.items.label", `${checkers.length}`, `${checkers.length === 1 ? "" : "s"}`),
+			label: `Run all ${checkers.length} discovered checker${checkers.length === 1 ? "" : "s"}`,
 		},
 		...checkers.map(checker => ({
 			value: `checker:${checker.id}`,
@@ -38,17 +37,17 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 		})),
 		{
 			value: "request",
-			label: t("Describe what to fix…"),
-			description: t("A discovery agent figures out the command to run"),
+			label: "Describe what to fix…",
+			description: "A discovery agent figures out the command to run",
 		},
 	];
-	const selection = await selectStandaloneItem(t("Select what to cleanse:"), items, {
+	const selection = await selectStandaloneItem("Select what to cleanse:", items, {
 		maxVisible: 12,
 		picker: {
 			icon: "wand",
-			noun: t("checkers"),
-			subtitle: t("Run the checkers, then repair what they find"),
-			confirm: t("Cleanse"),
+			noun: "checkers",
+			subtitle: "Run the checkers, then repair what they find",
+			confirm: "Cleanse",
 		},
 	});
 	if (selection === null) return { kind: "cancel" };
@@ -62,5 +61,5 @@ export async function pickCleanseTarget(checkers: readonly CleanseCheckerChoice[
 
 /** One-shot text prompt for a free-form cleanse request; `null` when cancelled or left empty. */
 export async function promptCleanseRequest(): Promise<string | null> {
-	return promptStandaloneText(t("Describe what to detect and fix (e.g. \"ts errors\"):"));
+	return promptStandaloneText('Describe what to detect and fix (e.g. "ts errors"):');
 }

@@ -1,5 +1,4 @@
 /** `ast_edit` — structural AST rewrites: per-op pattern/replacement pairs, replacement counts, diffs. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, CodeBlock, DiffBlock, InvalidArg, Note, Output, PathText, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -82,12 +81,16 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{first ? <PathText path={first} /> : <InvalidArg what="paths" />}
-			{paths.length > 1 && <span className="tv-faint">{t("+{0} more", `${paths.length - 1}`)}</span>}
-			<Badge tone="accent">{t("{0} op{1}", `${opCount}`, `${opCount === 1 ? "" : "s"}`)}</Badge>
+			{paths.length > 1 && <span className="tv-faint">+{paths.length - 1} more</span>}
+			<Badge tone="accent">
+				{opCount} op{opCount === 1 ? "" : "s"}
+			</Badge>
 			{total != null && (
-				<Badge tone={total > 0 ? "ok" : "warn"}>{t("{0} replacement{1}", `${total}`, `${total === 1 ? "" : "s"}`)}</Badge>
+				<Badge tone={total > 0 ? "ok" : "warn"}>
+					{total} replacement{total === 1 ? "" : "s"}
+				</Badge>
 			)}
-			{details?.limitReached && <Badge tone="warn">{t("limit")}</Badge>}
+			{details?.limitReached && <Badge tone="warn">limit</Badge>}
 		</>
 	);
 }
@@ -96,14 +99,14 @@ function OpCell({ op, lang }: { op: AstEditOp; lang: string | null }): ReactNode
 	return (
 		<div className="tv-cell">
 			{op.pat ? (
-				<CodeBlock code={op.pat} lang={lang} title={t("pattern")} maxLines={10} />
+				<CodeBlock code={op.pat} lang={lang} title="pattern" maxLines={10} />
 			) : (
 				<InvalidArg what="pattern" />
 			)}
 			{op.out ? (
-				<CodeBlock code={op.out} lang={lang} title={t("replacement")} maxLines={10} />
+				<CodeBlock code={op.out} lang={lang} title="replacement" maxLines={10} />
 			) : (
-				<div className="tv-muted">{t("deletion — matched code is removed")}</div>
+				<div className="tv-muted">deletion — matched code is removed</div>
 			)}
 		</div>
 	);
@@ -137,14 +140,18 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			{details && (
 				<span className="tv-badges">
 					{details.totalReplacements != null && (
-						<Badge tone={details.totalReplacements > 0 ? "ok" : "warn"}>{t("{0} replacement{1}", `${details.totalReplacements}`, `${details.totalReplacements === 1 ? "" : "s"}`)}</Badge>
+						<Badge tone={details.totalReplacements > 0 ? "ok" : "warn"}>
+							{details.totalReplacements} replacement{details.totalReplacements === 1 ? "" : "s"}
+						</Badge>
 					)}
 					{details.filesTouched != null && (
-						<Badge>{t("{0} file{1}", `${details.filesTouched}`, `${details.filesTouched === 1 ? "" : "s"}`)}</Badge>
+						<Badge>
+							{details.filesTouched} file{details.filesTouched === 1 ? "" : "s"}
+						</Badge>
 					)}
-					{details.filesSearched != null && <Badge>{t("searched {0}", `${details.filesSearched}`)}</Badge>}
-					{details.scopePath && <Badge>{t("in {0}", `${shortenPath(details.scopePath)}`)}</Badge>}
-					{details.limitReached && <Badge tone="warn">{t("limit reached")}</Badge>}
+					{details.filesSearched != null && <Badge>searched {details.filesSearched}</Badge>}
+					{details.scopePath && <Badge>in {shortenPath(details.scopePath)}</Badge>}
+					{details.limitReached && <Badge tone="warn">limit reached</Badge>}
 				</span>
 			)}
 			{details && details.fileReplacements.length > 0 && (
@@ -156,12 +163,12 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					))}
 				</div>
 			)}
-			{details?.limitReached && <Note tone="warn">{t("limit reached; narrow path")}</Note>}
+			{details?.limitReached && <Note tone="warn">limit reached; narrow path</Note>}
 			{details && details.parseErrors.length > 0 && (
 				<Output
 					text={details.parseErrors.join("\n")}
 					maxLines={6}
-					title={t("parse issues ({0})", `${parseErrorsTotal}`)}
+					title={`parse issues (${parseErrorsTotal})`}
 					variant="plain"
 				/>
 			)}

@@ -5,7 +5,6 @@
  * (see `cli/completion-gen.ts`), so it never drifts from the actual CLI surface.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { APP_NAME, postmortem, VERSION } from "@oh-my-pi/pi-utils";
 import { Args, type CliConfig, Command, type CommandCtor } from "@oh-my-pi/pi-utils/cli";
 import { completionsHelp as commandHelp } from "../cli/command-help";
@@ -35,14 +34,14 @@ export default class Completions extends Command {
 	static description = commandHelp.description;
 	static args = {
 		shell: Args.string({
-			description: t("Target shell"),
+			description: "Target shell",
 			required: true,
 			options: SHELLS,
 		}),
 	};
 
 	static examples = [
-		t("# zsh — eval at startup, or write to a file in $fpath\n  eval \"$({0} completions zsh)\"", `${APP_NAME}`),
+		`# zsh — eval at startup, or write to a file in $fpath\n  eval "$(${APP_NAME} completions zsh)"`,
 		`# bash\n  eval "$(${APP_NAME} completions bash)"`,
 		`# fish\n  ${APP_NAME} completions fish > ~/.config/fish/completions/${APP_NAME}.fish`,
 	];
@@ -50,7 +49,7 @@ export default class Completions extends Command {
 	async run(): Promise<void> {
 		const shell = this.argv[0];
 		if (!isShell(shell)) {
-			process.stderr.write(t("Usage: {0} completions <{1}>\n", `${APP_NAME}`, `${SHELLS.join("|")}`));
+			process.stderr.write(`Usage: ${APP_NAME} completions <${SHELLS.join("|")}>\n`);
 			process.exitCode = 1;
 			return;
 		}

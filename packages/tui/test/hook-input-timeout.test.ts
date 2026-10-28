@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 
+import { stripVTControlCharacters } from "node:util";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import type { DescribeContext, NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
@@ -120,15 +121,45 @@ describe("HookInputComponent timeout", () => {
 
 		component.dispose();
 	});
+
+	it("masks characters as bullets when secret is true", () => {
+		const onSubmit = vi.fn();
+		const onCancel = vi.fn();
+		const component = new HookInputComponent("API Key", undefined, onSubmit, onCancel, { secret: true });
+
+		component.handleInput("s");
+		component.handleInput("e");
+		component.handleInput("c");
+		component.handleInput("r");
+		component.handleInput("e");
+		component.handleInput("t");
+
+		const rendered = stripVTControlCharacters(component.render(80).join("\n"));
+		expect(rendered).toContain("••••••");
+		expect(rendered).not.toContain("secret");
+
+		component.handleInput("\n");
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		expect(onSubmit).toHaveBeenCalledWith("secret");
+
+		component.dispose();
+	});
 });
 
 describe("HookInputComponent native sheet", () => {
-	it("routes submit and cancel actions to their callbacks", () => {
+	it("Submit and Cancel run what Enter and Esc run; keys live only in tooltips", () => {
 		const onSubmit = vi.fn();
 		const onCancel = vi.fn();
 		const component = new HookInputComponent("Search pull requests", undefined, onSubmit, onCancel);
 		const buttons = nodes(component.describe(CX)).filter(node => node.p?.role === "omp.btn");
-		expect(buttons.map(button => button.key)).toEqual(["cancel", "submit"]);
+		expect(buttons.map(button => [button.key, button.p?.title])).toEqual([
+			["cancel", "Cancel  esc"],
+			["submit", "Submit  ⏎"],
+		]);
+		// No key legend text in the native body: the terminal-only hint stays in render().
+		const texts = nodes(component.describe(CX)).flatMap(node => spans(node).map(s => s.t));
+		expect(texts.some(t => t.includes("submit"))).toBe(false);
+		expect(stripVTControlCharacters(component.render(80).join("\n"))).toContain("submit");
 
 		component.handleInput("4");
 		component.handleInput("2");

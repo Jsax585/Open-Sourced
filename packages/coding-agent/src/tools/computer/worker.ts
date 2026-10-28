@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -1778,9 +1777,9 @@ export class ComputerWorkerCore {
 					if (open.reveal === true) {
 						refuseForeground(
 							context,
-							t("apps.open with reveal: true"),
-							t("bring Finder to the front"),
-							t("Open the containing folder with apps.open(folder) instead, which opens it behind the user's app."),
+							"apps.open with reveal: true",
+							"bring Finder to the front",
+							"Open the containing folder with apps.open(folder) instead, which opens it behind the user's app.",
 						);
 					}
 					// A relative path names an item in the session's folder, not the omp process's.
@@ -1845,14 +1844,14 @@ export class ComputerWorkerCore {
 				// window returns it, and otherwise the error names the missing selector.
 				const unfiltered =
 					selector == null
-						? t("computer.window() without an id or { app, title } filter matches every open window")
+						? "computer.window() without an id or { app, title } filter matches every open window"
 						: "";
 				if (matches.length === 0) {
 					const app = typeof selector === "object" ? selector?.app : undefined;
 					const route = session.capabilities.backend === "quartz" ? "shows-window" : "launches";
 					const lead = unfiltered
-						? t("{0}, and none is open", `${unfiltered}`)
-						: t("no window matches {0}", `${JSON.stringify(selector)}`);
+						? `${unfiltered}, and none is open`
+						: `no window matches ${JSON.stringify(selector)}`;
 					throw new ToolError(`${lead}\n${describeWindowMiss(windows, app, route)}`);
 				}
 				if (matches.length > 1) {
@@ -1863,8 +1862,8 @@ export class ComputerWorkerCore {
 					const omitted = matches.length - MAX_LISTED_WINDOWS;
 					const more = omitted > 0 ? `\n… ${omitted} more` : "";
 					const lead = unfiltered
-						? t("{0}; pass a window id or filter to pick one", `${unfiltered}`)
-						: t("multiple windows match {0}", `${JSON.stringify(selector)}`);
+						? `${unfiltered}; pass a window id or filter to pick one`
+						: `multiple windows match ${JSON.stringify(selector)}`;
 					throw new ToolError(`${lead}:\n${candidates}${more}`);
 				}
 				return makeWin(matches[0]!);

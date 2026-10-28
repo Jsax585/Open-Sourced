@@ -10,7 +10,6 @@
  * Adding a mode is a single entry here: the command surface (autocomplete +
  * ACP hint), the parser, and the engine override all read this table.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { CompactionMethod } from "./compaction-methods";
 
 /** Subcommand selecting a one-off compaction mode for manual `/compact`. */
@@ -41,17 +40,17 @@ export interface CompactModeDef {
 export const COMPACT_MODES: readonly CompactModeDef[] = [
 	{
 		name: "soft",
-		description: t("Summarize locally with the active model (skip server compaction)"),
+		description: "Summarize locally with the active model (skip server compaction)",
 		overrides: { methodOrder: ["soft"] },
 	},
 	{
 		name: "remote",
-		description: t("Summarize via OpenAI-compatible server compaction, then fall back to a local summary"),
+		description: "Summarize via OpenAI-compatible server compaction, then fall back to a local summary",
 		overrides: { methodOrder: ["remote", "soft"] },
 	},
 	{
 		name: "snapcompact",
-		description: t("Archive history onto dense bitmap images the model reads back (no LLM call)"),
+		description: "Archive history onto dense bitmap images the model reads back (no LLM call)",
 		overrides: { methodOrder: ["snapcompact"] },
 		rejectsFocus: true,
 	},

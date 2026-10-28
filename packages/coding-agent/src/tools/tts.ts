@@ -1,7 +1,6 @@
 // Ported from NousResearch/hermes-agent (MIT) — tools/tts_tool.py L167-171, L896-959.
 // Speech backends are catalog models selected through the speech role chain.
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -126,7 +125,7 @@ async function synthesizeCloud(
 		content: [
 			{
 				type: "text",
-				text: t("Saved {1} bytes to {0} (model={2}/{3}, voice={4}, codec={5}).", `${displayPath}`, `${result.audio.length}`, `${model.provider}`, `${model.id}`, `${voiceId}`, `${codec}`),
+				text: `Saved ${result.audio.length} bytes to ${displayPath} (model=${model.provider}/${model.id}, voice=${voiceId}, codec=${codec}).`,
 			},
 		],
 		details: { bytes: result.audio.length, voiceId, codec, backend },
@@ -150,7 +149,7 @@ async function synthesizeLocal(
 			content: [
 				{
 					type: "text",
-					text: t("Local TTS synthesis failed (model={0}). The on-device worker may be unavailable or the model download was interrupted.", `${model.id}`),
+					text: `Local TTS synthesis failed (model=${model.id}). The on-device worker may be unavailable or the model download was interrupted.`,
 				},
 			],
 		};
@@ -161,13 +160,13 @@ async function synthesizeLocal(
 	await Bun.write(wavPath, wav);
 	const displayPath = formatPathRelativeToCwd(wavPath, cwd);
 	const note = substituted
-		? t(" No local MP3 encoder is bundled, so WAV (PCM16) was written instead of the requested container.")
+		? ` No local MP3 encoder is bundled, so WAV (PCM16) was written instead of the requested container.`
 		: "";
 	return {
 		content: [
 			{
 				type: "text",
-				text: t("Saved {1} bytes to {0} (voice={2}/{3}, codec=wav, backend=local, {4} Hz).{5}", `${displayPath}`, `${wav.length}`, `${model.id}`, `${voice}`, `${audio.sampleRate}`, `${note}`),
+				text: `Saved ${wav.length} bytes to ${displayPath} (voice=${model.id}/${voice}, codec=wav, backend=local, ${audio.sampleRate} Hz).${note}`,
 			},
 		],
 		details: { bytes: wav.length, voiceId: `${model.id}/${voice}`, codec: "wav", backend: "local-inference" },
@@ -176,7 +175,7 @@ async function synthesizeLocal(
 
 export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 	name: "tts",
-	label: t("Speech Generation"),
+	label: "Speech Generation",
 	strict: false,
 	approval: "write",
 	description: prompt.render(ttsDescription, {
@@ -202,7 +201,7 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 		if (candidates.length === 0) {
 			return {
 				isError: true,
-				content: [{ type: "text", text: t("No available speech model matches the speech role.") }],
+				content: [{ type: "text", text: "No available speech model matches the speech role." }],
 			};
 		}
 
@@ -215,7 +214,7 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 				if (model.api === "xai-tts" || model.api === "openai-speech") {
 					return await synthesizeCloud(model, params, ctx, outputPath, displayPath, codec, signal);
 				}
-				throw new Error(t("Unsupported speech model API: {0}", `${model.api}`));
+				throw new Error(`Unsupported speech model API: ${model.api}`);
 			} catch (error) {
 				if (signal?.aborted) throw error;
 				if (error instanceof MissingApiKeyError || error instanceof ProviderHttpError) {
@@ -228,7 +227,7 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 
 		return {
 			isError: true,
-			content: [{ type: "text", text: t("Speech synthesis failed for every candidate: {0}", `${failures.join("; ")}`) }],
+			content: [{ type: "text", text: `Speech synthesis failed for every candidate: ${failures.join("; ")}` }],
 		};
 	},
 };

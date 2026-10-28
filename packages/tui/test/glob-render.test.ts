@@ -35,9 +35,13 @@ describe("globToolRenderer", () => {
 		// Same left edge as every other tool row (read, todo, framed cards).
 		expect(plainLines[0]).not.toStartWith(" ");
 		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", uiTheme.symbol("icon.search")));
+		expect(renderedLines[0]).not.toContain(uiTheme.fg("accent", "Find"));
 	});
 
-	it("distinguishes a timed-out empty scan from a completed empty scan", () => {
+	it("renders a timed-out empty scan as incomplete instead of a definitive no-files claim", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
 		// `truncated` with zero files only happens on the timeout path — the
 		// scan died mid-walk, so "No files found" would be a false claim.
 		const result = {
@@ -49,19 +53,14 @@ describe("globToolRenderer", () => {
 			},
 		};
 
-		const incomplete = globToolRenderer.describeResult(result, { expanded: true, isPartial: false }, {
-			paths: "~/.cache/*",
-		});
-		const complete = globToolRenderer.describeResult(
-			{ ...result, details: { ...result.details, truncated: false } },
-			{ expanded: true, isPartial: false },
-			{ paths: "~/.cache/*" },
-		);
-		expect(incomplete.tone).toBe("warning");
-		expect(incomplete.tool?.note).toBeDefined();
-		expect(complete.tool?.note).toBeUndefined();
-		expect(incomplete.body).toBeUndefined();
-		expect(complete.body).toBeUndefined();
+		const renderedLines = globToolRenderer
+			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { paths: "~/.cache/*" })
+			.render(240);
+		const plain = sanitizeText(renderedLines.join("\n"));
+
+		expect(plain).toContain("No matches before timeout (scan incomplete)");
+		expect(plain).toContain("timed out");
+		expect(plain).not.toContain("No files found");
 	});
 
 	it("distinguishes a timed-out partial listing from a result-limit truncation", async () => {
@@ -97,16 +96,32 @@ describe("globToolRenderer", () => {
 					.join("\n"),
 			);
 
-		const timedOutView = globToolRenderer.describeResult(timedOut, { expanded: true, isPartial: false });
-		const limitedView = globToolRenderer.describeResult(limitOnly, { expanded: true, isPartial: false });
-		expect(timedOutView.tool?.badges?.[0]?.tone).toBe("warning");
-		expect(limitedView.tool?.badges?.[0]?.tone).toBe("warning");
-		expect(timedOutView.tool?.badges?.[0]?.text).not.toBe(limitedView.tool?.badges?.[0]?.text);
-		for (const result of [timedOut, limitOnly]) {
-			const rendered = render(result);
-			expect(rendered).toContain("a.ts");
-			expect(rendered).toContain("b.ts");
-		}
+		expect(render(timedOut)).toContain("timed out");
+		const limited = render(limitOnly);
+		expect(limited).toContain("truncated");
+		expect(limited).not.toContain("timed out");
+	});
+
+	it("renders a genuinely empty result as no files found", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const result = {
+			content: [{ type: "text", text: "No files found matching pattern" }],
+			details: {
+				fileCount: 0,
+				files: [],
+				truncated: false,
+			},
+		};
+
+		const renderedLines = globToolRenderer
+			.renderResult(result as never, { expanded: true, isPartial: false }, uiTheme, { paths: "src/*.zig" })
+			.render(240);
+		const plain = sanitizeText(renderedLines.join("\n"));
+
+		expect(plain).toContain("No files found");
+		expect(plain).not.toContain("incomplete");
 	});
 
 	it("keeps raw control-byte file targets while displaying sanitized labels in terminal and native results", async () => {

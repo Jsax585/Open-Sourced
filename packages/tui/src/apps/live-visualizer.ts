@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "../app-keybindings";
 import type { Component } from "../tui";
 import { OverlayPanel, PanelRows } from "../chrome/overlay-box";
@@ -14,15 +13,6 @@ import { Memo } from "../native/memo";
 
 /** Distinct states of a realtime call connection. */
 export type LivePhase = "connecting" | "listening" | "working" | "speaking" | "muted" | "error";
-
-const PHASE_LABELS: Record<LivePhase, string> = {
-	connecting: t("connecting"),
-	listening: t("listening"),
-	working: t("working\u0004packages/tui/src/apps/live-visualizer.ts:PHASE_LABELS.working"),
-	speaking: t("speaking"),
-	muted: t("muted"),
-	error: t("error"),
-};
 
 const PHASE_ICONS: Record<LivePhase, string> = {
 	connecting: "○",
@@ -182,15 +172,15 @@ export class LiveVisualizer implements Component {
 			const phase = this.#phase;
 			const status =
 				phase === "working"
-					? node("spinner", { label: [span(PHASE_LABELS[phase], PHASE_COLORS[phase])], tone: PHASE_TONES[phase] })
-					: text([span(`${PHASE_ICONS[phase]} ${PHASE_LABELS[phase]}`, PHASE_COLORS[phase])]);
+					? node("spinner", { label: [span(phase, PHASE_COLORS[phase])], tone: PHASE_TONES[phase] })
+					: text([span(`${PHASE_ICONS[phase]} ${phase}`, PHASE_COLORS[phase])]);
 			const tone = phase === "muted" ? "muted" : phase === "error" ? "error" : "success";
 			return card({ role: "omp.app.live", tone: PHASE_TONES[phase] }, [
 				node("row", { gap: "sm", align: "center" }, [status], "head"),
 				meter
 					? row(
 							[
-								text([span(t("mic"), "muted")]),
+								text([span("mic", "muted")]),
 								node("meter", { value: level, style: "bar", size: "md", tone, grow: 1 }),
 							],
 							{
@@ -199,12 +189,12 @@ export class LiveVisualizer implements Component {
 								role: "omp.app.live.level",
 							},
 						)
-					: node("progress", { value: level, tone, label: [span(t("mic"), "muted")] }),
+					: node("progress", { value: level, tone, label: [span("mic", "muted")] }),
 				text([span(this.#userTranscript, "accent")], { wrap: "none", truncate: "start" }),
 				actionBar([
 					null,
-					actionButton(phase === "muted" ? t("Unmute") : t("Mute"), "mute", { keys: "space" }),
-					actionButton(t("End call"), "end", { keys: "escape", tone: "error" }),
+					actionButton(phase === "muted" ? "Unmute" : "Mute", "mute", { keys: "space" }),
+					actionButton("End call", "end", { keys: "escape", tone: "error" }),
 				]),
 			]);
 		});
@@ -272,8 +262,8 @@ export class LiveVisualizer implements Component {
 	#renderFooter(width: number, innerWidth: number): string {
 		const frames = theme.spinnerFrames;
 		const icon = this.#phase === "working" ? frames[this.#frame % frames.length] : PHASE_ICONS[this.#phase];
-		const status = `${icon} ${PHASE_LABELS[this.#phase]}`;
-		const fullLabel = t(" {0} · {1} mute · {2} end ", `${status}`, `${formatKeyHint("space")}`, `${formatKeyHint("escape")}`);
+		const status = `${icon} ${this.#phase}`;
+		const fullLabel = ` ${status} · ${formatKeyHint("space")} mute · ${formatKeyHint("escape")} end `;
 		const shortLabel = ` ${status} `;
 		const label =
 			innerWidth >= visibleWidth(fullLabel) + 1

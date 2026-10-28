@@ -48,7 +48,7 @@ describe("tiny-models download model resolution", () => {
 
 		await expect(
 			runTinyModelsCommand({ action: "download", model: "lfm2.5-350m", flags: { json: true } }),
-		).rejects.toThrow();
+		).rejects.toThrow("One or more tiny title models failed to download");
 
 		expect(JSON.parse(output.join(""))).toEqual({
 			results: [{ model: "lfm2.5-350m", ok: false, error: "Error: runtime install failed\n    at worker" }],
@@ -69,13 +69,15 @@ describe("tiny-models download model resolution", () => {
 		});
 
 		try {
-			await expect(runTinyModelsCommand({ action: "download", model: "lfm2.5-350m", flags: {} })).rejects.toThrow();
+			await expect(runTinyModelsCommand({ action: "download", model: "lfm2.5-350m", flags: {} })).rejects.toThrow(
+				"One or more tiny title models failed to download",
+			);
 		} finally {
 			if (isTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", isTtyDescriptor);
 			else Reflect.deleteProperty(process.stdout, "isTTY");
 		}
 
-		expect(output.join("")).toContain("runtime install failed");
+		expect(output.join("")).toContain("Failed to download LFM2.5 350M: runtime install failed.");
 	});
 
 	it("prints actionable CUDA provider diagnostics from worker errors", async () => {
@@ -99,13 +101,16 @@ describe("tiny-models download model resolution", () => {
 		});
 
 		try {
-			await expect(runTinyModelsCommand({ action: "download", model: "lfm2.5-350m", flags: {} })).rejects.toThrow();
+			await expect(runTinyModelsCommand({ action: "download", model: "lfm2.5-350m", flags: {} })).rejects.toThrow(
+				"One or more tiny title models failed to download",
+			);
 		} finally {
 			if (isTtyDescriptor) Object.defineProperty(process.stdout, "isTTY", isTtyDescriptor);
 			else Reflect.deleteProperty(process.stdout, "isTTY");
 		}
 
 		const text = output.join("");
+		expect(text).toContain("Failed to download LFM2.5 350M:");
 		expect(text).toContain("PI_TINY_DEVICE=cuda");
 		expect(text).toContain("libcudnn.so.9");
 		expect(text).toContain("tiny-title-runtime");

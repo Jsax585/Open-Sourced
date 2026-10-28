@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	RESOLVE_DEVICE_NAME,
 	REJECT_DEVICE_NAME,
@@ -241,7 +240,7 @@ async function runResolveInvocation(
 			}
 			if (error instanceof ToolError) throw error;
 			const message = error instanceof Error ? error.message : String(error);
-			throw new ToolError(t("Apply failed: {0}", `${message}`));
+			throw new ToolError(`Apply failed: ${message}`);
 		}
 		return {
 			...result,
@@ -286,7 +285,7 @@ export async function dispatchResolutionDevice(
 		const handler = session.peekPlanProposalHandler?.();
 		if (!handler) {
 			throw new ToolError(
-				t("No plan is awaiting approval — {0} only accepts a plan title while plan mode is active.", `${PROPOSE_DEVICE_PATH}`),
+				`No plan is awaiting approval — ${PROPOSE_DEVICE_PATH} only accepts a plan title while plan mode is active.`,
 			);
 		}
 		const result = await handler(body);
@@ -308,14 +307,14 @@ export async function dispatchResolutionDevice(
 			const details: ResolveDetails = { action, reason: body };
 			return {
 				result: {
-					content: [{ type: "text", text: t("Nothing to reject; no pending action remains.{0}", `${proposeHint}`) }],
+					content: [{ type: "text", text: `Nothing to reject; no pending action remains.${proposeHint}` }],
 					details,
 				},
 				xdev: { ...xdevBase, inner: details },
 			};
 		}
 		throw new ToolError(
-			t("No pending action to apply — {0} is only valid while a staged preview is pending.{1}", `${RESOLVE_DEVICE_PATH}`, `${proposeHint}`),
+			`No pending action to apply — ${RESOLVE_DEVICE_PATH} is only valid while a staged preview is pending.${proposeHint}`,
 		);
 	}
 	const invocation: ResolveInvocation = { action, reason: body };

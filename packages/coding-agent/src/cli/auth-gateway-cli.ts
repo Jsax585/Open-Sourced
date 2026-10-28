@@ -14,7 +14,6 @@
  *   - `token` / `token --regenerate` — manages the gateway bearer token file.
  *   - `status` — prints the locally-stored gateway token and bind hint.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
@@ -137,7 +136,7 @@ function createBrokerClient(brokerConfig: AuthBrokerClientConfig): AuthBrokerCli
 
 async function fetchBrokerSnapshot(client: AuthBrokerClient): Promise<SnapshotResponse> {
 	const result = await client.fetchSnapshot();
-	if (result.status !== 200) throw new Error(t("Auth broker returned no initial snapshot"));
+	if (result.status !== 200) throw new Error("Auth broker returned no initial snapshot");
 	return result.snapshot;
 }
 
@@ -326,7 +325,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		);
 	}
 	if (flags.clients !== undefined && flags.noAuth) {
-		throw new Error(t("`--clients` needs bearer auth; drop `--no-auth`."));
+		throw new Error("`--clients` needs bearer auth; drop `--no-auth`.");
 	}
 	const bind = flags.bind ?? DEFAULT_AUTH_GATEWAY_BIND;
 	const gatewayToken = flags.noAuth ? null : await ensureToken();
@@ -340,7 +339,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 			clients = parseAuthGatewayClients(clientsText);
 		} catch (error) {
 			throw new Error(
-				t("Cannot load --clients {0}: {1}", `${clientsPath}`, `${error instanceof Error ? error.message : String(error)}`),
+				`Cannot load --clients ${clientsPath}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
@@ -411,18 +410,18 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 		excludeProviders: new Set(cfgDisabledProviders.get(settings)),
 		clients,
 	});
-	process.stdout.write(t("auth-gateway listening on {0}\n", `${handle.url}`));
+	process.stdout.write(`auth-gateway listening on ${handle.url}\n`);
 	if (gatewayToken) {
-		process.stdout.write(t("bearer token: {0} (chmod 0600)\n", `${getTokenFilePath()}`));
+		process.stdout.write(`bearer token: ${getTokenFilePath()} (chmod 0600)\n`);
 	} else {
-		process.stdout.write(t("auth: disabled (--no-auth) — any client can call this gateway\n"));
+		process.stdout.write(`auth: disabled (--no-auth) — any client can call this gateway\n`);
 	}
 	if (clientsPath !== undefined && clients !== undefined) {
 		process.stdout.write(
-			t("client tokens: {1} from {0} (re-read every {2}s)\n", `${clientsPath}`, `${clients.length}`, `${CLIENTS_RELOAD_INTERVAL_MS / 1000}`),
+			`client tokens: ${clients.length} from ${clientsPath} (re-read every ${CLIENTS_RELOAD_INTERVAL_MS / 1000}s)\n`,
 		);
 	}
-	process.stdout.write(t("upstream broker: {0}\n", `${brokerConfig.url}`));
+	process.stdout.write(`upstream broker: ${brokerConfig.url}\n`);
 
 	// `serve` is long-lived: rebuild the catalog periodically so models
 	// discovered after boot (for providers we already hold credentials for)
@@ -471,7 +470,7 @@ async function runServe(flags: AuthGatewayCommandArgs["flags"]): Promise<void> {
 	const stop = async (signal: NodeJS.Signals): Promise<void> => {
 		if (shutdownStarted) return;
 		shutdownStarted = true;
-		process.stdout.write(t("\nReceived {0}, shutting down...\n", `${signal}`));
+		process.stdout.write(`\nReceived ${signal}, shutting down...\n`);
 		clearInterval(catalogRefresh);
 		clearInterval(credentialSync);
 		clearInterval(clientsReload);
@@ -542,9 +541,9 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			process.stdout.write(t("{0} Set OMP_AUTH_BROKER_URL.\n", `${chalk.yellow(t("No broker configured."))}`));
+			process.stdout.write(`${chalk.yellow("No broker configured.")} Set OMP_AUTH_BROKER_URL.\n`);
 			process.stdout.write(
-				t("token: {0} at {1}\n", `${status.tokenPresent ? chalk.green(t("present")) : chalk.red(t("missing"))}`, `${status.tokenFile}`),
+				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
 			);
 		}
 		process.exitCode = 1;
@@ -567,14 +566,16 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			const brokerLine = t("upstream broker: {0} ({1} credential{2})", `${brokerConfig.url}`, `${snapshot.credentials.length}`, `${snapshot.credentials.length === 1 ? "" : "s"}`);
-			process.stdout.write(`${tokenPresent ? chalk.green(t("ready")) : chalk.yellow(t("not ready"))} ${brokerLine}\n`);
+			const brokerLine = `upstream broker: ${brokerConfig.url} (${snapshot.credentials.length} credential${
+				snapshot.credentials.length === 1 ? "" : "s"
+			})`;
+			process.stdout.write(`${tokenPresent ? chalk.green("ready") : chalk.yellow("not ready")} ${brokerLine}\n`);
 			process.stdout.write(
-				t("token: {0} at {1}\n", `${tokenPresent ? chalk.green(t("present")) : chalk.red(t("missing"))}`, `${status.tokenFile}`),
+				`token: ${tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
 			);
 			if (!tokenPresent) {
 				process.stdout.write(
-					t("Run `omp auth-gateway token` or `omp auth-gateway serve` to create a bearer token.\n"),
+					"Run `omp auth-gateway token` or `omp auth-gateway serve` to create a bearer token.\n",
 				);
 			}
 		}
@@ -594,9 +595,9 @@ async function runStatus(flags: AuthGatewayCommandArgs["flags"]): Promise<void> 
 		if (flags.json) {
 			process.stdout.write(`${JSON.stringify(status)}\n`);
 		} else {
-			process.stdout.write(t("{0} upstream broker: {1}: {2}\n", `${chalk.red(t("FAILED"))}`, `${brokerConfig.url}`, `${message}`));
+			process.stdout.write(`${chalk.red("FAILED")} upstream broker: ${brokerConfig.url}: ${message}\n`);
 			process.stdout.write(
-				t("token: {0} at {1}\n", `${status.tokenPresent ? chalk.green(t("present")) : chalk.red(t("missing"))}`, `${status.tokenFile}`),
+				`token: ${status.tokenPresent ? chalk.green("present") : chalk.red("missing")} at ${status.tokenFile}\n`,
 			);
 		}
 		process.exitCode = 1;
@@ -622,7 +623,7 @@ export async function runAuthGatewayCommand(cmd: AuthGatewayCommandArgs): Promis
 			return;
 		default: {
 			const _exhaustive: never = cmd.action;
-			throw new Error(t("Unknown auth-gateway action: {0}", `${String(_exhaustive)}`));
+			throw new Error(`Unknown auth-gateway action: ${String(_exhaustive)}`);
 		}
 	}
 }

@@ -7,9 +7,6 @@ The companion relay server lives in the omp CLI (`omp browser-relay`, see `packa
 ## Setup
 
 1. `omp browser-relay install` — writes the bundled extension to `~/.omp/browser-relay/extension`, then load it via `chrome://extensions` → Developer mode → *Load unpacked*. (Or grab `omp-browser-relay-extension.zip` from GitHub releases.)
-
-The installer uses `OMP_LANG=ko` (default) or `OMP_LANG=en` for the options page and extension description. `OMP_LOCALE_DIR` can select an edited language pack; missing messages fall back to English. Re-run the installer and reload the extension after changing the selected language. Release zips use the language selected when they are built; embedded CLI assets remain English source templates and are localized at installation.
-
 2. Opt in, one of two ways:
    - **Per call** — pass `app: { relay: true }` to `browser.open(...)` in Eval. Works without any setting and persists nothing: the configured default for every other call and session stays whatever it already was.
    - **As the default** — `omp config set browser.relay true` makes the relay the default for **every session using this profile, in every project** (project-level settings, `PI_BROWSER_RELAY`, and an explicit `app` choice still take precedence). Any session's ordinary `browser.open(...)` call will then drive your real browser — including background sessions you aren't watching; without `app.target` such a call opens its own background tab in your logged-in profile.

@@ -25,59 +25,101 @@ beforeAll(async () => {
 });
 
 function renderPlain(component: Component, width = 120): string {
-	return Bun.stripANSI(component.render(width).join("\n"));
+	let rendered = "";
+	expect(() => {
+		rendered = Bun.stripANSI(component.render(width).join("\n"));
+	}).not.toThrow();
+	return rendered;
 }
 
 describe("tool path renderers with invalid provider arguments", () => {
 	for (const invalid of invalidPathCases) {
-		it(`read renderer preserves content with ${invalid.name}`, () => {
-			const component = readToolRenderer.renderResult(
-				{
-					content: [{ type: "text", text: "hello from read" }],
-					details: {
-						displayContent: { text: "hello from read", startLine: 1 },
-						contentType: "text/plain",
+		it(`read renderer does not throw for ${invalid.name}`, () => {
+			let callComponent: Component | undefined;
+			expect(() => {
+				callComponent = readToolRenderer.renderCall(
+					{ path: invalid.path },
+					{ expanded: false, isPartial: true },
+					uiTheme,
+				);
+			}).not.toThrow();
+			expect(renderPlain(callComponent!)).toContain("Read");
+
+			let resultComponent: Component | undefined;
+			expect(() => {
+				resultComponent = readToolRenderer.renderResult(
+					{
+						content: [{ type: "text", text: "hello from read" }],
+						details: {
+							displayContent: { text: "hello from read", startLine: 1 },
+							contentType: "text/plain",
+						},
 					},
-				},
-				{ expanded: false, isPartial: false },
-				uiTheme,
-				{ path: invalid.path },
-			);
-			expect(renderPlain(component)).toContain("hello from read");
+					{ expanded: false, isPartial: false },
+					uiTheme,
+					{ path: invalid.path },
+				);
+			}).not.toThrow();
+			const rendered = renderPlain(resultComponent!);
+			expect(rendered).toContain("Read");
+			expect(rendered).toContain("hello from read");
 		});
 
-		it(`write renderer preserves content with ${invalid.name}`, () => {
-			const call = writeToolRenderer.renderCall(
-				{ path: invalid.path, content: "first line\nsecond line" },
-				{ expanded: false, isPartial: true, spinnerFrame: 0 },
-				uiTheme,
-			);
-			expect(renderPlain(call!)).toContain("second line");
+		it(`write renderer does not throw for ${invalid.name}`, () => {
+			let callComponent: Component | undefined;
+			expect(() => {
+				callComponent = writeToolRenderer.renderCall(
+					{ path: invalid.path, content: "first line\nsecond line" },
+					{ expanded: false, isPartial: true, spinnerFrame: 0 },
+					uiTheme,
+				);
+			}).not.toThrow();
+			const callText = renderPlain(callComponent!);
+			expect(callText).toContain("Write");
+			expect(callText).toContain("second line");
 
-			const result = writeToolRenderer.renderResult(
-				{
-					content: [{ type: "text", text: "Wrote file" }],
-					details: { resolvedPath: "/tmp/example.ts" },
-				},
-				{ expanded: false, isPartial: false },
-				uiTheme,
-				{ path: invalid.path, content: "first line\nsecond line" },
-			);
-			expect(renderPlain(result)).toContain("first line");
+			let resultComponent: Component | undefined;
+			expect(() => {
+				resultComponent = writeToolRenderer.renderResult(
+					{
+						content: [{ type: "text", text: "Wrote file" }],
+						details: { resolvedPath: "/tmp/example.ts" },
+					},
+					{ expanded: false, isPartial: false },
+					uiTheme,
+					{ path: invalid.path, content: "first line\nsecond line" },
+				);
+			}).not.toThrow();
+			const resultText = renderPlain(resultComponent!);
+			expect(resultText).toContain("Write");
+			expect(resultText).toContain("first line");
 		});
 
-		it(`edit renderer preserves the diff with ${invalid.name}`, () => {
-			const component = editToolRenderer.renderResult(
-				{
-					content: [{ type: "text", text: "updated" }],
-					details: { diff: "-before\n+after" },
-				},
-				{ expanded: false, isPartial: false, renderContext: { editMode: "replace" } },
-				uiTheme,
-				{ path: invalid.path, oldText: "before", newText: "after" },
-			);
-			const rendered = renderPlain(component);
-			expect(rendered).toContain("before");
+		it(`edit renderer does not throw for ${invalid.name}`, () => {
+			let callComponent: Component | undefined;
+			expect(() => {
+				callComponent = editToolRenderer.renderCall(
+					{ path: invalid.path, oldText: "before", newText: "after" },
+					{ expanded: false, isPartial: true, spinnerFrame: 0, renderContext: { editMode: "replace" } },
+					uiTheme,
+				);
+			}).not.toThrow();
+			expect(renderPlain(callComponent!)).toContain("Edit");
+
+			let resultComponent: Component | undefined;
+			expect(() => {
+				resultComponent = editToolRenderer.renderResult(
+					{
+						content: [{ type: "text", text: "updated" }],
+						details: { diff: "-before\n+after" },
+					},
+					{ expanded: false, isPartial: false, renderContext: { editMode: "replace" } },
+					uiTheme,
+					{ path: invalid.path, oldText: "before", newText: "after" },
+				);
+			}).not.toThrow();
+			const rendered = renderPlain(resultComponent!);
+			expect(rendered).toContain("Edit");
 			expect(rendered).toContain("after");
 		});
 	}

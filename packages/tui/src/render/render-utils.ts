@@ -5,13 +5,12 @@
  * tool renderers to ensure a unified TUI experience.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { Ellipsis } from "@oh-my-pi/pi-natives";
 import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
-import { formatCount, pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
+import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatKeyHint, type KeyId } from "../app-keybindings";
 import { getKeybindings } from "../keybindings";
 import type { Theme } from "../theme/theme";
@@ -321,7 +320,7 @@ export function formatStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFram
 export function formatExpandHint(theme: Theme, expanded?: boolean, hasMore?: boolean): string {
 	if (expanded) return "";
 	if (hasMore === false) return "";
-	return theme.fg("dim", wrapBrackets(t("{0}: Expand", `${expandKeyHint()}`), theme));
+	return theme.fg("dim", wrapBrackets(`${expandKeyHint()}: Expand`, theme));
 }
 
 /**
@@ -339,7 +338,7 @@ export function formatBadge(label: string, color: ToolUIColor, theme: Theme): st
  */
 export function formatMoreItems(remaining: number, itemType: string): string {
 	const safeRemaining = Number.isFinite(remaining) ? remaining : 0;
-	return t("… {1} more {2}", `${(formatCount(itemType, safeRemaining))}`, `${(safeRemaining)}`, `${(pluralize(itemType, safeRemaining))}`);
+	return `… ${safeRemaining} more ${pluralize(itemType, safeRemaining)}`;
 }
 
 /**
@@ -384,7 +383,7 @@ export function capPreviewLines(
 	const visible = max <= 1 ? [] : lines.slice(lines.length - (max - 1));
 	const hidden = lines.length - visible.length;
 	const hint = options.expandHint === false ? "" : formatExpandHint(theme, false, true);
-	const marker = t("… {0} earlier line{2}{1}", `${(hidden)}`, `${(hint ? ` ${hint}` : "")}`, `${(hidden === 1 ? "" : "s")}`);
+	const marker = `… ${hidden} earlier ${pluralize("line", hidden)}${hint ? ` ${hint}` : ""}`;
 	return [`${options.prefix ?? ""}${theme.fg("dim", marker)}`, ...visible];
 }
 
@@ -395,7 +394,7 @@ export function formatMeta(meta: string[], theme: Theme): string {
 
 function sanitizeErrorText(message: string | undefined): string {
 	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
-	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : t("Unknown error");
+	return clean ? replaceTabs(truncateToWidth(clean, TRUNCATE_LENGTHS.LINE)) : "Unknown error";
 }
 
 /**
@@ -1044,7 +1043,7 @@ export function sanitizeDisplayWarnings(warnings: readonly string[]): string[] {
 		.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)
 		.map(warning => truncateToWidth(sanitizeDisplayWarning(warning), TRUNCATE_LENGTHS.LONG));
 	const hidden = warnings.length - visible.length;
-	if (hidden > 0) visible.push(t("… {0} more warning{1}", `${(hidden)}`, `${(hidden === 1 ? "" : "s")}`));
+	if (hidden > 0) visible.push(`… ${hidden} more ${pluralize("warning", hidden)}`);
 	return visible;
 }
 

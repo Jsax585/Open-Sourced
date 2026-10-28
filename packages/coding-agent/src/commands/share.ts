@@ -7,7 +7,6 @@
  * `share.redactSecrets`.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { getAgentDir, isEnoent } from "@oh-my-pi/pi-utils";
 import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { shareHelp as commandHelp } from "../cli/command-help";
@@ -24,13 +23,13 @@ export default class Share extends Command {
 	static description = commandHelp.description;
 	static args = {
 		session: Args.string({
-			description: t("Session id (prefix) or path to a session .jsonl"),
+			description: "Session id (prefix) or path to a session .jsonl",
 			required: true,
 		}),
 	};
 	static flags = {
 		gist: Flags.boolean({
-			description: t("Upload to a secret GitHub gist instead of the share server"),
+			description: "Upload to a secret GitHub gist instead of the share server",
 			default: false,
 		}),
 	};
@@ -54,7 +53,7 @@ export default class Share extends Command {
 			}
 		}
 		if (!sm) {
-			process.stderr.write(t("Session \"{0}\" not found.\n", `${sessionArg}`));
+			process.stderr.write(`Session "${sessionArg}" not found.\n`);
 			process.exitCode = 1;
 			return;
 		}
@@ -74,9 +73,9 @@ export default class Share extends Command {
 			store: flags.gist ? "gist" : cfgShareStore.get(settings),
 			obfuscator,
 		});
-		const lines = [t("Share URL: {0}", `${result.url}`)];
+		const lines = [`Share URL: ${result.url}`];
 		if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
-		if (result.truncated) lines.push(t("Note: large content was trimmed to fit the share size limit."));
+		if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
 		console.log(lines.join("\n"));
 	}
 }

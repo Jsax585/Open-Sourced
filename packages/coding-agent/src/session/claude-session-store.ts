@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type * as fsTypes from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -403,10 +402,10 @@ export class ClaudeSessionStore implements ForeignSessionStore {
 			[records, stats] = await Promise.all([collectForeignJsonRecords(info.path), fs.stat(info.path)]);
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
-			throw new Error(t("Unable to read Claude session {0}: {1}", `${info.id}`, `${detail}`));
+			throw new Error(`Unable to read Claude session ${info.id}: ${detail}`);
 		}
 		if (records.length === 0 && stats.size > 0)
-			throw new Error(t("Claude session {0} contains no readable records", `${info.id}`));
+			throw new Error(`Claude session ${info.id} contains no readable records`);
 
 		const sourceParents = new Map<string, string | null>();
 		let sourceCwd: string | undefined;

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type AgentCompactionThresholdOverride,
 	validateModelCompactionThresholds,
@@ -17,9 +16,9 @@ export const cfgWorkspaceAdditionalDirectories = register({
 	ui: {
 		tab: "context",
 		group: "General",
-		label: t("Additional Workspace Dirs"),
+		label: "Additional Workspace Dirs",
 		description:
-			t("Extra workspace directories added to every session as additional roots (multi-root workspace). Managed live via /add-dir and /remove-dir. Paths resolve relative to cwd; absolute paths recommended. The agent is told these roots exist and can read/grep/glob them."),
+			"Extra workspace directories added to every session as additional roots (multi-root workspace). Managed live via /add-dir and /remove-dir. Paths resolve relative to cwd; absolute paths recommended. The agent is told these roots exist and can read/grep/glob them.",
 	},
 });
 
@@ -33,14 +32,14 @@ const BUILTIN_CONTEXT_FILE_NAMES: Record<string, true> = {
 
 /** Why `entry` is not a valid `contextFiles.extra` name; undefined for a plain, non-built-in file name. */
 function contextFileNameError(entry: unknown): string | undefined {
-	if (typeof entry !== "string") return t("contextFiles.extra entries must be strings ({0})", `${String(entry)}`);
+	if (typeof entry !== "string") return `contextFiles.extra entries must be strings (${String(entry)})`;
 	const name = entry.trim();
-	if (name === "") return t("contextFiles.extra entries must not be empty");
+	if (name === "") return "contextFiles.extra entries must not be empty";
 	if (BUILTIN_CONTEXT_FILE_NAMES[name.toLowerCase()] === true) {
-		return t("contextFiles.extra cannot list a built-in context file ({0})", `${name}`);
+		return `contextFiles.extra cannot list a built-in context file (${name})`;
 	}
 	if (name === "." || name === ".." || name.includes("/") || name.includes("\\") || name.includes("\0")) {
-		return t("contextFiles.extra entries must be file names, not paths ({0})", `${name}`);
+		return `contextFiles.extra entries must be file names, not paths (${name})`;
 	}
 	return undefined;
 }
@@ -53,15 +52,15 @@ export const cfgContextFilesExtra = register({
 	ui: {
 		tab: "context",
 		group: "General",
-		label: t("Extra Context Files"),
+		label: "Extra Context Files",
 		editor: "json",
 		description:
-			t("Extra instruction filenames loaded beside AGENTS.md. Use a JSON list of names, not paths, e.g. [\"AGENTS.local.md\"]; [] disables extras. Start a new session to load them."),
+			'Extra instruction filenames loaded beside AGENTS.md. Use a JSON list of names, not paths, e.g. ["AGENTS.local.md"]; [] disables extras. Start a new session to load them.',
 		condition: "contextFilesExtraNotProject",
 	},
 	validate: raw => {
 		if (raw === undefined) return;
-		if (!Array.isArray(raw)) throw new Error(t("contextFiles.extra must be a list of file names"));
+		if (!Array.isArray(raw)) throw new Error("contextFiles.extra must be a list of file names");
 		for (const entry of raw) {
 			const error = contextFileNameError(entry);
 			if (error !== undefined) throw new Error(error);
@@ -81,9 +80,9 @@ export const cfgContextPromotionEnabled = register({
 	ui: {
 		tab: "context",
 		group: "General",
-		label: t("Auto-Promote Context"),
+		label: "Auto-Promote Context",
 		description:
-			t("Promote to the model's contextPromotionTarget on context overflow instead of compacting. Retry fallback switches are controlled by Retry Model Fallback"),
+			"Promote to the model's contextPromotionTarget on context overflow instead of compacting. Retry fallback switches are controlled by Retry Model Fallback",
 	},
 });
 
@@ -97,9 +96,9 @@ export const cfgExtendedContext = register({
 	ui: {
 		tab: "context",
 		group: "General",
-		label: t("Extended Context"),
+		label: "Extended Context",
 		description:
-			t("Use larger context windows where supported; may incur premium pricing. Off keeps default or standard-pricing windows"),
+			"Use larger context windows where supported; may incur premium pricing. Off keeps default or standard-pricing windows",
 	},
 });
 
@@ -111,8 +110,8 @@ export const cfgCompactionEnabled = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Auto-Compact"),
-		description: t("Automatically compact context when it gets too large"),
+		label: "Auto-Compact",
+		description: "Automatically compact context when it gets too large",
 	},
 });
 
@@ -123,8 +122,8 @@ export const cfgCompactionExperimentalContextManagement = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Notes-backed context windows (experimental)"),
-		description: t("Keep persistent notes and searchable raw history across context windows."),
+		label: "Notes-backed context windows (experimental)",
+		description: "Keep persistent notes and searchable raw history across context windows.",
 	},
 });
 
@@ -135,9 +134,9 @@ export const cfgCompactionMidTurnEnabled = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Mid-Turn Compaction"),
+		label: "Mid-Turn Compaction",
 		description:
-			t("Check thresholds at safe mid-turn tool-loop boundaries before the next provider request; subagents always check, since their whole assignment is one turn"),
+			"Check thresholds at safe mid-turn tool-loop boundaries before the next provider request; subagents always check, since their whole assignment is one turn",
 	},
 });
 
@@ -148,9 +147,9 @@ export const cfgCompactionMethodOrder = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Compaction Method Order"),
+		label: "Compaction Method Order",
 		description:
-			t("Preferred fallback order for automatic context maintenance; unavailable or failed methods advance to the next choice"),
+			"Preferred fallback order for automatic context maintenance; unavailable or failed methods advance to the next choice",
 		options: COMPACTION_METHOD_CHOICES,
 		ordered: true,
 	},
@@ -163,22 +162,22 @@ export const cfgCompactionThresholdPercent = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Compaction Threshold"),
-		description: t("Percent threshold for context maintenance; set to Default to use legacy reserve-based behavior"),
+		label: "Compaction Threshold",
+		description: "Percent threshold for context maintenance; set to Default to use legacy reserve-based behavior",
 		options: [
-			{ value: "default", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Legacy reserve-based threshold") },
-			{ value: "10", label: "10%", description: t("Extremely early maintenance") },
-			{ value: "20", label: "20%", description: t("Very early maintenance") },
-			{ value: "30", label: "30%", description: t("Early maintenance") },
-			{ value: "40", label: "40%", description: t("Moderately early maintenance") },
-			{ value: "50", label: "50%", description: t("Halfway point") },
-			{ value: "60", label: "60%", description: t("Moderate context usage") },
-			{ value: "70", label: "70%", description: t("Balanced") },
-			{ value: "75", label: "75%", description: t("Slightly aggressive") },
-			{ value: "80", label: "80%", description: t("Typical threshold") },
-			{ value: "85", label: "85%", description: t("Aggressive context usage") },
-			{ value: "90", label: "90%", description: t("Very aggressive") },
-			{ value: "95", label: "95%", description: t("Near context limit") },
+			{ value: "default", label: "Default", description: "Legacy reserve-based threshold" },
+			{ value: "10", label: "10%", description: "Extremely early maintenance" },
+			{ value: "20", label: "20%", description: "Very early maintenance" },
+			{ value: "30", label: "30%", description: "Early maintenance" },
+			{ value: "40", label: "40%", description: "Moderately early maintenance" },
+			{ value: "50", label: "50%", description: "Halfway point" },
+			{ value: "60", label: "60%", description: "Moderate context usage" },
+			{ value: "70", label: "70%", description: "Balanced" },
+			{ value: "75", label: "75%", description: "Slightly aggressive" },
+			{ value: "80", label: "80%", description: "Typical threshold" },
+			{ value: "85", label: "85%", description: "Aggressive context usage" },
+			{ value: "90", label: "90%", description: "Very aggressive" },
+			{ value: "95", label: "95%", description: "Near context limit" },
 		],
 	},
 });
@@ -190,17 +189,17 @@ export const cfgCompactionThresholdTokens = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Compaction Token Limit"),
-		description: t("Fixed token limit for context maintenance; overrides percentage if set"),
+		label: "Compaction Token Limit",
+		description: "Fixed token limit for context maintenance; overrides percentage if set",
 		options: [
-			{ value: "default", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Use percentage-based threshold") },
-			{ value: "25000", label: t("25K tokens"), description: t("1/8 of a 200K window") },
-			{ value: "50000", label: t("50K tokens"), description: t("1/4 of a 200K window") },
-			{ value: "100000", label: t("100K tokens"), description: t("1/2 of a 200K window") },
-			{ value: "150000", label: t("150K tokens"), description: t("3/4 of a 200K window") },
-			{ value: "200000", label: t("200K tokens"), description: t("Full standard context window") },
-			{ value: "300000", label: t("300K tokens"), description: t("Large context window") },
-			{ value: "500000", label: t("500K tokens"), description: t("Very large context window") },
+			{ value: "default", label: "Default", description: "Use percentage-based threshold" },
+			{ value: "25000", label: "25K tokens", description: "1/8 of a 200K window" },
+			{ value: "50000", label: "50K tokens", description: "1/4 of a 200K window" },
+			{ value: "100000", label: "100K tokens", description: "1/2 of a 200K window" },
+			{ value: "150000", label: "150K tokens", description: "3/4 of a 200K window" },
+			{ value: "200000", label: "200K tokens", description: "Full standard context window" },
+			{ value: "300000", label: "300K tokens", description: "Large context window" },
+			{ value: "500000", label: "500K tokens", description: "Very large context window" },
 		],
 	},
 });
@@ -240,8 +239,8 @@ export const cfgCompactionHandoffSaveToDisk = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Save Handoff Docs"),
-		description: t("Save generated handoff documents to markdown files for the auto-handoff flow"),
+		label: "Save Handoff Docs",
+		description: "Save generated handoff documents to markdown files for the auto-handoff flow",
 	},
 });
 
@@ -252,8 +251,8 @@ export const cfgCompactionRemoteStreamingV2Enabled = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Remote Compaction V2"),
-		description: t("Use Responses streaming compaction for compatible remote compaction models"),
+		label: "Remote Compaction V2",
+		description: "Use Responses streaming compaction for compatible remote compaction models",
 	},
 });
 
@@ -264,9 +263,9 @@ export const cfgCompactionAsyncEnabled = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Async Compaction"),
+		label: "Async Compaction",
 		description:
-			t("Speculatively summarize in the background as context nears the compaction threshold, then splice the ready result in when the threshold is crossed"),
+			"Speculatively summarize in the background as context nears the compaction threshold, then splice the ready result in when the threshold is crossed",
 	},
 });
 
@@ -308,8 +307,8 @@ export const cfgCompactionIdleEnabled = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Idle Compaction"),
-		description: t("Compact context while idle when token count exceeds threshold"),
+		label: "Idle Compaction",
+		description: "Compact context while idle when token count exceeds threshold",
 	},
 });
 
@@ -320,18 +319,18 @@ export const cfgCompactionIdleThresholdTokens = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Idle Compaction Threshold"),
-		description: t("Token count above which idle compaction triggers"),
+		label: "Idle Compaction Threshold",
+		description: "Token count above which idle compaction triggers",
 		options: [
-			{ value: "100000", label: t("100K tokens") },
-			{ value: "200000", label: t("200K tokens") },
-			{ value: "300000", label: t("300K tokens") },
-			{ value: "400000", label: t("400K tokens") },
-			{ value: "500000", label: t("500K tokens") },
-			{ value: "600000", label: t("600K tokens") },
-			{ value: "700000", label: t("700K tokens") },
-			{ value: "800000", label: t("800K tokens") },
-			{ value: "900000", label: t("900K tokens") },
+			{ value: "100000", label: "100K tokens" },
+			{ value: "200000", label: "200K tokens" },
+			{ value: "300000", label: "300K tokens" },
+			{ value: "400000", label: "400K tokens" },
+			{ value: "500000", label: "500K tokens" },
+			{ value: "600000", label: "600K tokens" },
+			{ value: "700000", label: "700K tokens" },
+			{ value: "800000", label: "800K tokens" },
+			{ value: "900000", label: "900K tokens" },
 		],
 	},
 });
@@ -343,16 +342,16 @@ export const cfgCompactionIdleTimeoutSeconds = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Idle Compaction Delay"),
+		label: "Idle Compaction Delay",
 		description:
-			t("Seconds to wait while idle before compacting; with a 1-hour prompt cache, compaction instead runs just before the cache expires"),
+			"Seconds to wait while idle before compacting; with a 1-hour prompt cache, compaction instead runs just before the cache expires",
 		options: [
-			{ value: "60", label: t("1 minute") },
-			{ value: "120", label: t("2 minutes") },
-			{ value: "300", label: t("5 minutes") },
-			{ value: "600", label: t("10 minutes") },
-			{ value: "1800", label: t("30 minutes") },
-			{ value: "3600", label: t("1 hour") },
+			{ value: "60", label: "1 minute" },
+			{ value: "120", label: "2 minutes" },
+			{ value: "300", label: "5 minutes" },
+			{ value: "600", label: "10 minutes" },
+			{ value: "1800", label: "30 minutes" },
+			{ value: "3600", label: "1 hour" },
 		],
 	},
 });
@@ -364,8 +363,8 @@ export const cfgCompactionSupersedeReads = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Supersede Stale Reads"),
-		description: t("Prune older read results when the same file is read again (cache-aware, runs every turn)"),
+		label: "Supersede Stale Reads",
+		description: "Prune older read results when the same file is read again (cache-aware, runs every turn)",
 	},
 });
 
@@ -376,9 +375,9 @@ export const cfgCompactionDropUseless = register({
 	ui: {
 		tab: "context",
 		group: "Compaction",
-		label: t("Elide Uneventful Results"),
+		label: "Elide Uneventful Results",
 		description:
-			t("Prune tool results flagged contextually useless (no matches, timed-out waits) once consumed (cache-aware)"),
+			"Prune tool results flagged contextually useless (no matches, timed-out waits) once consumed (cache-aware)",
 	},
 });
 
@@ -421,20 +420,20 @@ export const cfgSnapcompactSystemPrompt = register({
 	ui: {
 		tab: "context",
 		group: "Experimental",
-		label: t("Snapcompact System Prompt"),
+		label: "Snapcompact System Prompt",
 		description:
-			t("Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text."),
+			"Experimental: render selected system prompt text as dense PNG image(s) and attach to the first user message (vision models only). Saves tokens; loses prompt caching for imaged text.",
 		options: [
-			{ value: "none", label: t("None"), description: t("Keep the system prompt as text.") },
+			{ value: "none", label: "None", description: "Keep the system prompt as text." },
 			{
 				value: "agents-md",
 				label: "AGENTS.md",
-				description: t("Only move loaded context-file instructions to images, when that saves tokens."),
+				description: "Only move loaded context-file instructions to images, when that saves tokens.",
 			},
 			{
 				value: "all",
-				label: t("All"),
-				description: t("Move the full system prompt to images, when that saves tokens."),
+				label: "All",
+				description: "Move the full system prompt to images, when that saves tokens.",
 			},
 		],
 	},
@@ -447,9 +446,9 @@ export const cfgSnapcompactToolResults = register({
 	ui: {
 		tab: "context",
 		group: "Experimental",
-		label: t("Snapcompact Tool Results"),
+		label: "Snapcompact Tool Results",
 		description:
-			t("Experimental: render large tool results, the newest one included, as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated search and command output; read results stay text unless the model is known to edit exactly from images."),
+			"Experimental: render large tool results, the newest one included, as dense PNG image(s) instead of text (vision models only). Saves tokens on accumulated search and command output; read results stay text unless the model is known to edit exactly from images.",
 	},
 });
 
@@ -475,27 +474,27 @@ export const cfgToolsFormat = register({
 	ui: {
 		tab: "context",
 		group: "Experimental",
-		label: t("Tool Calling Mode"),
+		label: "Tool Calling Mode",
 		description:
-			t("Controls how tools are exposed to the model. Auto uses provider-native tool calls unless the selected model is marked as not supporting them, then falls back to the GLM owned dialect. Native forces provider-native tools; the other values force the named owned dialect."),
+			"Controls how tools are exposed to the model. Auto uses provider-native tool calls unless the selected model is marked as not supporting them, then falls back to the GLM owned dialect. Native forces provider-native tools; the other values force the named owned dialect.",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("Use native tool calls unless the model is known not to support them."),
+				label: "Auto",
+				description: "Use native tool calls unless the model is known not to support them.",
 			},
-			{ value: "native", label: t("Native"), description: t("Use provider-native tool calls.") },
-			{ value: "glm", label: "GLM", description: t("Use GLM-style in-band tool calls.") },
-			{ value: "hermes", label: "Hermes", description: t("Use Hermes-style in-band tool calls.") },
-			{ value: "kimi", label: "Kimi", description: t("Use Kimi-style in-band tool calls.") },
-			{ value: "xml", label: "XML", description: t("Use generic XML in-band tool calls.") },
-			{ value: "anthropic", label: "Anthropic", description: t("Use Anthropic-style in-band tool calls.") },
-			{ value: "deepseek", label: "DeepSeek", description: t("Use DeepSeek-style in-band tool calls.") },
-			{ value: "harmony", label: "Harmony", description: t("Use Harmony-style in-band tool calls.") },
-			{ value: "qwen3", label: "Qwen3", description: t("Use the Qwen3 owned dialect.") },
-			{ value: "gemini", label: "Gemini", description: t("Use the Gemini owned dialect.") },
-			{ value: "gemma", label: "Gemma", description: t("Use the Gemma owned dialect.") },
-			{ value: "minimax", label: "MiniMax", description: t("Use the MiniMax owned dialect.") },
+			{ value: "native", label: "Native", description: "Use provider-native tool calls." },
+			{ value: "glm", label: "GLM", description: "Use GLM-style in-band tool calls." },
+			{ value: "hermes", label: "Hermes", description: "Use Hermes-style in-band tool calls." },
+			{ value: "kimi", label: "Kimi", description: "Use Kimi-style in-band tool calls." },
+			{ value: "xml", label: "XML", description: "Use generic XML in-band tool calls." },
+			{ value: "anthropic", label: "Anthropic", description: "Use Anthropic-style in-band tool calls." },
+			{ value: "deepseek", label: "DeepSeek", description: "Use DeepSeek-style in-band tool calls." },
+			{ value: "harmony", label: "Harmony", description: "Use Harmony-style in-band tool calls." },
+			{ value: "qwen3", label: "Qwen3", description: "Use the Qwen3 owned dialect." },
+			{ value: "gemini", label: "Gemini", description: "Use the Gemini owned dialect." },
+			{ value: "gemma", label: "Gemma", description: "Use the Gemma owned dialect." },
+			{ value: "minimax", label: "MiniMax", description: "Use the MiniMax owned dialect." },
 		],
 	},
 });
@@ -508,102 +507,102 @@ export const cfgSnapcompactShape = register({
 	ui: {
 		tab: "context",
 		group: "Experimental",
-		label: t("Snapcompact Shape"),
+		label: "Snapcompact Shape",
 		description:
-			t("Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a shape tuned for the current model."),
+			"Frame shape snapcompact prints text with (compaction archive and inline imaging). Auto picks a shape tuned for the current model.",
 		options: [
 			{
 				value: "auto",
-				label: t("Auto"),
-				description: t("Picks a shape tuned for the current model, falling back to its provider family."),
+				label: "Auto",
+				description: "Picks a shape tuned for the current model, falling back to its provider family.",
 			},
 			{
 				value: "8x8r-bw",
-				label: t("8x8 repeated, black"),
+				label: "8x8 repeated, black",
 				description:
-					t("unscii square cell, black ink, every line printed twice with the copy on a pale highlight band."),
+					"unscii square cell, black ink, every line printed twice with the copy on a pale highlight band.",
 			},
 			{
 				value: "8x8r-sent",
-				label: t("8x8 repeated, sentence hues"),
-				description: t("Repeated grid with ink cycling six hues at sentence boundaries."),
+				label: "8x8 repeated, sentence hues",
+				description: "Repeated grid with ink cycling six hues at sentence boundaries.",
 			},
 			{
 				value: "8x8u-bw",
-				label: t("8x8, black"),
-				description: t("Plain unscii square cell, single-printed lines, black ink."),
+				label: "8x8, black",
+				description: "Plain unscii square cell, single-printed lines, black ink.",
 			},
 			{
 				value: "8x8u-sent",
-				label: t("8x8, sentence hues"),
-				description: t("Plain unscii square cell with sentence-hue ink."),
+				label: "8x8, sentence hues",
+				description: "Plain unscii square cell with sentence-hue ink.",
 			},
 			{
 				value: "6x6u-bw",
-				label: t("6x6 dense, black"),
-				description: t("unscii squeezed to 6x6 — densest readable cell, fewest frames — in black ink."),
+				label: "6x6 dense, black",
+				description: "unscii squeezed to 6x6 — densest readable cell, fewest frames — in black ink.",
 			},
 			{
 				value: "6x6u-sent",
-				label: t("6x6 dense, sentence hues"),
-				description: t("Densest cell with sentence-hue ink."),
+				label: "6x6 dense, sentence hues",
+				description: "Densest cell with sentence-hue ink.",
 			},
 			{
 				value: "5x8-bw",
-				label: t("5x8 legacy, black"),
-				description: t("Original X.org 5x8 glyphs on the 2576px frame, black ink."),
+				label: "5x8 legacy, black",
+				description: "Original X.org 5x8 glyphs on the 2576px frame, black ink.",
 			},
 			{
 				value: "5x8-sent",
-				label: t("5x8 legacy, sentence hues"),
-				description: t("The original snapcompact shape (pre-shape-table sessions rendered this)."),
+				label: "5x8 legacy, sentence hues",
+				description: "The original snapcompact shape (pre-shape-table sessions rendered this).",
 			},
 			{
 				value: "6x12-dim",
-				label: t("6x12, dimmed stopwords"),
-				description: t("X.org 6x12 glyphs, black ink, function words dimmed gray."),
+				label: "6x12, dimmed stopwords",
+				description: "X.org 6x12 glyphs, black ink, function words dimmed gray.",
 			},
 			{
 				value: "8x13-bw",
-				label: t("8x13, black"),
-				description: t("X.org 8x13 glyphs, black ink."),
+				label: "8x13, black",
+				description: "X.org 8x13 glyphs, black ink.",
 			},
 			{
 				value: "8on16-bw",
-				label: t("8x13 on 16px pitch, black"),
-				description: t("8x13 glyphs on an 8x16 cell (extra leading), black ink."),
+				label: "8x13 on 16px pitch, black",
+				description: "8x13 glyphs on an 8x16 cell (extra leading), black ink.",
 			},
 			{
 				value: "8on22-bw",
-				label: t("8x13 on 22px pitch (leading), black"),
+				label: "8x13 on 22px pitch (leading), black",
 				description:
-					t("8x13 glyphs on an 8x22 cell — extra line spacing so rows don't crowd. Default for OpenAI/Google."),
+					"8x13 glyphs on an 8x22 cell — extra line spacing so rows don't crowd. Default for OpenAI/Google.",
 			},
 			{
 				value: "11on16-bw",
-				label: t("8x13 on 11px advance (tracking), black"),
+				label: "8x13 on 11px advance (tracking), black",
 				description:
-					t("8x13 glyphs on an 11x16 cell — extra letter spacing so characters don't merge. Default for Anthropic."),
+					"8x13 glyphs on an 11x16 cell — extra letter spacing so characters don't merge. Default for Anthropic.",
 			},
 			{
 				value: "silver16-bw",
 				label: "Silver 16, CJK",
-				description: t("Embedded Silver TrueType font on a 16px grid for CJK and other non-Latin text."),
+				description: "Embedded Silver TrueType font on a 16px grid for CJK and other non-Latin text.",
 			},
 			{
 				value: "doc-8on16-bw",
-				label: t("Doc 8on16, black"),
-				description: t("Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink."),
+				label: "Doc 8on16, black",
+				description: "Two word-wrapped newspaper columns of 8x13 glyphs on a 16px pitch, black ink.",
 			},
 			{
 				value: "doc-8on16-sent",
-				label: t("Doc 8on16, sentence hues"),
-				description: t("Two-column doc layout with sentence-hue ink."),
+				label: "Doc 8on16, sentence hues",
+				description: "Two-column doc layout with sentence-hue ink.",
 			},
 			{
 				value: "doc-8on16-sent-dim",
-				label: t("Doc 8on16, sentence hues + dimmed stopwords"),
-				description: t("Two-column doc layout, sentence-hue ink, function words dimmed gray."),
+				label: "Doc 8on16, sentence hues + dimmed stopwords",
+				description: "Two-column doc layout, sentence-hue ink, function words dimmed gray.",
 			},
 		],
 	},
@@ -617,8 +616,8 @@ export const cfgBranchSummaryEnabled = register({
 	ui: {
 		tab: "context",
 		group: "General",
-		label: t("Branch Summaries"),
-		description: t("Prompt to summarize when leaving a branch"),
+		label: "Branch Summaries",
+		description: "Prompt to summarize when leaving a branch",
 	},
 });
 

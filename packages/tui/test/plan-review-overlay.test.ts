@@ -51,6 +51,7 @@ describe("PlanReviewOverlay", () => {
 			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		const out = render(overlay);
+		expect(out).toContain("Plan Review");
 		expect(out).toContain("My Plan");
 		expect(out).toContain("step one then step two");
 		expect(out).toContain("Plan mode - next step");
@@ -98,7 +99,7 @@ describe("PlanReviewOverlay", () => {
 		expect(onPick).toHaveBeenCalledWith("Approve and execute");
 	});
 
-	it("locks input after a pick, ignoring repeat keys", () => {
+	it("locks input and shows a submitting indicator after a pick, ignoring repeat keys", () => {
 		const onPick = vi.fn();
 		const onCancel = vi.fn();
 		const overlay = new PlanReviewOverlay(
@@ -109,6 +110,9 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(ENTER);
 		expect(onPick).toHaveBeenCalledTimes(1);
 		expect(onPick).toHaveBeenCalledWith("Approve and execute");
+
+		const committed = stripVTControlCharacters(overlay.render(80).join("\n"));
+		expect(committed).toContain("Approve and execute — submitting…");
 
 		// The async approval window keeps the overlay mounted; further keys must
 		// not fire a second callback or move the cursor (#5926).
@@ -309,7 +313,7 @@ describe("PlanReviewOverlay", () => {
 		expect(out).not.toContain("para 199");
 	});
 
-	it("copies the current plan content on c", () => {
+	it("copies the current plan content on c and advertises the hotkey when available", () => {
 		const onCopyPlan = vi.fn();
 		const overlay = new PlanReviewOverlay(
 			"# Original plan\n\nold body",
@@ -318,7 +322,7 @@ describe("PlanReviewOverlay", () => {
 		);
 
 		overlay.setPlanContent("# Edited plan\n\nnew body");
-		render(overlay);
+		expect(render(overlay)).toContain("c copy");
 		overlay.handleInput("c");
 
 		expect(onCopyPlan).toHaveBeenCalledTimes(1);
@@ -341,27 +345,23 @@ describe("PlanReviewOverlay", () => {
 		for (const line of body) expect(line).not.toContain("…");
 	});
 
-	it("shows a section sidebar and focuses it with Tab", () => {
-		const onAnnotationStateChange = vi.fn();
+	it("shows a header-less section sidebar and cycles focus regions with Tab", () => {
 		const overlay = new PlanReviewOverlay(
 			SECTION_PLAN,
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
-			{ onPick: vi.fn(), onCancel: vi.fn(), onAnnotationStateChange },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		const out = render(overlay);
-		// Two-column split chrome joins the title rule over the divider.
+		// Two-column split chrome (┬ joins the title rule over the divider) and the
+		// bare section list — no "Contents" label.
 		expect(out).toContain("┬");
+		expect(out).not.toContain("Contents");
 		expect(out).toContain("Overview");
-		// Tab into the ToC region and annotate its selected section.
+		// Tab into the ToC region surfaces its focus-specific help.
 		overlay.handleInput(TAB);
-		overlay.handleInput("a");
-		overlay.handleInput("sidebar note");
-		overlay.handleInput(ENTER);
-		expect(onAnnotationStateChange.mock.calls.at(-1)?.[0].annotations[0]).toMatchObject({
-			section: { title: "Overview" },
-			target: { kind: "section" },
-			note: "sidebar note",
-		});
+		const tocFocused = render(overlay);
+		expect(tocFocused).toContain("a annotate");
+		expect(tocFocused).toContain("d delete");
 	});
 
 	it("omits the single plan-title heading from the ToC", () => {
@@ -381,19 +381,18 @@ describe("PlanReviewOverlay", () => {
 	});
 
 	it("flows past the end of a region into the actions on Down", () => {
-		const onPick = vi.fn();
 		const overlay = new PlanReviewOverlay(
 			SECTION_PLAN,
 			{ promptTitle: "next", options: APPROVAL_OPTIONS },
-			{ onPick, onCancel: vi.fn() },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		render(overlay);
 		overlay.handleInput(TAB); // -> toc, first section
 		// Walk to the last ToC entry, then one more Down drops into the actions.
 		for (let i = 0; i < 10; i++) overlay.handleInput(DOWN);
-		overlay.handleInput(ENTER);
-		expect(onPick).toHaveBeenCalledTimes(1);
-		expect(APPROVAL_OPTIONS).toContain(onPick.mock.calls[0]?.[0]);
+		const out = render(overlay);
+		// Actions focus restores the option cursor highlight + actions help.
+		expect(out).not.toContain("a annotate");
 	});
 
 	it("scrolls the body exactly one line per keystroke in body focus", () => {
@@ -515,6 +514,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(ENTER);
 
 		overlay.handleInput("e");
+		expect(render(overlay)).toContain("Edit annotation");
 		expect(render(overlay)).toContain("first note");
 		expect(render(overlay)).toContain("second note");
 		overlay.handleInput(DOWN);
@@ -621,6 +621,7 @@ describe("PlanReviewOverlay", () => {
 		expect(topVisibleRow).toMatch(/^body-row-\d{3}$/);
 
 		overlay.handleInput("a");
+		expect(render(overlay)).toContain("Annotate");
 		for (const ch of note) overlay.handleInput(ch);
 		overlay.handleInput(ENTER);
 
@@ -905,6 +906,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput("\x05"); // ctrl+e
 
 		expect(editorDraft).toBe("draft");
+		expect(render(overlay)).toContain("Annotate");
 		expect(render(overlay)).toContain("- add rollback command");
 		// A multi-line draft renders as separate editor rows, never as an embedded newline.
 		const draftLines = overlay.render(80);
@@ -943,6 +945,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput("\x05"); // ctrl+e
 
 		const out = render(overlay);
+		expect(out).toContain("Annotate");
 		expect(out).toContain("draft");
 		expect(onFeedbackChange).not.toHaveBeenCalled();
 	});
@@ -979,6 +982,7 @@ describe("PlanReviewOverlay", () => {
 		// Click the "Steps" entry in the sidebar column.
 		expect(clickRow(overlay, "Steps", 4)).toBe(true);
 		const out = render(overlay);
+		expect(out).toContain("a annotate"); // ToC focus
 		// The body scrubbed to the clicked section.
 		expect(out.split("\n").slice(1, 5).join(" ")).toContain("Steps");
 	});
@@ -1001,7 +1005,6 @@ describe("PlanReviewOverlay", () => {
 
 	it("drives the slider with both arrows even when a sidebar is present", () => {
 		const changes: number[] = [];
-		const onPick = vi.fn();
 		const slider: HookSelectorSlider = {
 			caption: "continue with",
 			index: 0,
@@ -1011,7 +1014,7 @@ describe("PlanReviewOverlay", () => {
 		const overlay = new PlanReviewOverlay(
 			SECTION_PLAN,
 			{ promptTitle: "next", options: APPROVAL_OPTIONS, slider },
-			{ onPick, onCancel: vi.fn() },
+			{ onPick: vi.fn(), onCancel: vi.fn() },
 		);
 		render(overlay); // establish the sidebar
 		// The sidebar sits beside the body, not the slider, so left must still step
@@ -1020,8 +1023,7 @@ describe("PlanReviewOverlay", () => {
 		overlay.handleInput(LEFT); // 1 -> 0
 		expect(changes).toEqual([1, 0]);
 		// Focus stayed on the actions region (left did not jump to the ToC).
-		overlay.handleInput(ENTER);
-		expect(onPick).toHaveBeenCalledWith(APPROVAL_OPTIONS[0]);
+		expect(render(overlay)).not.toContain("a annotate");
 	});
 
 	it("fast-scrolls the body with Shift+Arrow", () => {

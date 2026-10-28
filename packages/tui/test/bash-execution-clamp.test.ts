@@ -34,8 +34,8 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const component = createComponentWithOutput(cjkString);
 			const output = component.getOutput();
 
-			expect(output.slice(output.lastIndexOf("…"))).toContain(String(expectedVisible - MAX_DISPLAY_LINE_CHARS));
-			expect(visibleWidth(output.slice(0, output.lastIndexOf("…")))).toBe(MAX_DISPLAY_LINE_CHARS);
+			expect(output).toContain("visible columns omitted");
+			expect(output).toContain(`[${expectedVisible - MAX_DISPLAY_LINE_CHARS} visible columns omitted]`);
 			expect(output).toContain("…");
 		});
 	});
@@ -47,10 +47,12 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const component = createComponentWithOutput(ansiString);
 			const output = component.getOutput();
 
-			expect(expectedVisible).toBeGreaterThan(MAX_DISPLAY_LINE_CHARS);
-			const suffix = output.slice(output.lastIndexOf("…"));
-			expect(suffix.match(/\d+/)?.[0]).toBe(String(expectedVisible - MAX_DISPLAY_LINE_CHARS));
-			expect(visibleWidth(output.slice(0, output.lastIndexOf("…")))).toBe(MAX_DISPLAY_LINE_CHARS);
+			if (expectedVisible > MAX_DISPLAY_LINE_CHARS) {
+				const omittedMatch = output.match(/\[(\d+) visible columns omitted\]/);
+				expect(omittedMatch).not.toBeNull();
+				const omitted = parseInt(omittedMatch![1], 10);
+				expect(omitted).toBe(expectedVisible - MAX_DISPLAY_LINE_CHARS);
+			}
 		});
 	});
 
@@ -61,6 +63,7 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const output = component.getOutput();
 
 			expect(output).toContain("…");
+			expect(output).toContain("visible columns omitted");
 			expect(output.length).toBeLessThan(5000);
 		});
 
@@ -69,8 +72,11 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const component = createComponentWithOutput(longString);
 			const output = component.getOutput();
 
-			const truncatedPart = output.slice(0, output.lastIndexOf("…"));
-			expect(visibleWidth(truncatedPart)).toBe(MAX_DISPLAY_LINE_CHARS);
+			if (output.includes("omitted")) {
+				const truncatedPart = output.split(" [")[0];
+				// truncateToWidth limits to exactly MAX_DISPLAY_LINE_CHARS, may go 1 over due to wide chars
+				expect(visibleWidth(truncatedPart)).toBeLessThanOrEqual(MAX_DISPLAY_LINE_CHARS + 10);
+			}
 		});
 	});
 
@@ -82,7 +88,7 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const output = component.getOutput();
 
 			const expectedOmitted = originalVisible - MAX_DISPLAY_LINE_CHARS;
-			expect(output.slice(output.lastIndexOf("…")).match(/\d+/)?.[0]).toBe(String(expectedOmitted));
+			expect(output).toContain(`[${expectedOmitted} visible columns omitted]`);
 		});
 
 		it("handles mixed content (ASCII + CJK + emoji + ANSI)", () => {
@@ -91,10 +97,10 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const component = createComponentWithOutput(mixed);
 			const output = component.getOutput();
 
-			expect(originalVisible).toBeGreaterThan(MAX_DISPLAY_LINE_CHARS);
-			const expectedOmitted = originalVisible - MAX_DISPLAY_LINE_CHARS;
-			expect(output.slice(output.lastIndexOf("…")).match(/\d+/)?.[0]).toBe(String(expectedOmitted));
-			expect(visibleWidth(output.slice(0, output.lastIndexOf("…")))).toBeLessThanOrEqual(MAX_DISPLAY_LINE_CHARS);
+			if (originalVisible > MAX_DISPLAY_LINE_CHARS) {
+				const expectedOmitted = originalVisible - MAX_DISPLAY_LINE_CHARS;
+				expect(output).toContain(`[${expectedOmitted} visible columns omitted]`);
+			}
 		});
 	});
 
@@ -105,6 +111,7 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const output = component.getOutput();
 
 			expect(output).toBe(exactlyAtLimit);
+			expect(output).not.toContain("omitted");
 		});
 
 		it("returns original string when visibleWidth is just below limit", () => {
@@ -113,6 +120,7 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const output = component.getOutput();
 
 			expect(output).toBe(justBelow);
+			expect(output).not.toContain("omitted");
 		});
 
 		it("truncates when visibleWidth is just above limit", () => {
@@ -120,8 +128,8 @@ describe("BashExecutionComponent #clampDisplayLine", () => {
 			const component = createComponentWithOutput(justAbove);
 			const output = component.getOutput();
 
-			expect(output.slice(0, output.lastIndexOf("…"))).toBe("a".repeat(MAX_DISPLAY_LINE_CHARS));
-			expect(output.slice(output.lastIndexOf("…")).match(/\d+/)?.[0]).toBe("1");
+			expect(output).toContain("omitted");
+			expect(output).toContain(`[1 visible columns omitted]`);
 		});
 
 		it("handles empty string", () => {

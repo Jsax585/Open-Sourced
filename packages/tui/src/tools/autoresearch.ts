@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "../components/text";
 import type { Theme } from "../theme/theme";
 import { replaceTabs, truncateToWidth, shortenPath } from "../render/render-utils";
@@ -167,10 +166,6 @@ function experimentTone(status: ExperimentStatus): TspTone {
 	return status === "keep" ? "success" : status === "discard" ? "warning" : "error";
 }
 
-function experimentStatusLabel(status: ExperimentStatus): string {
-	return status === "keep" ? t("success\u0004packages/tui/src/tools/autoresearch.ts:experimentStatusLabel") : status === "discard" ? t("warning\u0004packages/tui/src/tools/autoresearch.ts:experimentStatusLabel") : t("error\u0004packages/tui/src/tools/autoresearch.ts:experimentStatusLabel");
-}
-
 /** Plain first line of a free-form argument, for single-line heads. */
 function firstLine(value: string | undefined): string {
 	return (
@@ -226,7 +221,7 @@ function describeSummary(details: LogDetails): NativeToolView {
 		body: compact([
 			row(
 				[
-					node("badge", { text: experimentStatusLabel(experiment.status), tone }),
+					node("badge", { text: experiment.status.toUpperCase(), tone }),
 					text([span(plainText(experiment.description), "muted")], { wrap: "word", grow: 1 }),
 				],
 				{ gap: "sm" },
@@ -234,11 +229,11 @@ function describeSummary(details: LogDetails): NativeToolView {
 			kv([
 				[plainText(state.metricName), [span(formatNum(experiment.metric, state.metricUnit), "accent num")]],
 				[
-					t("baseline"),
+					"baseline",
 					state.bestMetric !== null ? [span(formatNum(state.bestMetric, state.metricUnit), "num")] : undefined,
 				],
-				[t("confidence"), state.confidence !== null ? [span(`${state.confidence.toFixed(1)}x`, "num")] : undefined],
-				[t("deviations"), deviations > 0 ? [span(String(deviations), "warning")] : undefined],
+				["confidence", state.confidence !== null ? [span(`${state.confidence.toFixed(1)}x`, "num")] : undefined],
+				["deviations", deviations > 0 ? [span(String(deviations), "warning")] : undefined],
 			]),
 		]),
 	};
@@ -247,16 +242,16 @@ function describeSummary(details: LogDetails): NativeToolView {
 function renderSummary(details: LogDetails, theme: Theme): string {
 	const { experiment, state } = details;
 	const color = experiment.status === "keep" ? "success" : experiment.status === "discard" ? "warning" : "error";
-	let summary = `${theme.fg(color, experimentStatusLabel(experiment.status))} ${theme.fg("muted", truncateToWidth(replaceTabs(experiment.description), 100))}`;
+	let summary = `${theme.fg(color, experiment.status.toUpperCase())} ${theme.fg("muted", truncateToWidth(replaceTabs(experiment.description), 100))}`;
 	summary += ` ${theme.fg("accent", `${state.metricName}=${formatNum(experiment.metric, state.metricUnit)}`)}`;
 	if (state.bestMetric !== null) {
-		summary += ` ${theme.fg("dim", t("baseline {0}", `${formatNum(state.bestMetric, state.metricUnit)}`))}`;
+		summary += ` ${theme.fg("dim", `baseline ${formatNum(state.bestMetric, state.metricUnit)}`)}`;
 	}
 	if (state.confidence !== null) {
-		summary += ` ${theme.fg("dim", t("conf {0}x\u0004packages/tui/src/tools/autoresearch.ts:renderSummary", `${state.confidence.toFixed(1)}`))}`;
+		summary += ` ${theme.fg("dim", `conf ${state.confidence.toFixed(1)}x`)}`;
 	}
 	if (details.scopeDeviations.length > 0) {
-		summary += ` ${theme.fg("warning", t("deviations:{0}", `${details.scopeDeviations.length}`))}`;
+		summary += ` ${theme.fg("warning", `deviations:${details.scopeDeviations.length}`)}`;
 	}
 	return summary;
 }
@@ -267,7 +262,7 @@ export const logExperimentToolRenderer = {
 		const color = args.status === "keep" ? "success" : args.status === "discard" ? "warning" : "error";
 		const description = truncateToWidth(replaceTabs(args.description), 100);
 		return new Text(
-			`${theme.fg("toolTitle", theme.bold("log_experiment"))} ${theme.fg(color, experimentStatusLabel(args.status))} ${theme.fg("muted", description)}`,
+			`${theme.fg("toolTitle", theme.bold("log_experiment"))} ${theme.fg(color, args.status)} ${theme.fg("muted", description)}`,
 			0,
 			0,
 		);
@@ -283,7 +278,7 @@ export const logExperimentToolRenderer = {
 		return {
 			head: toolHead(
 				"log_experiment",
-				args.status ? span(experimentStatusLabel(args.status), experimentTone(args.status)) : undefined,
+				args.status ? span(args.status, experimentTone(args.status)) : undefined,
 				span(firstLine(args.description), "muted"),
 			),
 		};
@@ -301,15 +296,15 @@ export const logExperimentToolRenderer = {
 function describeStatus(details: RunDetails): { tone: TspTone; node: NativeNode } {
 	const duration = `${details.durationSeconds.toFixed(1)}s`;
 	let tone: TspTone = "success";
-	let label = t("PASS");
+	let label = "PASS";
 	let meta = duration;
 	if (details.timedOut) {
 		tone = "error";
-		label = t("TIMEOUT");
+		label = "TIMEOUT";
 	} else if (details.exitCode !== 0) {
 		tone = "error";
-		label = t("FAIL");
-		meta = t("exit={0} {1}", `${details.exitCode}`, `${duration}`);
+		label = "FAIL";
+		meta = `exit=${details.exitCode} ${duration}`;
 	} else if (details.parsedPrimary !== null) {
 		meta = `${duration} ${plainText(details.metricName)}=${formatNum(details.parsedPrimary, details.metricUnit)}`;
 	}
@@ -321,16 +316,16 @@ function describeStatus(details: RunDetails): { tone: TspTone; node: NativeNode 
 
 function renderStatus(details: RunDetails, theme: Theme): string {
 	if (details.timedOut) {
-		return theme.fg("error", t("TIMEOUT {0}s", `${details.durationSeconds.toFixed(1)}`));
+		return theme.fg("error", `TIMEOUT ${details.durationSeconds.toFixed(1)}s`);
 	}
 	if (details.exitCode !== 0) {
-		return theme.fg("error", t("FAIL exit={0} {1}s", `${details.exitCode}`, `${details.durationSeconds.toFixed(1)}`));
+		return theme.fg("error", `FAIL exit=${details.exitCode} ${details.durationSeconds.toFixed(1)}s`);
 	}
 	const metric =
 		details.parsedPrimary !== null
 			? ` ${details.metricName}=${formatNum(details.parsedPrimary, details.metricUnit)}`
 			: "";
-	return theme.fg("success", t("PASS {0}s{1}", `${details.durationSeconds.toFixed(1)}`, `${metric}`));
+	return theme.fg("success", `PASS ${details.durationSeconds.toFixed(1)}s${metric}`);
 }
 
 function isRunDetails(value: unknown): value is RunDetails {
@@ -354,7 +349,7 @@ export const runExperimentToolRenderer = {
 	},
 	renderResult(result, options, theme): Text {
 		if (isProgressDetails(result.details)) {
-			const header = theme.fg("warning", t("Running {0}...", `${result.details.elapsed}`));
+			const header = theme.fg("warning", `Running ${result.details.elapsed}...`);
 			const preview = replaceTabs(result.content.find(part => part.type === "text")?.text ?? "");
 			return new Text(preview ? `${header}\n${theme.fg("dim", preview)}` : header, 0, 0);
 		}
@@ -371,7 +366,7 @@ export const runExperimentToolRenderer = {
 		);
 		const suffix =
 			options.expanded && details.truncation && details.fullOutputPath
-				? `\n${theme.fg("warning", t("Full output: {0}", `${shortenPath(details.fullOutputPath)}`))}`
+				? `\n${theme.fg("warning", `Full output: ${shortenPath(details.fullOutputPath)}`)}`
 				: "";
 		return new Text(preview ? `${statusText}\n${theme.fg("dim", preview)}${suffix}` : statusText, 0, 0);
 	},
@@ -387,7 +382,7 @@ export const runExperimentToolRenderer = {
 					tone: "warning",
 					preview: { lines: 6 },
 					body: compact([
-						node("spinner", { label: [span(t("Running {0}…", `${plainText(details.elapsed)}`), "warning")] }),
+						node("spinner", { label: [span(`Running ${plainText(details.elapsed)}…`, "warning")] }),
 						output.trim() ? ansi(output, { follow: true }) : undefined,
 					]),
 				};
@@ -401,7 +396,7 @@ export const runExperimentToolRenderer = {
 					status.node,
 					details.tailOutput.trim() ? ansi(details.tailOutput, { follow: true }) : undefined,
 					details.truncation && details.fullOutputPath
-						? text([span(t("Full output: "), "warning"), span(shortenPath(details.fullOutputPath), "path")], {
+						? text([span("Full output: ", "warning"), span(shortenPath(details.fullOutputPath), "path")], {
 								truncate: "middle",
 							})
 						: undefined,

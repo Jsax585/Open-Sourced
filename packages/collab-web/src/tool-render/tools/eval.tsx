@@ -6,7 +6,6 @@
  * `===== info =====`); all render as discrete highlighted cells. When the result
  * carries typed per-cell details, each cell's output is interleaved beneath its code.
  */
-import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Markdown } from "../../components/transcript/Markdown";
 import { Badges, CodeBlock, InvalidArg, Note, Output, ResultImages, ResultText } from "../parts";
@@ -475,7 +474,7 @@ function Summary({ name, args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{label && <span>{truncate(label, 72)}</span>}
-			<Badges items={[cells.length > 1 ? localize("{0} cells", `${cells.length}`) : null, ...langs]} />
+			<Badges items={[cells.length > 1 ? `${cells.length} cells` : null, ...langs]} />
 		</>
 	);
 }
@@ -510,10 +509,10 @@ function Body({ name, args, result }: ToolRenderProps): ReactNode {
 					if (dc) {
 						if (dc.durationMs !== null) {
 							const ms = dc.durationMs;
-							titleParts.push(ms < 1000 ? `${Math.round(ms)}ms` : localize("{0}s", `${(ms / 1000).toFixed(1)}`));
+							titleParts.push(ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
 						}
 						if (dc.status === "error")
-							titleParts.push(dc.exitCode !== null ? localize("error (exit {0})", `${dc.exitCode}`) : localize("error"));
+							titleParts.push(dc.exitCode !== null ? `error (exit ${dc.exitCode})` : "error");
 					}
 					return (
 						<div className="tv-cell" key={`c${i}`}>

@@ -7,7 +7,6 @@
  * stand-in, and the `session_name` segment falls back to a stand-in title
  * (passed via `previewTitle`) when the session is unnamed.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Component,
 	type ComposerChromeContext,
@@ -83,7 +82,7 @@ export function renderComposerShapePreview(
 
 	const gutter = style.defaultPromptGutter ?? "";
 	const contentWidth = Math.max(1, previewWidth - chromeWidth * 2 - visibleWidth(gutter));
-	const promptText = truncateToWidth(t("Ask anything, edit files, run tools"), Math.max(1, contentWidth - 1));
+	const promptText = truncateToWidth("Ask anything, edit files, run tools", Math.max(1, contentWidth - 1));
 	// Mirror the live editor: filled shapes let `surfaceColor` paint their own
 	// foreground, while transparent shapes resolve `text` to a contrast-safe
 	// color so an empty token never falls back to the terminal default.
@@ -148,8 +147,8 @@ export class ComposerShapePreview implements Component {
 		if (option?.description) caption.push(span(` · ${option.description}`, "muted"));
 		const described = col(
 			[
-				text([span(t("Preview:\u0004packages/tui/src/overlays/composer-shape-preview.ts:ComposerShapePreview.describe.described"), "muted")]),
-				node("editor", { placeholder: t("Ask anything, edit files, run tools"), readonly: true, maxLines: 1 }),
+				text([span("Preview:", "muted")]),
+				node("editor", { placeholder: "Ask anything, edit files, run tools", readonly: true, maxLines: 1 }),
 				text(caption, { wrap: "word" }),
 			],
 			{ role: "omp.preview.composer-shape", gap: "xs" },
@@ -160,6 +159,6 @@ export class ComposerShapePreview implements Component {
 
 	render(width: number): readonly string[] {
 		const lines = renderComposerShapePreview(this.#shape, width, this.#options.status);
-		return ["", theme.fg("muted", t("Preview:\u0004packages/tui/src/overlays/composer-shape-preview.ts:ComposerShapePreview.describe.described")), ...lines];
+		return ["", theme.fg("muted", "Preview:"), ...lines];
 	}
 }

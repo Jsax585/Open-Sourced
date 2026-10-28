@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type NarrowContext, type } from "@oh-my-pi/omptype";
 import { MODEL_KINDS, RUNNER_API_KINDS } from "@oh-my-pi/pi-catalog/types";
 import { once } from "@oh-my-pi/pi-utils";
@@ -13,7 +12,7 @@ function validateMaxContextWindow(
 			value.maxContextWindow <= 0 ||
 			(value.contextWindow !== undefined && value.maxContextWindow < value.contextWindow))
 	) {
-		return ctx.mustBe(t("maxContextWindow a positive integer no smaller than contextWindow"));
+		return ctx.mustBe("maxContextWindow a positive integer no smaller than contextWindow");
 	}
 	return true;
 }
@@ -23,7 +22,7 @@ function validateImageCountBudget(value: { imageCountBudget?: number }, ctx: Nar
 		value.imageCountBudget !== undefined &&
 		(!Number.isSafeInteger(value.imageCountBudget) || value.imageCountBudget <= 0)
 	) {
-		return ctx.mustBe(t("imageCountBudget a positive integer"));
+		return ctx.mustBe("imageCountBudget a positive integer");
 	}
 	return true;
 }
@@ -161,7 +160,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 				value.efforts !== undefined ||
 				value.levels !== undefined ||
 				(value.minLevel !== undefined && value.maxLevel !== undefined) ||
-				ctx.mustBe(t("thinking with `efforts` (or legacy `levels`/`minLevel`+`maxLevel`)")),
+				ctx.mustBe("thinking with `efforts` (or legacy `levels`/`minLevel`+`maxLevel`)"),
 		)
 		.pipe((value: any) => {
 			let resolved = value.efforts ?? value.levels;
@@ -194,20 +193,20 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"streamingEndpoint?": "string",
 	}).narrow((value, ctx) => {
 		if (value.endpoint !== undefined && typeof value.endpoint === "string" && value.endpoint.length === 0) {
-			return ctx.mustBe(t("remoteCompaction.endpoint a non-empty string"));
+			return ctx.mustBe("remoteCompaction.endpoint a non-empty string");
 		}
 		if (value.model !== undefined && typeof value.model === "string" && value.model.length === 0) {
-			return ctx.mustBe(t("remoteCompaction.model a non-empty string"));
+			return ctx.mustBe("remoteCompaction.model a non-empty string");
 		}
 		if (value.v2Endpoint !== undefined && typeof value.v2Endpoint === "string" && value.v2Endpoint.length === 0) {
-			return ctx.mustBe(t("remoteCompaction.v2Endpoint a non-empty string"));
+			return ctx.mustBe("remoteCompaction.v2Endpoint a non-empty string");
 		}
 		if (
 			value.streamingEndpoint !== undefined &&
 			typeof value.streamingEndpoint === "string" &&
 			value.streamingEndpoint.length === 0
 		) {
-			return ctx.mustBe(t("remoteCompaction.streamingEndpoint a non-empty string"));
+			return ctx.mustBe("remoteCompaction.streamingEndpoint a non-empty string");
 		}
 		return true;
 	});
@@ -249,27 +248,27 @@ export const getModelsConfigSchemaBundle = once(() => {
 	}).narrow((value, ctx) => {
 		// Enforce id non-empty
 		if (typeof value.id === "string" && value.id.length === 0) {
-			return ctx.mustBe(t("id a non-empty string"));
+			return ctx.mustBe("id a non-empty string");
 		}
 		if (value.name !== undefined && typeof value.name === "string" && value.name.length === 0) {
-			return ctx.mustBe(t("name a non-empty string"));
+			return ctx.mustBe("name a non-empty string");
 		}
 		if (value.baseUrl !== undefined && typeof value.baseUrl === "string" && value.baseUrl.length === 0) {
-			return ctx.mustBe(t("baseUrl a non-empty string"));
+			return ctx.mustBe("baseUrl a non-empty string");
 		}
 		if (
 			value.contextPromotionTarget !== undefined &&
 			typeof value.contextPromotionTarget === "string" &&
 			value.contextPromotionTarget.length === 0
 		) {
-			return ctx.mustBe(t("contextPromotionTarget a non-empty string"));
+			return ctx.mustBe("contextPromotionTarget a non-empty string");
 		}
 		if (
 			value.compactionModel !== undefined &&
 			typeof value.compactionModel === "string" &&
 			value.compactionModel.length === 0
 		) {
-			return ctx.mustBe(t("compactionModel a non-empty string"));
+			return ctx.mustBe("compactionModel a non-empty string");
 		}
 		return validateImageCountBudget(value, ctx) && validateMaxContextWindow(value, ctx);
 	});
@@ -308,21 +307,21 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"remoteCompaction?": RemoteCompactionSchema,
 	}).narrow((value, ctx) => {
 		if (value.name !== undefined && typeof value.name === "string" && value.name.length === 0) {
-			return ctx.mustBe(t("name a non-empty string"));
+			return ctx.mustBe("name a non-empty string");
 		}
 		if (
 			value.contextPromotionTarget !== undefined &&
 			typeof value.contextPromotionTarget === "string" &&
 			value.contextPromotionTarget.length === 0
 		) {
-			return ctx.mustBe(t("contextPromotionTarget a non-empty string"));
+			return ctx.mustBe("contextPromotionTarget a non-empty string");
 		}
 		if (
 			value.compactionModel !== undefined &&
 			typeof value.compactionModel === "string" &&
 			value.compactionModel.length === 0
 		) {
-			return ctx.mustBe(t("compactionModel a non-empty string"));
+			return ctx.mustBe("compactionModel a non-empty string");
 		}
 		return validateImageCountBudget(value, ctx) && validateMaxContextWindow(value, ctx);
 	});
@@ -338,15 +337,36 @@ export const getModelsConfigSchemaBundle = once(() => {
 		 * returns a different, smaller model list.
 		 */
 		"injectV1?": "boolean",
+		/**
+		 * Defaults to `true`. Set `false` to ignore the reasoning ladder a
+		 * `/v1/models` row advertises and build each model's thinking surface from
+		 * the bundled catalog reference alone — for endpoints whose advertised
+		 * levels do not match what the route actually accepts.
+		 *
+		 * Only the discovery types that read `/v1/models` rows accept it. LiteLLM
+		 * is rejected rather than accepted-and-ignored: its authoritative
+		 * reasoning metadata comes from `/model_group/info`, so the flag would
+		 * apply only on the `/v1/models` fallback and silently do nothing the rest
+		 * of the time.
+		 */
+		"advertisedReasoning?": "boolean",
 	}).narrow((value, ctx) => {
 		if (value.injectV1 !== undefined && value.type !== "openai-models-list") {
-			return ctx.mustBe(t("injectV1 only on openai-models-list discovery"));
+			return ctx.mustBe("injectV1 only on openai-models-list discovery");
+		}
+		if (
+			value.advertisedReasoning !== undefined &&
+			value.type !== "openai-models-list" &&
+			value.type !== "lm-studio" &&
+			value.type !== "proxy"
+		) {
+			return ctx.mustBe("advertisedReasoning only on discovery that reads /v1/models rows");
 		}
 		if (
 			value.timeoutMs !== undefined &&
 			(typeof value.timeoutMs !== "number" || value.timeoutMs <= 0 || !Number.isFinite(value.timeoutMs))
 		) {
-			return ctx.mustBe(t("timeoutMs a positive finite number"));
+			return ctx.mustBe("timeoutMs a positive finite number");
 		}
 		return true;
 	});
@@ -391,10 +411,10 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"transport?": '"pi-native"',
 	}).narrow((value, ctx) => {
 		if (value.baseUrl !== undefined && typeof value.baseUrl === "string" && value.baseUrl.length === 0) {
-			return ctx.mustBe(t("baseUrl a non-empty string"));
+			return ctx.mustBe("baseUrl a non-empty string");
 		}
 		if (value.apiKey !== undefined && typeof value.apiKey === "string" && value.apiKey.length === 0) {
-			return ctx.mustBe(t("apiKey a non-empty string"));
+			return ctx.mustBe("apiKey a non-empty string");
 		}
 		return true;
 	});

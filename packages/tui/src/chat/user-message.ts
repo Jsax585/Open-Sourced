@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { applyBackgroundToLine, padding, stripTerminalSequences, visibleWidth } from "../utils";
 import type { AnimationFrame, TranscriptPresentationTarget } from "../chrome/transcript-container";
 import { type Component, Container } from "../tui";
@@ -220,8 +219,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 					{
 						name: "copy",
 						role: "omp.user.tool",
-						title: localize("Copy message"),
-						aria: localize("Copy message"),
+						title: "Copy message",
+						aria: "Copy message",
 						actions: { click: "copy-message" },
 					},
 					undefined,
@@ -232,8 +231,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 					{
 						name: "rewind",
 						role: "omp.user.tool",
-						title: localize("Rewind the conversation to an earlier message"),
-						aria: localize("Rewind"),
+						title: "Rewind the conversation to an earlier message",
+						aria: "Rewind",
 						actions: { click: "rewind" },
 					},
 					undefined,
@@ -271,9 +270,9 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		if (this.#liveSteered) {
 			badges.push(
 				node("badge", {
-					text: localize("steered"),
+					text: "steered",
 					tone: "accent",
-					title: localize("Delivered into the response that was streaming"),
+					title: "Delivered into the response that was streaming",
 				}),
 			);
 		}
@@ -539,7 +538,7 @@ function syntheticInputLabel(text: string): string {
 		const line = raw.trim();
 		if (!line) continue;
 		const heading = /^#{1,6}\s+(.*)$/.exec(line);
-		return heading ? heading[1]!.trim() || localize("Synthetic input") : localize("Synthetic input");
+		return heading ? heading[1]!.trim() || "Synthetic input" : "Synthetic input";
 	}
-	return localize("Synthetic input");
+	return "Synthetic input";
 }

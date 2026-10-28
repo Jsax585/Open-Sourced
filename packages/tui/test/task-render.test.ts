@@ -140,6 +140,7 @@ describe("task live progress rendering", () => {
 
 		expect(text).toContain("line 1");
 		expect(text).toContain("line 8");
+		expect(text).not.toContain("more lines");
 	});
 
 	it("keeps the newest subagent output when the viewport cap truncates", () => {
@@ -147,6 +148,7 @@ describe("task live progress rendering", () => {
 		const chronological = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`);
 		const text = renderProgressText(makeProgress([...chronological].reverse()), true, uiTheme);
 
+		expect(text).toContain("… 3 earlier lines");
 		expect(text).not.toContain("line 1");
 		expect(text).not.toContain("line 3");
 		expect(text).toContain("line 4");
@@ -156,7 +158,7 @@ describe("task live progress rendering", () => {
 	it("shows the extension routing note on async progress rows after completion", () => {
 		setViewportRows(40);
 		const progress = { ...makeProgress([]), status: "completed" as const, resolvedModelRoute: "pool b (quota)" };
-		expect(renderProgressText(progress, false, uiTheme)).toContain("pool b (quota)");
+		expect(renderProgressText(progress, false, uiTheme)).toContain("routed: pool b (quota)");
 	});
 
 	it("strips bash footer notices from expanded subagent recent output", () => {
@@ -230,6 +232,7 @@ describe("task live progress rendering", () => {
 		expect(text).toContain("Nested4");
 		expect(text).toContain("Nested5");
 		expect(text).toContain("Nested6");
+		expect(text).toContain("2 more agents");
 	});
 
 	it("shows every nested task progress row when expanded", () => {
@@ -239,6 +242,7 @@ describe("task live progress rendering", () => {
 		for (let index = 1; index <= 6; index++) {
 			expect(text).toContain(`Nested${index}`);
 		}
+		expect(text).not.toContain("more agents");
 	});
 
 	it("caps collapsed finalized nested task results and keeps the failed child visible", () => {
@@ -246,6 +250,7 @@ describe("task live progress rendering", () => {
 		const text = renderResultText(makeParentWithNestedResults(6), false, uiTheme);
 
 		expect(text).toContain("Done6"); // failed child wins a slot despite sorting last
+		expect(text).toContain("2 more agents");
 		const visibleChildren = [1, 2, 3, 4, 5, 6].filter(index => text.includes(`Done${index}`));
 		expect(visibleChildren).toHaveLength(4);
 	});
@@ -257,6 +262,7 @@ describe("task live progress rendering", () => {
 		for (let index = 1; index <= 6; index++) {
 			expect(text).toContain(`Done${index}`);
 		}
+		expect(text).not.toContain("more agents");
 	});
 
 	it("does not request spinner ticks for static partial progress", () => {

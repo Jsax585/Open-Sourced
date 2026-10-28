@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import {
 	Activity,
 	CircleAlert,
@@ -43,29 +42,29 @@ export interface NavGroup {
 /** Sidebar structure; the order here is the order on screen. */
 export const NAV: readonly NavGroup[] = [
 	{
-		heading: t("Usage"),
+		heading: "Usage",
 		items: [
-			{ id: "overview", label: t("Overview"), icon: LayoutGrid, hotkey: "o" },
-			{ id: "models", label: t("Models"), icon: Cpu, hotkey: "m" },
-			{ id: "providers", label: t("Providers"), icon: PlugZap, hotkey: "p" },
-			{ id: "costs", label: t("Costs"), icon: Coins, hotkey: "c" },
+			{ id: "overview", label: "Overview", icon: LayoutGrid, hotkey: "o" },
+			{ id: "models", label: "Models", icon: Cpu, hotkey: "m" },
+			{ id: "providers", label: "Providers", icon: PlugZap, hotkey: "p" },
+			{ id: "costs", label: "Costs", icon: Coins, hotkey: "c" },
 		],
 	},
 	{
-		heading: t("Activity"),
+		heading: "Activity",
 		items: [
-			{ id: "requests", label: t("Requests"), icon: Activity, hotkey: "r" },
-			{ id: "errors", label: t("Errors"), icon: CircleAlert, hotkey: "e" },
-			{ id: "traces", label: t("Traces"), icon: SquareChartGantt, hotkey: "t" },
+			{ id: "requests", label: "Requests", icon: Activity, hotkey: "r" },
+			{ id: "errors", label: "Errors", icon: CircleAlert, hotkey: "e" },
+			{ id: "traces", label: "Traces", icon: SquareChartGantt, hotkey: "t" },
 		],
 	},
 	{
-		heading: t("Insights"),
+		heading: "Insights",
 		items: [
-			{ id: "tools", label: t("Tools"), icon: Wrench, hotkey: "l" },
-			{ id: "frustration", label: t("Frustration"), icon: Frown, hotkey: "f" },
-			{ id: "projects", label: t("Projects"), icon: FolderGit2, hotkey: "j" },
-			{ id: "gain", label: t("Gain"), icon: Sparkles, hotkey: "g" },
+			{ id: "tools", label: "Tools", icon: Wrench, hotkey: "l" },
+			{ id: "frustration", label: "Frustration", icon: Frown, hotkey: "f" },
+			{ id: "projects", label: "Projects", icon: FolderGit2, hotkey: "j" },
+			{ id: "gain", label: "Gain", icon: Sparkles, hotkey: "g" },
 		],
 	},
 ];

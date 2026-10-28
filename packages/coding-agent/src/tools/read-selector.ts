@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { LineRange } from "@oh-my-pi/pi-tui/tools/line-ranges";
 import { parseTailCount } from "./path-utils";
 import { mergeLineRanges, parseLineRanges } from "@oh-my-pi/pi-tui/tools/line-ranges";
@@ -64,7 +63,7 @@ function selectorChunkLooksReadLike(chunk: string): boolean {
 
 function invalidSelector(sel: string): ToolError {
 	return new ToolError(
-		t("Invalid selector ':{0}'. Use :N, :N-M, :N+K, :N- (open-ended), :-N (last N lines), a comma-separated list of ranges, :raw, :img for SVG rendering, or a range combined with raw (e.g. :raw:50-100).", `${sel}`),
+		`Invalid selector ':${sel}'. Use :N, :N-M, :N+K, :N- (open-ended), :-N (last N lines), a comma-separated list of ranges, :raw, :img for SVG rendering, or a range combined with raw (e.g. :raw:50-100).`,
 	);
 }
 

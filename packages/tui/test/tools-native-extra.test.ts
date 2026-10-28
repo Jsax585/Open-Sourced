@@ -40,7 +40,7 @@ describe("native todo", () => {
 			],
 		};
 		const view = todoToolRenderer.describeResult({ content: [], details }, opts);
-		expect(view?.tool).toMatchObject({ target: "3/6", targetKind: "text" });
+		expect(view?.tool).toMatchObject({ title: "Todo", target: "3/6", targetKind: "text" });
 		expect(view?.body).toHaveLength(1);
 		const checklist = view?.body?.[0] as NativeNode;
 		expect(checklist.k).toBe("checklist");
@@ -104,6 +104,7 @@ describe("native task", () => {
 			{ ...opts, isPartial: true, renderContext: { nowMs: 4000 } },
 			{ context: "Shared\ngoal", tasks: [] },
 		);
+		expect(view?.tool).toMatchObject({ title: "Task", target: "2 agents" });
 		const all = nodes(view?.body);
 		expect(all.some(n => n.k === "card")).toBe(false);
 		expect(view?.body?.[0]).toMatchObject({ k: "text", p: { role: "omp.tool.context" } });

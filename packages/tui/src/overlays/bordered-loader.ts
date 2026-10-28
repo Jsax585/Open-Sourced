@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { CancellableLoader, Container, Spacer, Text, type TUI } from "../index";
 import type { Theme } from "../theme/theme";
 import { DynamicBorder } from "../chrome/dynamic-border";
@@ -24,7 +23,7 @@ export class BorderedLoader extends Container {
 		);
 		this.addChild(this.#loader);
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("muted", t("{0} cancel", `${editorKey("tui.select.cancel")}`)), 1, 0));
+		this.addChild(new Text(theme.fg("muted", `${editorKey("tui.select.cancel")} cancel`), 1, 0));
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder(borderColor));
 	}
@@ -45,7 +44,7 @@ export class BorderedLoader extends Container {
 	override describe(): NativeNode {
 		this.#native ??= card({ role: "omp.hook.loader" }, [
 			this.#loader,
-			hintsRow([actionHint("tui.select.cancel", t("cancel"))]),
+			hintsRow([actionHint("tui.select.cancel", "cancel")]),
 		]);
 		return this.#native;
 	}

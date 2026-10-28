@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 /** Local model the `tiny-models` CLI downloads when none is named. */
 export const DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY = "lfm2.5-230m";
 
@@ -25,8 +24,8 @@ export const TINY_TITLE_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "LiquidAI/LFM2.5-230M-MLX-4bit",
 		label: "LFM2.5 230M",
-		description: t("Recommended local model; fastest LFM2.5 option, about 214 MB cached."),
-		contextNote: t("Best balance among the current compact title models."),
+		description: "Recommended local model; fastest LFM2.5 option, about 214 MB cached.",
+		contextNote: "Best balance among the current compact title models.",
 	},
 	{
 		key: "lfm2.5-350m",
@@ -34,8 +33,8 @@ export const TINY_TITLE_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "LiquidAI/LFM2.5-350M-MLX-4bit",
 		label: "LFM2.5 350M",
-		description: t("Larger LFM2.5 option, about 292 MB cached; tends toward terse titles."),
-		contextNote: t("Use when compact labels are preferred over descriptive titles."),
+		description: "Larger LFM2.5 option, about 292 MB cached; tends toward terse titles.",
+		contextNote: "Use when compact labels are preferred over descriptive titles.",
 	},
 	{
 		key: "falcon-h1-90m",
@@ -43,8 +42,8 @@ export const TINY_TITLE_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "mlx-community/Falcon-H1-Tiny-90M-Instruct-4bit",
 		label: "Falcon H1 Tiny 90M",
-		description: t("Smallest option, about 147 MB cached; lower fidelity on complex prompts."),
-		contextNote: t("Use on constrained machines where download size matters most."),
+		description: "Smallest option, about 147 MB cached; lower fidelity on complex prompts.",
+		contextNote: "Use on constrained machines where download size matters most.",
 	},
 ] as const satisfies readonly TinyTitleLocalModelSpec[];
 
@@ -56,7 +55,7 @@ export function isTinyTitleLocalModelKey(value: string): value is TinyTitleLocal
 
 export function getTinyTitleModelSpec(key: TinyTitleLocalModelKey): (typeof TINY_TITLE_LOCAL_MODELS)[number] {
 	const spec = TINY_TITLE_LOCAL_MODELS.find(model => model.key === key);
-	if (!spec) throw new Error(t("Unknown tiny title model: {0}", `${key}`));
+	if (!spec) throw new Error(`Unknown tiny title model: ${key}`);
 	return spec;
 }
 
@@ -77,11 +76,11 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		mlxRepo: "mlx-community/Qwen3-1.7B-4bit",
 		label: "Qwen3 1.7B",
 		description:
-			t("MLX only (providers.tinyModelDevice=mlx): onnxruntime-node cannot run this ONNX export's RotaryEmbedding cache updates."),
-		contextNote: t("Blocked on the ONNX backend to avoid the unsupported RotaryEmbedding runtime path."),
+			"MLX only (providers.tinyModelDevice=mlx): onnxruntime-node cannot run this ONNX export's RotaryEmbedding cache updates.",
+		contextNote: "Blocked on the ONNX backend to avoid the unsupported RotaryEmbedding runtime path.",
 		reasoning: true,
 		onnxUnsupportedReason:
-			t("onnxruntime-node does not support Qwen3 RotaryEmbedding cache updates in onnx-community/Qwen3-1.7B-ONNX"),
+			"onnxruntime-node does not support Qwen3 RotaryEmbedding cache updates in onnx-community/Qwen3-1.7B-ONNX",
 	},
 	{
 		key: "llama3.2:3b",
@@ -90,8 +89,8 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		mlxRepo: "mlx-community/Llama-3.2-3B-Instruct-4bit",
 		label: "Llama 3.2 3B",
 		description:
-			t("Larger Llama 3.2 option for local memory/classifier tasks; higher quality potential at higher disk/RAM/latency cost."),
-		contextNote: t("Use when larger model capacity is preferred over faster load times."),
+			"Larger Llama 3.2 option for local memory/classifier tasks; higher quality potential at higher disk/RAM/latency cost.",
+		contextNote: "Use when larger model capacity is preferred over faster load times.",
 	},
 	{
 		key: "gemma-3-1b",
@@ -99,8 +98,8 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "mlx-community/gemma-3-1b-it-4bit",
 		label: "Gemma 3 1B",
-		description: t("Best consolidation/dedup; lighter footprint, but leaks small talk during extraction."),
-		contextNote: t("Use when consolidation quality and size matter most."),
+		description: "Best consolidation/dedup; lighter footprint, but leaks small talk during extraction.",
+		contextNote: "Use when consolidation quality and size matter most.",
 	},
 	{
 		key: "qwen2.5-1.5b",
@@ -108,8 +107,8 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
 		label: "Qwen2.5 1.5B",
-		description: t("Best extraction granularity (atomic facts); weaker consolidation."),
-		contextNote: t("Use when fine-grained, deduplicatable facts matter more than summaries."),
+		description: "Best extraction granularity (atomic facts); weaker consolidation.",
+		contextNote: "Use when fine-grained, deduplicatable facts matter more than summaries.",
 	},
 	{
 		key: "lfm2-1.2b",
@@ -117,8 +116,8 @@ export const TINY_MEMORY_LOCAL_MODELS = [
 		dtype: "q4",
 		mlxRepo: "mlx-community/LFM2-1.2B-4bit",
 		label: "LFM2 1.2B",
-		description: t("Fastest load; solid all-rounder, slightly noisier extraction labels."),
-		contextNote: t("Use when local startup cost is the priority."),
+		description: "Fastest load; solid all-rounder, slightly noisier extraction labels.",
+		contextNote: "Use when local startup cost is the priority.",
 	},
 ] as const satisfies readonly TinyTitleLocalModelSpec[];
 
@@ -130,7 +129,7 @@ export function isTinyMemoryLocalModelKey(value: string): value is TinyMemoryLoc
 
 export function getTinyMemoryModelSpec(key: TinyMemoryLocalModelKey): (typeof TINY_MEMORY_LOCAL_MODELS)[number] {
 	const spec = TINY_MEMORY_LOCAL_MODELS.find(model => model.key === key);
-	if (!spec) throw new Error(t("Unknown tiny memory model: {0}", `${key}`));
+	if (!spec) throw new Error(`Unknown tiny memory model: ${key}`);
 	return spec;
 }
 

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
@@ -86,7 +85,12 @@ export interface PrewalkCoordinatorHost {
 		options?: { ephemeral?: boolean },
 	): Promise<void>;
 	setActiveToolsByName(names: string[]): Promise<void>;
-	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void>;
+	restoreNonMCPToolPresentation(
+		nonMCPToolNames: string[],
+		nonMCPMountedToolNames: string[],
+		registeredToolNames: readonly string[],
+	): Promise<void>;
+	getAllToolNames(): string[];
 	getActiveToolNames(): string[];
 	getEnabledToolNames(): string[];
 	getMountedXdevToolNames(): string[];
@@ -127,7 +131,7 @@ export class PrewalkCoordinator {
 	#continuePending = false;
 	#todoSeen = false;
 	#planYolo: PlanYolo | undefined;
-	#planYoloPreviousNonMCPPresentation: { enabled: string[]; mounted: string[] } | undefined;
+	#planYoloPreviousNonMCPPresentation: { enabled: string[]; mounted: string[]; registered: string[] } | undefined;
 	#planYoloArmed = false;
 	#handoff: PrewalkHandoff | undefined;
 	/** The pending arm `prewalk.auto` made, as opposed to a manual or configured one. */
@@ -219,7 +223,7 @@ export class PrewalkCoordinator {
 		} catch (error) {
 			this.#host.emitNotice(
 				"warning",
-				t("Prewalk: could not restore {0}/{1}: {2}", `${handoff.source.provider}`, `${handoff.source.id}`, `${error instanceof Error ? error.message : String(error)}`),
+				`Prewalk: could not restore ${handoff.source.provider}/${handoff.source.id}: ${error instanceof Error ? error.message : String(error)}`,
 				"prewalk",
 			);
 		}
@@ -282,8 +286,8 @@ export class PrewalkCoordinator {
 					? `${decision.route} (prewalk ${chance})`
 					: decision.arm
 						? `prewalk ${chance}`
-						: t("prewalk {0} (below threshold)", `${chance}`);
-			if (mode === "suggest") this.#host.emitNotice("info", t("Auto-prewalk: {0}", `${summary}`), "prewalk");
+						: `prewalk ${chance} (below threshold)`;
+			if (mode === "suggest") this.#host.emitNotice("info", `Auto-prewalk: ${summary}`, "prewalk");
 			else logger.debug("auto-prewalk: not armed", { decision: summary });
 			return undefined;
 		}
@@ -299,7 +303,7 @@ export class PrewalkCoordinator {
 		this.#clearPrewalkState();
 		this.#host.emitNotice(
 			"info",
-			t("Prewalk: target {0}/{1} already matches the active model and thinking level; nothing to switch.", `${prewalk.target.provider}`, `${prewalk.target.id}`),
+			`Prewalk: target ${prewalk.target.provider}/${prewalk.target.id} already matches the active model and thinking level; nothing to switch.`,
 			"prewalk",
 		);
 	}
@@ -346,7 +350,7 @@ export class PrewalkCoordinator {
 					attribution: "agent",
 					timestamp: Date.now(),
 				});
-				this.#host.emitNotice("info", t("Prewalk: injected deep-plan nudge."), "prewalk");
+				this.#host.emitNotice("info", "Prewalk: injected deep-plan nudge.", "prewalk");
 			}
 			return;
 		}
@@ -377,7 +381,7 @@ export class PrewalkCoordinator {
 		}
 		this.#host.emitNotice(
 			"info",
-			t("Prewalk: switched to {1}/{2} after first {0} call.", `${action.toolName}`, `${target.provider}`, `${target.id}`),
+			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
 			"prewalk",
 		);
 		this.#host.agent.steer({
@@ -398,7 +402,7 @@ export class PrewalkCoordinator {
 		this.#clearPrewalkState();
 		this.#host.emitNotice(
 			"info",
-			t("Prewalk: disarmed; staying on the active model instead of switching to {0}/{1}.", `${active.target.provider}`, `${active.target.id}`),
+			`Prewalk: disarmed; staying on the active model instead of switching to ${active.target.provider}/${active.target.id}.`,
 			"prewalk",
 		);
 	}
@@ -409,7 +413,7 @@ export class PrewalkCoordinator {
 		if (active) {
 			this.#host.emitNotice(
 				"info",
-				t("Prewalk: already armed for {0}/{1}, waiting for the first edit/write.", `${active.target.provider}`, `${active.target.id}`),
+				`Prewalk: already armed for ${active.target.provider}/${active.target.id}, waiting for the first edit/write.`,
 				"prewalk",
 			);
 			const matches =
@@ -438,7 +442,7 @@ export class PrewalkCoordinator {
 		this.#todoSeen = false;
 		this.#host.emitNotice(
 			"info",
-			t("Prewalk: armed for {0}/{1} — will switch at the first edit/write once the todo list exists.", `${target.provider}`, `${target.id}`),
+			`Prewalk: armed for ${target.provider}/${target.id} — will switch at the first edit/write once the todo list exists.`,
 			"prewalk",
 		);
 		return {
@@ -488,6 +492,7 @@ export class PrewalkCoordinator {
 		this.#planYoloArmed = true;
 		const previousEnabledTools = this.#host.getEnabledToolNames();
 		const previousMountedTools = this.#host.getMountedXdevToolNames();
+		const previousRegisteredTools = this.#host.getAllToolNames();
 		const previousPlanModeState = this.#host.getPlanModeState();
 		const planModeState: PlanModeState = {
 			enabled: true,
@@ -514,6 +519,7 @@ export class PrewalkCoordinator {
 		this.#planYoloPreviousNonMCPPresentation = {
 			enabled: previousEnabledTools.filter(name => !isMCPToolName(name)),
 			mounted: previousMountedTools.filter(name => !isMCPToolName(name)),
+			registered: previousRegisteredTools,
 		};
 		this.#host.setPlanProposalHandler(title => this.#finalizePlanYoloProposal(title));
 	}
@@ -570,7 +576,7 @@ export class PrewalkCoordinator {
 			});
 			if (autosavedPlan) {
 				const displayPath = truncateToWidth(replaceTabs(shortenPath(autosavedPlan)), TRUNCATE_LENGTHS.CONTENT);
-				this.#host.emitNotice("info", t("Plan autosaved to {0}.", `${displayPath}`), "plan-yolo");
+				this.#host.emitNotice("info", `Plan autosaved to ${displayPath}.`, "plan-yolo");
 			}
 		} catch (error) {
 			logger.warn("Failed to autosave approved plan", { error });
@@ -584,7 +590,7 @@ export class PrewalkCoordinator {
 			);
 			this.#host.emitNotice(
 				"warning",
-				t("Plan autosave failed: {0} Continuing with implementation.", `${detail}`),
+				`Plan autosave failed: ${detail} Continuing with implementation.`,
 				"plan-yolo",
 			);
 		}
@@ -592,7 +598,11 @@ export class PrewalkCoordinator {
 		const previousPresentation = this.#planYoloPreviousNonMCPPresentation;
 		try {
 			if (previousPresentation) {
-				await this.#host.restoreNonMCPToolPresentation(previousPresentation.enabled, previousPresentation.mounted);
+				await this.#host.restoreNonMCPToolPresentation(
+					previousPresentation.enabled,
+					previousPresentation.mounted,
+					previousPresentation.registered,
+				);
 			}
 		} catch (error) {
 			this.#host.setPlanModeState(state);
@@ -604,7 +614,7 @@ export class PrewalkCoordinator {
 		await this.#host.setModelTemporary(planYolo.target, planYolo.thinkingLevel, { ephemeral: true });
 		this.#host.emitNotice(
 			"info",
-			t("Plan-yolo: plan approved, switched to {1}/{2} to implement \"{0}\".", `${resolvedTitle}`, `${planYolo.target.provider}`, `${planYolo.target.id}`),
+			`Plan-yolo: plan approved, switched to ${planYolo.target.provider}/${planYolo.target.id} to implement "${resolvedTitle}".`,
 			"plan-yolo",
 		);
 		this.#host.agent.steer({

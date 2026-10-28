@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Markdown, Text, type TUI } from "../index";
 import { replaceTabs } from "../render/render-utils";
 import { getMarkdownTheme, theme } from "../theme/theme";
@@ -160,34 +159,34 @@ export class BtwPanelComponent extends OverlayPanel {
 
 	#describeBody(): NativeNode {
 		if (this.#state === "error") {
-			return text([span(sanitizeErrorLine(this.#errorMessage ?? t("Unknown error")), "error")], { wrap: "word" });
+			return text([span(sanitizeErrorLine(this.#errorMessage ?? "Unknown error"), "error")], { wrap: "word" });
 		}
 		const answer = this.#visibleAnswer;
 		if (answer) return md(answer, { stream: this.#state === "running" });
-		const waiting = this.#state === "running" ? t("{0} Waiting for response…", `${theme.status.pending}`) : t("No text returned.");
+		const waiting = this.#state === "running" ? `${theme.status.pending} Waiting for response…` : "No text returned.";
 		return text([span(waiting, "dim")]);
 	}
 
 	#describeFooter(canFollowUp: boolean, canBranch: boolean): NativeNode {
-		const esc: NativeHint = { keys: boundKeys("app.interrupt", ["escape"]).slice(0, 1), label: t("to close") };
+		const esc: NativeHint = { keys: boundKeys("app.interrupt", ["escape"]).slice(0, 1), label: "to close" };
 		switch (this.#state) {
 			case "running":
-				return hintsRow([{ ...esc, label: t("to cancel") }]);
+				return hintsRow([{ ...esc, label: "to cancel" }]);
 			case "complete": {
 				const hints: NativeHint[] = [];
-				if (this.isCopyable()) hints.push({ keys: ["c"], label: this.#copied ? t("to copy again") : t("to copy") });
-				if (canFollowUp) hints.push({ keys: ["f"], label: t("to follow up") });
-				if (canBranch) hints.push({ keys: ["b"], label: t("to branch") });
+				if (this.isCopyable()) hints.push({ keys: ["c"], label: this.#copied ? "to copy again" : "to copy" });
+				if (canFollowUp) hints.push({ keys: ["f"], label: "to follow up" });
+				if (canBranch) hints.push({ keys: ["b"], label: "to branch" });
 				hints.push(esc);
 				if (!this.#copied) return hintsRow(hints);
-				return statusHintsRow([span(t("✓ Copied to clipboard"), "success")], hints);
+				return statusHintsRow([span("✓ Copied to clipboard", "success")], hints);
 			}
 			case "branching":
-				return text([span(t("{0} Branching to chat…", `${theme.status.pending}`), "muted")]);
+				return text([span(`${theme.status.pending} Branching to chat…`, "muted")]);
 			case "aborted":
-				return statusHintsRow([span(t("{0} Cancelled", `${theme.status.warning}`), "warning")], [esc]);
+				return statusHintsRow([span(`${theme.status.warning} Cancelled`, "warning")], [esc]);
 			case "error":
-				return statusHintsRow([span(t("{0} Error", `${theme.status.error}`), "error")], [esc]);
+				return statusHintsRow([span(`${theme.status.error} Error`, "error")], [esc]);
 		}
 	}
 
@@ -206,36 +205,36 @@ export class BtwPanelComponent extends OverlayPanel {
 		const esc = interruptKey();
 		switch (this.#state) {
 			case "running":
-				return theme.fg("muted", t("{0} to cancel", `${esc}`));
+				return theme.fg("muted", `${esc} to cancel`);
 			case "complete": {
 				const actions: string[] = [];
 				const copyKey = formatKeyHint("c");
-				if (this.isCopyable()) actions.push(this.#copied ? t("{0} to copy again", `${copyKey}`) : t("{0} to copy", `${copyKey}`));
-				if (this.#canFollowUp?.()) actions.push(t("{0} to follow up", `${formatKeyHint("f")}`));
-				if (this.#canBranch?.() ?? this.isBranchable()) actions.push(t("{0} to branch", `${formatKeyHint("b")}`));
-				actions.push(t("{0} to close", `${esc}`));
+				if (this.isCopyable()) actions.push(this.#copied ? `${copyKey} to copy again` : `${copyKey} to copy`);
+				if (this.#canFollowUp?.()) actions.push(`${formatKeyHint("f")} to follow up`);
+				if (this.#canBranch?.() ?? this.isBranchable()) actions.push(`${formatKeyHint("b")} to branch`);
+				actions.push(`${esc} to close`);
 				if (this.#copied) {
-					return `${theme.fg("success", t("✓ Copied to clipboard"))}${theme.fg("muted", actions.length > 0 ? ` · ${actions.join(" · ")}` : "")}`;
+					return `${theme.fg("success", "✓ Copied to clipboard")}${theme.fg("muted", actions.length > 0 ? ` · ${actions.join(" · ")}` : "")}`;
 				}
 				return theme.fg("muted", actions.join(" · "));
 			}
 			case "branching":
-				return theme.fg("muted", t("{0} Branching to chat…", `${theme.status.pending}`));
+				return theme.fg("muted", `${theme.status.pending} Branching to chat…`);
 			case "aborted":
-				return theme.fg("warning", t("{0} Cancelled · {1} to close", `${theme.status.warning}`, `${esc}`));
+				return theme.fg("warning", `${theme.status.warning} Cancelled · ${esc} to close`);
 			case "error":
-				return theme.fg("error", t("{0} Error · {1} to close", `${theme.status.error}`, `${esc}`));
+				return theme.fg("error", `${theme.status.error} Error · ${esc} to close`);
 		}
 	}
 
 	#contentComponent(): Component {
 		if (this.#state === "error") {
-			return new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? t("Unknown error"))), 0, 0);
+			return new Text(theme.fg("error", sanitizeErrorLine(this.#errorMessage ?? "Unknown error")), 0, 0);
 		}
 		const text = this.#visibleAnswer;
 		if (!text) {
 			const waiting =
-				this.#state === "running" ? t("{0} Waiting for response…", `${theme.status.pending}`) : t("No text returned.");
+				this.#state === "running" ? `${theme.status.pending} Waiting for response…` : "No text returned.";
 			return new Text(theme.fg("dim", waiting), 0, 0);
 		}
 		return new Markdown(text, 0, 0, getMarkdownTheme());

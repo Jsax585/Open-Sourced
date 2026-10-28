@@ -514,6 +514,10 @@ describe("formatErrorMessage (F4 sanitization)", () => {
 		expect(visible.length).toBeLessThan(180);
 	});
 
+	it("falls back to 'Unknown error' for empty/missing input", () => {
+		const out = formatErrorMessage(undefined, theme);
+		expect(out).toContain("Unknown error");
+	});
 });
 
 describe("formatExpandHint / expandKeyHint", () => {
@@ -537,11 +541,14 @@ describe("formatExpandHint / expandKeyHint", () => {
 	it("reports the default tool-output expand key", () => {
 		setKeybindings(KeybindingsManager.inMemory());
 		expect(expandKeyHint()).toBe("Ctrl+O");
+		// Single bracket pair from the theme, no double-wrapping around the key.
+		expect(formatExpandHint(plainTheme, false, true)).toBe("[Ctrl+O: Expand]");
 	});
 
 	it("tracks a user remap of the expand binding", () => {
 		setKeybindings(KeybindingsManager.inMemory({ "app.tools.expand": "alt+e" }));
 		expect(expandKeyHint()).toBe("Alt+E");
+		expect(formatExpandHint(plainTheme, false, true)).toBe("[Alt+E: Expand]");
 	});
 
 	it("renders nothing when expanded or there is no more content", () => {
@@ -649,8 +656,7 @@ describe("sanitizeDisplayWarnings", () => {
 		const displayed = sanitizeDisplayWarnings(warnings);
 
 		expect(displayed).toHaveLength(PREVIEW_LIMITS.COLLAPSED_ITEMS + 1);
-		expect(displayed.slice(0, -1)).toEqual(warnings.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS));
-		expect(displayed.at(-1)?.match(/\d+/)?.[0]).toBe("2");
+		expect(displayed.at(-1)).toBe("… 2 more warnings");
 	});
 
 	it("truncates each warning before display", () => {

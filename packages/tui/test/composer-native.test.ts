@@ -98,6 +98,7 @@ describe("native composer", () => {
 		const chip = byRole(idle, "omp.composer.effort")!;
 		expect(chip.p).toMatchObject({ actions: { click: "thinking.cycle" } });
 		expect(nodes(chip).find(n => n.k === "effort")?.p).toEqual({ level: "high" });
+		expect(nodes(chip).find(n => n.k === "text")?.p).toMatchObject({ text: "high" });
 
 		running = true;
 		const busy = editor.describe(cx);
@@ -111,17 +112,17 @@ describe("native composer", () => {
 		expect(editor.onEscape).toHaveBeenCalledTimes(1);
 	});
 
-	it("uses the session title as the placeholder unless a subagent is being viewed", () => {
+	it("quotes the session title in italics as the placeholder; a viewed subagent's name wins", () => {
 		const placeholder = (state: ComposerNativeState) =>
-			nodes(composer(state).describe(cx)).find(n => n.k === "editor")?.p?.placeholder;
-		expect(placeholder({ running: false, title: "" })).toEqual(placeholder({ running: false }));
-		expect(placeholder({ running: false, title: "Fix login" })).toEqual([
-			{ t: expect.stringContaining("Fix login"), s: "em" },
-		]);
-		expect(placeholder({ running: false, title: "Fix login", viewing: ["Scout"] })).toEqual(
-			placeholder({ running: false, viewing: ["Scout"] }),
-		);
-		expect(placeholder({ running: false, viewing: ["Scout"] })).toEqual(expect.stringContaining("Scout"));
+			nodes(composer(state).describe(cx)).find(n => n.k === "editor")?.p;
+		expect(placeholder({ running: false })).toMatchObject({ placeholder: "What are we cooking?" });
+		expect(placeholder({ running: false, title: "" })).toMatchObject({ placeholder: "What are we cooking?" });
+		expect(placeholder({ running: false, title: "Fix login" })).toMatchObject({
+			placeholder: [{ t: "“Fix login”", s: "em" }],
+		});
+		expect(placeholder({ running: false, title: "Fix login", viewing: ["Scout"] })).toMatchObject({
+			placeholder: "Message Scout",
+		});
 	});
 
 	it("sends a shown prediction as ghost text in place of the placeholder", () => {
@@ -145,6 +146,7 @@ describe("native composer", () => {
 		const lead = (root.c ?? []).filter(isNode);
 		expect(lead.indexOf(header)).toBeLessThan(lead.indexOf(byRole(root, "omp.composer.line")!));
 		expect(byRole(header, "omp.composer.agent")?.p).toMatchObject({ text: "Scout" });
+		expect(nodes(root).find(n => n.k === "editor")?.p).toMatchObject({ placeholder: "Message Scout" });
 		expect(byRole(header, "omp.composer.crumb")?.p).toMatchObject({
 			text: "AckAudit",
 			actions: { click: "focus:AckAudit" },
@@ -315,6 +317,7 @@ describe("native composer", () => {
 		const chip = byRole(composer({ running: false, thinking: "off" }).describe(cx), "omp.composer.effort")!;
 		expect(chip.p).toMatchObject({ actions: { click: "thinking.cycle" } });
 		expect(nodes(chip).find(n => n.k === "effort")?.p).toEqual({ level: "off" });
+		expect(nodes(chip).find(n => n.k === "text")?.p).toMatchObject({ text: "off" });
 	});
 
 	it("sends an unresolved `auto` level through to the effort glyph", () => {
@@ -358,10 +361,11 @@ describe("native composer", () => {
 
 		const reading = bar();
 		expect(slots(reading)).toEqual(["omp.composer.effort", "omp.composer.rate", "gap", "omp.composer.send"]);
-		expect(byRole(reading, "omp.composer.rate")?.p).toMatchObject({
+		expect(byRole(reading, "omp.composer.rate")?.p).toEqual({
 			value: 31.8,
 			unit: "tok/s",
 			role: "omp.composer.rate",
+			title: "Generation rate",
 		});
 
 		// A rate tick re-describes the readout alone: the chips beside it keep their nodes.
@@ -397,6 +401,8 @@ describe("native composer thinking level in the model chip", () => {
 		expect((model.c ?? []).filter(isNode).map(n => n.k)).toEqual(["effort", "text", "icon"]);
 		expect(byRole(model, "omp.composer.model.effort")?.p).toMatchObject({
 			level: "xhigh",
+			// The level, then the cycle key as the effort chip's tooltip names it.
+			title: expect.stringMatching(/^Thinking effort: xhigh {2}\S/),
 			actions: { click: "thinking.cycle" },
 		});
 	});
@@ -423,7 +429,7 @@ describe("native working row", () => {
 		expect(first.k).toBe("meter");
 		expect(first.p).toMatchObject({ value: 0.75, style: "ring" });
 		const stop = byRole(row, "omp.working.stop")!;
-		expect(stop.p).toMatchObject({ actions: { click: "interrupt" } });
+		expect(stop.p).toMatchObject({ title: "Cancel  esc", actions: { click: "interrupt" } });
 
 		const plain = describeWorkingRow(spec, context([]), 2_000);
 		expect((plain.c![0] as NativeNode).k).toBe("spinner");
@@ -466,18 +472,24 @@ describe("native queued messages", () => {
 		const pills = (band.describe().c ?? []).filter(isNode);
 		expect(pills).toHaveLength(3);
 		const counts = pills.map(pill => byRole(pill, "omp.queue.count")?.p);
-		expect(counts[0]).toMatchObject({ role: "omp.queue.count", text: expect.stringMatching(/^\D*3\D*$/) });
-		expect(counts.slice(1)).toEqual([undefined, undefined]);
+		expect(counts).toEqual([
+			{ text: "3 queued", title: "3 messages queued", role: "omp.queue.count" },
+			undefined,
+			undefined,
+		]);
 		band.handleNativeEvent({ type: "action", key: "x/edit", act: "queue.edit", mods: [] });
 		expect(onEdit).toHaveBeenCalledTimes(1);
 
 		const single = new QueuedMessagesBand([{ label: "Steering", messages: ["only"] }], "alt+up", onEdit);
 		expect(byRole(single.describe(), "omp.queue.count")).toBeUndefined();
 
+		// Two waiting: the first pill reads as the total ("2 queued"), never as a bare "2" position.
 		const pair = new QueuedMessagesBand([{ label: "Steering", messages: ["first", "second"] }], "alt+up", onEdit);
 		const pairCounts = (pair.describe().c ?? []).filter(isNode).map(pill => byRole(pill, "omp.queue.count")?.p);
-		expect(pairCounts[0]).toMatchObject({ role: "omp.queue.count", text: expect.stringMatching(/^\D*2\D*$/) });
-		expect(pairCounts.slice(1)).toEqual([undefined]);
+		expect(pairCounts).toEqual([
+			{ text: "2 queued", title: "2 messages queued", role: "omp.queue.count" },
+			undefined,
+		]);
 	});
 });
 

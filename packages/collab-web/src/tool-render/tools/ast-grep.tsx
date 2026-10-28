@@ -1,5 +1,4 @@
 /** `ast_grep` — structural AST pattern search across files. */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, CodeBlock, InvalidArg, Kv, KvGrid, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -61,17 +60,19 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			? [
 					matchCount !== null && (
 						<Badge key="matches" tone={matchCount === 0 ? "warn" : "ok"}>
-							{matchCount} {matchCount === 1 ? t("match") : t("matches")}
+							{matchCount} {matchCount === 1 ? "match" : "matches"}
 						</Badge>
 					),
 					fileCount !== null && fileCount > 0 && (
 						<Badge key="files">
-							{fileCount} {fileCount === 1 ? t("file") : t("files")}
+							{fileCount} {fileCount === 1 ? "file" : "files"}
 						</Badge>
 					),
-					filesSearched !== null && <Badge key="searched">{t("searched {0}", `${filesSearched}`)}</Badge>,
+					filesSearched !== null && <Badge key="searched">searched {filesSearched}</Badge>,
 					limitReached && (
-						<Badge key="limit" tone="warn">{t("limit reached")}</Badge>
+						<Badge key="limit" tone="warn">
+							limit reached
+						</Badge>
 					),
 				]
 			: [];
@@ -87,7 +88,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						key={i}
 						code={pat}
 						lang={lang ?? undefined}
-						title={patterns.length > 1 ? t("pattern {0}", `${i + 1}`) : t("pattern")}
+						title={patterns.length > 1 ? `pattern ${i + 1}` : "pattern"}
 						maxLines={12}
 					/>
 				))
@@ -105,7 +106,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						</Kv>
 					)}
 					{scopePath && (
-						<Kv k={t("scope")}>
+						<Kv k="scope">
 							<PathText path={scopePath} />
 						</Kv>
 					)}
@@ -116,7 +117,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					text={parseErrors.join("\n")}
 					maxLines={6}
 					title={
-						parseErrorsTotal > parseErrors.length ? t("parse issues ({0} total)", `${parseErrorsTotal}`) : t("parse issues")
+						parseErrorsTotal > parseErrors.length ? `parse issues (${parseErrorsTotal} total)` : "parse issues"
 					}
 				/>
 			)}

@@ -116,8 +116,8 @@ describe("bashToolRenderer", () => {
 			{ command: "python3 scripts/edit-benchmark.py", timeout: 1200 },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("120s");
-		expect(rendered).not.toContain("1200s");
+		expect(rendered).toContain("Timeout: 120s");
+		expect(rendered).not.toContain("Timeout: 1200s");
 	});
 
 	it("renders wall time alongside the timeout label and strips the textual notice", async () => {
@@ -132,8 +132,8 @@ describe("bashToolRenderer", () => {
 			{ command: "echo hi" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("1.23s");
-		expect(rendered).toContain("5s");
+		expect(rendered).toContain("Wall: 1.23s");
+		expect(rendered).toContain("Timeout: 5s");
 		// Notice text must not appear in the output region — the styled label is the
 		// only place wall time is shown so users don't read it twice.
 		expect(rendered).not.toContain("Wall time: 1.23 seconds");
@@ -150,7 +150,7 @@ describe("bashToolRenderer", () => {
 			const component = bashToolRenderer.renderResult(result, options, uiTheme, args);
 			const rendered = sanitizeText(component.render(120).join("\n"));
 			expect(rendered.match(/Wall time: 0\.02 seconds/gu)).toHaveLength(1);
-			expect(rendered).toContain("0.02s");
+			expect(rendered).toContain("Wall: 0.02s");
 			const view = bashToolRenderer.describeResult(result, options, args);
 			const output = (view.body ?? [])
 				.flatMap(node => ("k" in node ? (node.c ?? []) : []))
@@ -171,11 +171,12 @@ describe("bashToolRenderer", () => {
 			{ command: "bun run dev", name: "web", ready: { log: "READY" } },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("web");
-		expect(rendered).toContain("ready");
-		expect(rendered).toContain("42");
-		expect(rendered.split("\n").at(-1)?.match(/\d+(?:\.\d+)?s/g) ?? []).toEqual([]);
+		expect(rendered).toContain("Service: web");
+		expect(rendered).toContain("State: ready");
+		expect(rendered).toContain("Ready: yes");
+		expect(rendered).toContain("PID: 42");
 		expect(rendered).toContain("listening");
+		expect(rendered).not.toContain("Timeout:");
 	});
 
 	it("renders a backgrounded job as a static footer notice, with or without a stated deadline", async () => {
@@ -203,7 +204,7 @@ describe("bashToolRenderer", () => {
 			);
 			const rendered = sanitizeText(component.render(120).join("\n"));
 			expect(rendered, label).toContain("started");
-			expect(rendered, label).toContain("bash-42");
+			expect(rendered, label).toContain("Backgrounded: bash-42");
 			// Shared by every notice form, so a row whose notice is not stripped fails here.
 			expect(rendered, label).not.toContain("injected into the conversation");
 			expect(rendered, label).not.toContain("Do NOT poll");
@@ -224,9 +225,9 @@ describe("bashToolRenderer", () => {
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
 		expect(rendered).toContain("filtered");
-		expect(rendered).toContain("0.08s");
-		expect(rendered).toContain("300s");
-		expect(rendered).toContain("13");
+		expect(rendered).toContain("Wall: 0.08s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).toContain("Artifact: 13");
 		expect(rendered).not.toContain("[raw output: artifact://13]");
 		expect(rendered).not.toContain("artifact://13");
 	});
@@ -243,9 +244,9 @@ describe("bashToolRenderer", () => {
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
 		// The footer carries the styled stats including the non-zero exit status.
-		expect(rendered).toContain("0.02s");
-		expect(rendered).toContain("300s");
-		expect(rendered.split("\n").at(-1)?.match(/\d+(?:\.\d+)?s?/g)).toEqual(["0.02s", "300s", "1"]);
+		expect(rendered).toContain("Wall: 0.02s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).toContain("Exit: 1");
 		// Both the exit-code and wall-time notices are folded into the footer, not
 		// echoed verbatim in the output region.
 		expect(rendered).not.toContain("Command exited with code 1");
@@ -273,7 +274,7 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain(errorAnsi);
 	});
 
-	it("renders successful output and timing without an exit status", async () => {
+	it("omits the status footer for a successful command", async () => {
 		const component = bashToolRenderer.renderResult(
 			{
 				content: [{ type: "text", text: "ok\n\nWall time: 0.02 seconds" }],
@@ -285,11 +286,9 @@ describe("bashToolRenderer", () => {
 			{ command: "true" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		expect(rendered).toContain("ok");
-		expect(rendered).toContain("0.02s");
-		expect(rendered).toContain("300s");
-		expect(rendered).not.toContain("Wall time: 0.02 seconds");
-		expect(rendered.split("\n").at(-1)?.match(/\d+(?:\.\d+)?s?/g)).toEqual(["0.02s", "300s"]);
+		expect(rendered).toContain("Wall: 0.02s");
+		expect(rendered).toContain("Timeout: 300s");
+		expect(rendered).not.toContain("Exit:");
 	});
 
 	it("bypasses truncation/styling for SIXEL lines", async () => {
@@ -415,10 +414,12 @@ describe("bashToolRenderer", () => {
 			render({ expanded: false, isPartial: false }),
 		]) {
 			expect(rendered).toContain(`echo step_${total - 1}`);
+			expect(rendered).toContain("earlier line");
 			expect(rendered).not.toContain("echo step_0");
 		}
 
 		const expandedFinal = render({ expanded: true, isPartial: false });
 		expect(expandedFinal).toContain("echo step_0");
+		expect(expandedFinal).not.toContain("earlier line");
 	});
 });

@@ -10,7 +10,6 @@
  * - NTFS (Windows): `compact /c` sets LZNT1 compression on each file in place,
  *   keeping its inode and timestamps; later appends are stored compressed too.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -232,6 +231,31 @@ export async function compressFilesInPlace(
 	return result;
 }
 
+/**
+ * Whether `method` actually stores a compressible file compressed under `dir`.
+ * The volume type alone does not prove it: on macOS 27 `ditto --hfsCompression`
+ * exits 0 but writes plain copies (#16244), and policy can disable NTFS
+ * compression. Runs one throwaway file through {@link compressFilesInPlace}
+ * inside a scratch directory the sweep reclaims if this process dies. Throws
+ * when the compression tool itself fails, so a broken run is not mistaken for
+ * a volume that stores files uncompressed.
+ */
+export async function compressionWorks(dir: string, method: CompressMethod): Promise<boolean> {
+	const scratch = await fs.mkdtemp(path.join(dir, COMPRESS_SCRATCH_PREFIX));
+	try {
+		await Bun.write(path.join(scratch, SCRATCH_OWNER_MARKER), "");
+		const probe = path.join(scratch, "probe.txt");
+		await Bun.write(probe, "omp gc compression probe\n".repeat(10_000));
+		const candidate = await compressCandidate(probe);
+		if (!candidate) return false;
+		const batch = await compressFilesInPlace([candidate], method, new Set());
+		if (batch.errors.length > 0) throw new Error(batch.errors.join("; "));
+		return batch.compressed === 1;
+	} finally {
+		await fs.rm(scratch, { recursive: true, force: true });
+	}
+}
+
 async function compactBatch(batch: CompressCandidate[], result: CompressBatchResult): Promise<void> {
 	for (const candidate of batch) result.allocatedAfter += candidate.allocated;
 	// LZNT1 rather than `/exe` (WOF) compression: WOF inflates the whole file on
@@ -242,7 +266,7 @@ async function compactBatch(batch: CompressCandidate[], result: CompressBatchRes
 	const run = await $`compact /c /i /a /q ${batch.map(candidate => candidate.path)}`.quiet().nothrow();
 	if (run.exitCode !== 0) {
 		const output = `${run.stdout.toString()}${run.stderr.toString()}`.trim().split("\n").slice(-3).join(" ");
-		result.errors.push(t("compact exited {0}: {1}", `${run.exitCode}`, `${output}`));
+		result.errors.push(`compact exited ${run.exitCode}: ${output}`);
 	}
 	for (const candidate of batch) {
 		try {
@@ -317,7 +341,7 @@ async function compressBatch(
 			.quiet()
 			.nothrow();
 		if (copy.exitCode !== 0) {
-			result.errors.push(t("{0}: ditto exited {1}: {2}", `${dir}`, `${copy.exitCode}`, `${copy.stderr.toString().trim()}`));
+			result.errors.push(`${dir}: ditto exited ${copy.exitCode}: ${copy.stderr.toString().trim()}`);
 			return;
 		}
 		const storage = new FileSessionStorage();
@@ -326,7 +350,7 @@ async function compressBatch(
 			try {
 				const copied = await fs.lstat(copyPath);
 				if (copied.size !== candidate.bytes || (await sha256File(copyPath)) !== digests[index]) {
-					result.errors.push(t("{0}: compressed copy does not match the original", `${candidate.path}`));
+					result.errors.push(`${candidate.path}: compressed copy does not match the original`);
 					continue;
 				}
 				// Incompressible: APFS stored the copy uncompressed, so the original stays.

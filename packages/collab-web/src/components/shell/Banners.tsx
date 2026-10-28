@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import type { ConnectionPhase, GuestSnapshot } from "../../lib/client";
 
@@ -16,7 +15,7 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 		return (
 			<div className="sh-banner" role="status">
 				<span className="sh-banner-dot" />
-				{phase === "connecting" ? t("Connecting to relay…") : t("Joining session…{0}", `${progress}`)}
+				{phase === "connecting" ? "Connecting to relay…" : `Joining session…${progress}`}
 			</div>
 		);
 	}
@@ -24,19 +23,23 @@ export function Banners({ phase, endedReason, loading, onRejoin, onNewLink }: Ba
 		return (
 			<div className="sh-banner" role="status">
 				<span className="sh-banner-dot" />
-				{t("Reconnecting…{0}", `${progress}`)}
+				{`Reconnecting…${progress}`}
 			</div>
 		);
 	}
 	if (phase === "ended") {
 		return (
-			<div className="sh-ended" role="alertdialog" aria-label={t("session ended")}>
+			<div className="sh-ended" role="alertdialog" aria-label="session ended">
 				<div className="sh-ended-card">
-					<div className="sh-ended-title">{t("Session ended")}</div>
+					<div className="sh-ended-title">Session ended</div>
 					{endedReason && <div className="sh-ended-reason">{endedReason}</div>}
 					<div className="sh-ended-actions">
-						<button type="button" className="sh-btn sh-btn-primary" onClick={onRejoin}>{t("Rejoin")}</button>
-						<button type="button" className="sh-btn" onClick={onNewLink}>{t("New link")}</button>
+						<button type="button" className="sh-btn sh-btn-primary" onClick={onRejoin}>
+							Rejoin
+						</button>
+						<button type="button" className="sh-btn" onClick={onNewLink}>
+							New link
+						</button>
 					</div>
 				</div>
 			</div>

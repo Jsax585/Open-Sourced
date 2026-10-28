@@ -76,5 +76,6 @@ describe("runRootCommand — --no-session --resume", () => {
 		expect(pickerCalled).toBe(false);
 		expect(thrown).toBeInstanceOf(ProcessExitSignal);
 		expect(exitCodes).toEqual([1]);
+		expect(stderr).toContain("--resume requires session persistence");
 	}, 15_000);
 });

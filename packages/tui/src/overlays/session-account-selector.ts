@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type SelectItem, SelectList, type SgrMouseEvent } from "../index";
 import { getSelectListTheme } from "../theme/theme";
 import { OverlayPanel } from "../chrome/overlay-box";
@@ -41,7 +40,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		onSelect: (account: SessionPinAccount) => void,
 		onCancel: () => void,
 	) {
-		super(t("Select a {0} account for this session", `${providerName}`), "omp.overlay.session-account");
+		super(`Select a ${providerName} account for this session`, "omp.overlay.session-account");
 		const accountsByValue = new Map<string, SessionPinAccount>();
 		const items: SelectItem[] = accounts.map(account => {
 			const value = String(account.credentialId);
@@ -49,7 +48,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 			return {
 				value,
 				label: account.label,
-				description: account.active ? t("active for this session") : undefined,
+				description: account.active ? "active for this session" : undefined,
 			};
 		});
 
@@ -69,12 +68,12 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		// Natively the active account carries the picker's current check, so the
 		// row's detail is what tells accounts apart instead of "active for this session".
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: t("{0} account", `${providerName}`),
-			subtitle: t("Pin the account this session sends its requests with"),
+			title: `${providerName} account`,
+			subtitle: "Pin the account this session sends its requests with",
 			icon: "key-round",
-			noun: t("accounts"),
+			noun: "accounts",
 			current: accounts.filter(account => account.active).map(account => String(account.credentialId)),
-			confirm: t("Pin"),
+			confirm: "Pin",
 			decorate: item => {
 				const account = accountsByValue.get(item.value);
 				if (!account) return undefined;

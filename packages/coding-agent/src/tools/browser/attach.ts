@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
@@ -615,9 +614,9 @@ function selectRelayEntry(entries: RelayJsonEntry[], options: PickTargetOptions)
 				`The tab matching ${JSON.stringify(options.matcher)} was discarded by Chrome. Click it to reload, then retry.`,
 			);
 		}
-		const summary = entries.map(e => `- ${e.id}  ${e.title || localize("(untitled)")}  ${e.url}`).join("\n");
+		const summary = entries.map(e => `- ${e.id}  ${e.title || "(untitled)"}  ${e.url}`).join("\n");
 		throw new ToolError(
-			localize("No page target matched {1} after waiting {0}s for a newly opened tab. Pass a target id, URL or title substring (browser.targets() lists URLs before adopting), or omit it to use the active tab. Available pages:\n{2}", `${RELAY_MATCH_SETTLE_MS / 1000}`, `${JSON.stringify(options.matcher)}`, `${summary}`),
+			`No page target matched ${JSON.stringify(options.matcher)} after waiting ${RELAY_MATCH_SETTLE_MS / 1000}s for a newly opened tab. Pass a target id, URL or title substring (browser.targets() lists URLs before adopting), or omit it to use the active tab. Available pages:\n${summary}`,
 		);
 	}
 	const usable = entries.filter(isAdoptableRelayEntry);
@@ -804,7 +803,7 @@ async function pickPageFromList(pages: Page[], options: PickTargetOptions): Prom
 		const needle = options.matcher.toLowerCase();
 		const hit = enriched.find(p => p.url.toLowerCase().includes(needle) || p.title.toLowerCase().includes(needle));
 		if (hit) return hit.page;
-		const summary = enriched.map(p => `- ${p.id}  ${p.title || localize("(untitled)")}  ${p.url}`).join("\n");
+		const summary = enriched.map(p => `- ${p.id}  ${p.title || "(untitled)"}  ${p.url}`).join("\n");
 		throw new ToolError(`No page target matched ${JSON.stringify(options.matcher)}. Available pages:\n${summary}`);
 	}
 	const usable = enriched.filter(

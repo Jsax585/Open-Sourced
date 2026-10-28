@@ -4,7 +4,6 @@
  * + text blocks, tool args/result, user text, subagent task text.
  */
 
-import { getLanguage, t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Check, Copy } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { getSessionEntryDetail } from "../api";
@@ -19,14 +18,6 @@ export interface SpanDrawerProps {
 	/** Selects the first span of the given child track ("open child track"). */
 	onOpenChildTrack?: (childTrackId: string) => void;
 }
-
-const SPAN_KIND_LABEL: Record<TraceSpan["kind"], string> = {
-	turn: t("turn"),
-	model: t("model"),
-	tool: t("tool"),
-	subagent: t("subagent"),
-	background: t("background"),
-};
 
 /** Loose structural view of a fetched journal entry (validated field-by-field). */
 interface EntryDetailView {
@@ -121,32 +112,32 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 	const metrics: Array<{ key: string; label: ReactNode; value: ReactNode }> = [
 		{
 			key: "duration",
-			label: t("Duration"),
+			label: "Duration",
 			value: (
 				<span className="num">
 					{formatDurationMs(span.end - span.start)}
-					{span.unterminated && <span className="muted">{t(" · unterminated")}</span>}
+					{span.unterminated && <span className="muted"> · unterminated</span>}
 				</span>
 			),
 		},
-		{ key: "start", label: t("Start"), value: <span className="num">{new Date(span.start).toLocaleTimeString((getLanguage() === "ko" ? "ko-KR" : "en-US"))}</span> },
-		{ key: "track", label: t("Track"), value: <span className="mono">{track?.label ?? "-"}</span> },
+		{ key: "start", label: "Start", value: <span className="num">{new Date(span.start).toLocaleTimeString()}</span> },
+		{ key: "track", label: "Track", value: <span className="mono">{track?.label ?? "-"}</span> },
 	];
 	if (span.kind === "model") {
 		metrics.push(
 			{
 				key: "tokens",
-				label: t("Tokens"),
+				label: "Tokens",
 				value: <span className="num">{formatInteger(span.tokens ?? 0)}</span>,
 			},
-			{ key: "cost", label: t("Cost"), value: <span className="num">${(span.cost ?? 0).toFixed(4)}</span> },
+			{ key: "cost", label: "Cost", value: <span className="num">${(span.cost ?? 0).toFixed(4)}</span> },
 			{ key: "ttft", label: "TTFT", value: <span className="num">{formatDurationMs(span.ttft ?? null)}</span> },
-			{ key: "model", label: t("Model"), value: <span className="mono">{msg?.model ?? span.model ?? "-"}</span> },
+			{ key: "model", label: "Model", value: <span className="mono">{msg?.model ?? span.model ?? "-"}</span> },
 		);
 		if (usage)
 			metrics.push({
 				key: "split",
-				label: t("Input / output / cached"),
+				label: "Input / output / cached",
 				value: (
 					<span className="num">
 						{formatInteger(usage.input ?? 0)} / {formatInteger(usage.output ?? 0)} /{" "}
@@ -155,9 +146,9 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 				),
 			});
 		if (msg?.provider)
-			metrics.push({ key: "provider", label: t("Provider"), value: <span className="mono">{msg.provider}</span> });
+			metrics.push({ key: "provider", label: "Provider", value: <span className="mono">{msg.provider}</span> });
 		if (msg?.stopReason)
-			metrics.push({ key: "stop", label: t("Stop reason"), value: <span className="mono">{msg.stopReason}</span> });
+			metrics.push({ key: "stop", label: "Stop reason", value: <span className="mono">{msg.stopReason}</span> });
 	}
 
 	return (
@@ -168,7 +159,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 			subtitle={
 				<span className="row" style={{ gap: 6 }}>
 					<Badge tone={span.isError ? "bad" : "neutral"}>
-						{span.isError ? t("{0} · error", `${SPAN_KIND_LABEL[span.kind]}`) : SPAN_KIND_LABEL[span.kind]}
+						{span.isError ? `${span.kind} · error` : span.kind}
 					</Badge>
 				</span>
 			}
@@ -179,8 +170,8 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 					data-variant="ghost"
 					data-icon="true"
 					onClick={handleCopy}
-					aria-label={t("Copy raw JSON")}
-					title={t("Copy raw JSON")}
+					aria-label="Copy raw JSON"
+					title="Copy raw JSON"
 				>
 					{copied ? <Check size={15} /> : <Copy size={15} />}
 				</button>
@@ -191,7 +182,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 
 				{msg?.errorMessage && (
 					<div className="stack" style={{ gap: 6 }}>
-						<div className="section-label tone-bad">{t("Error message")}</div>
+						<div className="section-label tone-bad">Error message</div>
 						<pre className="code-block traces-pre">{msg.errorMessage}</pre>
 					</div>
 				)}
@@ -200,7 +191,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 					<div className="stack" style={{ gap: 8 }}>
 						{span.detail && (
 							<>
-								<div className="section-label">{t("Task")}</div>
+								<div className="section-label">Task</div>
 								<pre className="code-block traces-pre">{span.detail}</pre>
 							</>
 						)}
@@ -211,7 +202,8 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 									className="btn"
 									data-size="sm"
 									onClick={() => onOpenChildTrack(span.childTrackId ?? "")}
-								>{t("Open child track ")}<span className="mono">{span.childTrackId}</span>
+								>
+									Open child track <span className="mono">{span.childTrackId}</span>
 								</button>
 							</div>
 						)}
@@ -220,7 +212,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 
 				{span.kind === "tool" && span.detail && (
 					<div className="stack" style={{ gap: 6 }}>
-						<div className="section-label">{t("Args")}</div>
+						<div className="section-label">Args</div>
 						<pre className="code-block traces-pre">{span.detail}</pre>
 					</div>
 				)}
@@ -231,20 +223,20 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 						<Skeleton height={160} />
 					</div>
 				)}
-				{error && <ErrorState error={t("Failed to load entry: {0}", `${error.message}`)} />}
+				{error && <ErrorState error={`Failed to load entry: ${error.message}`} />}
 
 				{!loading &&
 					entry !== null &&
 					textBlocks(msg?.content).map((block, index) => (
 						<div key={`${block.kind}-${index}`} className="stack" style={{ gap: 6 }}>
-							<div className="section-label">{block.kind === "thinking" ? t("Thinking") : t("Text")}</div>
+							<div className="section-label">{block.kind === "thinking" ? "Thinking" : "Text"}</div>
 							<pre className="code-block traces-pre" data-scroll="true">
 								{block.text}
 							</pre>
 						</div>
 					))}
 
-				{!loading && entry !== null && <JsonBlock data={entry} title={t("Raw entry")} initialCollapsed={true} />}
+				{!loading && entry !== null && <JsonBlock data={entry} title="Raw entry" initialCollapsed={true} />}
 			</div>
 		</Drawer>
 	);

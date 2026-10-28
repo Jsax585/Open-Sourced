@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { register } from "../../config/registry";
 
 export const cfgBrowserEnabled = register({
@@ -12,8 +11,8 @@ export const cfgBrowserEnabled = register({
 	ui: {
 		tab: "tools",
 		group: "Available Tools",
-		label: t("Browser"),
-		description: t("Enable the browser eval prelude for scripted Chromium automation (Puppeteer)"),
+		label: "Browser",
+		description: "Enable the browser eval prelude for scripted Chromium automation (Puppeteer)",
 	},
 });
 
@@ -24,9 +23,9 @@ export const cfgBrowserCdpUrl = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Browser CDP URL"),
+		label: "Browser CDP URL",
 		description:
-			t("Default HTTP CDP discovery endpoint (for example http://127.0.0.1:9222) to attach to instead of launching a browser. Explicit app.cdp_url or app.path on the tool call take precedence."),
+			"Default HTTP CDP discovery endpoint (for example http://127.0.0.1:9222) to attach to instead of launching a browser. Explicit app.cdp_url or app.path on the tool call take precedence.",
 	},
 });
 
@@ -37,9 +36,9 @@ export const cfgBrowserRelay = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Browser Relay"),
+		label: "Browser Relay",
 		description:
-			t("Drive your own Chrome tabs through the omp browser relay. Install the extension once (`omp browser-relay install`); the relay server auto-starts when the browser prelude needs it. Takes precedence over Browser CDP URL; set PI_BROWSER_RELAY=0 or PI_BROWSER_RELAY=1 to override."),
+			"Drive your own Chrome tabs through the omp browser relay. Install the extension once (`omp browser-relay install`); the relay server auto-starts when the browser prelude needs it. Takes precedence over Browser CDP URL; set PI_BROWSER_RELAY=0 or PI_BROWSER_RELAY=1 to override.",
 	},
 });
 
@@ -50,8 +49,8 @@ export const cfgBrowserRelayUrl = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Browser Relay URL"),
-		description: t("omp browser relay endpoint (default http://127.0.0.1:9224)."),
+		label: "Browser Relay URL",
+		description: "omp browser relay endpoint (default http://127.0.0.1:9224).",
 	},
 });
 
@@ -62,8 +61,8 @@ export const cfgBrowserHeadless = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Headless Browser"),
-		description: t("Launch browser in headless mode (disable to show browser UI)"),
+		label: "Headless Browser",
+		description: "Launch browser in headless mode (disable to show browser UI)",
 	},
 });
 
@@ -74,9 +73,9 @@ export const cfgBrowserCmux = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("cmux Browser"),
+		label: "cmux Browser",
 		description:
-			t("Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override."),
+			"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override.",
 	},
 });
 
@@ -87,9 +86,9 @@ export const cfgBrowserTern = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Tern Browser"),
+		label: "Tern Browser",
 		description:
-			t("Inside a Tern pane, open browser tabs as picture-in-pictures over omp's pane (native web view) instead of headless Chromium; falls back to Chromium when no Tern window can host them. Explicit app options, the relay and Browser CDP URL take precedence; app.tern:false opts one open out. Set PI_BROWSER_TERN=0 or PI_BROWSER_TERN=1 to override."),
+			"Inside a Tern pane, open browser tabs as picture-in-pictures over omp's pane (native web view) instead of headless Chromium; falls back to Chromium when no Tern window can host them. Explicit app options, the relay and Browser CDP URL take precedence; app.tern:false opts one open out. Set PI_BROWSER_TERN=0 or PI_BROWSER_TERN=1 to override.",
 	},
 });
 
@@ -100,9 +99,9 @@ export const cfgBrowserFreezeOnTurnEnd = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Freeze Browser Tabs On Turn End"),
+		label: "Freeze Browser Tabs On Turn End",
 		description:
-			t("Freeze OMP-owned headless browser tabs when a turn settles so animated pages stop burning CPU/GPU while idle. Tabs unfreeze automatically on next use; pass persist:true on open to opt a tab out."),
+			"Freeze OMP-owned headless browser tabs when a turn settles so animated pages stop burning CPU/GPU while idle. Tabs unfreeze automatically on next use; pass persist:true on open to opt a tab out.",
 	},
 });
 
@@ -113,14 +112,14 @@ export const cfgBrowserIdleCloseSec = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Browser Idle Close Timeout"),
+		label: "Browser Idle Close Timeout",
 		description:
-			t("Close OMP-owned headless browser tabs and Tern browser picture-in-pictures idle longer than this many seconds (0 = never; session dispose still reaps). Never touches relay/CDP/spawned browsers or other sessions' tabs."),
+			"Close OMP-owned headless browser tabs and Tern browser picture-in-pictures idle longer than this many seconds (0 = never; session dispose still reaps). Never touches relay/CDP/spawned browsers or other sessions' tabs.",
 		options: [
-			{ value: "0", label: t("Never") },
-			{ value: "900", label: t("15 minutes") },
-			{ value: "1800", label: t("30 minutes") },
-			{ value: "3600", label: t("1 hour") },
+			{ value: "0", label: "Never" },
+			{ value: "900", label: "15 minutes" },
+			{ value: "1800", label: "30 minutes" },
+			{ value: "3600", label: "1 hour" },
 		],
 	},
 });
@@ -132,8 +131,8 @@ export const cfgBrowserScreenshotDir = register({
 	ui: {
 		tab: "tools",
 		group: "Grep & Browser",
-		label: t("Screenshot Directory"),
+		label: "Screenshot Directory",
 		description:
-			t("Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)"),
+			"Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)",
 	},
 });

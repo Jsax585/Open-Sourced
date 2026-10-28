@@ -4,7 +4,6 @@
  * passage verification) lives in {@link runCascade}; this file is the tool
  * contract and the model-facing report.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -67,7 +66,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		return searchApprovalCacheTargets(root ? [root] : [], this.session.cwd, entry => entry);
 	};
 	readonly loadMode = "essential";
-	readonly label = t("Find");
+	readonly label = "Find";
 	readonly summary = "Semantic grep: find files and line ranges by describing what they do";
 	readonly description = findDescription;
 	readonly parameters = findSchema;
@@ -88,7 +87,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		// Host paths stay native; internal URLs (`local://`, `omp://`, …) are
 		// listed, scanned, and read in place through the URL filesystem.
 		const filesystem = new InternalUrlFilesystem({
-			context: sessionResolveContext(this.session, { signal }),
+			context: sessionResolveContext(this.session, { signal, containSkillPaths: true }),
 			tier: resolveToolTier(this, params),
 		});
 		const root = await resolveSearchRoot(filesystem, rawScopeInput, cwd);

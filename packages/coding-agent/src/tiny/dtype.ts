@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { DataType } from "@huggingface/transformers";
 import { $env } from "@oh-my-pi/pi-utils";
 
@@ -32,7 +31,7 @@ export function normalizeTinyModelDtype(value: string | undefined): TinyModelDty
 	if (!raw) return undefined;
 	if (raw in DTYPE_VALUES) return raw as TinyModelDtype;
 	throw new Error(
-		t("Unsupported PI_TINY_DTYPE={0}. Use auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16, q2, q2f16, q1, or q1f16.", `${JSON.stringify(value)}`),
+		`Unsupported PI_TINY_DTYPE=${JSON.stringify(value)}. Use auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16, q2, q2f16, q1, or q1f16.`,
 	);
 }
 
@@ -70,20 +69,20 @@ export const TINY_MODEL_DTYPE_SETTING_VALUES = [
 
 /** Submenu metadata for the `providers.tinyModelDtype` setting. */
 export const TINY_MODEL_DTYPE_SETTING_OPTIONS = [
-	{ value: "default", label: t("Default\u0004packages/coding-agent/src/edit/settings.ts:cfgEditFuzzyThreshold.ui.options.description"), description: t("Each model's shipped dtype (currently q4)") },
-	{ value: "q4", label: "q4", description: t("4-bit weights; smallest and fastest") },
-	{ value: "q4f16", label: "q4f16", description: t("4-bit weights with fp16 activations") },
-	{ value: "q8", label: "q8", description: t("8-bit quantization") },
-	{ value: "fp16", label: "fp16", description: t("16-bit float; higher fidelity, larger") },
-	{ value: "fp32", label: "fp32", description: t("Full precision; largest and slowest") },
-	{ value: "int8", label: "int8", description: t("Signed 8-bit integer") },
-	{ value: "uint8", label: "uint8", description: t("Unsigned 8-bit integer") },
-	{ value: "bnb4", label: "bnb4", description: t("bitsandbytes 4-bit") },
-	{ value: "q2", label: "q2", description: t("2-bit weights") },
-	{ value: "q2f16", label: "q2f16", description: t("2-bit weights with fp16 activations") },
-	{ value: "q1", label: "q1", description: t("1-bit weights") },
-	{ value: "q1f16", label: "q1f16", description: t("1-bit weights with fp16 activations") },
-	{ value: "auto", label: t("Auto"), description: t("Let transformers.js choose per device") },
+	{ value: "default", label: "Default", description: "Each model's shipped dtype (currently q4)" },
+	{ value: "q4", label: "q4", description: "4-bit weights; smallest and fastest" },
+	{ value: "q4f16", label: "q4f16", description: "4-bit weights with fp16 activations" },
+	{ value: "q8", label: "q8", description: "8-bit quantization" },
+	{ value: "fp16", label: "fp16", description: "16-bit float; higher fidelity, larger" },
+	{ value: "fp32", label: "fp32", description: "Full precision; largest and slowest" },
+	{ value: "int8", label: "int8", description: "Signed 8-bit integer" },
+	{ value: "uint8", label: "uint8", description: "Unsigned 8-bit integer" },
+	{ value: "bnb4", label: "bnb4", description: "bitsandbytes 4-bit" },
+	{ value: "q2", label: "q2", description: "2-bit weights" },
+	{ value: "q2f16", label: "q2f16", description: "2-bit weights with fp16 activations" },
+	{ value: "q1", label: "q1", description: "1-bit weights" },
+	{ value: "q1f16", label: "q1f16", description: "1-bit weights with fp16 activations" },
+	{ value: "auto", label: "Auto", description: "Let transformers.js choose per device" },
 ] as const satisfies ReadonlyArray<{
 	value: (typeof TINY_MODEL_DTYPE_SETTING_VALUES)[number];
 	label: string;

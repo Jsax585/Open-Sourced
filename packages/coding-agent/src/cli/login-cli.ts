@@ -6,7 +6,6 @@
  * contributed by extensions, then re-runs that provider's model discovery so
  * the next session sees the models the credential unlocked.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as readline from "node:readline";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
 import { APP_NAME, getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
@@ -37,12 +36,12 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 		const providerId = provider ?? (await pickOAuthProvider(rl, providers));
 		const info = providers.find(p => p.id === providerId);
 		if (!info) {
-			throw new Error(t("Unknown OAuth provider '{0}'. Run `{1} login` to pick one.", `${providerId}`, `${APP_NAME}`));
+			throw new Error(`Unknown OAuth provider '${providerId}'. Run \`${APP_NAME} login\` to pick one.`);
 		}
 
 		const identity = await runTerminalOAuthLogin(rl, authStorage, info.id, { openBrowser: true });
 		if (!identity) {
-			process.stdout.write(chalk.yellow(t("No credentials were stored for {0}.\n", `${info.name}`)));
+			process.stdout.write(chalk.yellow(`No credentials were stored for ${info.name}.\n`));
 			return;
 		}
 		// A provider-scoped online refresh re-runs discovery with the new
@@ -51,15 +50,15 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 		await modelRegistry.refreshProvider(info.storeCredentialsAs ?? info.id, "online");
 
 		const who = formatLoginIdentity(identity);
-		process.stdout.write(chalk.green(t("\nLogged in to {0}{1}\n", `${info.name}`, `${who ? t(" as {0}", `${who}`) : ""}`)));
+		process.stdout.write(chalk.green(`\nLogged in to ${info.name}${who ? ` as ${who}` : ""}\n`));
 		const broker = await resolveAuthBrokerConfig();
 		process.stdout.write(
 			chalk.dim(
-				broker ? t("Credentials saved to auth broker {0}\n", `${broker.url}`) : t("Credentials saved to {0}\n", `${getAgentDbPath()}`),
+				broker ? `Credentials saved to auth broker ${broker.url}\n` : `Credentials saved to ${getAgentDbPath()}\n`,
 			),
 		);
 	} catch (error) {
-		process.stderr.write(chalk.red(t("Login failed: {0}\n", `${error instanceof Error ? error.message : String(error)}`)));
+		process.stderr.write(chalk.red(`Login failed: ${error instanceof Error ? error.message : String(error)}\n`));
 		process.exitCode = 1;
 	} finally {
 		rl.close();

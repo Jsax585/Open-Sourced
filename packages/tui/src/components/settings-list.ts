@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { fuzzyFilter } from "../fuzzy";
@@ -56,8 +55,6 @@ export interface SettingItem {
 	defaultLabel?: string;
 	/** Render as a non-interactive section heading. Skipped by navigation and search. */
 	heading?: boolean;
-	/** Stable section identity when its display label is localized. */
-	headingId?: string;
 }
 
 /** A row's open editor as a native settings page shows it (`TspPrefsProps.editing`). */
@@ -125,7 +122,6 @@ export interface SettingsListTheme {
 /** A contiguous run of items under one heading, derived from the item list. */
 interface SettingSection {
 	name: string;
-	label: string;
 	firstItemIndex: number;
 	lastItemIndex: number;
 }
@@ -533,12 +529,12 @@ export class SettingsList implements Component {
 		for (let i = 0; i < this.#filteredItems.length; i++) {
 			const item = this.#filteredItems[i];
 			if (item.heading) {
-				current = { name: item.headingId ?? item.label, label: item.label, firstItemIndex: -1, lastItemIndex: -1 };
+				current = { name: item.label, firstItemIndex: -1, lastItemIndex: -1 };
 				sections.push(current);
 				continue;
 			}
 			if (!current) {
-				current = { name: "", label: "", firstItemIndex: i, lastItemIndex: i };
+				current = { name: "", firstItemIndex: i, lastItemIndex: i };
 				sections.push(current);
 			}
 			if (current.firstItemIndex < 0) current.firstItemIndex = i;
@@ -575,7 +571,7 @@ export class SettingsList implements Component {
 
 	#renderSearchStatus(width: number): string {
 		const query = sanitizeSingleLine(this.#filterQuery);
-		const statusText = query ? t("  Search: {0}", `${query}`) : t("  Type to search");
+		const statusText = query ? `  Search: ${query}` : "  Type to search";
 		return this.#theme.hint(truncateToWidth(statusText, width, Ellipsis.Omit));
 	}
 
@@ -687,7 +683,7 @@ export class SettingsList implements Component {
 			selected: this.getSelectedItem()?.id ?? null,
 			filter: this.#filterQuery.trim() || undefined,
 			empty:
-				this.#items.length === 0 ? (this.#options.emptyText ?? t("No settings available")) : t("No matching settings"),
+				this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -742,11 +738,11 @@ export class SettingsList implements Component {
 	#hintText(): string {
 		const jumpHint =
 			this.#sections().length >= 2
-				? t("{0} to jump sections · ", `${editorKeys("tui.select.pageUp", "tui.select.pageDown")}`)
+				? `${editorKeys("tui.select.pageUp", "tui.select.pageDown")} to jump sections · `
 				: "";
 		return (
 			this.#options.hint ??
-			t("{0}/{1} to change · {2}Type to search · {3} to cancel", `${editorKey("tui.select.confirm")}`, `${formatKeyHint("space")}`, `${jumpHint}`, `${editorKey("tui.select.cancel")}`)
+			`${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to change · ${jumpHint}Type to search · ${editorKey("tui.select.cancel")} to cancel`
 		);
 	}
 
@@ -805,7 +801,7 @@ export class SettingsList implements Component {
 		const lines: string[] = [];
 
 		if (this.#items.length === 0) {
-			lines.push(this.#theme.hint(`  ${this.#options.emptyText ?? t("No settings available")}`));
+			lines.push(this.#theme.hint(`  ${this.#options.emptyText ?? "No settings available"}`));
 			return lines;
 		}
 
@@ -813,11 +809,11 @@ export class SettingsList implements Component {
 			if (this.#shouldRenderSearchStatus()) {
 				lines.push(this.#renderSearchStatus(width));
 			}
-			lines.push(this.#theme.hint(t("  No matching settings")));
+			lines.push(this.#theme.hint("  No matching settings"));
 			lines.push("");
 			const editKey = editorKey("tui.editor.deleteCharBackward");
 			const cancelKey = editorKey("tui.select.cancel");
-			lines.push(truncateToWidth(this.#theme.hint(t("  {0} to edit search · {1} to cancel", `${editKey}`, `${cancelKey}`)), width));
+			lines.push(truncateToWidth(this.#theme.hint(`  ${editKey} to edit search · ${cancelKey} to cancel`), width));
 			return lines;
 		}
 
@@ -922,7 +918,7 @@ export class SettingsList implements Component {
 	 * both panes, falling back to the flat single-column layout.
 	 */
 	#renderSplitList(width: number, sections: SettingSection[]): string[] | null {
-		const sectionNames = sections.map(section => section.label || t("Other"));
+		const sectionNames = sections.map(section => section.name || "Other");
 		let nameWidth = 0;
 		for (const name of sectionNames) nameWidth = Math.max(nameWidth, visibleWidth(name));
 		const sidebarWidth = this.#options.sidebarWidth ?? Math.min(22, nameWidth) + 4; // 2-space indent + 2-space gap

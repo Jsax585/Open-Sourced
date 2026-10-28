@@ -23,7 +23,7 @@ describe("retainToolRenderer", () => {
 		],
 	};
 
-	it("renders one inline bullet line per item", async () => {
+	it("renders one inline bullet line per item with a count summary", async () => {
 		const uiTheme = await theme();
 		const bullet = uiTheme.format.bullet;
 		const result = { content: [{ type: "text", text: "3 memories stored." }], details: { count: 3 } };
@@ -31,10 +31,14 @@ describe("retainToolRenderer", () => {
 			retainToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, args),
 		);
 
+		expect(rendered[0]).toContain("Retain");
+		expect(rendered[0]).toContain("3 memories stored");
 		const items = rendered.filter(line => line.includes(bullet));
 		expect(items).toHaveLength(3);
 		expect(items[0]).toContain("First fact to remember");
 		expect(items[2]).toContain("Third fact to remember");
+		// No "Remember:" prefix and no raw JSON arg tree leaks into the output.
+		expect(rendered.some(line => line.includes("Remember:"))).toBe(false);
 		expect(rendered.some(line => line.includes("context") || line.includes("[0]"))).toBe(false);
 	});
 
@@ -68,12 +72,13 @@ describe("retainToolRenderer", () => {
 			retainToolRenderer.renderCall({ items: "[" }, { expanded: false, isPartial: true }, uiTheme),
 		);
 
+		expect(rendered[0]).toContain("Retain");
 		expect(rendered.some(line => line.includes(bullet))).toBe(false);
 	});
 });
 
 describe("recallToolRenderer", () => {
-	it("hides memories until expanded", async () => {
+	it("summarizes the match count and hides memories until expanded", async () => {
 		const uiTheme = await theme();
 		const result = {
 			content: [
@@ -88,7 +93,9 @@ describe("recallToolRenderer", () => {
 				query: "find stuff",
 			}),
 		);
+		expect(collapsed[0]).toContain("Recall");
 		expect(collapsed[0]).toContain("find stuff");
+		expect(collapsed[0]).toContain("2 found");
 		expect(collapsed.some(line => line.includes("alpha memory"))).toBe(false);
 
 		const expanded = lines(
@@ -98,6 +105,18 @@ describe("recallToolRenderer", () => {
 		);
 		expect(expanded.some(line => line.includes("alpha memory"))).toBe(true);
 		expect(expanded.some(line => line.includes("beta memory"))).toBe(true);
+	});
+
+	it("flags an empty recall as a single warning line", async () => {
+		const uiTheme = await theme();
+		const result = { content: [{ type: "text", text: "No relevant memories found." }] };
+		const rendered = lines(
+			recallToolRenderer.renderResult(result as never, { expanded: false, isPartial: false }, uiTheme, {
+				query: "q",
+			}),
+		);
+		expect(rendered).toHaveLength(1);
+		expect(rendered[0]).toContain("no matches");
 	});
 });
 
@@ -110,6 +129,7 @@ describe("reflectToolRenderer", () => {
 				query: "what do you know",
 			}),
 		);
+		expect(rendered[0]).toContain("Reflect");
 		expect(rendered[0]).toContain("what do you know");
 		expect(rendered.some(line => line.includes("Line one."))).toBe(true);
 		expect(rendered.some(line => line.includes("Line three."))).toBe(true);

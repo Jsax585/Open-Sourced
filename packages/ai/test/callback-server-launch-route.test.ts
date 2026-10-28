@@ -120,7 +120,7 @@ describe("OAuthCallbackFlow /launch route", () => {
 		await login;
 	});
 
-	it("removes the close button after the browser refuses to close the success tab", async () => {
+	it("shows manual-close guidance when the browser refuses to close the success tab", async () => {
 		const { info, login } = await startFlowAndWaitForAuth();
 		const authUrl = new URL(info.url);
 		const redirectUri = authUrl.searchParams.get("redirect_uri");
@@ -150,12 +150,16 @@ describe("OAuthCallbackFlow /launch route", () => {
 
 		expect(closeWindow).toHaveBeenCalledTimes(1);
 		expect(document.querySelector(".btn")).not.toBeNull();
+		expect(document.getElementById("message")?.textContent).toBe("You have successfully logged in.");
 
 		vi.advanceTimersByTime(299);
 		expect(document.querySelector(".btn")).not.toBeNull();
 		vi.advanceTimersByTime(1);
 
 		expect(document.querySelector(".btn")).toBeNull();
+		expect(document.getElementById("message")?.textContent).toBe(
+			"You have successfully logged in.Please close this tab manually.",
+		);
 	});
 
 	it("suppresses launchUrl and routes /launch to the callback handler when callbackPath is /launch", async () => {

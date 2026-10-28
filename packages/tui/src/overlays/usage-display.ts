@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { UsageLimit, UsageReport, UsageResetCreditDetail, UsageResetCredits } from "@oh-my-pi/pi-ai";
 
 /** Include the usage tier in a limit title unless its label already names it. */
@@ -34,11 +33,11 @@ export function formatUsageResetWindow(windowId: string): string {
 		case "anthropic:5h":
 			return "Claude 5h";
 		case "anthropic:7d":
-			return t("Claude weekly");
+			return "Claude weekly";
 		case "anthropic:7d:opus":
-			return t("Claude Opus weekly");
+			return "Claude Opus weekly";
 		case "anthropic:7d:sonnet":
-			return t("Claude Sonnet weekly");
+			return "Claude Sonnet weekly";
 		default:
 			return windowId;
 	}

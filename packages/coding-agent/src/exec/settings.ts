@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { combine, register, type SettingValueOf } from "../config/registry";
 
 /** One bash-interceptor rule: commands matching `pattern` are redirected to `tool`. */
@@ -111,7 +110,7 @@ export const cfgBashEnabled = register({
 		tab: "shell",
 		group: "Bash",
 		label: "Bash",
-		description: t("Enable the bash tool for shell command execution"),
+		description: "Enable the bash tool for shell command execution",
 	},
 });
 
@@ -122,9 +121,9 @@ export const cfgBashAllowCompoundCommands = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Allow Compound Commands"),
+		label: "Allow Compound Commands",
 		description:
-			t("Evaluate literal && chains per command; unmatched commands use normal bash approval policy and mode"),
+			"Evaluate literal && chains per command; unmatched commands use normal bash approval policy and mode",
 	},
 });
 
@@ -136,8 +135,8 @@ export const cfgBashAutoBackgroundEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Bash Auto-Background"),
-		description: t("Automatically background long-running bash commands and deliver the result later"),
+		label: "Bash Auto-Background",
+		description: "Automatically background long-running bash commands and deliver the result later",
 	},
 });
 
@@ -148,9 +147,9 @@ export const cfgBashGitGuard = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Git Guard"),
+		label: "Git Guard",
 		description:
-			t("Refuse git commands that discard or move shared work in the bash tool: stash, reset --hard or to another commit, and checkout/switch/restore outside a merge or rebase conflict"),
+			"Refuse git commands that discard or move shared work in the bash tool: stash, reset --hard or to another commit, and checkout/switch/restore outside a merge or rebase conflict",
 	},
 });
 
@@ -161,9 +160,9 @@ export const cfgBashPatterns = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Bash Approval Patterns"),
+		label: "Bash Approval Patterns",
 		description:
-			t("Ordered bash command approval rules. Each item has match and approval fields; only '*' wildcards are supported."),
+			"Ordered bash command approval rules. Each item has match and approval fields; only '*' wildcards are supported.",
 	},
 });
 
@@ -175,8 +174,8 @@ export const cfgBashInterceptorEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Bash Interceptor"),
-		description: t("Block shell commands that have dedicated tools"),
+		label: "Bash Interceptor",
+		description: "Block shell commands that have dedicated tools",
 	},
 });
 
@@ -194,13 +193,9 @@ export const cfgBashDirenv = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("direnv Auto-Load"),
+		label: "direnv Auto-Load",
 		description:
-			t("Auto-load a repo's direnv/devenv `.envrc` into the bash session so devenv tools and env vars are present without manual `direnv exec`. Honors direnv's allow list: an `.envrc` you haven't `direnv allow`ed is never executed"),
-		options: [
-			{ value: "auto", label: t("Auto") },
-			{ value: "off", label: t("Off") },
-		],
+			"Auto-load a repo's direnv/devenv `.envrc` into the bash session so devenv tools and env vars are present without manual `direnv exec`. Honors direnv's allow list: an `.envrc` you haven't `direnv allow`ed is never executed",
 	},
 });
 
@@ -211,9 +206,9 @@ export const cfgBashDirenvLoadTimeoutMs = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("direnv Load Timeout (ms)"),
+		label: "direnv Load Timeout (ms)",
 		description:
-			t("Max wait for the first `direnv export` (a cold devenv shell can be slow); on timeout the session runs without the direnv env"),
+			"Max wait for the first `direnv export` (a cold devenv shell can be slow); on timeout the session runs without the direnv env",
 	},
 });
 
@@ -225,8 +220,8 @@ export const cfgShellMinimizerEnabled = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Shell Minimizer"),
-		description: t("Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent"),
+		label: "Shell Minimizer",
+		description: "Compress verbose shell output (git, npm, cargo, etc.) before returning it to the agent",
 	},
 });
 
@@ -262,12 +257,8 @@ export const cfgShellMinimizerSourceOutlineLevel = register({
 	ui: {
 		tab: "shell",
 		group: "Bash",
-		label: t("Shell Minimizer Source Outline"),
-		description: t("Source outline mode for cat/read of source files: default or aggressive"),
-		options: [
-			{ value: "default", label: t("Default") },
-			{ value: "aggressive", label: t("aggressive") },
-		],
+		label: "Shell Minimizer Source Outline",
+		description: "Source outline mode for cat/read of source files: default or aggressive",
 	},
 });
 

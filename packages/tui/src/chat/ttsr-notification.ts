@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "../components/text";
 import { type Component, Container } from "../tui";
 import {
@@ -73,9 +72,9 @@ export class TtsrNotificationComponent extends Container {
 	#nativePresentation(): MessageNoticeNativePresentation {
 		const single = this.#rules.length === 1 ? this.#rules[0] : undefined;
 		const head = single
-			? [span(t("Rule applied: "), "warning"), span(single.name, "mono strong")]
+			? [span("Rule applied: ", "warning"), span(single.name, "mono strong")]
 			: [
-					span(t("{0} rules applied: ", `${this.#rules.length}`), "warning"),
+					span(`${this.#rules.length} rules applied: `, "warning"),
 					span(this.#rules.map(rule => rule.name).join(", "), "mono strong"),
 				];
 		const body: NativeNode[] = [];
@@ -105,7 +104,7 @@ export class TtsrNotificationComponent extends Container {
 	}
 
 	#presentationSingle(rule: NotificationRule, expanded: boolean): MessageNoticePresentation {
-		const header = t("Injecting rule: {0}  {1}", `${theme.bold(rule.name)}`, `${theme.icon.rewind}`);
+		const header = `Injecting rule: ${theme.bold(rule.name)}  ${theme.icon.rewind}`;
 
 		const desc = (rule.description || rule.content)?.trim();
 		if (!desc) return { icon: theme.icon.warning, header };
@@ -122,13 +121,13 @@ export class TtsrNotificationComponent extends Container {
 
 		const body: Component[] = [new Text(theme.italic(displayText), 0, 0)];
 		if (truncated) {
-			body.push(new Text(theme.italic(t(" ({0} to expand)", `${expandKeyHint()}`)), 0, 0));
+			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
 		}
 		return { icon: theme.icon.warning, header, body };
 	}
 
 	#presentationMulti(expanded: boolean): MessageNoticePresentation {
-		const header = t("Injecting {0} rules:  {1}", `${this.#rules.length}`, `${theme.icon.rewind}`);
+		const header = `Injecting ${this.#rules.length} rules:  ${theme.icon.rewind}`;
 
 		const visible = expanded ? this.#rules : this.#rules.slice(0, MAX_COLLAPSED_RULES);
 		const body: Component[] = [];
@@ -153,9 +152,9 @@ export class TtsrNotificationComponent extends Container {
 
 		const hidden = this.#rules.length - visible.length;
 		if (hidden > 0) {
-			body.push(new Text(theme.italic(t("… +{0} more ({1} to expand)", `${hidden}`, `${expandKeyHint()}`)), 0, 0));
+			body.push(new Text(theme.italic(`… +${hidden} more (${expandKeyHint()} to expand)`), 0, 0));
 		} else if (elidedDetail) {
-			body.push(new Text(theme.italic(t(" ({0} to expand)", `${expandKeyHint()}`)), 0, 0));
+			body.push(new Text(theme.italic(` (${expandKeyHint()} to expand)`), 0, 0));
 		}
 		return { icon: theme.icon.warning, header, body };
 	}

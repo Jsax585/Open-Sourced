@@ -10,7 +10,6 @@
  * Add a hint by appending to {@link COMPOSER_HINTS}, extending
  * {@link ComposerHintId}, and recording the gesture where it is handled.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { formatDoubleTap, formatKeyHint, type KeybindingsManager } from "../app-keybindings";
 import { theme } from "../theme/theme";
 
@@ -50,7 +49,7 @@ export const COMPOSER_HINTS: readonly ComposerHint[] = [
 			if (ctx.runningAgents === 0 || ctx.focusedOnAgent) return undefined;
 			return {
 				key: formatDoubleTap("left"),
-				label: t("to see {0} running {1}", `${ctx.runningAgents}`, `${ctx.runningAgents === 1 ? "agent" : "agents"}`),
+				label: `to see ${ctx.runningAgents} running ${ctx.runningAgents === 1 ? "agent" : "agents"}`,
 			};
 		},
 	},
@@ -60,7 +59,7 @@ export const COMPOSER_HINTS: readonly ComposerHint[] = [
 		resolve: ctx => {
 			if (ctx.conversationStarted) return undefined;
 			const key = ctx.keybindings.getKeys("app.thinking.cycle")[0];
-			return key ? { key: formatKeyHint(key), label: t("to change thinking effort") } : undefined;
+			return key ? { key: formatKeyHint(key), label: "to change thinking effort" } : undefined;
 		},
 	},
 ];

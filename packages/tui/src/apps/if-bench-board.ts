@@ -8,7 +8,6 @@
  * callers keep a parseable trace.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { replaceTabs, truncateToWidth } from "../utils";
 import { renderTableRow, type TableColumn } from "../components/table";
 import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
@@ -65,11 +64,11 @@ const DETAIL_WIDTH = 120;
 
 /** Human-readable verdict for each scored failure mode. */
 const FAILURE_TEXT: Record<IfBenchFailure, string> = {
-	result: t("wrong array"),
-	cat: t("no cat sound"),
-	"result+cat": t("wrong array + no cat sound"),
-	format: t("no <result> block"),
-	provider: t("provider error"),
+	result: "wrong array",
+	cat: "no cat sound",
+	"result+cat": "wrong array + no cat sound",
+	format: "no <result> block",
+	provider: "provider error",
 };
 
 /** Rendering surface for one `omp if-bench` run. */
@@ -170,18 +169,18 @@ function renderLive(
 	const deepest = Math.max(0, ...[...rows.values()].map(row => row.actions));
 	const header =
 		`${fgOrPlain("accent", spinner)} ${theme ? theme.bold("if-bench") : "if-bench"} ${fgOrPlain("dim", "·")} ` +
-		t("{0} live {1} {2} actions {3} ", `${rows.size}`, `${fgOrPlain("dim", "·")}`, `${deepest}`, `${fgOrPlain("dim", "·")}`) +
+		`${rows.size} live ${fgOrPlain("dim", "·")} ${deepest} actions ${fgOrPlain("dim", "·")} ` +
 		`${fgOrPlain("dim", `L=${meta.arrayLength} nya{1,${meta.nyaMax}}`)} ${fgOrPlain("dim", "·")} ` +
 		`${formatDuration(Date.now() - startedAt)}`;
 	const lines = [header];
 	for (const [label, row] of rows) {
 		const meterCells = ladder(row, meta.maxTurns, spinner);
 		const parts = [
-			t("turn {0}/{1}", `${Math.max(row.turn, 1)}`, `${meta.maxTurns}`),
-			t("{0} acts", `${row.actions}`),
+			`turn ${Math.max(row.turn, 1)}/${meta.maxTurns}`,
+			`${row.actions} acts`,
 			formatDuration(Date.now() - row.startedAt),
 		];
-		if (row.placement) parts.push(fgOrPlain("dim", t("cat@{0}", `${row.placement}`)));
+		if (row.placement) parts.push(fgOrPlain("dim", `cat@${row.placement}`));
 		lines.push(
 			renderTableRow(
 				[
@@ -228,22 +227,22 @@ function ladder(row: RowState, maxTurns: number, spinner: string): string {
 }
 
 function formatTurnLine(label: string, record: IfBenchTurnRecord): string {
-	const head = t("[turn {0}] {1} {2} acts cat@{3}", `${record.turn}`, `${label}`, `${record.cumulativeActions}`, `${record.placement}`);
-	if (record.passed) return t("{0} PASS {1}", `${head}`, `${formatDuration(Math.round(record.durationMs))}`);
-	return t("{0} FAIL {2}", `${(head)}`, `${(FAILURE_TEXT[record.failure ?? "format"])}`, `${(record.failure ?? "format")}`);
+	const head = `[turn ${record.turn}] ${label} ${record.cumulativeActions} acts cat@${record.placement}`;
+	if (record.passed) return `${head} PASS ${formatDuration(Math.round(record.durationMs))}`;
+	return `${head} FAIL ${record.failure ?? "format"}`;
 }
 
 function formatVerdict(report: IfBenchModelReport, meta: IfBenchBoardMeta): string {
 	const stats = [
-		t("{0}/{1} turns", `${report.turnsPassed}`, `${meta.maxTurns}`),
-		t("{0} actions", `${report.actionsPassed}`),
-		t("{0}/turn", `${formatDuration(Math.round(meanTurnMs(report)))}`),
+		`${report.turnsPassed}/${meta.maxTurns} turns`,
+		`${report.actionsPassed} actions`,
+		`${formatDuration(Math.round(meanTurnMs(report)))}/turn`,
 	];
-	if (report.outputTokens > 0) stats.push(t("{0} tok\u0004packages/tui/src/apps/cleanse-board.ts:CleanseBoardModel.#describeRepairHeader", `${formatNumber(report.outputTokens)}`));
+	if (report.outputTokens > 0) stats.push(`${formatNumber(report.outputTokens)} tok`);
 	if (report.cost > 0) stats.push(formatCost(report.cost));
 	const body = `${theme ? theme.bold(report.label) : report.label} ${stats.join(fgOrPlain("dim", " · "))}`;
 	if (!report.failure) return `${fgOrPlain("success", "✓")} ${body}`;
-	return `${fgOrPlain("error", "✗")} ${body} ${fgOrPlain("dim", "·")} ${fgOrPlain("error", t("broke on turn {0}: {1}", `${report.failure.turn}`, `${FAILURE_TEXT[report.failure.kind]}`))}`;
+	return `${fgOrPlain("error", "✗")} ${body} ${fgOrPlain("dim", "·")} ${fgOrPlain("error", `broke on turn ${report.failure.turn}: ${FAILURE_TEXT[report.failure.kind]}`)}`;
 }
 
 /** Expected/actual pair for the turn that ended a run, clipped for the terminal. */
@@ -253,10 +252,10 @@ function failureDetail(report: IfBenchModelReport): string[] {
 	const oneLine = (text: string): string =>
 		truncateToWidth(replaceTabs(text).replace(/\s+/g, " ").trim(), DETAIL_WIDTH);
 	if (failed.failure === "provider")
-		return [`    ${fgOrPlain("dim", t("provider"))} ${fgOrPlain("error", oneLine(failed.response))}`];
+		return [`    ${fgOrPlain("dim", "provider")} ${fgOrPlain("error", oneLine(failed.response))}`];
 	return [
-		`    ${fgOrPlain("dim", t("expected"))} <${failed.expected}>`,
-		`    ${fgOrPlain("dim", t("actual  "))} ${oneLine(failed.response)}`,
+		`    ${fgOrPlain("dim", "expected")} <${failed.expected}>`,
+		`    ${fgOrPlain("dim", "actual  ")} ${oneLine(failed.response)}`,
 	];
 }
 
@@ -284,21 +283,21 @@ export function formatIfBenchScoreboard(summary: IfBenchSummary): string {
 		(a, b) => b.turnsPassed - a.turnsPassed || b.actionsPassed - a.actionsPassed || meanTurnMs(a) - meanTurnMs(b),
 	);
 	const columns: ScoreboardColumn[] = [
-		{ header: t("model"), value: report => report.label },
-		{ header: t("turns"), value: report => `${report.turnsPassed}/${summary.maxTurns}`, align: "right" },
-		{ header: t("actions"), value: report => String(report.actionsPassed), align: "right" },
+		{ header: "model", value: report => report.label },
+		{ header: "turns", value: report => `${report.turnsPassed}/${summary.maxTurns}`, align: "right" },
+		{ header: "actions", value: report => String(report.actionsPassed), align: "right" },
 		{
-			header: t("broke on"),
+			header: "broke on",
 			value: report =>
-				report.failure ? t("turn {0} · {1}", `${report.failure.turn}`, `${FAILURE_TEXT[report.failure.kind]}`) : t("survived"),
+				report.failure ? `turn ${report.failure.turn} · ${FAILURE_TEXT[report.failure.kind]}` : "survived",
 		},
-		{ header: t("per turn"), value: report => formatDuration(Math.round(meanTurnMs(report))), align: "right" },
+		{ header: "per turn", value: report => formatDuration(Math.round(meanTurnMs(report))), align: "right" },
 		{
-			header: t("tokens"),
+			header: "tokens",
 			value: report => (report.outputTokens > 0 ? formatNumber(report.outputTokens) : "-"),
 			align: "right",
 		},
-		{ header: t("cost"), value: report => (report.cost > 0 ? formatCost(report.cost) : "-"), align: "right" },
+		{ header: "cost", value: report => (report.cost > 0 ? formatCost(report.cost) : "-"), align: "right" },
 	];
 	const cells = ranked.map(report => columns.map(column => column.value(report)));
 	const widths = columns.map((column, index) =>

@@ -23,7 +23,6 @@
  * Declaration order is significant: the settings panel lists a tab's settings in registration order
  * (sections follow `TAB_GROUPS`), and `config/all-settings.ts` imports every domain in that order.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { logger, parseFlag } from "@oh-my-pi/pi-utils";
 import type { AnyUiMetadata, SubmenuOption, UiBase } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import type { SettingProvenance, Settings } from "./settings";
@@ -568,11 +567,11 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 				const lower = trimmed.toLowerCase();
 				if (["true", "1", "yes", "on"].includes(lower)) return true as T;
 				if (["false", "0", "no", "off"].includes(lower)) return false as T;
-				throw new Error(t("Invalid boolean value: {0}. Use true/false, yes/no, on/off, or 1/0", `${text}`));
+				throw new Error(`Invalid boolean value: ${text}. Use true/false, yes/no, on/off, or 1/0`);
 			}
 			case "number": {
 				const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
-				if (!Number.isFinite(parsed)) throw new Error(t("Invalid number: {0}", `${text}`));
+				if (!Number.isFinite(parsed)) throw new Error(`Invalid number: ${text}`);
 				return parsed as T;
 			}
 			case "array":
@@ -581,9 +580,9 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 				try {
 					parsed = JSON.parse(trimmed);
 				} catch {
-					throw new Error(t("Invalid {0} JSON: {1}", `${this.definition.type}`, `${text}`));
+					throw new Error(`Invalid ${this.definition.type} JSON: ${text}`);
 				}
-				if (!this.accepts(parsed)) throw new Error(t("Invalid {0} JSON: {1}", `${this.definition.type}`, `${text}`));
+				if (!this.accepts(parsed)) throw new Error(`Invalid ${this.definition.type} JSON: ${text}`);
 				return parsed as T;
 			}
 			case "string":
@@ -599,7 +598,7 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 				}
 				const valid = this.enumValues;
 				if (valid && !valid.includes(value)) {
-					throw new Error(t("Invalid value: {0}. Valid values: {1}", `${text}`, `${valid.join(", ")}`));
+					throw new Error(`Invalid value: ${text}. Valid values: ${valid.join(", ")}`);
 				}
 				return value as T;
 			}
@@ -663,12 +662,13 @@ export class Setting<T, Id extends string = string> extends Derived<T> {
 		const unknown = this.#unknownItems(value);
 		if (unknown.length > 0 && this.definition.type === "array" && this.definition.items) {
 			const { values, label } = this.definition.items;
-			throw new Error(t("Unknown {4}: {1}. Valid {2}s: {3}", `${(label)}`, `${(unknown.join(", "))}`, `${(label)}`, `${(values.join(", "))}`, `${(unknown.length === 1 ? label : `${label}s`)}`));
+			const noun = unknown.length === 1 ? label : `${label}s`;
+			throw new Error(`Unknown ${noun}: ${unknown.join(", ")}. Valid ${label}s: ${values.join(", ")}`);
 		}
 		this.definition.validate?.(value);
 		if (!this.accepts(value)) {
-			const expected = this.enumValues ? t("one of {0}", `${this.enumValues.join(", ")}`) : t("a {0}", `${this.definition.type}`);
-			throw new Error(t("Invalid value for {0}: {1} (expected {2})", `${this.id}`, `${Bun.inspect(value)}`, `${expected}`));
+			const expected = this.enumValues ? `one of ${this.enumValues.join(", ")}` : `a ${this.definition.type}`;
+			throw new Error(`Invalid value for ${this.id}: ${Bun.inspect(value)} (expected ${expected})`);
 		}
 	}
 
@@ -814,7 +814,7 @@ const ordered: AnySetting[] = [];
  * @throws Error when `id` is already registered.
  */
 export function register<const D extends SettingDefinition>(definition: D): Setting<DefinitionValue<D>, D["id"]> {
-	if (byId.has(definition.id)) throw new Error(t("Setting \"{0}\" is registered twice", `${definition.id}`));
+	if (byId.has(definition.id)) throw new Error(`Setting "${definition.id}" is registered twice`);
 	const handle = new Setting<DefinitionValue<D>, D["id"]>(definition);
 	byId.set(definition.id, handle as AnySetting);
 	ordered.push(handle as AnySetting);

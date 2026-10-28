@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, test } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type { TspPickerProps } from "@oh-my-pi/pi-wire";
+import type { TspPickerGroup, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
 import { ModelHubComponent, type ModelHubRegistry, type ModelHubSource } from "../src/overlays/model-hub";
 import { ModelPickerComponent } from "../src/overlays/model-picker";
@@ -118,9 +118,20 @@ function props(root: NativeNode): TspPickerProps {
 	return root.p as TspPickerProps;
 }
 
+function groups(p: TspPickerProps): string[] {
+	return (p.order ?? [])
+		.filter((entry): entry is TspPickerGroup => typeof entry !== "string")
+		.map(g => String(g.label));
+}
+
 /** A described child's prop, when the child is a node carrying it. */
 function prop(child: NativeChild, name: string): unknown {
 	return "k" in child && child.p ? Reflect.get(child.p, name) : undefined;
+}
+
+function titleOf(children: readonly NativeChild[] | undefined): unknown {
+	const title = children?.find(child => prop(child, "role") === "omp.picker.title");
+	return title ? prop(title, "text") : undefined;
 }
 
 test("the model hub describes a data-first picker when the terminal has the kind, else its generic frame", () => {
@@ -131,19 +142,21 @@ test("the model hub describes a data-first picker when the terminal has the kind
 
 	const root = hub.describe(withPicker);
 	const p = props(root);
-	expect(p).toMatchObject({ size: "lg", layout: "rows", preview: "side", icon: "cpu", scope: "all" });
-	expect(p.scopes?.map(scope => [scope.id, scope.count])).toEqual([
-		["roles", 2],
-		["all", 5],
-		["provider:anthropic", 2],
-		["provider:demo", 1],
-		["provider:openai", 2],
+	expect(p).toMatchObject({ size: "lg", layout: "rows", preview: "side", icon: "cpu", title: "Models", scope: "all" });
+	expect(p.scopes?.map(scope => [scope.id, scope.count, scope.group])).toEqual([
+		["roles", 2, undefined],
+		["all", 5, undefined],
+		["provider:anthropic", 2, "Providers"],
+		["provider:demo", 1, "Providers"],
+		["provider:openai", 2, "Providers"],
 	]);
 	expect(p.scopes?.find(scope => scope.id === "provider:anthropic")?.mark).toEqual({
 		text: "An",
 		seed: "anthropic",
 		icon: "provider:anthropic",
 	});
+	// The recent/role block, then one group per provider.
+	expect(groups(p)).toEqual(["Recent", "anthropic", "openai"]);
 	expect(p.current).toEqual(["demo/demo"]);
 	expect(p.total).toBe(5);
 	const demo = p.items?.find(entry => entry.id === "demo/demo");
@@ -152,9 +165,10 @@ test("the model hub describes a data-first picker when the terminal has the kind
 	// The default role runs with thinking off (`defaultThinkingLevel`): its chip carries that level's dot.
 	expect(demo?.chips).toEqual([{ text: "default", on: true, dot: "thinkingOff" }]);
 	expect(p.items?.find(entry => entry.id === "anthropic/claude-sonnet-5-5")?.facts?.int).toBe("60");
-	expect(p.items?.find(entry => entry.id === "openai/gpt-5.6-mini")?.badges).toContainEqual(
-		expect.objectContaining({ tone: "success" }),
-	);
+	expect(p.items?.find(entry => entry.id === "openai/gpt-5.6-mini")?.badges).toEqual([
+		{ text: "free", tone: "success" },
+	]);
+	expect(titleOf(root.c)).toBe("demo");
 	// Unchanged state keeps the node.
 	expect(hub.describe(withPicker)).toBe(root);
 });
@@ -170,9 +184,7 @@ test("Factory Droid rows carry the base credit rate and a credit-only model is n
 	const row = (id: string) => items.find(entry => entry.id === `factory-droid/${id}`);
 	expect(row("claude-opus-5")?.facts?.price).toBe("$3·15 2×");
 	expect(row("preview-credit-model")?.facts?.price).toBe("0.5×");
-	expect(row("preview-credit-model")?.badges ?? []).not.toContainEqual(
-		expect.objectContaining({ tone: "success" }),
-	);
+	expect(row("preview-credit-model")?.badges ?? []).not.toContainEqual({ text: "free", tone: "success" });
 });
 
 test("typing changes the order, hits, counts and head total but never the catalogue", () => {
@@ -238,6 +250,7 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	let p = props(hub.describe(withPicker));
 	expect(p.selected).toBe("openai/gpt-5.6");
 	expect(p.focus).toBe("list");
+	expect(titleOf(hub.describe(withPicker).c)).toBe("gpt-5.6");
 
 	// Activate = Enter: the role-assignment strip opens and takes the focus.
 	hub.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
@@ -265,7 +278,8 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 		label: "openai/gpt-5.6",
 		depth: 1,
 	});
-	expect(p.items?.find(entry => entry.id === "role:default")?.facts).toMatchObject({ model: "demo/demo" });
+	expect(p.items?.find(entry => entry.id === "role:default")?.facts).toEqual({ model: "demo/demo", thinking: "off" });
+	expect(groups(p)).toContain("Model fallback chains");
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
@@ -279,7 +293,7 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 	expect(calls.cancel).toBe(1);
 });
 
-test("ctrl+←/→ switches the active preset in the Roles view", () => {
+test("the Roles view picker names the active preset and ctrl+←/→ switches it", () => {
 	const presets = { names: ["fast", "slow"], active: "fast" as string | undefined };
 	let revision = 0;
 	const switched: string[] = [];
@@ -301,11 +315,16 @@ test("ctrl+←/→ switches the active preset in the Roles view", () => {
 		},
 	);
 	hubs.push(hub);
+	const subtitleText = () => {
+		const subtitle = props(hub.describe(withPicker)).subtitle;
+		return Array.isArray(subtitle) ? subtitle.map(part => part.t).join("") : subtitle;
+	};
 
 	hub.handleInput("\x1b[A"); // All models → Roles
-	expect(props(hub.describe(withPicker)).scope).toBe("roles");
+	expect(subtitleText()).toStartWith("Preset fast");
 	hub.handleInput("\x1b[1;5C");
 	expect(switched).toEqual(["slow"]);
+	expect(subtitleText()).toStartWith("Preset slow");
 	hub.handleInput("\x1b[1;5D");
 	expect(switched).toEqual(["slow", "fast"]);
 });
@@ -327,13 +346,15 @@ test("the quick picker is an md sheet with the summary below and a task-model to
 	expect(picker.describe(withoutPicker).k).not.toBe("picker");
 	let root = picker.describe(withPicker);
 	let p = props(root);
-	expect(p).toMatchObject({ size: "md", preview: "below", selected: "demo/demo" });
+	expect(p).toMatchObject({ size: "md", preview: "below", title: "Switch model", selected: "demo/demo" });
 	expect(p.scopes).toBeUndefined();
+	expect(groups(p)).toEqual(["Recent", "All"]);
 	expect(root.c?.some(child => prop(child, "layout") === "inline")).toBe(true);
 
 	picker.handleNativeEvent({ type: "action", key: "", act: "task", mods: [] });
 	root = picker.describe(withPicker);
 	p = props(root);
+	expect(p.title).toBe("Switch task model");
 	expect(p.actions?.find(action => action.id === "task")?.on).toBe(true);
 	picker.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
 	expect(picked).toEqual(["task:openai/gpt-5.6"]);
@@ -354,6 +375,9 @@ test("a select-only picker never marks models over the live context window", () 
 		},
 		{ currentSelector: "demo/tiny", currentContextTokens: 50_000, selectOnly: true },
 	);
+	const rendered = picker.render(120).join("\n");
+	expect(rendered).not.toContain("context>");
+	expect(rendered).not.toContain("compacts with");
 	picker.handleNativeEvent({ type: "activate", key: "", item: "demo/tiny" });
 	expect(picks).toEqual([{ selector: "demo/tiny", overContext: false }]);
 });

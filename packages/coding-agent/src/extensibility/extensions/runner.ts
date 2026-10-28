@@ -1,7 +1,6 @@
 /**
  * Extension runner - executes extensions and manages their lifecycle.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type AgentMessage,
@@ -135,7 +134,7 @@ export const EXTENSION_HANDLER_TIMEOUT_MS = 30_000;
 let extensionHandlerTimeoutMs = EXTENSION_HANDLER_TIMEOUT_MS;
 
 function throwUnsupportedServiceTierAction(): never {
-	throw new Error(t("This extension host does not support service-tier actions"));
+	throw new Error("This extension host does not support service-tier actions");
 }
 
 export function testSetExtensionHandlerTimeoutMs(timeoutMs: number): void {
@@ -484,7 +483,7 @@ const noOpUIContext: ExtensionUIContext = {
 	},
 	getAllThemes: () => Promise.resolve([]),
 	getTheme: () => Promise.resolve(undefined),
-	setTheme: (_theme: string | Theme) => Promise.resolve({ success: false, error: t("UI not available") }),
+	setTheme: (_theme: string | Theme) => Promise.resolve({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
@@ -537,6 +536,7 @@ export class ExtensionRunner {
 	#resolvePlanReviewFn: NonNullable<ExtensionContextActions["resolvePlanReview"]> = () => false;
 	#getPendingPlanReviewFn: NonNullable<ExtensionContextActions["getPendingPlanReview"]> = () => undefined;
 	#openPlanReviewFn: NonNullable<ExtensionContextActions["openPlanReview"]> = async () => false;
+	#sessionModes?: ExtensionContextActions["sessionModes"];
 	#getMemoryFn?: () => MemoryRuntimeContext | undefined;
 	#createAnnotations?: ExtensionAnnotationsFactory;
 	#commandDiagnostics: Array<{ type: string; message: string; path: string }> = [];
@@ -724,10 +724,10 @@ export class ExtensionRunner {
 		},
 	): Promise<AgentToolResult<TDetails>> {
 		const resolved = this.#nativeToolResolver?.(name);
-		if (!resolved) throw new Error(t("invokeTool: no native built-in named \"{0}\" to delegate to", `${name}`));
+		if (!resolved) throw new Error(`invokeTool: no native built-in named "${name}" to delegate to`);
 		const depth = options?.depth ?? 0;
 		if (depth >= 8) {
-			throw new Error(t("invokeTool: delegation depth exceeded 8 (recursive invokeTool for \"{0}\"?)", `${name}`));
+			throw new Error(`invokeTool: delegation depth exceeded 8 (recursive invokeTool for "${name}"?)`);
 		}
 		const toolCallId = `invoke-${name}-${Date.now().toString(36)}-${depth}`;
 		return (await resolved.tool.execute(
@@ -842,6 +842,8 @@ export class ExtensionRunner {
 		if (contextActions.resolvePlanReview) this.#resolvePlanReviewFn = contextActions.resolvePlanReview;
 		if (contextActions.getPendingPlanReview) this.#getPendingPlanReviewFn = contextActions.getPendingPlanReview;
 		if (contextActions.openPlanReview) this.#openPlanReviewFn = contextActions.openPlanReview;
+		// Assigned unconditionally: a headless rebind must not inherit a previous host's controls.
+		this.#sessionModes = contextActions.sessionModes;
 		this.#getContextUsageFn = contextActions.getContextUsage;
 		this.#compactFn = contextActions.compact;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
@@ -1478,6 +1480,7 @@ export class ExtensionRunner {
 		const createAnnotations = this.#createAnnotations;
 		const sendUserMessage = (text: string, options?: SendUserMessageOptions): void =>
 			this.runtime.sendUserMessage(text, options);
+		const getSessionModes = () => this.#sessionModes;
 		return {
 			ui: this.#uiContext,
 			mode: this.#mode,
@@ -1501,11 +1504,15 @@ export class ExtensionRunner {
 			resolvePlanReview: (reviewId, choice, input) => this.#resolvePlanReviewFn(reviewId, choice, input),
 			getPendingPlanReview: () => this.#getPendingPlanReviewFn(),
 			openPlanReview: () => this.#openPlanReviewFn(),
+			// Live: a context saved before or across a host rebind sees the current controls.
+			get sessionModes() {
+				return getSessionModes();
+			},
 			getSystemPrompt: () => this.#getSystemPromptFn(),
 			runEphemeralTurn: runEphemeralTurn
 				? async options => {
 						if (this.#ephemeralTurnBlocker.getStore()) {
-							throw new Error(t("runEphemeralTurn cannot be called recursively from an ephemeral turn hook"));
+							throw new Error("runEphemeralTurn cannot be called recursively from an ephemeral turn hook");
 						}
 						// Resolve at call time so a running handler's cancellation is inherited.
 						// A saved context must not retain a completed handler's stale signal.
@@ -1760,10 +1767,18 @@ export class ExtensionRunner {
 					if (stopResult.decision === "block") {
 						return stopResult as RunnerEmitResult<TEvent>;
 					}
-					const hasContinuationContext =
-						(typeof stopResult.additionalContext === "string" && stopResult.additionalContext.length > 0) ||
-						(typeof stopResult.reason === "string" && stopResult.reason.length > 0);
-					if (stopResult.continue === true && hasContinuationContext) result ??= stopResult;
+					const continuationContext = stopResult.additionalContext || stopResult.reason;
+					if (stopResult.continue === true && continuationContext) {
+						if (result) {
+							const prior = result as SessionStopEventResult;
+							result = {
+								continue: true,
+								additionalContext: `${prior.additionalContext || prior.reason}\n\n${continuationContext}`,
+							};
+						} else {
+							result = stopResult;
+						}
+					}
 				}
 			}
 		}
@@ -1857,7 +1872,7 @@ export class ExtensionRunner {
 					this.emitError({
 						extensionPath: ext.path,
 						event: "assistant_message",
-						error: t("content replacement may only change text in existing blocks; block positions, non-text blocks, and other metadata must remain unchanged"),
+						error: "content replacement may only change text in existing blocks; block positions, non-text blocks, and other metadata must remain unchanged",
 					});
 					continue;
 				}

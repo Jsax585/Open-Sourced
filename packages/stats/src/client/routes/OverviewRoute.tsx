@@ -1,4 +1,3 @@
-import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getOverviewStats, getRecentRequests } from "../api";
@@ -43,12 +42,12 @@ export interface OverviewRouteProps {
 type ActivityMetric = "requests" | "tokens" | "cost";
 
 const ACTIVITY_OPTIONS = [
-	{ value: "requests" as const, label: localize("Requests") },
-	{ value: "tokens" as const, label: localize("Tokens") },
-	{ value: "cost" as const, label: localize("Cost") },
+	{ value: "requests" as const, label: "Requests" },
+	{ value: "tokens" as const, label: "Tokens" },
+	{ value: "cost" as const, label: "Cost" },
 ];
 
-const AGENT_LABEL: Record<AgentType, string> = { main: localize("Main agent"), subagent: localize("Subagents"), advisor: localize("Advisor") };
+const AGENT_LABEL: Record<AgentType, string> = { main: "Main agent", subagent: "Subagents", advisor: "Advisor" };
 const AGENT_COLOR: Record<AgentType, string> = {
 	main: "var(--chart-primary)",
 	subagent: "var(--chart-secondary)",
@@ -56,10 +55,10 @@ const AGENT_COLOR: Record<AgentType, string> = {
 };
 
 const TOKEN_MIX = [
-	{ key: "input", label: localize("Uncached input"), color: "#5b8cff" },
-	{ key: "cacheRead", label: localize("Cache read"), color: "var(--chart-primary)" },
-	{ key: "cacheWrite", label: localize("Cache write"), color: "#f5b54a" },
-	{ key: "output", label: localize("Output"), color: "var(--chart-secondary)" },
+	{ key: "input", label: "Uncached input", color: "#5b8cff" },
+	{ key: "cacheRead", label: "Cache read", color: "var(--chart-primary)" },
+	{ key: "cacheWrite", label: "Cache write", color: "#f5b54a" },
+	{ key: "output", label: "Output", color: "var(--chart-secondary)" },
 ] as const;
 
 export function OverviewRoute({ active, range, onRequestClick }: OverviewRouteProps) {
@@ -87,73 +86,73 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 	const chartSeries =
 		metric === "requests"
 			? [
-					{ key: "ok", label: localize("Succeeded"), color: "var(--chart-primary)", values: series.requests },
-					{ key: "err", label: localize("Failed"), color: "var(--bad)", values: series.errors },
+					{ key: "ok", label: "Succeeded", color: "var(--chart-primary)", values: series.requests },
+					{ key: "err", label: "Failed", color: "var(--bad)", values: series.errors },
 				]
 			: metric === "tokens"
-				? [{ key: "tokens", label: localize("Tokens"), color: "var(--chart-primary)", values: series.tokens }]
-				: [{ key: "cost", label: localize("API-equivalent"), color: "var(--chart-secondary)", values: series.cost }];
+				? [{ key: "tokens", label: "Tokens", color: "var(--chart-primary)", values: series.tokens }]
+				: [{ key: "cost", label: "API-equivalent", color: "var(--chart-secondary)", values: series.cost }];
 
 	return (
 		<div className="page">
-			<PageHeader title={localize("Overview")} description={localize("Everything omp did across your sessions in {0}.", `${meta.windowLabel}`)} />
+			<PageHeader title="Overview" description={`Everything omp did across your sessions in ${meta.windowLabel}.`} />
 
 			<QueryView query={overview} skeleton={<ChartSkeleton height={112} />}>
 				{({ overall }) => (
 					<div data-stale={overview.stale} className="stack" style={{ gap: 16 }}>
 						<StatGrid min={190}>
 							<Stat
-								label={localize("API-equivalent cost")}
-								title={localize("What this usage would cost at public API rates")}
+								label="API-equivalent cost"
+								title="What this usage would cost at public API rates"
 								value={formatEstimatedCost(overall.totalCost, overall.unpricedRequests)}
 								hint={
 									overall.unpricedRequests > 0
-										? localize("{0} unpriced", `${formatInteger(overall.unpricedRequests)}`)
+										? `${formatInteger(overall.unpricedRequests)} unpriced`
 										: undefined
 								}
 								spark={series.cost}
 								sparkColor="var(--chart-secondary)"
 							/>
 							<Stat
-								label={localize("Requests")}
+								label="Requests"
 								value={formatInteger(overall.totalRequests)}
-								hint={localize("{0} failed\u0004packages/stats/src/client/routes/OverviewRoute.tsx:OverviewRoute", `${formatInteger(overall.failedRequests)}`)}
+								hint={`${formatInteger(overall.failedRequests)} failed`}
 								spark={series.all}
 							/>
 							<Stat
-								label={localize("Conversation tokens")}
-								title={localize("Uncached input + cache reads + cache writes + output")}
+								label="Conversation tokens"
+								title="Uncached input + cache reads + cache writes + output"
 								value={formatCompact(sumConversationTokens(overall))}
-								hint={localize("{0} output", `${formatCompact(overall.totalOutputTokens)}`)}
+								hint={`${formatCompact(overall.totalOutputTokens)} output`}
 								spark={series.tokens}
 							/>
 							<Stat
-								label={localize("Cache rate")}
-								title={localize("Cache reads ÷ (uncached input + cache reads)")}
+								label="Cache rate"
+								title="Cache reads ÷ (uncached input + cache reads)"
 								value={formatPercent(overall.cacheRate)}
-								hint={localize("{0} saved", `${formatPercent(overall.cacheSavings)}`)}
+								hint={`${formatPercent(overall.cacheSavings)} saved`}
 							/>
 							<Stat
-								label={localize("Error rate")}
+								label="Error rate"
 								value={formatErrorRate(overall.errorRate)}
-								hint={localize("{0} succeeded\u0004packages/stats/src/client/routes/OverviewRoute.tsx:OverviewRoute", `${formatInteger(overall.successfulRequests)}`)}
+								hint={`${formatInteger(overall.successfulRequests)} succeeded`}
 								spark={series.errors}
 								sparkColor="var(--bad)"
 							/>
 						</StatGrid>
 						<StatGrid min={140}>
-							<Stat size="sm" label={localize("Uncached input")} value={formatCompact(overall.totalInputTokens)} />
-							<Stat size="sm" label={localize("Cache read")} value={formatCompact(overall.totalCacheReadTokens)} />
-							<Stat size="sm" label={localize("Cache write")} value={formatCompact(overall.totalCacheWriteTokens)} />
-							<Stat size="sm" label={localize("Output")} value={formatCompact(overall.totalOutputTokens)} />
+							<Stat size="sm" label="Uncached input" value={formatCompact(overall.totalInputTokens)} />
+							<Stat size="sm" label="Cache read" value={formatCompact(overall.totalCacheReadTokens)} />
+							<Stat size="sm" label="Cache write" value={formatCompact(overall.totalCacheWriteTokens)} />
+							<Stat size="sm" label="Output" value={formatCompact(overall.totalOutputTokens)} />
 							<Stat
 								size="sm"
-								label={localize("Premium requests")}
+								label="Premium requests"
 								value={formatInteger(Math.round(overall.totalPremiumRequests * 100) / 100)}
 							/>
-							<Stat size="sm" label={localize("Tokens/s")} value={formatTokensPerSecond(overall.avgTokensPerSecond)} />
-							<Stat size="sm" label={localize("Avg latency")} value={formatDurationMs(overall.avgDuration)} />
-							<Stat size="sm" label={localize("Avg TTFT")} value={formatDurationMs(overall.avgTtft)} />
+							<Stat size="sm" label="Tokens/s" value={formatTokensPerSecond(overall.avgTokensPerSecond)} />
+							<Stat size="sm" label="Avg latency" value={formatDurationMs(overall.avgDuration)} />
+							<Stat size="sm" label="Avg TTFT" value={formatDurationMs(overall.avgTtft)} />
 						</StatGrid>
 					</div>
 				)}
@@ -162,8 +161,8 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title={localize("Activity")}
-					description={localize("Per {0}", `${meta.bucketMs < 3_600_000 ? localize("5 minutes") : meta.bucketMs < 86_400_000 ? localize("hour") : localize("day")}`)}
+					title="Activity"
+					description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}`}
 					actions={<Segmented size="sm" options={ACTIVITY_OPTIONS} value={metric} onChange={setMetric} />}
 					stale={overview.stale}
 				>
@@ -180,7 +179,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 					</QueryView>
 				</Card>
 
-				<Card index={2} title={localize("Token mix")} description={localize("Where conversation tokens went")} stale={overview.stale}>
+				<Card index={2} title="Token mix" description="Where conversation tokens went" stale={overview.stale}>
 					<QueryView query={overview} skeleton={<ChartSkeleton height={260} />}>
 						{({ overall, byAgentType }) => {
 							const mix = {
@@ -212,7 +211,9 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 										/>
 									</div>
 									<div className="stack" style={{ gap: 10 }}>
-										<div className="section-label" style={{ marginBottom: 0 }}>{localize("By agent")}</div>
+										<div className="section-label" style={{ marginBottom: 0 }}>
+											By agent
+										</div>
 										<ShareBar
 											segments={agents.segments.map(s => ({
 												key: s.agentType,
@@ -226,7 +227,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 												<span className="row">
 													<span className="swatch" style={{ background: AGENT_COLOR[s.agentType] }} />
 													{AGENT_LABEL[s.agentType]}
-													<span className="dim num">{localize("{0} req\u0004packages/stats/src/client/routes/OverviewRoute.tsx:OverviewRoute", `${formatInteger(s.requests)}`)}</span>
+													<span className="dim num">{formatInteger(s.requests)} req</span>
 												</span>
 												<span className="row">
 													<span className="dim num">{formatCompact(s.tokens)}</span>
@@ -248,11 +249,13 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 				index={3}
 				title={
 					<>
-						<Dot tone="live" pulse />{localize(" Latest requests")}</>
+						<Dot tone="live" pulse /> Latest requests
+					</>
 				}
-				description={localize("Most recent model calls across every session")}
+				description="Most recent model calls across every session"
 				actions={
-					<a className="btn" data-size="sm" data-variant="ghost" href={`#/requests?range=${range}`}>{localize("All requests ")}<ArrowRight size={13} />
+					<a className="btn" data-size="sm" data-variant="ghost" href={`#/requests?range=${range}`}>
+						All requests <ArrowRight size={13} />
 					</a>
 				}
 				flush
@@ -276,37 +279,37 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 const REQUEST_COLUMNS = [
 	{
 		key: "model",
-		header: localize("Model"),
+		header: "Model",
 		render: (row: MessageStats) => <LabelCell primary={row.model} secondary={row.provider} />,
 	},
 	{
 		key: "time",
-		header: localize("When"),
+		header: "When",
 		render: (row: MessageStats) => <span className="muted">{formatRelativeTime(row.timestamp)}</span>,
 	},
 	{
 		key: "tokens",
-		header: localize("Tokens"),
+		header: "Tokens",
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
 	},
 	{
 		key: "cost",
-		header: localize("Cost"),
+		header: "Cost",
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatMessageCost(row, 4)}</span>,
 	},
 	{
 		key: "duration",
-		header: localize("Duration"),
+		header: "Duration",
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatDurationMs(row.duration)}</span>,
 	},
 	{
 		key: "status",
-		header: localize("Status"),
+		header: "Status",
 		align: "right" as const,
 		render: (row: MessageStats) =>
-			row.errorMessage ? <Badge tone="bad">{localize("Failed")}</Badge> : <Badge tone="ok">{localize("OK")}</Badge>,
+			row.errorMessage ? <Badge tone="bad">Failed</Badge> : <Badge tone="ok">OK</Badge>,
 	},
 ];

@@ -2,10 +2,6 @@
 
 ## [Unreleased]
 
-### Added
-
-- Added Korean dashboard labels, tooltips, accessibility text, and localized date and number formatting ([#17203](https://github.com/can1357/oh-my-pi/pull/17203) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
-
 ## [18.12.0] - 2026-10-17
 
 ### Fixed

@@ -7,7 +7,6 @@
  * categorical axes (hour of day, model names).
  */
 
-import { t as localize } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
 import { formatCompact } from "../data/formatters";
 import type { ChartKind, ChartSeries, ReferenceLine } from "./types";
@@ -69,7 +68,7 @@ export function Chart({
 	showTotal,
 	references,
 	onSelect,
-	emptyLabel = localize("No data in this range"),
+	emptyLabel = "No data in this range",
 	tooltipExtra,
 }: ChartProps) {
 	const [ref, width] = useWidth<HTMLDivElement>();
@@ -341,7 +340,7 @@ export function Chart({
 					))}
 					{withTotal && hoverRows.length > 1 && (
 						<div className="chart-tooltip-row chart-tooltip-total">
-							<span className="chart-tooltip-label">{localize("Total")}</span>
+							<span className="chart-tooltip-label">Total</span>
 							<span className="chart-tooltip-value">{(formatTooltip ?? format)(total)}</span>
 						</div>
 					)}

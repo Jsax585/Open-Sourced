@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Agent,
 	type AgentEvent,
@@ -159,7 +158,7 @@ export class StreamingEditGuard {
 			});
 			this.#host.emitNotice(
 				"warning",
-				t("Streaming edit preview failed {0} times; stopped auto-recovery for this prompt.", `${this.#recoveryCount}`),
+				`Streaming edit preview failed ${this.#recoveryCount} times; stopped auto-recovery for this prompt.`,
 				STREAMING_EDIT_NOTICE_SOURCE,
 			);
 			return;
@@ -185,7 +184,7 @@ export class StreamingEditGuard {
 			this.#host.sessionManager.appendCustomMessageEntry(STREAMING_EDIT_RECOVERY_TYPE, content, false);
 			this.#host.emitNotice(
 				"info",
-				t("Streaming edit preview failed; retrying with the error context (attempt {0}/{1}).", `${attempt}`, `${STREAMING_EDIT_RECOVERY_LIMIT}`),
+				`Streaming edit preview failed; retrying with the error context (attempt ${attempt}/${STREAMING_EDIT_RECOVERY_LIMIT}).`,
 				STREAMING_EDIT_NOTICE_SOURCE,
 			);
 			try {
@@ -295,7 +294,7 @@ export class LoopGuards {
 		});
 		this.#host.emitNotice(
 			"warning",
-			t("Interrupted {0} planning headers with no tool call; reminded the model to issue one.", `${headerCount}`),
+			`Interrupted ${headerCount} planning headers with no tool call; reminded the model to issue one.`,
 			"loop-guard",
 		);
 		this.#host.agent.abort(GEMINI_HEADER_INTERRUPT_REASON);

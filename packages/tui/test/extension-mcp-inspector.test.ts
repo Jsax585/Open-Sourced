@@ -90,7 +90,7 @@ function connectedSource(): MCPRuntimeSource {
 }
 
 describe("MCP inspector runtime join", () => {
-	test("shows identity and tools before command plumbing", () => {
+	test("shows identity, health, tools, then plumbing last", () => {
 		const panel = new InspectorPanel();
 		panel.setMcpSource(connectedSource());
 		panel.setExtension(mcpExtension());
@@ -99,17 +99,23 @@ describe("MCP inspector runtime join", () => {
 		expect(text).toContain("github");
 		expect(text).toContain("GitHub MCP Server");
 		expect(text).toContain("Access GitHub repositories, issues, and pull requests.");
+		expect(text).toContain("Connected");
 		expect(text).toContain("stdio");
 		expect(text).toContain("github-mcp-server 0.19.0");
 		expect(text).toContain("search_code");
 		expect(text).toContain("Search code across GitHub repositories.");
 		expect(text).toContain("Prefer search_code over cloning.");
+		expect(text).not.toContain("Server guidance");
+		expect(text).not.toContain("Connection");
 		expect(text).toContain("/usr/bin/github-mcp-server");
 
-		expect(text.indexOf("Access GitHub")).toBeLessThan(text.indexOf("/usr/bin/github-mcp-server"));
-		expect(text.indexOf("Prefer search_code")).toBeLessThan(text.indexOf(githubServer._source.path));
+		expect(text).not.toContain("Type: mcp");
+		expect(text).not.toMatch(/Status:\s+.*Active/);
+		expect(text.indexOf("Access GitHub")).toBeLessThan(text.indexOf("Command"));
+		expect(text.indexOf("Prefer search_code")).toBeLessThan(text.indexOf("Origin"));
 		expect(text.indexOf("Prefer search_code")).toBeLessThan(text.indexOf("search_code"));
-		expect(text.indexOf("search_code")).toBeLessThan(text.indexOf("/usr/bin/github-mcp-server"));
+		expect(text.indexOf("search_code")).toBeLessThan(text.indexOf("Command"));
+		expect(text).not.toMatch(/^.*github-mcp-server\n.*Type:/s);
 	});
 
 	test("inlines short MCP tool args and keeps long schemas collapsed", () => {
@@ -122,6 +128,8 @@ describe("MCP inspector runtime join", () => {
 		expect(collapsed).toContain("Search query");
 		expect(collapsed).toContain("title");
 		expect(collapsed).toContain("Issue title");
+		expect(collapsed).not.toContain("1 arg");
+		expect(collapsed).not.toMatch(/args \(.* to expand\)/);
 
 		const long = connectedSource();
 		const conn = long.getConnection("github")!;
@@ -146,11 +154,28 @@ describe("MCP inspector runtime join", () => {
 		longPanel.setMcpSource(long);
 		longPanel.setExtension(mcpExtension());
 		const longCollapsed = Bun.stripANSI(longPanel.render(72).join("\n"));
+		expect(longCollapsed).toContain("5 args");
+		expect(longCollapsed).toMatch(/args \(.* to expand\)/);
 		expect(longCollapsed).not.toMatch(/query\s+string/);
 
 		longPanel.toggleExpanded();
 		const expanded = Bun.stripANSI(longPanel.render(72).join("\n"));
 		expect(expanded).toMatch(/query\s+string/);
+		expect(expanded).toContain("Required");
+	});
+
+	test("does not present a dead server as Active", () => {
+		const panel = new InspectorPanel();
+		panel.setMcpSource({
+			getConnectionStatus: () => "disconnected",
+			getConnection: () => undefined,
+			getTools: () => [],
+		});
+		panel.setExtension(mcpExtension());
+		const text = Bun.stripANSI(panel.render(72).join("\n"));
+		expect(text).toContain("Not connected");
+		expect(text).not.toMatch(/Status:\s+.*Active/);
+		expect(text).not.toContain("unknown");
 	});
 
 	test("wraps a long command instead of ellipsizing it", () => {
@@ -164,7 +189,11 @@ describe("MCP inspector runtime join", () => {
 			},
 		});
 		const text = Bun.stripANSI(panel.render(42).join("\n"));
-		expect(text.replace(/\s+/g, "")).toContain("/home/sf/worlds/personal/.omp/bin/gog-mcp-readonly");
+		const command = text.slice(text.indexOf("Command"));
+		expect(command.split("\n").some(line => line.includes("…") || line.endsWith("..."))).toBe(false);
+		expect(command.replace(/\s+/g, "")).toContain("gog-mcp-readonly");
+		expect(command).toContain("Command");
+		expect(text).not.toContain("Connection");
 	});
 
 	test("collapses large resource and prompt catalogs until expand", () => {
@@ -195,6 +224,7 @@ describe("MCP inspector runtime join", () => {
 		expect(collapsed).not.toContain("resource_19");
 		expect(collapsed).toContain("prompt_0");
 		expect(collapsed).not.toContain("prompt_11");
+		expect(collapsed).toMatch(/more \(.* to expand\)/);
 
 		panel.toggleExpanded();
 		const expanded = Bun.stripANSI(panel.render(72).join("\n"));
@@ -273,6 +303,7 @@ describe("MCP inspector runtime join", () => {
 		const other = Bun.stripANSI(panel.render(72).join("\n"));
 		expect(other).toContain("issue_0");
 		expect(other).not.toContain("issue_19");
+		expect(other).toMatch(/more \(.* to expand\)/);
 
 		panel.setExtension({ ...mcpExtension() });
 		const back = Bun.stripANSI(panel.render(72).join("\n"));
@@ -286,15 +317,29 @@ describe("MCP inspector runtime join", () => {
 });
 
 describe("MCP list runtime join", () => {
-	test("connected row shows the server without the transport", () => {
+	test("connected row shows tool/resource counts instead of transport", () => {
 		const list = new ExtensionList([mcpExtension()], { mcpSource: connectedSource() });
 		list.setFocused(true);
 		const text = Bun.stripANSI(list.render(80).join("\n"));
 		expect(text).toContain("github");
+		expect(text).toContain("2 tools · 1 resource");
 		expect(text).not.toMatch(/github\s+stdio/);
 	});
 
+	test("disconnected enabled server is unavailable, not Active", () => {
+		const list = new ExtensionList([mcpExtension()], {
+			mcpSource: {
+				getConnectionStatus: () => "disconnected",
+				getConnection: () => undefined,
+				getTools: () => [],
+			},
+		});
+		const text = Bun.stripANSI(list.render(80).join("\n"));
+		expect(text).toContain("unavailable");
+	});
+
 	test("shadowed same-name config does not inherit the winner's health or tools", () => {
+		const winner = mcpExtension("active");
 		const shadowed: Extension = {
 			...mcpExtension("shadowed"),
 			id: "mcp:github",
@@ -302,10 +347,22 @@ describe("MCP list runtime join", () => {
 			shadowedBy: "github",
 			raw: { ...githubServer, command: "/usr/bin/shadowed-github" },
 		};
+		const list = new ExtensionList([winner, shadowed], { mcpSource: connectedSource() });
+		list.setFocused(true);
+		const text = Bun.stripANSI(list.render(80).join("\n"));
+		expect(text).toContain("2 tools · 1 resource");
+		const winnerIdx = text.indexOf("2 tools · 1 resource");
+		const secondGithub = text.indexOf("github", winnerIdx + 1);
+		expect(secondGithub).toBeGreaterThan(-1);
+		expect(text.slice(secondGithub)).not.toContain("2 tools");
+		expect(text.slice(secondGithub)).not.toContain("Connected");
+
 		const panel = new InspectorPanel();
 		panel.setMcpSource(connectedSource());
 		panel.setExtension(shadowed);
 		const inspector = Bun.stripANSI(panel.render(72).join("\n"));
+		expect(inspector).toContain("Shadowed");
+		expect(inspector).not.toContain("Connected");
 		expect(inspector).not.toContain("search_code");
 		expect(inspector).not.toContain("GitHub MCP Server");
 		expect(inspector).toContain("/usr/bin/shadowed-github");
@@ -361,5 +418,10 @@ describe("MCP list runtime join", () => {
 		list.handleClick(4);
 		list.handleInput(" ");
 		expect(toggles).toEqual([]);
+
+		const rendered = Bun.stripANSI(list.render(80).join("\n"));
+		const secondGithub = rendered.indexOf("github", rendered.indexOf("2 tools · 1 resource") + 1);
+		expect(secondGithub).toBeGreaterThan(-1);
+		expect(rendered.slice(secondGithub)).not.toContain("2 tools");
 	});
 });

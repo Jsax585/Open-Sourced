@@ -2,7 +2,6 @@
  * Tool card chrome + per-tool dispatch. Works in the collab-web app and inside
  * the `<omp-tool-view>` web component embedded in HTML session exports.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -82,7 +81,7 @@ export function ToolView(props: ToolViewProps): ReactNode {
 				title={intent || undefined}
 			>
 				{status === "run" ? (
-					<span className="tv-spin" aria-label={t("running")} />
+					<span className="tv-spin" aria-label="running" />
 				) : (
 					<span className={`tv-status tv-status--${status}`} aria-hidden="true" />
 				)}

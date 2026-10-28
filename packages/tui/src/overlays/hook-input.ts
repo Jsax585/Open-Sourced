@@ -1,7 +1,6 @@
 /**
  * One-line text prompt an extension (hook) asks the user.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Spacer, Text, type TUI } from "../index";
 import { matchesAppInterrupt } from "../keybinding-matchers";
 import { CountdownTimer } from "../chrome/countdown-timer";
@@ -22,6 +21,7 @@ export interface HookInputOptions {
 	tui?: TUI;
 	timeout?: number;
 	onTimeout?: () => void;
+	secret?: boolean;
 }
 
 /** Terminal-only key legend under the field; a native terminal puts the keys in the buttons' tooltips. */
@@ -75,7 +75,7 @@ export class HookInputComponent extends OverlayPanel {
 			this.#countdown = new CountdownTimer(
 				opts.timeout,
 				opts.tui,
-				s => (this.title = t("{0} ({1}s)", `${this.#baseTitle}`, `${s}`)),
+				s => (this.title = `${this.#baseTitle} (${s}s)`),
 				() => {
 					opts.onTimeout?.();
 					this.#onCancelCallback();
@@ -85,6 +85,7 @@ export class HookInputComponent extends OverlayPanel {
 
 		this.#field = new TextFormField({
 			theme: formTheme,
+			secret: opts?.secret ?? false,
 			empty: "submit",
 			onSubmit: value => this.#onSubmitCallback(value),
 			onCancel: () => this.#onCancelCallback(),
@@ -97,7 +98,7 @@ export class HookInputComponent extends OverlayPanel {
 			isCancel: matchesAppInterrupt,
 		});
 		this.addChild(this.#form);
-		this.addChild(new KeyLegend(t("{0} submit  {1} cancel", `${editorKey("tui.input.submit")}`, `${interruptKey()}`)));
+		this.addChild(new KeyLegend(`${editorKey("tui.input.submit")} submit  ${interruptKey()} cancel`));
 		this.addChild(new Spacer(1));
 	}
 
@@ -156,7 +157,7 @@ export class HookInputComponent extends OverlayPanel {
 			titleRow.push(
 				node(
 					"row",
-					{ role: `${PART}.timer`, title: t("Cancels when the time runs out; typing restarts it") },
+					{ role: `${PART}.timer`, title: "Cancels when the time runs out; typing restarts it" },
 					[countdown],
 					"timer",
 				),
@@ -185,8 +186,8 @@ export class HookInputComponent extends OverlayPanel {
 		const cancelKey = boundKeys("app.interrupt", ["escape"])[0];
 		this.#nativeActions = actionBar([
 			null,
-			actionButton(t("Cancel"), "cancel", cancelKey ? { keys: cancelKey } : {}),
-			actionButton(t("Submit"), "submit", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
+			actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {}),
+			actionButton("Submit", "submit", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
 		]);
 		return this.#nativeActions;
 	}

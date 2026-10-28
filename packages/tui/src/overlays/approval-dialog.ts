@@ -16,7 +16,6 @@
  * scroll the details, and with a full prompt the expand key
  * (`app.tools.expand`) swaps it in, wrapped.
  */
-import { t as localize } from "@oh-my-pi/pi-utils/i18n";
 import { type Component, Ellipsis, ScrollView, type TUI, truncateToWidth, wrapTextWithAnsi } from "../index";
 import { formatKeyHints, formatTooltipKey } from "../app-keybindings";
 import { OverlayPanel, PanelDivider, PanelRows } from "../chrome/overlay-box";
@@ -45,7 +44,7 @@ const MAX_DETAIL_ROWS: number = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 /** Enter and the approve key are ignored this long after mount, so a key sent as the prompt appears cannot answer it. */
 export const APPROVE_ARM_MS = 500;
 /** The Deny row while a composer draft holds Enter: sending it denies the call and steers the turn. */
-const DENY_AND_SEND_LABEL = localize("Deny and send message");
+const DENY_AND_SEND_LABEL = "Deny and send message";
 
 /** `grant<N>` takes the Nth of {@link ApprovalDialogOptions.grants}; `remember` toggles their lifetime. */
 type ApprovalAnswer = "once" | "session" | "deny" | "remember" | `grant${number}`;
@@ -169,14 +168,14 @@ export class ApprovalDialogComponent implements Component {
 		const grants = this.options.grants ?? [];
 		const glyph = this.#rememberAlways ? theme.checkbox.checked : theme.checkbox.unchecked;
 		return [
-			...(grants.length > 0 ? [{ label: localize("{0} Remember across sessions", `${glyph}`), answer: "remember" as const }] : []),
+			...(grants.length > 0 ? [{ label: `${glyph} Remember across sessions`, answer: "remember" as const }] : []),
 			...grants.map((grant, index) => ({
 				label: this.#rememberAlways ? grant.alwaysLabel : grant.label,
 				answer: `grant${index}` as const,
 			})),
-			{ label: grants.length > 0 ? localize("Approve Once\u0004packages/tui/src/overlays/approval-dialog.ts:ApprovalDialogComponent.#buildChoices.label") : localize("Approve"), answer: "once" },
+			{ label: grants.length > 0 ? "Approve Once" : "Approve", answer: "once" },
 			...(this.options.session ? [{ label: this.options.session.label, answer: "session" as const }] : []),
-			{ label: localize("Deny"), answer: "deny" },
+			{ label: "Deny", answer: "deny" },
 		];
 	}
 
@@ -333,22 +332,22 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#native && this.#nativeDrafting === drafting) return this.#native;
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
 		const approveKey = appApproveKeys()[0];
-		const deny = actionButton(localize("Deny"), "deny", {
+		const deny = actionButton("Deny", "deny", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			tone: "error",
-			title: localize("Deny this call{0}", `${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`),
+			title: `Deny this call${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
-		const approve = actionButton(this.options.grants?.length ? localize("Approve Once\u0004packages/tui/src/overlays/approval-dialog.ts:ApprovalDialogComponent.#buildChoices.label") : localize("Approve"), "approve", {
+		const approve = actionButton(this.options.grants?.length ? "Approve Once" : "Approve", "approve", {
 			...(approveKey ? { keys: approveKey } : {}),
 			tone: "accent",
-			title: localize("Approve this call{0}", `${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`),
+			title: `Approve this call${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
 		});
 		const expandKey = appToolsExpandKey();
 		const expand = this.#full
 			? [
-					actionButton(this.#expanded ? localize("Less") : localize("Details"), "expand", {
+					actionButton(this.#expanded ? "Less" : "Details", "expand", {
 						keys: expandKey,
-						title: `${this.#expanded ? localize("Summarize\u0004packages/tui/src/overlays/approval-dialog.ts:ApprovalDialogComponent.describe.expand.title") : localize("Show every detail of")}  ${formatTooltipKey(expandKey)}`,
+						title: `${this.#expanded ? "Summarize" : "Show every detail of"} this call  ${formatTooltipKey(expandKey)}`,
 					}),
 				]
 			: [];
@@ -407,13 +406,13 @@ export class ApprovalDialogComponent implements Component {
 	#footerHint(overflows: boolean, drafting: boolean): string {
 		const approve = formatKeyHints(appApproveKeys());
 		const expand = this.#full
-			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? localize("less") : localize("details")}`
+			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
 			: "";
-		const keys = localize("{0} approve · {1} deny{2}", `${approve}`, `${editorKey("tui.select.cancel")}`, `${expand}`);
-		if (drafting) return localize("{0} deny and send · {1}", `${editorKey("tui.input.submit")}`, `${keys}`);
-		const choose = localize("{0} choose · {1} select", `${editorKeys("tui.select.up", "tui.select.down")}`, `${editorKey("tui.select.confirm")}`);
-		const scroll = overflows ? localize(" · {0} scroll", `${editorKeys("tui.select.pageUp", "tui.select.pageDown")}`) : "";
-		return `${choose} · ${keys}${scroll}${this.options.draft ? localize(" · type to deny and steer") : ""}`;
+		const keys = `${approve} approve · ${editorKey("tui.select.cancel")} deny${expand}`;
+		if (drafting) return `${editorKey("tui.input.submit")} deny and send · ${keys}`;
+		const choose = `${editorKeys("tui.select.up", "tui.select.down")} choose · ${editorKey("tui.select.confirm")} select`;
+		const scroll = overflows ? ` · ${editorKeys("tui.select.pageUp", "tui.select.pageDown")} scroll` : "";
+		return `${choose} · ${keys}${scroll}${this.options.draft ? " · type to deny and steer" : ""}`;
 	}
 
 	#scroll(delta: number): void {

@@ -4,7 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<meta name="color-scheme" content="dark light" />
-		<title data-omp-i18n>omp · authentication</title>
+		<title>omp · authentication</title>
 		<style>
 			:root {
 				--bg: #000;
@@ -292,14 +292,14 @@
 
 			<div class="status" role="status">
 				<span aria-hidden="true" class="status-dot"></span>
-				<span class="status-word status-pending" data-omp-i18n>Waiting</span>
-				<span class="status-word status-success" data-omp-i18n>Connected</span>
-				<span class="status-word status-error" data-omp-i18n>Failed</span>
+				<span class="status-word status-pending">Waiting</span>
+				<span class="status-word status-success">Connected</span>
+				<span class="status-word status-error">Failed</span>
 			</div>
 
-			<h1 id="title" data-omp-i18n>Authentication</h1>
+			<h1 id="title">Authentication</h1>
 			<p id="message"></p>
-			<button onclick="window.close()" class="btn" data-omp-i18n>Close window</button>
+			<button onclick="window.close()" class="btn">Close window</button>
 			<span aria-hidden="true" class="timer"></span>
 		</div>
 
@@ -308,7 +308,6 @@
 		</script>
 
 		<script>
-			function ompT(source, ...values) { return source.replace(/\{(\d+)\}/g, (match, index) => index < values.length ? String(values[index]) : match); }
 			let serverState;
 			try {
 				serverState = JSON.parse(document.getElementById("server-state").textContent);
@@ -316,7 +315,7 @@
 				const params = new URLSearchParams(window.location.search);
 				serverState = {
 					ok: params.get("ok") === "1",
-					error: params.get("error") || ompT("Authentication failed"),
+					error: params.get("error") || "Authentication failed",
 				};
 			}
 
@@ -327,18 +326,18 @@
 			if (serverState.ok) {
 				const closeButton = document.querySelector(".btn");
 				app.classList.add("success", "countdown");
-				title.textContent = ompT("Authentication successful");
-				message.textContent = ompT("You have successfully logged in.");
+				title.textContent = "Authentication successful";
+				message.textContent = "You have successfully logged in.";
 				window.close();
 				setTimeout(() => {
 					app.classList.remove("countdown");
 					closeButton.remove();
-					message.replaceChildren(document.createTextNode(ompT("You have successfully logged in.")), document.createElement("br"), document.createTextNode(ompT("Please close this tab manually.")));
+					message.innerHTML = "You have successfully logged in.<br>Please close this tab manually.";
 				}, 300);
 			} else {
 				app.classList.add("error");
-				title.textContent = ompT("Authentication failed");
-				message.textContent = serverState.error || ompT("An error occurred");
+				title.textContent = "Authentication failed";
+				message.textContent = serverState.error || "An error occurred";
 			}
 		</script>
 	</body>

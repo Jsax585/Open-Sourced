@@ -7,7 +7,6 @@
  * wording, and add-flow logic stay in the per-controller files because they
  * diverge in workflow.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Text } from "@oh-my-pi/pi-tui";
 import type { SourceMeta } from "../../capability/types";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
@@ -25,7 +24,7 @@ export type ScopeFlagResult = { ok: true; scope: ScopeValue } | { ok: false; err
  */
 export function readScopeFlag(value: string | undefined): ScopeFlagResult {
 	if (!value || (value !== "project" && value !== "user")) {
-		return { ok: false, error: t("Invalid --scope value. Use project or user.") };
+		return { ok: false, error: "Invalid --scope value. Use project or user." };
 	}
 	return { ok: true, scope: value };
 }
@@ -62,7 +61,7 @@ export function parseRemoveArgs(rest: string): ParseRemoveResult {
 			i += 2;
 			continue;
 		}
-		return { ok: false, error: t("Unknown option: {0}", `${token}`) };
+		return { ok: false, error: `Unknown option: ${token}` };
 	}
 
 	return { ok: true, value: { name, scope } };

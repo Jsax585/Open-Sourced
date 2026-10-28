@@ -5,7 +5,6 @@
  * that toggles the entire provider. All items below are dimmed when the
  * master switch is off.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import type { TspPickerGroup, TspPickerItem, TspProps, TspSpan, TspTone } from "@oh-my-pi/pi-wire";
 import type { Component } from "../../tui";
 import { node, span, stableKey } from "../../native/describe";
@@ -378,7 +377,7 @@ export class ExtensionList implements Component {
 			"list",
 			{
 				selected: selected ? nativeItemId(selected) : null,
-				empty: t("No extensions found for this provider."),
+				empty: "No extensions found for this provider.",
 				virtual: true,
 				grow: 1,
 				basis: 0,
@@ -415,11 +414,11 @@ export class ExtensionList implements Component {
 		if (item.type === "user-source") {
 			const providerOff =
 				this.#callbacks.getProviders?.().find(provider => provider.id === item.providerId)?.enabled === false;
-			return providerOff ? { on: item.enabled, blocked: t("Provider disabled") } : { on: item.enabled };
+			return providerOff ? { on: item.enabled, blocked: "Provider disabled" } : { on: item.enabled };
 		}
 		const on = item.item.state !== "disabled";
-		if (isShadowedExtension(item.item)) return { on, blocked: t("Shadowed by another source") };
-		if (this.#isMasterDisabled()) return { on, blocked: t("Provider disabled") };
+		if (isShadowedExtension(item.item)) return { on, blocked: "Shadowed by another source" };
+		if (this.#isMasterDisabled()) return { on, blocked: "Provider disabled" };
 		return { on };
 	}
 
@@ -453,7 +452,7 @@ export class ExtensionList implements Component {
 				label: `Enable ${sanitizeDisplayLine(entry.providerName)}`,
 				icon: "power",
 				dot: entry.enabled ? "success" : "muted",
-				badges: [{ text: t("Master Switch"), tone: "warning" }],
+				badges: [{ text: "Master Switch", tone: "warning" }],
 				tone: entry.enabled ? undefined : "muted",
 			};
 		}
@@ -466,7 +465,7 @@ export class ExtensionList implements Component {
 				detail: "opt-in; project config always loads",
 				dot: entry.enabled ? "success" : "muted",
 				tone: off ? "muted" : undefined,
-				disabled: masterDisabled ? t("Provider disabled") : undefined,
+				disabled: masterDisabled ? "Provider disabled" : undefined,
 			};
 		}
 		const ext = entry.item;
@@ -502,7 +501,7 @@ export class ExtensionList implements Component {
 			// Only a disabled provider makes the row inert. An extension switched
 			// off by its own toggle must stay activatable, or the click/dblclick
 			// that turned it off could never turn it back on.
-			disabled: masterDisabled ? t("Provider disabled") : undefined,
+			disabled: masterDisabled ? "Provider disabled" : undefined,
 		};
 	}
 
@@ -786,25 +785,25 @@ export class ExtensionList implements Component {
 	#getKindLabel(kind: ExtensionKind): string {
 		switch (kind) {
 			case "extension-module":
-				return t("Extension Modules");
+				return "Extension Modules";
 			case "skill":
-				return t("Skills");
+				return "Skills";
 			case "tool":
-				return t("Tools");
+				return "Tools";
 			case "slash-command":
 				return "Commands";
 			case "rule":
 				return "Rules";
 			case "mcp":
-				return t("MCP Servers");
+				return "MCP Servers";
 			case "hook":
-				return t("Hooks");
+				return "Hooks";
 			case "prompt":
-				return t("Prompts");
+				return "Prompts";
 			case "context-file":
-				return t("Context");
+				return "Context";
 			case "instruction":
-				return t("Instructions");
+				return "Instructions";
 			default:
 				return kind;
 		}

@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { transcriptEntryMessage } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { type CopyPickSource, CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { assistantText } from "@oh-my-pi/pi-tui/overlays/copy-targets";
@@ -12,28 +11,28 @@ export type AnnotationSourceKind = "code-review" | "last" | "session" | "file" |
 export const ANNOTATION_SOURCE_CHOICES = [
 	{
 		kind: "code-review",
-		label: t("Code review"),
-		description: t("Annotate a local diff before review"),
+		label: "Code review",
+		description: "Annotate a local diff before review",
 	},
 	{
 		kind: "last",
-		label: t("Latest assistant reply"),
-		description: t("Annotate the latest non-empty assistant reply on this branch"),
+		label: "Latest assistant reply",
+		description: "Annotate the latest non-empty assistant reply on this branch",
 	},
 	{
 		kind: "session",
-		label: t("Session message or block"),
-		description: t("Choose a message, code block, quote, or command from this session"),
+		label: "Session message or block",
+		description: "Choose a message, code block, quote, or command from this session",
 	},
 	{
 		kind: "file",
-		label: t("File"),
-		description: t("Read a regular text file from the current working directory"),
+		label: "File",
+		description: "Read a regular text file from the current working directory",
 	},
 	{
 		kind: "prompt",
-		label: t("Text prompt"),
-		description: t("Enter text directly for annotation"),
+		label: "Text prompt",
+		description: "Enter text directly for annotation",
 	},
 ] as const satisfies ReadonlyArray<{ kind: AnnotationSourceKind; label: string; description: string }>;
 
@@ -73,7 +72,7 @@ export function latestAssistantTextReviewSource(
 	return {
 		id: `message:${latest.id}`,
 		kind: "message",
-		label: t("Latest assistant reply"),
+		label: "Latest assistant reply",
 		text: latest.text,
 		provenance: { kind: "latest-assistant", entryId: latest.id },
 		sessionId,

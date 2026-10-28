@@ -19,26 +19,6 @@ describe("SettingsList", () => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
 	});
 
-
-	it("keeps native section focus on stable identities when heading labels are localized", () => {
-		const list = new SettingsList(
-			[
-				{ id: "__heading:Theme", label: "테마", headingId: "Theme", currentValue: "", heading: true },
-				{ id: "theme.dark", label: "어두운 테마", currentValue: "dark" },
-				{ id: "__heading:Display", label: "표시", headingId: "Display", currentValue: "", heading: true },
-				{ id: "display.cursor", label: "커서", currentValue: "false", values: ["false", "true"] },
-			],
-			5,
-			testTheme,
-			() => {},
-			() => {},
-		);
-
-		list.toggleSectionFocus();
-		expect(list.prefsFocus()).toEqual({ section: "Theme" });
-		list.handleInput("\x1b[B");
-		expect(list.prefsFocus()).toEqual({ section: "Display" });
-	});
 	it("cycles the selected value when Enter arrives as LF", () => {
 		const changes: Array<[string, string]> = [];
 		const list = new SettingsList(
@@ -205,6 +185,7 @@ describe("SettingsList", () => {
 		list.handleInput("b");
 
 		const output = list.render(80).join("\n");
+		expect(output).toContain("Search: b");
 		expect(output).toContain("Browser Path");
 		expect(output).not.toContain("Theme");
 		expect(output).not.toContain("Mode");
@@ -292,6 +273,7 @@ describe("SettingsList", () => {
 
 		const output = list.render(80).join("\n");
 		expect(output).not.toContain("Group Alpha");
+		expect(output).toContain("No matching settings");
 	});
 	function sectionedItems() {
 		return [

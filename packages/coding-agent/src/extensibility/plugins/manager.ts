@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,11 +55,11 @@ function validatePackageName(name: string): void {
 	// Remove version specifier for validation
 	const baseName = extractPackageName(name);
 	if (!VALID_PACKAGE_NAME.test(baseName)) {
-		throw new Error(t("Invalid package name: {0}", `${name}`));
+		throw new Error(`Invalid package name: ${name}`);
 	}
 	// Extra safety: no shell metacharacters
 	if (/[;&|`$(){}[\]<>\\]/.test(name)) {
-		throw new Error(t("Invalid characters in package name: {0}", `${name}`));
+		throw new Error(`Invalid characters in package name: ${name}`);
 	}
 }
 
@@ -73,7 +72,7 @@ function validatePackageName(name: string): void {
  */
 function validateGitSpec(spec: string): void {
 	if (SHELL_METACHARS.test(spec)) {
-		throw new Error(t("Invalid characters in plugin source: {0}", `${spec}`));
+		throw new Error(`Invalid characters in plugin source: ${spec}`);
 	}
 }
 
@@ -478,7 +477,7 @@ export class PluginManager {
 		}
 
 		if (errors.length > 0) {
-			throw new Error(t("Plugin {0} extension validation failed:\n{1}", `${plugin.name}`, `${errors.join("\n")}`));
+			throw new Error(`Plugin ${plugin.name} extension validation failed:\n${errors.join("\n")}`);
 		}
 	}
 
@@ -513,8 +512,6 @@ export class PluginManager {
 			validatePackageName(spec.packageName);
 		}
 
-		await this.#ensurePackageJson();
-
 		if (options.dryRun) {
 			return {
 				name: spec.packageName,
@@ -525,6 +522,9 @@ export class PluginManager {
 				enabled: true,
 			};
 		}
+
+		await this.#ensurePackageJson();
+
 		const pkgJsonPath = getPluginsPackageJson();
 		const packageJsonBefore = await Bun.file(pkgJsonPath).text();
 		// Snapshot bun's lockfile so the rollback path can restore the pin. Every
@@ -598,7 +598,7 @@ export class PluginManager {
 				getPluginsDir(),
 			);
 			if (install.exitCode !== 0) {
-				throw new Error(t("bun install failed: {0}", `${install.stderr}`));
+				throw new Error(`bun install failed: ${install.stderr}`);
 			}
 			// Resolve actual package name. npm specs encode the name (strip version);
 			// git specs do not, so diff plugins/package.json deps to find the new entry.
@@ -639,7 +639,7 @@ export class PluginManager {
 				await refreshBunGitCache(gitSource, getPluginsDir());
 				const update = await runBunCli(["update", actualName], getPluginsDir());
 				if (update.exitCode !== 0) {
-					throw new Error(t("bun update {0} failed: {1}", `${actualName}`, `${update.stderr}`));
+					throw new Error(`bun update ${actualName} failed: ${update.stderr}`);
 				}
 			}
 
@@ -649,7 +649,7 @@ export class PluginManager {
 				pkg = await Bun.file(pkgPath).json();
 			} catch (err) {
 				if (isEnoent(err)) {
-					throw new Error(t("Package installed but package.json not found at {0}", `${pkgPath}`));
+					throw new Error(`Package installed but package.json not found at ${pkgPath}`);
 				}
 				throw err;
 			}
@@ -741,19 +741,7 @@ export class PluginManager {
 	 * `bun.lock` resolution.
 	 */
 	async upgrade(name: string): Promise<{ from: string | undefined; plugin: InstalledPlugin; changed: boolean }> {
-		validatePackageName(name);
-		const deps = await this.#readDeps(getPluginsPackageJson());
-		const config = await this.#ensureConfigLoaded();
-		const recorded = deps[name];
-		if (recorded === undefined) {
-			if (config.plugins[name]) {
-				throw new Error(`${name} is linked from a local path; there is nothing to upgrade`);
-			}
-			throw new Error(`${name} is not installed`);
-		}
-		if (/^(file|link|workspace|portal):/i.test(recorded)) {
-			throw new Error(`${name} is installed from a local path (${recorded}); there is nothing to upgrade`);
-		}
+		const { recorded, config } = await this.#resolveUpgradeSource(name);
 
 		const previous = config.plugins[name];
 		let from = previous?.version;
@@ -777,6 +765,28 @@ export class PluginManager {
 		return { from, plugin, changed };
 	}
 
+	/** Throws the error `upgrade(name)` would throw before it changes anything (unknown, linked or local plugin). */
+	async validateUpgrade(name: string): Promise<void> {
+		await this.#resolveUpgradeSource(name);
+	}
+
+	async #resolveUpgradeSource(name: string): Promise<{ recorded: string; config: PluginRuntimeConfig }> {
+		validatePackageName(name);
+		const deps = await this.#readDeps(getPluginsPackageJson());
+		const config = await this.#ensureConfigLoaded();
+		const recorded = deps[name];
+		if (recorded === undefined) {
+			if (config.plugins[name]) {
+				throw new Error(`${name} is linked from a local path; there is nothing to upgrade`);
+			}
+			throw new Error(`${name} is not installed`);
+		}
+		if (/^(file|link|workspace|portal):/i.test(recorded)) {
+			throw new Error(`${name} is installed from a local path (${recorded}); there is nothing to upgrade`);
+		}
+		return { recorded, config };
+	}
+
 	/**
 	 * Uninstall a plugin.
 	 */
@@ -786,7 +796,7 @@ export class PluginManager {
 
 		const { exitCode } = await runBunCli(["uninstall", name], getPluginsDir());
 		if (exitCode !== 0) {
-			throw new Error(t("npm uninstall failed for {0}", `${name}`));
+			throw new Error(`npm uninstall failed for ${name}`);
 		}
 
 		// Linked plugins have no package.json dependency, so Bun has no entry to
@@ -895,11 +905,11 @@ export class PluginManager {
 		try {
 			pkg = await Bun.file(pkgFilePath).json();
 		} catch (err) {
-			if (isEnoent(err)) throw new Error(t("package.json not found at {0}", `${absolutePath}`));
+			if (isEnoent(err)) throw new Error(`package.json not found at ${absolutePath}`);
 			throw err;
 		}
 		if (!pkg.name) {
-			throw new Error(t("package.json must have a name field"));
+			throw new Error("package.json must have a name field");
 		}
 		validatePackageName(pkg.name);
 
@@ -950,7 +960,7 @@ export class PluginManager {
 	async setEnabled(name: string, enabled: boolean): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
 		if (!config.plugins[name]) {
-			throw new Error(t("Plugin {0} not found in runtime config", `${name}`));
+			throw new Error(`Plugin ${name} not found in runtime config`);
 		}
 		config.plugins[name].enabled = enabled;
 		await this.#saveRuntimeConfig();
@@ -974,7 +984,7 @@ export class PluginManager {
 	async setEnabledFeatures(name: string, features: string[] | null): Promise<void> {
 		const config = await this.#ensureConfigLoaded();
 		if (!config.plugins[name]) {
-			throw new Error(t("Plugin {0} not found in runtime config", `${name}`));
+			throw new Error(`Plugin ${name} not found in runtime config`);
 		}
 
 		// Validate features if setting specific ones
@@ -1051,7 +1061,7 @@ export class PluginManager {
 		checks.push({
 			name: "plugins_directory",
 			status: pluginsDirExists ? "ok" : "warning",
-			message: pluginsDirExists ? t("Found at {0}", `${pluginsDir}`) : t("Not created yet"),
+			message: pluginsDirExists ? `Found at ${pluginsDir}` : "Not created yet",
 		});
 
 		// Check 2: package.json exists
@@ -1071,7 +1081,7 @@ export class PluginManager {
 		checks.push({
 			name: "package_manifest",
 			status: hasPkgJson ? "ok" : "warning",
-			message: hasPkgJson ? t("Found") : t("Not created yet"),
+			message: hasPkgJson ? "Found" : "Not created yet",
 		});
 
 		// Check 3: node_modules exists
@@ -1080,7 +1090,7 @@ export class PluginManager {
 		checks.push({
 			name: "node_modules",
 			status: hasNodeModules ? "ok" : hasPkgJson ? "error" : "warning",
-			message: hasNodeModules ? t("Found") : t("Missing (run npm install in plugins dir)"),
+			message: hasNodeModules ? "Found" : "Missing (run npm install in plugins dir)",
 		});
 
 		const deps = pkg.dependencies || {};
@@ -1107,7 +1117,7 @@ export class PluginManager {
 							checks.push({
 								name: `plugin:${name}`,
 								status: "error",
-								message: t("Missing from node_modules"),
+								message: "Missing from node_modules",
 								fixed,
 							});
 						} else {
@@ -1115,7 +1125,7 @@ export class PluginManager {
 							checks.push({
 								name: `orphan:${name}`,
 								status: "warning",
-								message: t("Plugin in config but not installed"),
+								message: "Plugin in config but not installed",
 								fixed,
 							});
 						}
@@ -1123,7 +1133,7 @@ export class PluginManager {
 						checks.push({
 							name: `plugin:${name}`,
 							status: "error",
-							message: t("Missing package.json"),
+							message: "Missing package.json",
 						});
 					}
 					continue;
@@ -1174,7 +1184,7 @@ export class PluginManager {
 					checks.push({
 						name: `plugin:${name}:tools`,
 						status: "error",
-						message: t("Tools entry \"{0}\" not found", `${manifest.tools}`),
+						message: `Tools entry "${manifest.tools}" not found`,
 					});
 				}
 			}
@@ -1186,7 +1196,7 @@ export class PluginManager {
 					checks.push({
 						name: `plugin:${name}:hooks`,
 						status: "error",
-						message: t("Hooks entry \"{0}\" not found", `${manifest.hooks}`),
+						message: `Hooks entry "${manifest.hooks}" not found`,
 					});
 				}
 			}
@@ -1199,7 +1209,7 @@ export class PluginManager {
 						checks.push({
 							name: `plugin:${name}:extension:${extensionPath}`,
 							status: "error",
-							message: t("Extension entry \"{0}\" not found", `${extensionPath}`),
+							message: `Extension entry "${extensionPath}" not found`,
 						});
 					}
 				}
@@ -1214,7 +1224,7 @@ export class PluginManager {
 						checks.push({
 							name: `plugin:${name}:feature:${feat}`,
 							status: "warning",
-							message: t("Enabled feature \"{0}\" not in manifest", `${feat}`),
+							message: `Enabled feature "${feat}" not in manifest`,
 							fixed,
 						});
 					}
@@ -1312,31 +1322,31 @@ export function validateSetting(value: unknown, schema: PluginSettingSchema): Va
 	switch (schema.type) {
 		case "string":
 			if (typeof value !== "string") {
-				return { valid: false, error: t("Expected string") };
+				return { valid: false, error: "Expected string" };
 			}
 			break;
 
 		case "number":
 			if (typeof value !== "number" || Number.isNaN(value)) {
-				return { valid: false, error: t("Expected number") };
+				return { valid: false, error: "Expected number" };
 			}
 			if (schema.min !== undefined && value < schema.min) {
-				return { valid: false, error: t("Must be >= {0}", `${schema.min}`) };
+				return { valid: false, error: `Must be >= ${schema.min}` };
 			}
 			if (schema.max !== undefined && value > schema.max) {
-				return { valid: false, error: t("Must be <= {0}", `${schema.max}`) };
+				return { valid: false, error: `Must be <= ${schema.max}` };
 			}
 			break;
 
 		case "boolean":
 			if (typeof value !== "boolean") {
-				return { valid: false, error: t("Expected boolean") };
+				return { valid: false, error: "Expected boolean" };
 			}
 			break;
 
 		case "enum":
 			if (!schema.values.includes(String(value))) {
-				return { valid: false, error: t("Must be one of: {0}", `${schema.values.join(", ")}`) };
+				return { valid: false, error: `Must be one of: ${schema.values.join(", ")}` };
 			}
 			break;
 	}

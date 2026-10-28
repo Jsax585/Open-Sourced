@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Container } from "../tui";
 import { Spacer } from "../components/spacer";
 import { TruncatedText } from "../components/truncated-text";
@@ -41,9 +40,9 @@ export class QueuedMessagesBand extends Container {
 			}
 		}
 		this.addChild(
-			new TruncatedText(theme.fg("dim", t("  {0} {1} to edit", `${theme.tree.hook}`, `${formatKeyHint(dequeueKey)}`)), 1, 0),
+			new TruncatedText(theme.fg("dim", `  ${theme.tree.hook} ${formatKeyHint(dequeueKey)} to edit`), 1, 0),
 		);
-		const editTitle = t("Edit  {0}", `${formatTooltipKey(dequeueKey)}`);
+		const editTitle = `Edit  ${formatTooltipKey(dequeueKey)}`;
 
 		const count = groups.reduce((sum, group) => sum + group.messages.length, 0);
 		const pills: NativeNode[] = [];
@@ -67,7 +66,7 @@ export class QueuedMessagesBand extends Container {
 					children.push(
 						node(
 							"badge",
-							{ text: t("{0} queued", `${count}`), title: t("{0} messages queued", `${count}`), role: "omp.queue.count" },
+							{ text: `${count} queued`, title: `${count} messages queued`, role: "omp.queue.count" },
 							undefined,
 							"count",
 						),
@@ -83,7 +82,7 @@ export class QueuedMessagesBand extends Container {
 							title: editTitle,
 							actions: { click: "queue.edit" },
 						},
-						[kbd(dequeueKey), text(t("Edit"))],
+						[kbd(dequeueKey), text("Edit")],
 						"edit",
 					),
 				);

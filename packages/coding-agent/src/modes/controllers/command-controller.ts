@@ -1,4 +1,3 @@
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -49,11 +48,12 @@ import { MoveOverlay, type MoveOverlayResult } from "@oh-my-pi/pi-tui/overlays/m
 import { moveDirectorySource } from "../move-directory-source";
 import { getMarkdownTheme, getSymbolTheme, theme, type Theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { ContextUsageView, contextUsageHead } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import { ContextViewer } from "@oh-my-pi/pi-tui/overlays/context-viewer";
 import type { OverlayHandle } from "@oh-my-pi/pi-tui";
 import { ReportPanel } from "@oh-my-pi/pi-tui/overlays/report-panel";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import { computeSessionContextBreakdown } from "../../session/context-usage-runtime";
+import { buildSessionContextView } from "../../session/context-view";
 import { buildHotkeysMarkdown, HotkeysSheetComponent } from "@oh-my-pi/pi-tui/hotkeys-markdown";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { buildToolsMarkdown } from "@oh-my-pi/pi-tui/prompt/tools-markdown";
@@ -188,8 +188,8 @@ function hasForkApiKeyOverride(argv: string[]): boolean {
 }
 
 export class CommandController {
-	/** The open native report sheet. */
-	#reportSheet: OverlayHandle | undefined;
+	/** The open native report sheet and the component it shows. */
+	#reportSheet: { handle: OverlayHandle; component: Component } | undefined;
 	#forkTerminalDependencies: ForkTerminalDependencies;
 
 	constructor(
@@ -235,9 +235,24 @@ export class CommandController {
 		const sheet = this.#reportSheet;
 		if (!sheet) return;
 		this.#reportSheet = undefined;
-		sheet.hide();
+		sheet.handle.hide();
+		// Like the docked report, a closed sheet is never shown again.
+		sheet.component.dispose?.();
 		this.ctx.ui.setFocus(this.ctx.editorContainer.children[0] ?? this.ctx.editor);
 		this.ctx.ui.requestRender();
+	}
+
+	/** Open `component` as a focused full-screen page; callers close any previous sheet first. */
+	#showFullscreenSheet(component: Component): void {
+		const handle = this.ctx.ui.showOverlay(component, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+		});
+		this.#reportSheet = { handle, component };
+		this.ctx.ui.setFocus(component);
 	}
 
 	/**
@@ -264,19 +279,15 @@ export class CommandController {
 		});
 		if (isNativeRendering()) {
 			report.holdFocus();
-			this.#reportSheet = this.ctx.ui.showOverlay(report, { anchor: "center", width: "90%", maxHeight: "90%" });
+			this.#reportSheet = {
+				handle: this.ctx.ui.showOverlay(report, { anchor: "center", width: "90%", maxHeight: "90%" }),
+				component: report,
+			};
 			this.ctx.ui.setFocus(report);
 		} else if (report.heightAt(terminal.columns) > inline) {
 			fullScreen = true;
 			report.holdFocus();
-			this.#reportSheet = this.ctx.ui.showOverlay(report, {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-				fullscreen: true,
-			});
-			this.ctx.ui.setFocus(report);
+			this.#showFullscreenSheet(report);
 		} else {
 			this.ctx.reportContainer.addChild(report);
 		}
@@ -294,7 +305,7 @@ export class CommandController {
 	): Promise<void> {
 		if (initialError !== undefined) {
 			this.ctx.showError(
-				t("Failed to switch workspace: {0}", `${initialError instanceof Error ? initialError.message : String(initialError)}`),
+				`Failed to switch workspace: ${initialError instanceof Error ? initialError.message : String(initialError)}`,
 			);
 		}
 
@@ -308,13 +319,13 @@ export class CommandController {
 			} catch {}
 			if (!realigned) {
 				this.ctx.showError(
-					t("Failed to roll back move: {0} (failed to re-align workspace to {1})", `${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`, `${actual}`),
+					`Failed to roll back move: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)} (failed to re-align workspace to ${actual})`,
 				);
 				await this.ctx.shutdown();
 				return;
 			}
 			this.ctx.showError(
-				t("Failed to roll back move: {0} (workspace remains at {1})", `${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`, `${actual}`),
+				`Failed to roll back move: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)} (workspace remains at ${actual})`,
 			);
 			return;
 		}
@@ -331,11 +342,11 @@ export class CommandController {
 			realigned = await this.ctx.applyCwdChange(actual);
 		} catch {}
 		if (!realigned) {
-			this.ctx.showError(t("Failed to restore source workspace after rollback: workspace remains at {0}", `${actual}`));
+			this.ctx.showError(`Failed to restore source workspace after rollback: workspace remains at ${actual}`);
 			await this.ctx.shutdown();
 			return;
 		}
-		this.ctx.showError(t("Failed to restore source workspace after rollback: workspace remains at {0}", `${actual}`));
+		this.ctx.showError(`Failed to restore source workspace after rollback: workspace remains at ${actual}`);
 	}
 
 	openInBrowser(urlOrPath: string): void {
@@ -346,23 +357,23 @@ export class CommandController {
 		try {
 			const { outputPath, useUserThemes } = parseExportArgs(text.slice("/export".length));
 			if (outputPath === "--copy" || outputPath === "clipboard" || outputPath === "copy") {
-				this.ctx.showWarning(t("Use /dump to copy the session to clipboard."));
+				this.ctx.showWarning("Use /dump to copy the session to clipboard.");
 				return;
 			}
 
 			// The viewed session: the focused subagent's transcript (plus its own
 			// subagents) from a focused view, otherwise the main session.
 			const filePath = await this.ctx.viewSession.exportToHtml(outputPath, useUserThemes);
-			this.ctx.showStatus(t("Session exported to: {0}", `${filePath}`));
+			this.ctx.showStatus(`Session exported to: ${filePath}`);
 			this.openInBrowser(filePath);
 		} catch (error: unknown) {
-			this.ctx.showError(t("Failed to export session: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+			this.ctx.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 	async handleTraceCommand(): Promise<void> {
 		const sessionFile = this.ctx.session.sessionFile;
 		if (!sessionFile) {
-			this.ctx.showWarning(t("No session file yet — send a message first."));
+			this.ctx.showWarning("No session file yet — send a message first.");
 			return;
 		}
 		try {
@@ -372,9 +383,9 @@ export class CommandController {
 			const { hostname, port } = await startServer();
 			const url = `${formatStatsDashboardUrl(hostname, port)}/#/traces?s=${encodeURIComponent(sessionFile)}`;
 			this.openInBrowser(url);
-			this.ctx.showStatus(t("Trace: {0}", `${url}`));
+			this.ctx.showStatus(`Trace: ${url}`);
 		} catch (error: unknown) {
-			this.ctx.showError(t("Failed to open trace: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+			this.ctx.showError(`Failed to open trace: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 
@@ -382,7 +393,7 @@ export class CommandController {
 		try {
 			const formatted = this.ctx.session.formatSessionAsText();
 			if (!formatted) {
-				this.ctx.showError(t("No messages to dump yet."));
+				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
 			// Build the LLM request JSON sidecar first so its path (and a
@@ -392,18 +403,18 @@ export class CommandController {
 			try {
 				sidecarPath = await this.ctx.session.dumpLlmRequestToTmpDir();
 			} catch (error: unknown) {
-				sidecarError = error instanceof Error ? error.message : t("Unknown error");
+				sidecarError = error instanceof Error ? error.message : "Unknown error";
 			}
 			const doc = sidecarPath
-				? t("{0}\n\n---\nLLM request JSON: {1}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.", `${formatted}`, `${sidecarPath}`)
+				? `${formatted}\n\n---\nLLM request JSON: ${sidecarPath}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.`
 				: formatted;
 			await copyToClipboard(doc);
-			const statusParts = [t("Session copied to clipboard")];
-			if (sidecarPath) statusParts.push(t("LLM request JSON: {0}", `${sidecarPath}`));
-			if (sidecarError) statusParts.push(t("LLM request JSON unavailable: {0}", `${sidecarError}`));
+			const statusParts = ["Session copied to clipboard"];
+			if (sidecarPath) statusParts.push(`LLM request JSON: ${sidecarPath}`);
+			if (sidecarError) statusParts.push(`LLM request JSON unavailable: ${sidecarError}`);
 			this.ctx.showStatus(statusParts.join("\n"));
 		} catch (error: unknown) {
-			this.ctx.showError(t("Failed to copy session: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+			this.ctx.showError(`Failed to copy session: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 
@@ -419,14 +430,14 @@ export class CommandController {
 		try {
 			const archive = await write();
 			if (!archive) {
-				this.ctx.showError(t("No messages to dump yet."));
+				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
 			await copyToClipboard(archive.path);
-			this.ctx.showStatus([...formatDumpArchiveReport(archive), t("Archive path copied to clipboard")].join("\n"));
+			this.ctx.showStatus([...formatDumpArchiveReport(archive), "Archive path copied to clipboard"].join("\n"));
 		} catch (error: unknown) {
 			this.ctx.showError(
-				t("Failed to write session dump: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`),
+				`Failed to write session dump: ${error instanceof Error ? error.message : "Unknown error"}`,
 			);
 		}
 	}
@@ -435,18 +446,18 @@ export class CommandController {
 		try {
 			const advisorHistory = this.ctx.session.formatAdvisorHistoryAsText({ compact: !isRaw });
 			if (advisorHistory === null) {
-				this.ctx.showError(t("Advisor is not active for this session."));
+				this.ctx.showError("Advisor is not active for this session.");
 				return;
 			}
 			if (!advisorHistory) {
-				this.ctx.showError(t("Advisor has no history yet."));
+				this.ctx.showError("Advisor has no history yet.");
 				return;
 			}
 			copyToClipboard(advisorHistory);
-			this.ctx.showStatus(t("Advisor history copied to clipboard"));
+			this.ctx.showStatus("Advisor history copied to clipboard");
 		} catch (error: unknown) {
 			this.ctx.showError(
-				t("Failed to copy advisor history: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`),
+				`Failed to copy advisor history: ${error instanceof Error ? error.message : "Unknown error"}`,
 			);
 		}
 	}
@@ -457,15 +468,15 @@ export class CommandController {
 			const renderedLines = this.ctx.chatContainer.render(width).map(line => replaceTabs(Bun.stripANSI(line)));
 			const rendered = renderedLines.join("\n").trimEnd();
 			if (!rendered) {
-				this.ctx.showError(t("No messages to dump yet."));
+				this.ctx.showError("No messages to dump yet.");
 				return;
 			}
 			const tmpPath = path.join(os.tmpdir(), `${Snowflake.next()}-tmp.txt`);
 			await Bun.write(tmpPath, `${rendered}\n`);
-			this.ctx.showStatus(t("Debug transcript written to:\n{0}", `${tmpPath}`));
+			this.ctx.showStatus(`Debug transcript written to:\n${tmpPath}`);
 		} catch (error: unknown) {
 			this.ctx.showError(
-				t("Failed to write debug transcript: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`),
+				`Failed to write debug transcript: ${error instanceof Error ? error.message : "Unknown error"}`,
 			);
 		}
 	}
@@ -479,7 +490,7 @@ export class CommandController {
 			return;
 		}
 
-		const loader = new BorderedLoader(this.ctx.ui, theme, t("Sharing session..."));
+		const loader = new BorderedLoader(this.ctx.ui, theme, "Sharing session...");
 		this.ctx.editorContainer.clear();
 		this.ctx.editorContainer.addChild(loader);
 		this.ctx.ui.setFocus(loader);
@@ -493,7 +504,7 @@ export class CommandController {
 		};
 		loader.onAbort = () => {
 			restoreEditor();
-			this.ctx.showStatus(t("Share cancelled"));
+			this.ctx.showStatus("Share cancelled");
 		};
 
 		// Custom share scripts keep their legacy contract: they receive a path
@@ -507,21 +518,21 @@ export class CommandController {
 				restoreEditor();
 
 				if (typeof result === "string") {
-					this.ctx.showStatus(t("Share URL: {0}", `${result}`));
+					this.ctx.showStatus(`Share URL: ${result}`);
 					this.openInBrowser(result);
 				} else if (result) {
 					const parts: string[] = [];
-					if (result.url) parts.push(t("Share URL: {0}", `${result.url}`));
+					if (result.url) parts.push(`Share URL: ${result.url}`);
 					if (result.message) parts.push(result.message);
 					if (parts.length > 0) this.ctx.showStatus(parts.join("\n"));
 					if (result.url) this.openInBrowser(result.url);
 				} else {
-					this.ctx.showStatus(t("Session shared"));
+					this.ctx.showStatus("Session shared");
 				}
 			} catch (err) {
 				if (!loader.signal.aborted) {
 					restoreEditor();
-					this.ctx.showError(t("Custom share failed: {0}", `${err instanceof Error ? err.message : String(err)}`));
+					this.ctx.showError(`Custom share failed: ${err instanceof Error ? err.message : String(err)}`);
 				}
 			} finally {
 				await fs.rm(tmpFile, { force: true }).catch(() => {});
@@ -541,15 +552,15 @@ export class CommandController {
 			if (loader.signal.aborted) return;
 			restoreEditor();
 
-			const lines = [t("Share URL: {0}", `${result.url}`)];
+			const lines = [`Share URL: ${result.url}`];
 			if (result.gistUrl) lines.push(`Gist: ${result.gistUrl}`);
-			if (result.truncated) lines.push(t("Note: large content was trimmed to fit the share size limit.\u0004packages/coding-agent/src/modes/controllers/command-controller.ts:CommandController.handleShareCommand"));
+			if (result.truncated) lines.push("Note: large content was trimmed to fit the share size limit.");
 			this.ctx.showStatus(lines.join("\n"));
 			this.openInBrowser(result.url);
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
 				restoreEditor();
-				this.ctx.showError(t("Failed to share session: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+				this.ctx.showError(`Failed to share session: ${error instanceof Error ? error.message : "Unknown error"}`);
 			}
 		}
 	}
@@ -563,7 +574,7 @@ export class CommandController {
 		const normalizedPremiumRequests = Math.round((premiumRequests + Number.EPSILON) * 100) / 100;
 
 		let info = "";
-		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? t("In-memory")}\n`;
+		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
 		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n`;
 		const builds = runtimeIdentityHistory(this.ctx.session.sessionManager.getEntries());
 		const running = currentRuntimeIdentity();
@@ -573,10 +584,10 @@ export class CommandController {
 		const hidden = builds.length > MAX_LISTED_BUILDS ? builds.length - MAX_LISTED_BUILDS + 1 : 0;
 		for (const [index, build] of builds.entries()) {
 			if (hidden > 0 && index > 0 && index <= hidden) {
-				if (index === 1) info += `${theme.fg("dim", t("Builds 2–{0}:", `${hidden + 1}`))} ${t("{0} more", `${hidden}`)}\n`;
+				if (index === 1) info += `${theme.fg("dim", `Builds 2–${hidden + 1}:`)} ${hidden} more\n`;
 				continue;
 			}
-			const key = builds.length === 1 ? t("Build:") : t("Build {0}:", `${index + 1}`);
+			const key = builds.length === 1 ? "Build:" : `Build ${index + 1}:`;
 			info += `${theme.fg("dim", key)} ${replaceTabs(sanitizeText(formatRuntimeIdentity(build)))}\n`;
 		}
 		if (!sameRuntimeIdentity(builds[builds.length - 1], running)) {
@@ -585,7 +596,7 @@ export class CommandController {
 		info += `\n${theme.bold("Provider")}\n`;
 		const model = this.ctx.session.model;
 		if (!model) {
-			info += `${theme.fg("dim", t("No model selected"))}\n`;
+			info += `${theme.fg("dim", "No model selected")}\n`;
 		} else {
 			const authMode = resolveProviderAuthMode(this.ctx.session.modelRegistry.authStorage, model.provider);
 			const credentialSource = this.ctx.session.modelRegistry.authStorage.keys.describe(
@@ -632,9 +643,9 @@ export class CommandController {
 			const setting = cfgProviderAppendOnlyContext.get(this.ctx.settings);
 			const model = this.ctx.session.model;
 			const mode = shouldEnableAppendOnlyContext(setting, model);
-			const activeLabel = mode ? theme.fg("success", t("active\u0004packages/coding-agent/src/modes/controllers/command-controller.ts:CommandController.handleSessionCommand.activeLabel")) : theme.fg("dim", t("inactive"));
+			const activeLabel = mode ? theme.fg("success", "active") : theme.fg("dim", "inactive");
 			const settingLabel = setting === "auto" ? `${setting} (${model?.provider ?? "?"})` : setting;
-			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (${t("setting: {0}", `${settingLabel}`)})\n`;
+			info += `${theme.fg("dim", "Append-Only:")} ${activeLabel} (setting: ${settingLabel})\n`;
 		}
 		info += `${theme.bold("Tokens")}\n`;
 		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
@@ -683,12 +694,12 @@ export class CommandController {
 			const mcpServers = this.ctx.mcpManager.getConnectedServers();
 			info += `\n${theme.bold("MCP Servers")}\n`;
 			if (mcpServers.length === 0) {
-				info += `${theme.fg("dim", t("None connected"))}\n`;
+				info += `${theme.fg("dim", "None connected")}\n`;
 			} else {
 				for (const name of mcpServers) {
 					const conn = this.ctx.mcpManager.getConnection(name);
 					const toolCount = conn?.tools?.length ?? 0;
-					info += `${theme.fg("dim", `${name}:`)} ${theme.fg("success", t("connected"))} ${theme.fg("dim", t("({0} tools)", `${toolCount}`))}\n`;
+					info += `${theme.fg("dim", `${name}:`)} ${theme.fg("success", "connected")} ${theme.fg("dim", `(${toolCount} tools)`)}\n`;
 				}
 			}
 		}
@@ -705,17 +716,17 @@ export class CommandController {
 	};
 
 	static readonly #advisorStatusLabel: Record<string, string> = {
-		running: t("running"),
-		paused: t("off"),
-		no_model: t("no model"),
-		quota_exhausted: t("quota exhausted"),
-		error: t("error"),
+		running: "running",
+		paused: "off",
+		no_model: "no model",
+		quota_exhausted: "quota exhausted",
+		error: "error",
 	};
 
 	async handleAdvisorStatusCommand(): Promise<void> {
 		const stats = this.ctx.session.getAdvisorStats();
 		if (!stats.configured) {
-			this.showCommandReport({ title: t("Advisor Status"), body: new Text(t("Advisor is disabled."), 0, 0) });
+			this.showCommandReport({ title: "Advisor Status", body: new Text("Advisor is disabled.", 0, 0) });
 			return;
 		}
 		// Render cached quota data without waiting for the network. Quota lines
@@ -749,7 +760,7 @@ export class CommandController {
 							: "dim";
 				info += `\n${theme.fg(color, glyph)} ${theme.bold(a.name)} ${theme.fg("dim", `[${label}]`)}\n`;
 				if (a.model) {
-					info += `${theme.fg("dim", t("Model:"))} ${a.model.provider}/${a.model.id}\n`;
+					info += `${theme.fg("dim", "Model:")} ${a.model.provider}/${a.model.id}\n`;
 				}
 				if (a.model && usageReports) {
 					const identity = resolveActiveAdvisorAccount(a.model.provider, a.sessionId);
@@ -766,20 +777,20 @@ export class CommandController {
 						a.contextWindow > 0
 							? `${a.contextTokens.toLocaleString()} / ${a.contextWindow.toLocaleString()} (${Math.round((a.contextTokens / a.contextWindow) * 100)}%)`
 							: `${a.contextTokens.toLocaleString()}`;
-					info += `${theme.fg("dim", t("Context:"))} ${ctx}\n`;
-					info += `${theme.fg("dim", t("Messages:"))} ${a.messages.total.toLocaleString()}\n`;
-					info += t("{0} {1} in / {2} out", `${theme.fg("dim", t("Spend:"))}`, `${a.tokens.input.toLocaleString()}`, `${a.tokens.output.toLocaleString()}`);
+					info += `${theme.fg("dim", "Context:")} ${ctx}\n`;
+					info += `${theme.fg("dim", "Messages:")} ${a.messages.total.toLocaleString()}\n`;
+					info += `${theme.fg("dim", "Spend:")} ${a.tokens.input.toLocaleString()} in / ${a.tokens.output.toLocaleString()} out`;
 					if (a.cost > 0) info += `, $${a.cost.toFixed(4)}`;
 					info += "\n";
 				}
 			}
 			if (stats.active) {
-				info += `\n${theme.bold(t("Totals"))}\n`;
-				info += `${theme.fg("dim", t("Tokens:"))} ${stats.tokens.total.toLocaleString()}\n`;
-				if (stats.cost > 0) info += `${theme.fg("dim", t("Cost:"))} $${stats.cost.toFixed(4)}\n`;
+				info += `\n${theme.bold("Totals")}\n`;
+				info += `${theme.fg("dim", "Tokens:")} ${stats.tokens.total.toLocaleString()}\n`;
+				if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
 			}
 			this.showCommandReport({
-				title: t("Advisor Status ({0} advisors)", `${stats.advisors.length}`),
+				title: `Advisor Status (${stats.advisors.length} advisors)`,
 				body: new Text(info.trim(), 0, 0),
 			});
 			return;
@@ -794,8 +805,8 @@ export class CommandController {
 			info += `${theme.fg(a.status === "running" ? "success" : "error", glyph)} ${a.name} ${theme.fg("dim", `[${label}]`)}\n\n`;
 		}
 		if (model) {
-			info += `${theme.bold(t("Provider"))}\n`;
-			info += `${theme.fg("dim", t("Model:"))} ${model.provider}/${model.id}\n`;
+			info += `${theme.bold("Provider")}\n`;
+			info += `${theme.fg("dim", "Model:")} ${model.provider}/${model.id}\n`;
 		}
 		if (model && usageReports) {
 			const identity = resolveActiveAdvisorAccount(model.provider, stats.advisors[0]?.sessionId);
@@ -806,29 +817,29 @@ export class CommandController {
 				(report, limit) => !identity || limitMatchesActiveAccount(report, limit, identity),
 			);
 			if (quota) {
-				info += `\n${theme.bold(t("Quota"))}\n`;
+				info += `\n${theme.bold("Quota")}\n`;
 				info += `${theme.fg("dim", quota)}\n`;
 			}
 		}
-		info += `\n${theme.bold(t("Messages"))}\n`;
-		info += `${theme.fg("dim", t("User:"))} ${stats.messages.user.toLocaleString()}\n`;
-		info += `${theme.fg("dim", t("Assistant:"))} ${stats.messages.assistant.toLocaleString()}\n`;
-		info += `${theme.fg("dim", t("Total:"))} ${stats.messages.total.toLocaleString()}\n`;
-		info += `\n${theme.bold(t("Context"))}\n`;
+		info += `\n${theme.bold("Messages")}\n`;
+		info += `${theme.fg("dim", "User:")} ${stats.messages.user.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Assistant:")} ${stats.messages.assistant.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Total:")} ${stats.messages.total.toLocaleString()}\n`;
+		info += `\n${theme.bold("Context")}\n`;
 		if (stats.contextWindow > 0) {
 			const percent = Math.round((stats.contextTokens / stats.contextWindow) * 100);
-			info += `${theme.fg("dim", t("Tokens:"))} ${stats.contextTokens.toLocaleString()} / ${stats.contextWindow.toLocaleString()} (${percent}%)\n`;
+			info += `${theme.fg("dim", "Tokens:")} ${stats.contextTokens.toLocaleString()} / ${stats.contextWindow.toLocaleString()} (${percent}%)\n`;
 		} else {
-			info += `${theme.fg("dim", t("Tokens:"))} ${stats.contextTokens.toLocaleString()}\n`;
+			info += `${theme.fg("dim", "Tokens:")} ${stats.contextTokens.toLocaleString()}\n`;
 		}
-		info += `\n${theme.bold(t("Spend"))}\n`;
-		info += `${theme.fg("dim", t("Input:"))} ${stats.tokens.input.toLocaleString()}\n`;
-		info += `${theme.fg("dim", t("Output:"))} ${stats.tokens.output.toLocaleString()}\n`;
+		info += `\n${theme.bold("Spend")}\n`;
+		info += `${theme.fg("dim", "Input:")} ${stats.tokens.input.toLocaleString()}\n`;
+		info += `${theme.fg("dim", "Output:")} ${stats.tokens.output.toLocaleString()}\n`;
 		if (stats.tokens.cacheRead > 0) {
-			info += `${theme.fg("dim", t("Cache Read:"))} ${stats.tokens.cacheRead.toLocaleString()}\n`;
+			info += `${theme.fg("dim", "Cache Read:")} ${stats.tokens.cacheRead.toLocaleString()}\n`;
 		}
-		if (stats.cost > 0) info += `${theme.fg("dim", t("Cost:"))} $${stats.cost.toFixed(4)}\n`;
-		this.showCommandReport({ title: t("Advisor Status"), body: new Text(info.trim(), 0, 0) });
+		if (stats.cost > 0) info += `${theme.fg("dim", "Cost:")} $${stats.cost.toFixed(4)}\n`;
+		this.showCommandReport({ title: "Advisor Status", body: new Text(info.trim(), 0, 0) });
 	}
 
 	/**
@@ -841,7 +852,7 @@ export class CommandController {
 		const full = options?.full === true;
 		const tree = this.ctx.viewSession.getAsyncJobTree();
 		if (!tree) {
-			this.ctx.showWarning(t("Async background jobs are unavailable in this session."));
+			this.ctx.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
 		if (isNativeRendering() && !full) {
@@ -851,10 +862,10 @@ export class CommandController {
 
 		const now = Date.now();
 		const columns = this.ctx.ui.terminal.columns ?? 100;
-		let info = `${theme.fg("dim", t("Running:"))} ${tree.running.length}\n`;
+		let info = `${theme.fg("dim", "Running:")} ${tree.running.length}\n`;
 		if (tree.running.length === 0 && tree.recent.length === 0) {
-			info += `\n${theme.fg("dim", t("No async jobs yet."))}`;
-			this.showCommandReport({ title: t("Background Jobs"), body: new Text(info, 0, 0) });
+			info += `\n${theme.fg("dim", "No async jobs yet.")}`;
+			this.showCommandReport({ title: "Background Jobs", body: new Text(info, 0, 0) });
 			return;
 		}
 
@@ -889,7 +900,7 @@ export class CommandController {
 			}
 		}
 
-		this.showCommandReport({ title: t("Background Jobs"), body: new Text(info.trimEnd(), 0, 0) });
+		this.showCommandReport({ title: "Background Jobs", body: new Text(info.trimEnd(), 0, 0) });
 	}
 
 	async handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {
@@ -897,13 +908,13 @@ export class CommandController {
 		if (!usageReports) {
 			const provider = this.ctx.session as { fetchUsageReports?: () => Promise<UsageReport[] | null> };
 			if (!provider.fetchUsageReports) {
-				this.ctx.showWarning(t("Usage reporting is not configured for this session."));
+				this.ctx.showWarning("Usage reporting is not configured for this session.");
 				return;
 			}
 			try {
 				usageReports = await provider.fetchUsageReports();
 			} catch (error) {
-				this.ctx.showError(t("Failed to fetch usage data: {0}", `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Failed to fetch usage data: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 
@@ -920,21 +931,21 @@ export class CommandController {
 		const allEntries = await parseChangelog(changelogPath);
 		const entriesToShow = selectChangelogEntries(allEntries, view);
 		const changelogMarkdown =
-			entriesToShow.length > 0 ? renderChangelogEntries(entriesToShow).markdown : t("No changelog entries found.");
+			entriesToShow.length > 0 ? renderChangelogEntries(entriesToShow).markdown : "No changelog entries found.";
 		const shown = entriesToShow.length;
 		const titleCount = shown > 0 ? shown : view.kind === "last" ? view.count : shown;
 		const title =
 			view.kind === "full"
-				? t("Full Changelog")
+				? "Full Changelog"
 				: view.kind === "last"
 					? titleCount === 1
-						? t("Last Release")
-						: t("Last {0} Releases", `${titleCount}`)
-					: t("Recent Changes");
+						? "Last Release"
+						: `Last ${titleCount} Releases`
+					: "Recent Changes";
 		const hint =
 			view.kind === "full"
 				? ""
-				: `\n\n${theme.bold("/changelog full")} ${theme.fg("dim", t("to view the complete changelog."))}`;
+				: `\n\n${theme.fg("dim", "Use")} ${theme.bold("/changelog full")} ${theme.fg("dim", "to view the complete changelog.")}`;
 
 		this.#showMarkdownPanel(title, changelogMarkdown + hint);
 	}
@@ -953,7 +964,7 @@ export class CommandController {
 			this.ctx.ui.requestRender();
 			return;
 		}
-		this.#showMarkdownPanel(t("Keyboard Shortcuts"), buildHotkeysMarkdown(bindings));
+		this.#showMarkdownPanel("Keyboard Shortcuts", buildHotkeysMarkdown(bindings));
 	}
 
 	handleToolsCommand(): void {
@@ -961,21 +972,31 @@ export class CommandController {
 			tools: this.ctx.session.agent.state.tools,
 			xdevTools: this.ctx.session.getXdevToolEntries(),
 		});
-		this.#showMarkdownPanel(t("Available Tools"), tools);
+		this.#showMarkdownPanel("Available Tools", tools);
 	}
 
 	handleContextCommand(): void {
-		const breakdown = computeSessionContextBreakdown(this.ctx.session, { snapcompactSavings: true });
-		if (breakdown.contextWindow <= 0) {
-			this.ctx.showWarning(t("Context usage is unavailable: no model is selected for this session."));
+		const session = this.ctx.session;
+		if (!session.model) {
+			this.ctx.showWarning("Context usage is unavailable: no model is selected for this session.");
 			return;
 		}
-		// Natively the body is `/context`'s own card (meters, legend, compaction mark).
-		this.showCommandReport({
-			title: t("Context Usage"),
-			head: contextUsageHead(breakdown),
-			body: new ContextUsageView(breakdown, theme),
+		// Validate capacity before tokenizing the whole history into a snapshot.
+		const breakdown = computeSessionContextBreakdown(session, { snapcompactSavings: true });
+		if (!(breakdown.contextWindow > 0) || !Number.isFinite(breakdown.contextWindow)) {
+			this.ctx.showWarning("Context usage is unavailable: the model's context window is unknown or invalid.");
+			return;
+		}
+		const data = buildSessionContextView(session, breakdown);
+		this.#clearReport();
+		this.#closeReportSheet();
+		const viewer = new ContextViewer(data, {
+			onClose: () => this.#closeReportSheet(),
+			requestRender: () => this.ctx.ui.requestRender(),
+			getRows: () => this.ctx.ui.terminal.rows,
 		});
+		this.#showFullscreenSheet(viewer);
+		this.ctx.ui.requestRender();
 	}
 
 	async handleMemoryCommand(text: string): Promise<void> {
@@ -992,10 +1013,10 @@ export class CommandController {
 				this.ctx.session,
 			);
 			if (!payload) {
-				this.ctx.showWarning(t("Memory payload is empty (memory backend off, disabled, or no memory available)."));
+				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;
 			}
-			this.#showMarkdownPanel(t("Memory Injection Payload"), payload);
+			this.#showMarkdownPanel("Memory Injection Payload", payload);
 			return;
 		}
 
@@ -1003,9 +1024,9 @@ export class CommandController {
 			try {
 				await backend.clear(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
 				await this.ctx.session.refreshBaseSystemPrompt();
-				this.ctx.showStatus(t("Memory data cleared and system prompt refreshed."));
+				this.ctx.showStatus("Memory data cleared and system prompt refreshed.");
 			} catch (error) {
-				this.ctx.showError(t("Memory clear failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Memory clear failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -1013,9 +1034,9 @@ export class CommandController {
 		if (action === "enqueue" || action === "rebuild") {
 			try {
 				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
-				this.ctx.showStatus(t("Memory consolidation enqueued."));
+				this.ctx.showStatus("Memory consolidation enqueued.");
 			} catch (error) {
-				this.ctx.showError(t("Memory enqueue failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Memory enqueue failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -1027,12 +1048,12 @@ export class CommandController {
 					session: this.ctx.session,
 				});
 				if (!payload) {
-					this.ctx.showWarning(t("Memory queue is not available for the {0} backend.", `${backend.id}`));
+					this.ctx.showWarning(`Memory queue is not available for the ${backend.id} backend.`);
 					return;
 				}
-				this.#showMarkdownPanel(t("Memory Queue"), payload);
+				this.#showMarkdownPanel("Memory Queue", payload);
 			} catch (error) {
-				this.ctx.showError(t("Memory queue failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Memory queue failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -1040,9 +1061,9 @@ export class CommandController {
 		if (action === "sync") {
 			try {
 				await backend.enqueue(agentDir, this.ctx.sessionManager.getCwd(), this.ctx.session);
-				this.ctx.showStatus(t("Memory consolidation ran."));
+				this.ctx.showStatus("Memory consolidation ran.");
 			} catch (error) {
-				this.ctx.showError(t("Memory sync failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Memory sync failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -1055,9 +1076,9 @@ export class CommandController {
 					this.ctx.showWarning(memoryStatsUnavailableMessage(backend.id, action));
 					return;
 				}
-				this.#showMarkdownPanel(t("Memory {0}", `${action === "stats" ? t("Stats") : t("Diagnostics")}`), payload);
+				this.#showMarkdownPanel(`Memory ${action === "stats" ? "Stats" : "Diagnostics"}`, payload);
 			} catch (error) {
-				this.ctx.showError(t("Memory {0} failed: {1}", `${action}`, `${error instanceof Error ? error.message : String(error)}`));
+				this.ctx.showError(`Memory ${action} failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 			return;
 		}
@@ -1067,7 +1088,7 @@ export class CommandController {
 			return;
 		}
 
-		this.ctx.showError(t("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync|mm ...>"));
+		this.ctx.showError("Usage: /memory <view|stats|diagnose|clear|reset|enqueue|rebuild|queue|sync|mm ...>");
 	}
 
 	async #handleMentalModelsSubcommand(argumentText: string): Promise<void> {
@@ -1079,11 +1100,11 @@ export class CommandController {
 		const state = this.ctx.session.getHindsightSessionState();
 		const primary = state && !state.aliasOf ? state : undefined;
 		if (!primary) {
-			this.ctx.showError(t("Hindsight backend is not active for this session."));
+			this.ctx.showError("Hindsight backend is not active for this session.");
 			return;
 		}
 		if (!primary.config.mentalModelsEnabled) {
-			this.ctx.showError(t("Mental models are disabled (hindsight.mentalModelsEnabled = false)."));
+			this.ctx.showError("Mental models are disabled (hindsight.mentalModelsEnabled = false).");
 			return;
 		}
 
@@ -1092,14 +1113,14 @@ export class CommandController {
 				await this.#mmList(primary);
 				return;
 			case "show":
-				if (!arg) return this.ctx.showError(t("Usage: /memory mm show <id>"));
+				if (!arg) return this.ctx.showError("Usage: /memory mm show <id>");
 				await this.#mmShow(primary, arg);
 				return;
 			case "refresh":
 				await this.#mmRefresh(primary, arg);
 				return;
 			case "history":
-				if (!arg) return this.ctx.showError(t("Usage: /memory mm history <id>"));
+				if (!arg) return this.ctx.showError("Usage: /memory mm history <id>");
 				await this.#mmHistory(primary, arg);
 				return;
 			case "seed":
@@ -1110,11 +1131,11 @@ export class CommandController {
 				return;
 			case "delete":
 			case "remove":
-				if (!arg) return this.ctx.showError(t("Usage: /memory mm delete <id>"));
+				if (!arg) return this.ctx.showError("Usage: /memory mm delete <id>");
 				await this.#mmDelete(primary, arg);
 				return;
 			default:
-				this.ctx.showError(t("Usage: /memory mm <list|show|refresh|history|seed|reload|delete>"));
+				this.ctx.showError("Usage: /memory mm <list|show|refresh|history|seed|reload|delete>");
 		}
 	}
 
@@ -1124,16 +1145,16 @@ export class CommandController {
 			const response = await client.listMentalModels(state.bankId, { detail: "metadata" });
 			const items = response.items ?? [];
 			if (items.length === 0) {
-				this.ctx.showStatus(t("No mental models on bank {0}.", `${state.bankId}`));
+				this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
 				return;
 			}
 			const lines = items
 				.slice()
 				.sort((a, b) => a.id.localeCompare(b.id))
 				.map(summarizeMentalModel);
-			this.#showMarkdownPanel(t("Mental Models — {0}", `${state.bankId}`), lines.join("\n"));
+			this.#showMarkdownPanel(`Mental Models — ${state.bankId}`, lines.join("\n"));
 		} catch (error) {
-			this.ctx.showError(t("mm list failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm list failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -1141,16 +1162,16 @@ export class CommandController {
 		try {
 			const model = await state.client.getMentalModel(state.bankId, id, { detail: "content" });
 			if (!model) {
-				this.ctx.showError(t("Mental model not found: {0}", `${id}`));
+				this.ctx.showError(`Mental model not found: ${id}`);
 				return;
 			}
-			const tags = model.tags && model.tags.length > 0 ? t("\n_tags: {0}_", `${model.tags.join(", ")}`) : "";
-			const refreshed = model.last_refreshed_at ? t("\n_last refreshed: {0}_", `${model.last_refreshed_at}`) : "";
-			const sourceQuery = model.source_query ? t("\n\n**Source query:** {0}", `${model.source_query}`) : "";
-			const content = (model.content ?? t("_(empty — background reflect may still be running)_")).trim();
+			const tags = model.tags && model.tags.length > 0 ? `\n_tags: ${model.tags.join(", ")}_` : "";
+			const refreshed = model.last_refreshed_at ? `\n_last refreshed: ${model.last_refreshed_at}_` : "";
+			const sourceQuery = model.source_query ? `\n\n**Source query:** ${model.source_query}` : "";
+			const content = (model.content ?? "_(empty — background reflect may still be running)_").trim();
 			this.#showMarkdownPanel(model.name, `**id:** \`${model.id}\`${tags}${refreshed}${sourceQuery}\n\n${content}`);
 		} catch (error) {
-			this.ctx.showError(t("mm show failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm show failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -1161,7 +1182,7 @@ export class CommandController {
 				// auto-refresh filter so curated/manual models can still be
 				// refreshed on demand.
 				await state.client.refreshMentalModel(state.bankId, id);
-				this.ctx.showStatus(t("Refresh queued for mental model {0}.", `${id}`));
+				this.ctx.showStatus(`Refresh queued for mental model ${id}.`);
 			} else {
 				// Bulk refresh: only touch models that opted into automatic
 				// refresh via `trigger.refresh_after_consolidation`. Curated
@@ -1172,14 +1193,14 @@ export class CommandController {
 				const list = await state.client.listMentalModels(state.bankId, { detail: "content" });
 				const items = list.items ?? [];
 				if (items.length === 0) {
-					this.ctx.showStatus(t("No mental models on bank {0}.", `${state.bankId}`));
+					this.ctx.showStatus(`No mental models on bank ${state.bankId}.`);
 					return;
 				}
 				const targets = items.filter(m => m.trigger?.refresh_after_consolidation === true);
 				const skipped = items.length - targets.length;
 				if (targets.length === 0) {
 					this.ctx.showStatus(
-						t("No mental models opted into auto-refresh; {0} curated model(s) left untouched. Pass an explicit id to refresh one of them.", `${skipped}`),
+						`No mental models opted into auto-refresh; ${skipped} curated model(s) left untouched. Pass an explicit id to refresh one of them.`,
 					);
 					return;
 				}
@@ -1190,13 +1211,13 @@ export class CommandController {
 						queued++;
 					} catch (error) {
 						this.ctx.showWarning(
-							t("Refresh failed for {0}: {1}", `${item.id}`, `${error instanceof Error ? error.message : String(error)}`),
+							`Refresh failed for ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
 						);
 					}
 				}
-				const skippedSuffix = skipped > 0 ? t("; skipped {0} curated model(s)", `${skipped}`) : "";
+				const skippedSuffix = skipped > 0 ? `; skipped ${skipped} curated model(s)` : "";
 				this.ctx.showStatus(
-					t("Refresh queued for {1}/{0} auto-refresh model(s){2}.", `${targets.length}`, `${queued}`, `${skippedSuffix}`),
+					`Refresh queued for ${queued}/${targets.length} auto-refresh model(s)${skippedSuffix}.`,
 				);
 			}
 			// Reload the cache after a brief grace so the new content (if the refresh
@@ -1204,7 +1225,7 @@ export class CommandController {
 			await Bun.sleep(500);
 			await reloadMentalModelsForSession(state.session);
 		} catch (error) {
-			this.ctx.showError(t("mm refresh failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm refresh failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -1215,11 +1236,11 @@ export class CommandController {
 				state.client.getMentalModelHistory(state.bankId, id),
 			]);
 			if (!model) {
-				this.ctx.showError(t("Mental model not found: {0}", `${id}`));
+				this.ctx.showError(`Mental model not found: ${id}`);
 				return;
 			}
 			if (history.length === 0) {
-				this.ctx.showStatus(t("No history recorded for {0}.", `${id}`));
+				this.ctx.showStatus(`No history recorded for ${id}.`);
 				return;
 			}
 			// History is most-recent first. Each entry stores the content BEFORE that
@@ -1235,9 +1256,9 @@ export class CommandController {
 				const diff = diffMentalModelContent(before, after);
 				sections.push(`### ${history[i].changed_at}\n\n\`\`\`diff\n${diff}\n\`\`\``);
 			}
-			this.#showMarkdownPanel(t("History — {0}", `${model.name}`), sections.join("\n\n"));
+			this.#showMarkdownPanel(`History — ${model.name}`, sections.join("\n\n"));
 		} catch (error) {
-			this.ctx.showError(t("mm history failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm history failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -1254,7 +1275,7 @@ export class CommandController {
 				config.scoping,
 			);
 			if (seeds.length === 0) {
-				this.ctx.showStatus(t("No built-in seeds apply to scoping={0}.", `${config.scoping}`));
+				this.ctx.showStatus(`No built-in seeds apply to scoping=${config.scoping}.`);
 				return;
 			}
 			const list = await state.client.listMentalModels(state.bankId, { detail: "metadata" });
@@ -1276,22 +1297,22 @@ export class CommandController {
 					created++;
 				} catch (error) {
 					this.ctx.showWarning(
-						t("Seed failed for {0}: {1}", `${seed.id}`, `${error instanceof Error ? error.message : String(error)}`),
+						`Seed failed for ${seed.id}: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				}
 			}
-			this.ctx.showStatus(t("Seeded {0} new mental model(s); {1} already present.", `${created}`, `${skipped}`));
+			this.ctx.showStatus(`Seeded ${created} new mental model(s); ${skipped} already present.`);
 		} catch (error) {
-			this.ctx.showError(t("mm seed failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm seed failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
 	async #mmReload(state: HindsightSessionState): Promise<void> {
 		const ok = await reloadMentalModelsForSession(state.session);
 		if (ok) {
-			this.ctx.showStatus(t("Mental-model cache reloaded."));
+			this.ctx.showStatus("Mental-model cache reloaded.");
 		} else {
-			this.ctx.showError(t("Reload failed (Hindsight backend not active or mental models disabled)."));
+			this.ctx.showError("Reload failed (Hindsight backend not active or mental models disabled).");
 		}
 	}
 
@@ -1299,19 +1320,19 @@ export class CommandController {
 		try {
 			const removed = await state.client.deleteMentalModel(state.bankId, id);
 			if (!removed) {
-				this.ctx.showError(t("Mental model not found: {0}", `${id}`));
+				this.ctx.showError(`Mental model not found: ${id}`);
 				return;
 			}
 			// Drop the cached snippet so the closing tag does not silently keep
 			// stale content in the system prompt until the next agent_end TTL.
 			await reloadMentalModelsForSession(state.session);
-			this.ctx.showStatus(t("Deleted mental model {1} from bank {0}.", `${state.bankId}`, `${id}`));
+			this.ctx.showStatus(`Deleted mental model ${id} from bank ${state.bankId}.`);
 		} catch (error) {
-			this.ctx.showError(t("mm delete failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`mm delete failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
-	async #runNewSessionFlow(options?: NewSessionOptions, label: string = t("New session started")): Promise<void> {
+	async #runNewSessionFlow(options?: NewSessionOptions, label: string = "New session started"): Promise<void> {
 		this.ctx.clearTransientSessionUi();
 
 		if (this.ctx.session.isCompacting) {
@@ -1348,13 +1369,13 @@ export class CommandController {
 	async handleFreshCommand(): Promise<void> {
 		const result = this.ctx.session.freshSession();
 		if (!result) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before refreshing provider state."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before refreshing provider state.");
 			return;
 		}
-		const stateLabel = result.closedProviderSessions === 1 ? t("provider state") : t("provider states");
+		const stateLabel = result.closedProviderSessions === 1 ? "provider state" : "provider states";
 		this.ctx.statusLine.invalidate();
 		this.ctx.ui.requestRender();
-		this.ctx.showStatus(t("Fresh provider session started ({1} {0} pruned).", `${stateLabel}`, `${result.closedProviderSessions}`));
+		this.ctx.showStatus(`Fresh provider session started (${result.closedProviderSessions} ${stateLabel} pruned).`);
 	}
 
 	async handleResetContextCommand(): Promise<void> {
@@ -1366,7 +1387,7 @@ export class CommandController {
 		}
 		const result = await this.ctx.session.resetSessionContext();
 		if (!result) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before resetting the context."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before resetting the context.");
 			return;
 		}
 		// Drop the rendered transcript so the UI matches the now-empty model
@@ -1376,11 +1397,11 @@ export class CommandController {
 		this.ctx.resetTranscript();
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorBorderColor();
-		const noun = result.droppedCount === 1 ? t("message") : t("messages");
+		const noun = result.droppedCount === 1 ? "message" : "messages";
 		this.ctx.present([
 			new Spacer(1),
 			new Text(
-				`${theme.fg("accent", t("{0} Context reset — {2} {1} dropped; session continues.", `${theme.status.success}`, `${noun}`, `${result.droppedCount}`))}`,
+				`${theme.fg("accent", `${theme.status.success} Context reset — ${result.droppedCount} ${noun} dropped; session continues.`)}`,
 				1,
 				1,
 			),
@@ -1390,10 +1411,10 @@ export class CommandController {
 
 	async handleDeleteCommand(): Promise<void> {
 		if (!this.ctx.sessionManager.getSessionFile()) {
-			this.ctx.showError(t("Nothing to delete (in-memory session)"));
+			this.ctx.showError("Nothing to delete (in-memory session)");
 			return;
 		}
-		await this.#runNewSessionFlow({ drop: true }, t("Session deleted"));
+		await this.#runNewSessionFlow({ drop: true }, "Session deleted");
 	}
 
 	async handleForkCommand(placement?: "pane" | "window"): Promise<void> {
@@ -1408,7 +1429,7 @@ export class CommandController {
 		// An in-place fork moves this process onto the new file; a running turn
 		// would finish there and leave the original transcript cut mid-turn.
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before forking."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before forking.");
 			return;
 		}
 		if (this.ctx.loadingAnimation) {
@@ -1425,7 +1446,7 @@ export class CommandController {
 
 		const success = await this.ctx.session.fork();
 		if (!success) {
-			this.ctx.showError(t("Fork failed (session not persisted or cancelled)"));
+			this.ctx.showError("Fork failed (session not persisted or cancelled)");
 			return;
 		}
 
@@ -1438,8 +1459,8 @@ export class CommandController {
 				theme.fg(
 					"accent",
 					previousSessionId
-						? t("{0} Session forked · return to original: {1} or /resume {2}", `${theme.status.success}`, `${resumeCommand(previousSessionId)}`, `${previousSessionId}`)
-						: t("{0} Session forked", `${theme.status.success}`),
+						? `${theme.status.success} Session forked · return to original: ${resumeCommand(previousSessionId)} or /resume ${previousSessionId}`
+						: `${theme.status.success} Session forked`,
 				),
 				1,
 				1,
@@ -1459,33 +1480,33 @@ export class CommandController {
 
 		if (this.ctx.session.isStreaming) {
 			const confirmed = await this.ctx.showHookConfirm(
-				t("Fork while a response is running?"),
-				t("The child may not include the partial response. Continue opening a fork? The current session will keep running here."),
+				"Fork while a response is running?",
+				"The child may not include the partial response. Continue opening a fork? The current session will keep running here.",
 			);
 			if (!confirmed) return;
 		}
 
 		const initialSessionFile = this.ctx.sessionManager.getSessionFile();
 		if (!initialSessionFile) {
-			this.ctx.showError(t("Cannot open a fork in another terminal: the current session has not been persisted yet."));
+			this.ctx.showError("Cannot open a fork in another terminal: the current session has not been persisted yet.");
 			return;
 		}
 
 		const childArgs = restartArgv(dependencies.argv(), undefined, FORK_LAUNCH_OVERRIDES);
 		if (hasForkApiKeyOverride(childArgs)) {
 			this.ctx.showError(
-				t("Cannot open a fork in another terminal when --api-key was supplied at startup; the key cannot be forwarded without exposing it in the multiplexer command. Configure provider credentials in the auth store and retry."),
+				"Cannot open a fork in another terminal when --api-key was supplied at startup; the key cannot be forwarded without exposing it in the multiplexer command. Configure provider credentials in the auth store and retry.",
 			);
 			return;
 		}
 		const shellGrammar = placementInfo.shellGrammar;
 		if (shellGrammar === "posix") {
 			const confirmed = await this.ctx.showHookConfirm(
-				t("Confirm destination shell compatibility"),
-				t("This fork command uses POSIX shell syntax. Continue only if the destination's configured interactive shell accepts POSIX syntax; this cannot be inferred from the current terminal."),
+				"Confirm destination shell compatibility",
+				"This fork command uses POSIX shell syntax. Continue only if the destination's configured interactive shell accepts POSIX syntax; this cannot be inferred from the current terminal.",
 			);
 			if (!confirmed) {
-				this.ctx.showWarning(t("Fork cancelled: POSIX shell compatibility was not confirmed for the destination."));
+				this.ctx.showWarning("Fork cancelled: POSIX shell compatibility was not confirmed for the destination.");
 				return;
 			}
 		}
@@ -1494,20 +1515,20 @@ export class CommandController {
 			await this.ctx.sessionManager.flush();
 		} catch (error) {
 			logger.error("Failed to flush the session before opening a terminal fork", { error });
-			this.ctx.showError(t("Cannot open a fork in another terminal: failed to save the current session."));
+			this.ctx.showError("Cannot open a fork in another terminal: failed to save the current session.");
 			return;
 		}
 
 		const sessionFile = this.ctx.sessionManager.getSessionFile();
 		if (!sessionFile) {
-			this.ctx.showError(t("Cannot open a fork in another terminal: the current session is no longer persisted."));
+			this.ctx.showError("Cannot open a fork in another terminal: the current session is no longer persisted.");
 			return;
 		}
 		const sourceSessionFile = path.resolve(sessionFile);
 		try {
 			await fs.access(sourceSessionFile);
 		} catch {
-			this.ctx.showError(t("Cannot open a fork in another terminal: the persisted session transcript is unavailable."));
+			this.ctx.showError("Cannot open a fork in another terminal: the persisted session transcript is unavailable.");
 			return;
 		}
 
@@ -1559,19 +1580,19 @@ export class CommandController {
 			const result = await dependencies.launchTerminal(launchPlan.request);
 			if (result.warning) {
 				this.ctx.showWarning(
-					t("Opened a fork in {0}, but {1} This session continues here.", `${placementInfo.displayName}`, `${result.warning}`),
+					`Opened a fork in ${placementInfo.displayName}, but ${result.warning} This session continues here.`,
 				);
 				return;
 			}
 			this.ctx.showStatus(
-				t("Opened a fork in {0} ({1}); this session continues here.", `${placementInfo.displayName}`, `${placementInfo.placementLabel}`),
+				`Opened a fork in ${placementInfo.displayName} (${placementInfo.placementLabel}); this session continues here.`,
 			);
 		} catch (error) {
 			logger.error("Failed to open a terminal fork", { multiplexer, error });
 			this.ctx.showError(
 				error instanceof TerminalLaunchError
-					? t("Could not open a fork in {0}: {1}", `${placementInfo.displayName}`, `${error.message}`)
-					: t("Could not open a fork in {0}. See logs for details.", `${placementInfo.displayName}`),
+					? `Could not open a fork in ${placementInfo.displayName}: ${error.message}`
+					: `Could not open a fork in ${placementInfo.displayName}. See logs for details.`,
 			);
 		}
 	}
@@ -1608,17 +1629,17 @@ export class CommandController {
 					return false;
 				}
 				this.ctx.showError(
-					t("Tern did not confirm the fork: {0}", `${error instanceof Error ? error.message : String(error)}`),
+					`Tern did not confirm the fork: ${error instanceof Error ? error.message : String(error)}`,
 				);
 				return true;
 			}
 		} finally {
 			client.close();
 		}
-		const note = this.ctx.session.isStreaming ? t(" · the running response continues here, not in the fork") : "";
+		const note = this.ctx.session.isStreaming ? " · the running response continues here, not in the fork" : "";
 		this.ctx.present([
 			new Spacer(1),
-			new Text(theme.fg("accent", t("{0} Session forked into a new pane{1}", `${theme.status.success}`, `${note}`)), 1, 1),
+			new Text(theme.fg("accent", `${theme.status.success} Session forked into a new pane${note}`), 1, 1),
 		]);
 		return true;
 	}
@@ -1634,7 +1655,7 @@ export class CommandController {
 	 */
 	async handleMoveCommand(targetPath?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before moving."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before moving.");
 			return;
 		}
 
@@ -1653,7 +1674,7 @@ export class CommandController {
 
 		const unquoted = stripOuterDoubleQuotes(input);
 		if (!unquoted) {
-			this.ctx.showError(t("Usage: /move <path>"));
+			this.ctx.showError("Usage: /move <path>");
 			return;
 		}
 
@@ -1677,21 +1698,21 @@ export class CommandController {
 				parentExists = false;
 			}
 			if (!parentExists) {
-				this.ctx.showError(t("Cannot create \"{0}\": parent directory does not exist", `${path.basename(resolvedPath)}`));
+				this.ctx.showError(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`);
 				return;
 			}
 		}
 		const moved = await this.#withSessionMove(async () => {
 			if (!isDirectory) {
 				const confirmed = await this.ctx.showHookConfirm(
-					t("Create directory?"),
-					t("\"{0}\" does not exist. Create it?", `${path.basename(resolvedPath)}`),
+					"Create directory?",
+					`"${path.basename(resolvedPath)}" does not exist. Create it?`,
 				);
 				if (!confirmed) return false;
 				try {
 					await fs.mkdir(resolvedPath, { recursive: true });
 				} catch (err) {
-					this.ctx.showError(t("Failed to create directory: {0}", `${err instanceof Error ? err.message : String(err)}`));
+					this.ctx.showError(`Failed to create directory: ${err instanceof Error ? err.message : String(err)}`);
 					return false;
 				}
 			}
@@ -1700,7 +1721,7 @@ export class CommandController {
 		if (moved) {
 			this.ctx.present([
 				new Spacer(1),
-				new Text(`${theme.fg("accent", t("{0} Moved to {1}", `${theme.status.success}`, `${resolvedPath}`))}`, 1, 1),
+				new Text(`${theme.fg("accent", `${theme.status.success} Moved to ${resolvedPath}`)}`, 1, 1),
 			]);
 		}
 	}
@@ -1716,7 +1737,7 @@ export class CommandController {
 		options: { keepChanges?: boolean } = {},
 	): Promise<SessionWorktree | undefined> {
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before creating a worktree."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before creating a worktree.");
 			return undefined;
 		}
 		let created: SessionWorktree | undefined;
@@ -1728,7 +1749,7 @@ export class CommandController {
 				this.ctx.ui,
 				spinner => theme.fg("accent", spinner),
 				text => theme.fg("muted", text),
-				t("Creating worktree on {0}…", `${branchName}`),
+				`Creating worktree on ${branchName}…`,
 				getSymbolTheme().spinnerFrames,
 			);
 			this.ctx.statusContainer.addChild(loader);
@@ -1737,7 +1758,7 @@ export class CommandController {
 			try {
 				worktree = await createSessionWorktree(cwd, this.ctx.settings, branchName, options);
 			} catch (err) {
-				this.ctx.showError(t("Worktree creation failed: {0}", `${err instanceof Error ? err.message : String(err)}`));
+				this.ctx.showError(`Worktree creation failed: ${err instanceof Error ? err.message : String(err)}`);
 				return false;
 			} finally {
 				loader.stop();
@@ -1755,7 +1776,7 @@ export class CommandController {
 				? await cleanSourceCheckoutIfConfigured(cwd, this.ctx.settings)
 				: { cleaned: false, errorMessage: undefined };
 			if (cleanup.errorMessage !== undefined) {
-				this.ctx.showWarning(t("Worktree created, but cleaning source checkout failed: {0}", `${cleanup.errorMessage}`));
+				this.ctx.showWarning(`Worktree created, but cleaning source checkout failed: ${cleanup.errorMessage}`);
 			}
 			this.ctx.present([
 				new Spacer(1),
@@ -1775,7 +1796,7 @@ export class CommandController {
 		try {
 			await this.ctx.settings.flush();
 		} catch (err) {
-			this.ctx.showError(t("Failed to save pending settings: {0}", `${err instanceof Error ? err.message : String(err)}`));
+			this.ctx.showError(`Failed to save pending settings: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
 
@@ -1790,7 +1811,7 @@ export class CommandController {
 		try {
 			await this.ctx.session.moveSession(resolvedPath);
 		} catch (err) {
-			this.ctx.showError(t("Move failed: {0}", `${err instanceof Error ? err.message : String(err)}`));
+			this.ctx.showError(`Move failed: ${err instanceof Error ? err.message : String(err)}`);
 			return false;
 		}
 		let applied = false;
@@ -1829,14 +1850,14 @@ export class CommandController {
 			const stored = await persistence;
 			if (!isCurrent()) return;
 			if (!stored) {
-				this.ctx.showError(t("Session name cannot be empty."));
+				this.ctx.showError("Session name cannot be empty.");
 				return;
 			}
 			const name = sessionManager.getSessionName()!;
-			this.ctx.showStatus(t("Session renamed to \"{0}\".", `${name}`));
+			this.ctx.showStatus(`Session renamed to "${name}".`);
 		} catch (err) {
 			if (!isCurrent()) return;
-			this.ctx.showError(t("Rename failed: {0}", `${err instanceof Error ? err.message : String(err)}`));
+			this.ctx.showError(`Rename failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -1844,7 +1865,7 @@ export class CommandController {
 		const isDeferred = this.ctx.session.isStreaming;
 		const shouldPersistCwd = isPersistentShellCdCommand(command);
 		if (isDeferred && shouldPersistCwd) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before changing directories."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before changing directories.");
 			return;
 		}
 
@@ -1905,14 +1926,16 @@ export class CommandController {
 				if (shouldPersistCwd) return await this.#applyBashResultCwd(result);
 			} catch (error) {
 				this.ctx.showError(
-					t("Bash command completed, but OMP failed to update its working directory: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`),
+					`Bash command completed, but OMP failed to update its working directory: ${
+						error instanceof Error ? error.message : "Unknown error"
+					}`,
 				);
 			}
 		} catch (error) {
 			if (this.ctx.bashComponent) {
 				this.ctx.bashComponent.setComplete(undefined, false);
 			}
-			this.ctx.showError(t("Bash command failed: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+			this.ctx.showError(`Bash command failed: ${error instanceof Error ? error.message : "Unknown error"}`);
 		} finally {
 			this.ctx.bashComponent = undefined;
 			this.ctx.ui.requestRender();
@@ -1973,7 +1996,7 @@ export class CommandController {
 			if (this.ctx.pythonComponent) {
 				this.ctx.pythonComponent.setComplete(undefined, false);
 			}
-			this.ctx.showError(t("Python execution failed: {0}", `${error instanceof Error ? error.message : t("Unknown error")}`));
+			this.ctx.showError(`Python execution failed: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 
 		this.ctx.pythonComponent = undefined;
@@ -1990,7 +2013,7 @@ export class CommandController {
 		const messageCount = entries.filter(e => e.type === "message").length;
 
 		if (messageCount < 2) {
-			this.ctx.showWarning(t("Nothing to compact (no messages yet)"));
+			this.ctx.showWarning("Nothing to compact (no messages yet)");
 			return "ok";
 		}
 
@@ -2023,7 +2046,7 @@ export class CommandController {
 		try {
 			result = await this.ctx.session.shake(mode);
 		} catch (error) {
-			this.ctx.showError(t("Shake failed: {0}", `${error instanceof Error ? error.message : String(error)}`));
+			this.ctx.showError(`Shake failed: ${error instanceof Error ? error.message : String(error)}`);
 			return;
 		}
 
@@ -2033,7 +2056,7 @@ export class CommandController {
 			(result.imagesDropped ?? 0) +
 			(result.thinkingBlocksDropped ?? 0);
 		if (dropped === 0) {
-			this.ctx.showStatus(t("Nothing to shake."));
+			this.ctx.showStatus("Nothing to shake.");
 			return;
 		}
 		this.ctx.rebuildChatFromMessages();
@@ -2054,8 +2077,8 @@ export class CommandController {
 		}
 		this.ctx.statusContainer.disposeChildren();
 
-		const cancelHint = t("({0} to cancel)", `${appKey(this.ctx.keybindings, "app.interrupt")}`);
-		const label = isAuto ? t("Auto-compacting context... {0}", `${cancelHint}`) : t("Compacting context... {0}", `${cancelHint}`);
+		const cancelHint = `(${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`;
+		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
 		const compactingLoader = new Loader(
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
@@ -2066,7 +2089,7 @@ export class CommandController {
 		const compactionStartMs = Date.now();
 		compactingLoader.setWorkingRow(
 			() => ({
-				label: isAuto ? t("Auto-compacting context…") : t("Compacting context…"),
+				label: isAuto ? "Auto-compacting context…" : "Compacting context…",
 				startedAt: compactionStartMs,
 				variant: { kind: "compaction" },
 				interruptKey: this.ctx.maintenanceInterruptKey(),
@@ -2106,11 +2129,11 @@ export class CommandController {
 		} catch (error) {
 			if (error instanceof CompactionCancelledError) {
 				outcome = "cancelled";
-				this.ctx.showError(t("Compaction cancelled"));
+				this.ctx.showError("Compaction cancelled");
 			} else {
 				outcome = "failed";
 				const message = error instanceof Error ? error.message : String(error);
-				this.ctx.showError(t("Compaction failed: {0}", `${message}`));
+				this.ctx.showError(`Compaction failed: ${message}`);
 			}
 		} finally {
 			compactingLoader.stop();
@@ -2127,11 +2150,11 @@ export class CommandController {
 
 	async handleHandoffCommand(customInstructions?: string): Promise<void> {
 		if (this.ctx.session.isStreaming) {
-			this.ctx.showWarning(t("Wait for the current response to finish or abort it before handing off."));
+			this.ctx.showWarning("Wait for the current response to finish or abort it before handing off.");
 			return;
 		}
 		if (this.ctx.session.isCompacting) {
-			this.ctx.showWarning(t("Wait for context compaction to finish or cancel it before handing off."));
+			this.ctx.showWarning("Wait for context compaction to finish or cancel it before handing off.");
 			return;
 		}
 
@@ -2139,7 +2162,7 @@ export class CommandController {
 		const messageCount = entries.filter(e => e.type === "message").length;
 
 		if (messageCount < 2) {
-			this.ctx.showWarning(t("Nothing to hand off (no messages yet)"));
+			this.ctx.showWarning("Nothing to hand off (no messages yet)");
 			return;
 		}
 
@@ -2153,7 +2176,7 @@ export class CommandController {
 			this.ctx.ui,
 			spinner => theme.fg("accent", spinner),
 			text => theme.fg("muted", text),
-			t("Generating handoff… ({0} to cancel)", `${appKey(this.ctx.keybindings, "app.interrupt")}`),
+			`Generating handoff… (${appKey(this.ctx.keybindings, "app.interrupt")} to cancel)`,
 			getSymbolTheme().spinnerFrames,
 		);
 		this.ctx.statusContainer.addChild(handoffLoader);
@@ -2165,7 +2188,7 @@ export class CommandController {
 			const result = await this.ctx.session.handoff(customInstructions);
 
 			if (!result) {
-				this.ctx.showError(t("Handoff cancelled"));
+				this.ctx.showError("Handoff cancelled");
 				return;
 			}
 
@@ -2179,13 +2202,13 @@ export class CommandController {
 			this.ctx.present([
 				new Spacer(1),
 				new Text(
-					`${theme.fg("accent", t("{0} Context handed off and compacted in place", `${theme.status.success}`))}`,
+					`${theme.fg("accent", `${theme.status.success} Context handed off and compacted in place`)}`,
 					1,
 					1,
 				),
 			]);
 			if (result.savedPath) {
-				this.ctx.showStatus(t("Handoff document saved to: {0}", `${result.savedPath}`));
+				this.ctx.showStatus(`Handoff document saved to: ${result.savedPath}`);
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -2193,12 +2216,12 @@ export class CommandController {
 			// provider error (even one named AbortError) is re-thrown verbatim so it surfaces
 			// as a real failure instead of a false "cancelled".
 			if (message === "Handoff cancelled") {
-				this.ctx.showError(t("Handoff cancelled"));
+				this.ctx.showError("Handoff cancelled");
 			} else {
 				// Persist the real failure so it is debuggable after the transient
 				// TUI error clears (#7993).
 				logger.error("Handoff failed", { error: message });
-				this.ctx.showError(t("Handoff failed: {0}", `${message}`));
+				this.ctx.showError(`Handoff failed: ${message}`);
 			}
 		} finally {
 			this.#finishHandoffUi(handoffLoader);
@@ -2242,10 +2265,10 @@ function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 }
 
 function formatJobStatus(status: AsyncJobSnapshotItem["status"]): string {
-	if (status === "running") return theme.fg("warning", t("running"));
-	if (status === "completed") return theme.fg("success", t("completed\u0004reviewed-expression"));
-	if (status === "cancelled") return theme.fg("dim", t("cancelled"));
-	return theme.fg("error", t("failed"));
+	if (status === "running") return theme.fg("warning", "running");
+	if (status === "completed") return theme.fg("success", "completed");
+	if (status === "cancelled") return theme.fg("dim", "cancelled");
+	return theme.fg("error", "failed");
 }
 
 function truncateJobLabel(label: string, maxWidth: number): string {
@@ -2340,7 +2363,7 @@ function formatAccountLabel(
 		typeof report.metadata?.projectId === "string" && report.metadata.projectId
 			? report.metadata.projectId
 			: limit.scope.projectId || undefined;
-	const base = typeof projectId === "string" && projectId ? projectId : t("account {0}", `${index + 1}`);
+	const base = typeof projectId === "string" && projectId ? projectId : `account ${index + 1}`;
 	return codex ? formatCodexTuiLabel(report, peers, base) : base;
 }
 
@@ -2356,7 +2379,7 @@ function formatUnlimitedReportLabel(report: UsageReport, peers: readonly UsageRe
 			? formatCodexTuiLabel(report, peers, accountId)
 			: `${accountId}${orgSuffix(report)}`;
 	const projectId = report.metadata?.projectId;
-	const base = typeof projectId === "string" && projectId ? projectId : t("account {0}", `${index + 1}`);
+	const base = typeof projectId === "string" && projectId ? projectId : `account ${index + 1}`;
 	return report.provider === "openai-codex" ? formatCodexTuiLabel(report, peers, base) : base;
 }
 
@@ -2444,7 +2467,7 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 	if (fractions.length === limits.length && fractions.length > 0) {
 		const sum = fractions.reduce((total, value) => total + value, 0);
 		const avgRemaining = Math.max(0, ((limits.length - sum) / limits.length) * 100);
-		return t("{0}% free", `${formatNumber(avgRemaining)}`);
+		return `${formatNumber(avgRemaining)}% free`;
 	}
 
 	const amounts = limits
@@ -2454,7 +2477,7 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 		const totalUsed = amounts.reduce((sum, amount) => sum + (amount.used ?? 0), 0);
 		const totalLimit = amounts.reduce((sum, amount) => sum + (amount.limit ?? 0), 0);
 		const remainingPct = totalLimit > 0 ? Math.max(0, 100 - (totalUsed / totalLimit) * 100) : 0;
-		return t("{0}% free", `${formatNumber(remainingPct)}`);
+		return `${formatNumber(remainingPct)}% free`;
 	}
 
 	if (limits.length > 0 && limits.every(isUsedOnlyAbsoluteAmount)) return "";
@@ -2469,10 +2492,10 @@ function formatAggregateAmount(limits: UsageLimit[]): string {
 	const uniqueAccountIds = new Set(
 		limits.map(limit => limit.scope.accountId).filter((id): id is string => typeof id === "string" && id.length > 0),
 	);
-	if (uniqueAccountIds.size > 0) return t("{0} {1}\u0004packages/coding-agent/src/modes/controllers/command-controller.ts:formatAggregateAmount", `${uniqueAccountIds.size}`, `${uniqueAccountIds.size === 1 ? "acct" : "accts"}`);
+	if (uniqueAccountIds.size > 0) return `${uniqueAccountIds.size} ${uniqueAccountIds.size === 1 ? "acct" : "accts"}`;
 	// No account IDs available — keep the pre-existing fallback so providers
 	// that don't populate scope.accountId still show a summary.
-	return t("{0} accts", `${limits.length}`);
+	return `${limits.length} accts`;
 }
 
 function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
@@ -2491,9 +2514,9 @@ function resolveResetRange(limits: UsageLimit[], nowMs: number): string | null {
 	const minReset = Math.min(...offsets);
 	const maxReset = Math.max(...offsets);
 	if (maxReset - minReset > 60_000) {
-		return t("{2} in {0}–{1}", `${(formatDuration(minReset))}`, `${(formatDuration(maxReset))}`, `${(verb === "resets" ? t("resets\u0004runtime-action") : verb)}`);
+		return `${verb} in ${formatDuration(minReset)}–${formatDuration(maxReset)}`;
 	}
-	return t("{1} in {0}", `${(formatDuration(minReset))}`, `${(verb === "resets" ? t("resets\u0004runtime-action") : verb)}`);
+	return `${verb} in ${formatDuration(minReset)}`;
 }
 
 function resolveStatusIcon(status: AggregateDisplayStatus, uiTheme: Theme): string {
@@ -2518,7 +2541,7 @@ function renderUsageBar(limit: UsageLimit, uiTheme: Theme, barWidth: number): st
 			limit.amount.unit === "usd"
 				? `$${usedAmount.toFixed(2)}`
 				: `${formatNumber(usedAmount, 2)} ${limit.amount.unit}`;
-		return uiTheme.fg("dim", truncateJobLabel(t("{0} used", `${used}`), barWidth));
+		return uiTheme.fg("dim", truncateJobLabel(`${used} used`, barWidth));
 	}
 	const fraction = resolveUsedFraction(limit);
 	if (fraction === undefined) {
@@ -2563,8 +2586,8 @@ export function renderUsageReports(
 	const displayReports = collapseSharedUsageReports(reports);
 	const lines: string[] = [];
 	const latestFetchedAt = Math.max(0, ...reports.map(report => report.fetchedAt ?? 0));
-	const headerSuffix = latestFetchedAt ? t(" ({0} ago)", `${formatDuration(nowMs - latestFetchedAt)}`) : "";
-	lines.push(uiTheme.bold(uiTheme.fg("accent", t("Usage{0}", `${headerSuffix}`))));
+	const headerSuffix = latestFetchedAt ? ` (${formatDuration(nowMs - latestFetchedAt)} ago)` : "";
+	lines.push(uiTheme.bold(uiTheme.fg("accent", `Usage${headerSuffix}`)));
 	const grouped = new Map<string, UsageReport[]>();
 	for (const report of displayReports) {
 		const list = grouped.get(report.provider) ?? [];
@@ -2642,16 +2665,16 @@ export function renderUsageReports(
 					? formatCodexTuiLabel(
 							activeReport,
 							providerReports,
-							activeAccount?.email || activeAccount?.accountId || t("account"),
+							activeAccount?.email || activeAccount?.accountId || "account",
 						)
 					: activeAccount?.email || activeAccount?.accountId || activeAccount?.projectId
 				: formatActiveAccountLabel(activeAccount);
 		if (activeAccountLabel) {
-			lines.push(`  ${uiTheme.fg("accent", t("in use by this session:"))} ${activeAccountLabel}`);
+			lines.push(`  ${uiTheme.fg("accent", "in use by this session:")} ${activeAccountLabel}`);
 		}
 		const reportingModels = usageModelSelectors.filter(selector => selector.startsWith(`${provider}/`));
 		if (reportingModels.length > 0) {
-			lines.push(`  ${uiTheme.fg("accent", t("Models with usage data"))}`);
+			lines.push(`  ${uiTheme.fg("accent", "Models with usage data")}`);
 			for (const selector of reportingModels) {
 				lines.push(`    ${replaceTabs(truncateToWidth(sanitizeText(selector), availableWidth - 4))}`);
 			}
@@ -2659,7 +2682,7 @@ export function renderUsageReports(
 		for (const account of unavailableAccounts) {
 			if (account.provider !== provider) continue;
 			const label = replaceTabs(sanitizeText(account.label.replace(/[\r\n]+/g, " ")));
-			const status = t(" — usage unavailable");
+			const status = " — usage unavailable";
 			const boundedLabel = truncateToWidth(label, Math.max(0, availableWidth - 2 - visibleWidth(status)));
 			lines.push(`  ${uiTheme.fg("dim", truncateToWidth(`${boundedLabel}${status}`, availableWidth - 2))}`);
 		}
@@ -2682,7 +2705,7 @@ export function renderUsageReports(
 					? report.metadata.email
 					: typeof report.metadata?.accountId === "string" && report.metadata.accountId
 						? report.metadata.accountId
-						: t("account");
+						: "account";
 			const orgName = report.metadata?.orgName;
 			const orgId = report.metadata?.orgId;
 			const orgLabel =
@@ -2705,28 +2728,28 @@ export function renderUsageReports(
 						((!!activeAccount.accountId && activeAccount.accountId === report.metadata?.accountId) ||
 							(!!activeAccount.email && activeAccount.email === report.metadata?.email));
 			const availability =
-				resets.redeemableCount === resets.bankedCount ? "" : t(" · {0} usable now\u0004packages/coding-agent/src/modes/controllers/command-controller.ts:renderUsageReports.availability", `${resets.redeemableCount}`);
+				resets.redeemableCount === resets.bankedCount ? "" : ` · ${resets.redeemableCount} usable now`;
 			resetAccountLines.push(
-				t("    • {0}: {1} saved reset{4}{2}{3}", `${label}`, `${resets.bankedCount}`, `${availability}`, `${isActive ? t(" (active)") : ""}`, `${resets.bankedCount === 1 ? "" : "s"}`),
+				`    • ${label}: ${resets.bankedCount} saved reset${resets.bankedCount === 1 ? "" : "s"}${availability}${isActive ? " (active)" : ""}`,
 			);
 			if (resets.soonestExpiry) {
 				const expiryMs = Date.parse(resets.soonestExpiry);
 				const remaining = expiryMs - nowMs;
 				const expiryDate = resets.soonestExpiry.slice(0, 10);
 				if (remaining > 0) {
-					resetAccountLines.push(t("        soonest expires in {0} ({1})", `${formatDuration(remaining)}`, `${expiryDate}`));
+					resetAccountLines.push(`        soonest expires in ${formatDuration(remaining)} (${expiryDate})`);
 				} else {
-					resetAccountLines.push(t("        expired ({0})", `${expiryDate}`));
+					resetAccountLines.push(`        expired (${expiryDate})`);
 				}
 			}
 			if (resets.redeemableCount === 0 && resets.unavailableReason) {
 				const reason = sanitizeText(resets.unavailableReason.replace(/[\r\n\t]+/g, " "));
-				resetAccountLines.push(t("        unavailable: {0}", `${reason}`));
+				resetAccountLines.push(`        unavailable: ${reason}`);
 			}
 		}
 		if (resetAccountLines.length > 0) {
 			lines.push(
-				`  ${uiTheme.fg("accent", t("Saved rate-limit resets"))} ${uiTheme.fg("dim", t("(/usage reset to spend)"))}`,
+				`  ${uiTheme.fg("accent", "Saved rate-limit resets")} ${uiTheme.fg("dim", "(/usage reset to spend)")}`,
 			);
 			for (const line of resetAccountLines) lines.push(uiTheme.fg("dim", line));
 		}
@@ -2811,7 +2834,7 @@ export function renderUsageReports(
 			const tierSuffix = typeof tier === "string" && tier ? ` ${uiTheme.fg("dim", `(${tier})`)}` : "";
 			const daybreakSuffix = report.metadata?.daybreak === true ? uiTheme.fg("success", " daybreak") : "";
 			lines.push(
-				`${uiTheme.fg("success", uiTheme.status.success)} ${label}${daybreakSuffix}${tierSuffix} ${uiTheme.fg("dim", t("-- no limits"))}`,
+				`${uiTheme.fg("success", uiTheme.status.success)} ${label}${daybreakSuffix}${tierSuffix} ${uiTheme.fg("dim", "-- no limits")}`,
 			);
 		}
 		// No per-provider footer; global header shows last check.

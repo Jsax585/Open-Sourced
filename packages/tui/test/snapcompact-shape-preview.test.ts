@@ -59,20 +59,17 @@ describe("snapcompact shape preview", () => {
 		const cursor = preview(CURSOR_CLAUDE);
 		const auto = await show(cursor, "auto");
 		// 11on16 at Cursor's 1024px edge: 1024/11 × 1024/16 cells, (1024/28)² tokens.
-		expect(auto.caption).toContain("auto → 11on16-bw");
-		expect(auto.caption).toContain("93×64");
-		expect(auto.caption).toContain("1.4k");
+		expect(auto.caption).toContain("· auto → 11on16-bw · full frame 93×64 cells");
+		expect(auto.caption).toContain("≈ 1.4k tokens");
 		for (const variant of ["11on16-bw", "silver16-bw", "8on22-bw", "5x8-bw", "doc-8on16-bw"]) {
-			expect((await show(cursor, variant)).caption).toContain(variant);
+			expect((await show(cursor, variant)).caption).toContain(`· ${variant} · full frame`);
 		}
-		expect((await show(cursor, "silver16-bw")).caption).toContain("64×64");
+		expect((await show(cursor, "silver16-bw")).caption).toContain("full frame 64×64 cells");
 	});
 
 	it("names auto's geometry on a model line that widens the frame", async () => {
 		const opus = preview({ provider: "anthropic", api: "anthropic-messages", id: "claude-opus-5" });
-		const { caption } = await show(opus, "auto");
-		expect(caption).toContain("auto → 11on16-bw");
-		expect(caption).toContain("175×120");
+		expect((await show(opus, "auto")).caption).toContain("· auto → 11on16-bw · full frame 175×120 cells");
 	});
 
 	it("renders a separate sample for each variant", async () => {

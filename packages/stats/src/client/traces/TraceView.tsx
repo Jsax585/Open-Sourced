@@ -4,7 +4,6 @@
  * Owns the shared viewport/selection state so all pieces stay in sync.
  */
 
-import { t } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getSessionTrace } from "../api";
@@ -27,17 +26,17 @@ export interface TraceViewProps {
 }
 
 const MODE_OPTIONS: Array<{ value: AxisMode; label: string; title?: string }> = [
-	{ value: "time", label: t("Duration"), title: t("Real wall-clock time") },
-	{ value: "turns", label: t("Turns"), title: t("Equal width per user turn") },
-	{ value: "calls", label: t("Calls"), title: t("Equal width per model/tool call boundary") },
+	{ value: "time", label: "Duration", title: "Real wall-clock time" },
+	{ value: "turns", label: "Turns", title: "Equal width per user turn" },
+	{ value: "calls", label: "Calls", title: "Equal width per model/tool call boundary" },
 ];
 
 const LEGEND: Array<{ kind: TraceSpanKind; label: string }> = [
-	{ kind: "turn", label: t("Input") },
-	{ kind: "model", label: t("Model") },
-	{ kind: "tool", label: t("Tool") },
-	{ kind: "subagent", label: t("Agent") },
-	{ kind: "background", label: t("Background") },
+	{ kind: "turn", label: "Input" },
+	{ kind: "model", label: "Model" },
+	{ kind: "tool", label: "Tool" },
+	{ kind: "subagent", label: "Agent" },
+	{ kind: "background", label: "Background" },
 ];
 
 export function TraceView({ file, active, onBack }: TraceViewProps) {
@@ -228,7 +227,9 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 		<div className="stack traces-view">
 			<div>
 				<button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={onBack}>
-					<ArrowLeft size={14} aria-hidden="true" />{t("Sessions")}</button>
+					<ArrowLeft size={14} aria-hidden="true" />
+					Sessions
+				</button>
 			</div>
 			<PageHeader
 				title={<span className="traces-title truncate">{trace?.title ?? file.split("/").pop()}</span>}
@@ -240,8 +241,8 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 						data-variant="ghost"
 						data-icon="true"
 						onClick={query.refetch}
-						aria-label={t("Refresh trace")}
-						title={t("Refresh trace")}
+						aria-label="Refresh trace"
+						title="Refresh trace"
 					>
 						<RefreshCw size={14} className={query.refreshing ? "traces-spin" : undefined} />
 					</button>
@@ -255,8 +256,8 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 
 						<Card
 							index={1}
-							title={t("Timeline")}
-							description={t("W/S zoom · A/D pan · drag pan · wheel zoom · 0 fit · F focus selection · dbl-click focus · Esc deselect")}
+							title="Timeline"
+							description="W/S zoom · A/D pan · drag pan · wheel zoom · 0 fit · F focus selection · dbl-click focus · Esc deselect"
 							actions={
 								<>
 									<button
@@ -287,7 +288,7 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 										value={mode}
 										onChange={setMode}
 										size="sm"
-										aria-label={t("Axis mode")}
+										aria-label="Axis mode"
 									/>
 									{mode === "time" && (
 										<label className="traces-check">
@@ -306,7 +307,7 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 												setSearch(value);
 												setMatchIndex(0);
 											}}
-											placeholder={t("Search spans…")}
+											placeholder="Search spans…"
 											width={200}
 										/>
 										{search.trim() && (
@@ -323,7 +324,7 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 													data-size="sm"
 													data-icon="true"
 													onClick={() => cycleMatch(-1)}
-													aria-label={t("Previous match")}
+													aria-label="Previous match"
 													disabled={matches.length === 0}
 												>
 													<ChevronLeft size={14} />
@@ -335,7 +336,7 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 													data-size="sm"
 													data-icon="true"
 													onClick={() => cycleMatch(1)}
-													aria-label={t("Next match")}
+													aria-label="Next match"
 													disabled={matches.length === 0}
 												>
 													<ChevronRight size={14} />
@@ -378,8 +379,8 @@ export function TraceView({ file, active, onBack }: TraceViewProps) {
 
 						<Card
 							index={2}
-							title={t("Transcript")}
-							description={t("Every span and marker in order; click to inspect")}
+							title="Transcript"
+							description="Every span and marker in order; click to inspect"
 							flush
 						>
 							<TranscriptList

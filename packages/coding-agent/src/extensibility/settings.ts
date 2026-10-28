@@ -2,7 +2,6 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { combine, register, type SettingValueOf } from "../config/registry";
 import { DEFAULT_SKILLS_URL } from "@oh-my-pi/pi-wire/skillshare";
 
@@ -20,9 +19,9 @@ export const cfgSkillsRegistryUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Skills",
-		label: t("Skill Registry"),
+		label: "Skill Registry",
 		description:
-			t("Skillshare registry used by `omp skill` to install, search, and publish skills (https://host[:port])"),
+			"Skillshare registry used by `omp skill` to install, search, and publish skills (https://host[:port])",
 	},
 });
 
@@ -36,8 +35,8 @@ export const cfgSkillsEnableSkillCommands = register({
 	ui: {
 		tab: "tasks",
 		group: "Commands & Skills",
-		label: t("Skill Commands"),
-		description: t("Register skills as /skill:name commands"),
+		label: "Skill Commands",
+		description: "Register skills as /skill:name commands",
 	},
 });
 
@@ -108,8 +107,8 @@ export const cfgCommandsEnableClaudeUser = register({
 	ui: {
 		tab: "tasks",
 		group: "Commands & Skills",
-		label: t("Claude User Commands"),
-		description: t("Load commands from ~/.claude/commands/"),
+		label: "Claude User Commands",
+		description: "Load commands from ~/.claude/commands/",
 	},
 });
 
@@ -120,8 +119,8 @@ export const cfgCommandsEnableClaudeProject = register({
 	ui: {
 		tab: "tasks",
 		group: "Commands & Skills",
-		label: t("Claude Project Commands"),
-		description: t("Load commands from .claude/commands/"),
+		label: "Claude Project Commands",
+		description: "Load commands from .claude/commands/",
 	},
 });
 
@@ -132,8 +131,8 @@ export const cfgCommandsEnableOpencodeUser = register({
 	ui: {
 		tab: "tasks",
 		group: "Commands & Skills",
-		label: t("OpenCode User Commands"),
-		description: t("Load commands from ~/.config/opencode/commands/"),
+		label: "OpenCode User Commands",
+		description: "Load commands from ~/.config/opencode/commands/",
 	},
 });
 
@@ -144,8 +143,8 @@ export const cfgCommandsEnableOpencodeProject = register({
 	ui: {
 		tab: "tasks",
 		group: "Commands & Skills",
-		label: t("OpenCode Project Commands"),
-		description: t("Load commands from .opencode/commands/"),
+		label: "OpenCode Project Commands",
+		description: "Load commands from .opencode/commands/",
 	},
 });
 
@@ -156,8 +155,21 @@ export const cfgExtensionHandlersToolCallTimeoutMs = register({
 	ui: {
 		tab: "tools",
 		group: "Extensions",
-		label: t("Tool Call Handler Timeout (ms)"),
+		label: "Tool Call Handler Timeout (ms)",
 		description:
-			t("Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting OMP-owned dialogs does not count"),
+			"Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting OMP-owned dialogs does not count",
+	},
+});
+
+export const cfgExtensionHandlersModeControl = register({
+	id: "extensionHandlers.modeControl",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Extensions",
+		label: "Extension Mode Control",
+		description:
+			"Let extensions enter and exit plan, vibe, goal, and loop modes via ctx.sessionModes.set(); reading mode state stays available",
 	},
 });

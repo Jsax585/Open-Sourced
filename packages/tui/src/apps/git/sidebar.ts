@@ -10,7 +10,6 @@
  * lines and forwards key/mouse input. Every rendered frame records a hit
  * target per row so mouse clicks resolve against what is actually visible.
  */
-import { t } from "@oh-my-pi/pi-utils/i18n";
 import { Editor } from "../../components/editor";
 import { FormField, type FormFieldTheme, TextFormField } from "../../components/form";
 import { Image, type ImageBudget } from "../../components/image";
@@ -1103,8 +1102,8 @@ export class Sidebar {
 			"tabs",
 			{
 				items: [
-					{ id: "path", label: t("Path") },
-					{ id: "tree", label: t("Tree") },
+					{ id: "path", label: "Path" },
+					{ id: "tree", label: "Tree" },
 				],
 				active: this.viewStyle,
 				role: "omp.app.seg",
@@ -1127,30 +1126,30 @@ export class Sidebar {
 		const actions: NativeNode[] =
 			area === "unstaged"
 				? [
-						quietButton(t("Stage all"), "stage-all", t("Stage every change (space on the head)")),
+						quietButton("Stage all", "stage-all", "Stage every change (space on the head)"),
 						node(
 							"icon",
 							{
 								name: "wand",
 								role: "omp.app.ibtn",
-								title: t("Stage by description…"),
-								aria: t("Stage by description"),
+								title: "Stage by description…",
+								aria: "Stage by description",
 								actions: { click: "stage-ai" },
 							},
 							undefined,
 							"ai",
 						),
 					]
-				: [quietButton(t("Unstage all"), "unstage-all", t("Unstage every change (space on the head)"))];
+				: [quietButton("Unstage all", "unstage-all", "Unstage every change (space on the head)")];
 		const head = row(
 			[
 				row(
 					[
 						node("icon", { name: folded ? "chev-r" : "chev" }),
-						text(area === "unstaged" ? t("Unstaged") : t("Staged")),
+						text(area === "unstaged" ? "Unstaged" : "Staged"),
 						text([span(String(files.length), "num")], { role: "omp.app.git.count" }),
 					],
-					{ gap: "xs", align: "center", actions: { click: `fold-${area}` }, title: folded ? t("Show") : t("Hide") },
+					{ gap: "xs", align: "center", actions: { click: `fold-${area}` }, title: folded ? "Show" : "Hide" },
 				),
 				row(files.length > 0 ? actions : [], { gap: "xs", align: "center", role: "omp.app.git.acts" }),
 			],
@@ -1168,10 +1167,10 @@ export class Sidebar {
 					aiInput
 						? node("input", {
 								...inputProps(aiInput),
-								placeholder: t("What should we stage?"),
+								placeholder: "What should we stage?",
 								role: "omp.app.git.field.on",
 							})
-						: fieldText(this.aiInput.getValue(), t("What should we stage?"), "edit-ai", on(target)),
+						: fieldText(this.aiInput.getValue(), "What should we stage?", "edit-ai", on(target)),
 					"ai",
 				),
 			);
@@ -1184,7 +1183,7 @@ export class Sidebar {
 					entries.map(entry => this.#describeEntry(entry)),
 					{
 						selected: selected ? this.#nativeKey(selected.target) : null,
-						empty: area === "unstaged" ? t("Nothing to stage") : t("Nothing staged yet"),
+						empty: area === "unstaged" ? "Nothing to stage" : "Nothing staged yet",
 						role: "omp.app.git.files",
 						actions: { click: "select", dblclick: "activate" },
 					},
@@ -1218,7 +1217,7 @@ export class Sidebar {
 		if (file.deletions) stats.push(span(`${stats.length > 0 ? " " : ""}−${file.deletions}`, "del num"));
 		return item(key, {
 			label,
-			detail: file.origPath ? [span(t("from {0}\u0004packages/tui/src/apps/git/sidebar.ts:Sidebar.#describeEntry.detail", `${file.origPath}`), "dim")] : undefined,
+			detail: file.origPath ? [span(`from ${file.origPath}`, "dim")] : undefined,
 			value: stats.length > 0 ? stats : undefined,
 			hint: [KIND_LETTER[file.kind]],
 			tone: KIND_COLOR[file.kind],
@@ -1243,22 +1242,22 @@ export class Sidebar {
 		const summaryField = summaryInput
 			? row(
 					[
-						node("input", { ...inputProps(summaryInput), placeholder: t("Summary"), grow: 1 }),
+						node("input", { ...inputProps(summaryInput), placeholder: "Summary", grow: 1 }),
 						text([span(String(left), left < 0 ? "warning num" : "num")], { role: "omp.app.git.count" }),
 					],
 					{ gap: "sm", align: "center", role: "omp.app.git.summary.on" },
 				)
-			: fieldText(summary, t("Summary"), "edit-summary", on({ kind: "summary" }), "omp.app.git.summary");
+			: fieldText(summary, "Summary", "edit-summary", on({ kind: "summary" }), "omp.app.git.summary");
 		const bodyField = descriptionEditor
 			? node("editor", {
 					...editorProps(descriptionEditor),
-					placeholder: t("Description"),
+					placeholder: "Description",
 					maxLines: 5,
 					role: "omp.app.git.body.on",
 				})
 			: fieldText(
 					description.split("\n", 1)[0] + (description.includes("\n") ? " …" : ""),
-					t("Description"),
+					"Description",
 					"edit-description",
 					on({ kind: "description" }),
 					"omp.app.git.body",
@@ -1267,12 +1266,12 @@ export class Sidebar {
 		const canCommit =
 			hasChanges && !this.generating && (summary.trim().length > 0 || description.trim().length === 0);
 		const label = this.generating
-			? t("Generating message…")
+			? "Generating message…"
 			: summary.trim().length === 0 && description.trim().length === 0
-				? t("Generate message")
+				? "Generate message"
 				: this.#model.staged.length > 0
-					? t("Commit")
-					: t("Stage all & commit");
+					? "Commit"
+					: "Stage all & commit";
 		// The panels' button (omp-panels.css `omp.btn`): accent while the keyboard is on it, muted when it can't run.
 		const commitTone = !canCommit ? "muted" : on({ kind: "commit-button" }) ? "accent" : undefined;
 		return col(
@@ -1282,12 +1281,12 @@ export class Sidebar {
 				keyed(
 					row(
 						[
-							row([node("icon", { name: this.amend ? "check" : "commit" }), text(t("Amend"))], {
+							row([node("icon", { name: this.amend ? "check" : "commit" }), text("Amend")], {
 								gap: "xs",
 								align: "center",
 								role: `omp.app.git.toggle${this.amend ? ".set" : ""}${on({ kind: "amend" }) ? ".on" : ""}`,
 								actions: { click: "amend" },
-								title: t("Amend the previous commit"),
+								title: "Amend the previous commit",
 							}),
 							row(compact([this.generating && node("spinner", { style: "dots" }), text(label)]), {
 								gap: "xs",
@@ -1297,8 +1296,8 @@ export class Sidebar {
 								actions: canCommit ? { click: "commit" } : undefined,
 								title:
 									this.#model.staged.length > 0
-										? t("Commit the staged changes")
-										: t("Stage everything, then commit"),
+										? "Commit the staged changes"
+										: "Stage everything, then commit",
 							}),
 						],
 						{ justify: "between", align: "center", role: "omp.app.git.foot" },
@@ -1314,7 +1313,7 @@ export class Sidebar {
 	#describeHead(selectedKey: string | undefined): NativeChild[] {
 		const head = this.#model.headCommit;
 		if (!head) {
-			return [keyed(text([span(t("No commits yet"), "muted")], { role: "omp.app.git.empty" }), "empty")];
+			return [keyed(text([span("No commits yet", "muted")], { role: "omp.app.git.empty" }), "empty")];
 		}
 		const when = head.authorDate ? new Date(head.authorDate) : null;
 		const initials = head.authorName
@@ -1342,10 +1341,10 @@ export class Sidebar {
 				),
 				node("kv", {
 					items: compact([
-						when && !Number.isNaN(when.getTime()) ? { k: t("authored"), v: when.toLocaleString() } : undefined,
+						when && !Number.isNaN(when.getTime()) ? { k: "authored", v: when.toLocaleString() } : undefined,
 						head.parents.length > 0
 							? {
-									k: t("parent"),
+									k: head.parents.length === 1 ? "parent" : "parents",
 									v: [span(head.parents.map(sha => sha.slice(0, 8)).join(" "), "mono accent")],
 								}
 							: undefined,
@@ -1357,7 +1356,7 @@ export class Sidebar {
 		);
 		const out: NativeChild[] = [keyed(commit, "head")];
 		if (!head.filesLoaded) {
-			out.push(keyed(text([span(t("Loading changed files…"), "muted")]), "loading"));
+			out.push(keyed(text([span("Loading changed files…", "muted")]), "loading"));
 			return out;
 		}
 		const additions = head.files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
@@ -1483,8 +1482,8 @@ export class Sidebar {
 	/** Centered `Path | Tree` toggle row with column-scoped hit targets. */
 	#viewToggleRow(width: number): Row {
 		const nerd = theme.getSymbolPreset() === "nerd";
-		const pathPill = softPill(t(" {0} Path ", `${nerd ? "" : "☰"}`), { active: this.viewStyle === "path" });
-		const treePill = softPill(t(" {0} Tree ", `${nerd ? "" : "└"}`), { active: this.viewStyle === "tree" });
+		const pathPill = softPill(` ${nerd ? "" : "☰"} Path `, { active: this.viewStyle === "path" });
+		const treePill = softPill(` ${nerd ? "" : "└"} Tree `, { active: this.viewStyle === "tree" });
 		const total = visibleWidth(pathPill) + 1 + visibleWidth(treePill);
 		const left = Math.max(1, Math.floor((width - total) / 2));
 		return {
@@ -1522,7 +1521,7 @@ export class Sidebar {
 	#changesHeaderRows(width: number): Row[] {
 		const total = this.#model.unstaged.length + this.#model.staged.length;
 		const branch = this.#model.branch ? tintChip(` ${this.#model.branch} `, theme.getColorHex("accent")) : "";
-		const label = theme.bold(t("{0} file change{1} on ", `${total}`, `${total === 1 ? "" : "s"}`));
+		const label = theme.bold(`${total} file change${total === 1 ? "" : "s"} on `);
 		return [
 			{ text: ` ${label}${branch}` },
 			this.#viewToggleRow(width),
@@ -1537,9 +1536,9 @@ export class Sidebar {
 		const wand = theme.getSymbolPreset() === "nerd" ? "" : "✦";
 		rows.push(
 			sectionHeaderRow(
-				t("{0} Unstaged Files ({1})", `${unstagedFolded ? "▸" : "▾"}`, `${this.#model.unstaged.length}`),
+				`${unstagedFolded ? "▸" : "▾"} Unstaged Files (${this.#model.unstaged.length})`,
 				[
-					{ action: t("Stage All"), target: { kind: "stage-all" } },
+					{ action: "Stage All", target: { kind: "stage-all" } },
 					{ action: wand, target: { kind: "stage-ai" } },
 				],
 				unstaged,
@@ -1551,15 +1550,15 @@ export class Sidebar {
 		if (this.#aiPromptOpen) rows.push(this.#aiPromptRow(width, isSelected));
 		if (!unstagedFolded) {
 			rows.push(...this.#entryRows(this.#model.unstaged, "unstaged"));
-			if (this.#model.unstaged.length === 0) rows.push({ text: theme.fg("dim", t("   no unstaged files")) });
+			if (this.#model.unstaged.length === 0) rows.push({ text: theme.fg("dim", "   no unstaged files") });
 		}
 		rows.push({ text: "" });
 		const staged: SectionTarget = { kind: "section", area: "staged" };
 		const stagedFolded = this.#collapsedSections.has("staged");
 		rows.push(
 			sectionHeaderRow(
-				t("{0} Staged Files ({1})", `${stagedFolded ? "▸" : "▾"}`, `${this.#model.staged.length}`),
-				[{ action: t("Unstage All"), target: { kind: "unstage-all" } }],
+				`${stagedFolded ? "▸" : "▾"} Staged Files (${this.#model.staged.length})`,
+				[{ action: "Unstage All", target: { kind: "unstage-all" } }],
 				staged,
 				width,
 				isSelected(staged),
@@ -1568,7 +1567,7 @@ export class Sidebar {
 		);
 		if (!stagedFolded) {
 			rows.push(...this.#entryRows(this.#model.staged, "staged"));
-			if (this.#model.staged.length === 0) rows.push({ text: theme.fg("dim", t("   no staged files")) });
+			if (this.#model.staged.length === 0) rows.push({ text: theme.fg("dim", "   no staged files") });
 		}
 		return rows;
 	}
@@ -1578,7 +1577,7 @@ export class Sidebar {
 		const bar = isSelected(target) ? theme.fg("accent", "▎") : theme.fg("borderMuted", "▏");
 		const line =
 			this.aiInput.getValue().length === 0 && !this.aiInput.focused
-				? theme.fg("dim", t("What should we stage?"))
+				? theme.fg("dim", "What should we stage?")
 				: (this.aiInput.render(width - 4)[0] ?? "");
 		return { text: ` ${bar}${line}`, target };
 	}
@@ -1589,7 +1588,7 @@ export class Sidebar {
 
 		const amendTarget: Target = { kind: "amend" };
 		const amendBox = this.amend ? theme.fg("accent", "▣") : theme.fg("muted", "☐");
-		const amendLine = t(" {0} Amend previous commit", `${amendBox}`);
+		const amendLine = ` ${amendBox} Amend previous commit`;
 		rows.push({
 			text: isSelected(amendTarget) && this.focused ? `${withBg(amendLine, selectionBgAnsi())}\x1b[0m` : amendLine,
 			target: amendTarget,
@@ -1598,7 +1597,7 @@ export class Sidebar {
 		const summaryTarget: Target = { kind: "summary" };
 		const summaryLen = this.summary.getValue().length;
 		const counter = theme.fg(summaryLen > SUMMARY_LIMIT ? "warning" : "dim", String(SUMMARY_LIMIT - summaryLen));
-		const summaryLabel = theme.fg("muted", t("Commit summary"));
+		const summaryLabel = theme.fg("muted", "Commit summary");
 		rows.push({
 			text: ` ${summaryLabel}${" ".repeat(Math.max(1, width - 2 - visibleWidth(summaryLabel) - visibleWidth(counter)))}${counter}`,
 		});
@@ -1610,7 +1609,7 @@ export class Sidebar {
 		const descriptionLines = this.#descriptionField.render(width - 4);
 		const descriptionBar = isSelected(descriptionTarget) ? theme.fg("accent", "▎") : theme.fg("borderMuted", "▏");
 		if (this.description.getText().length === 0 && !this.#descriptionField.focused) {
-			rows.push({ text: ` ${descriptionBar}${theme.fg("dim", t("Description"))}`, target: descriptionTarget });
+			rows.push({ text: ` ${descriptionBar}${theme.fg("dim", "Description")}`, target: descriptionTarget });
 		} else {
 			for (const line of descriptionLines.length > 0 ? descriptionLines : [""]) {
 				rows.push({ text: ` ${descriptionBar}${line}`, target: descriptionTarget });
@@ -1624,10 +1623,10 @@ export class Sidebar {
 		const description = this.description.getText().trim();
 		const canActivate = hasChanges && !this.generating && (summary.length > 0 || description.length === 0);
 		const label = this.generating
-			? t("-○- Generating commit message")
+			? "-○- Generating commit message"
 			: this.#model.staged.length > 0
-				? t("-○- Commit staged changes")
-				: t("-○- Stage all & commit");
+				? "-○- Commit staged changes"
+				: "-○- Stage all & commit";
 		const pad = Math.max(0, Math.floor((width - 4 - visibleWidth(label)) / 2));
 		const inner = `${" ".repeat(pad)}${label}${" ".repeat(pad)}`;
 		const button = pill(inner, theme.getColorHex("accent"), {
@@ -1642,7 +1641,7 @@ export class Sidebar {
 		const rows: Row[] = [];
 		const head = this.#model.headCommit;
 		if (!head) {
-			rows.push({ text: "" }, { text: theme.fg("dim", t(" No commits yet")) });
+			rows.push({ text: "" }, { text: theme.fg("dim", " No commits yet") });
 			return rows;
 		}
 		for (const line of Bun.wrapAnsi(theme.bold(head.subject), width - 2).split("\n")) {
@@ -1661,27 +1660,27 @@ export class Sidebar {
 		rows.push({ text: ` ${theme.bold(head.authorName)} ${theme.fg("dim", `<${head.authorEmail}>`)}` });
 		const when = head.authorDate ? new Date(head.authorDate) : null;
 		if (when && !Number.isNaN(when.getTime())) {
-			rows.push({ text: theme.fg("dim", t(" authored {0}", `${when.toLocaleString()}`)) });
+			rows.push({ text: theme.fg("dim", ` authored ${when.toLocaleString()}`) });
 		}
 		if (head.parents.length > 0) {
 			rows.push({
-				text: ` ${theme.fg("dim", t("parent:"))} ${theme.fg("accent", head.parents.map(sha => sha.slice(0, 8)).join(" "))}`,
+				text: ` ${theme.fg("dim", "parent:")} ${theme.fg("accent", head.parents.map(sha => sha.slice(0, 8)).join(" "))}`,
 			});
 		}
 		// This view only appears when there is nothing to stage or discard, so say so
 		// rather than letting the file list read as pending work.
-		rows.push({ text: theme.fg("success", t(" Working tree clean — showing committed {0}", `${head.shortSha}`)) });
+		rows.push({ text: theme.fg("success", ` Working tree clean — showing committed ${head.shortSha}`) });
 		rows.push({ text: theme.fg("borderMuted", "─".repeat(Math.max(0, width))) });
 		if (!head.filesLoaded) {
-			rows.push({ text: theme.fg("dim", t(" Loading changed files…")) });
+			rows.push({ text: theme.fg("dim", " Loading changed files…") });
 			return rows;
 		}
 
 		const additions = head.files.reduce((sum, file) => sum + (file.additions ?? 0), 0);
 		const deletions = head.files.reduce((sum, file) => sum + (file.deletions ?? 0), 0);
-		const count = t("{0} file{1}", `${head.files.length}`, `${head.files.length === 1 ? "" : "s"}`);
+		const count = `${head.files.length} file${head.files.length === 1 ? "" : "s"}`;
 		rows.push({
-			text: ` ${theme.bold(count)} ${theme.fg("dim", t("in {0}\u0004packages/tui/src/apps/git/sidebar.ts:Sidebar.#commitViewRows.text", `${head.shortSha}`))}  ${theme.fg("success", `+${additions}`)} ${theme.fg("error", `−${deletions}`)}`,
+			text: ` ${theme.bold(count)} ${theme.fg("dim", `in ${head.shortSha}`)}  ${theme.fg("success", `+${additions}`)} ${theme.fg("error", `−${deletions}`)}`,
 		});
 		rows.push(this.#viewToggleRow(width));
 		rows.push(...this.#entryRows(head.files, "commit"));

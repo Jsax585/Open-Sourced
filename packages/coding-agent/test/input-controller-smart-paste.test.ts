@@ -43,6 +43,7 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("Unsupported clipboard image format: image/tiff");
 	});
 
 	it("starts the text read without waiting for the image read", async () => {
@@ -111,6 +112,7 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("Clipboard is empty");
 	});
 
 	it("surfaces a read failure without pasting", async () => {
@@ -126,6 +128,7 @@ describe("InputController.handleImagePaste smart-paste fallback", () => {
 
 		expect(result).toBe(false);
 		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("Failed to read clipboard");
 	});
 });
 
@@ -153,5 +156,24 @@ describe("InputController.handleClipboardTextRawPaste", () => {
 		await controller.handleClipboardTextRawPaste();
 
 		expect(spies.insertText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledWith("No text in clipboard to paste raw");
+	});
+});
+
+describe("InputController paste over SSH", () => {
+	it("never pastes the SSH host's clipboard when the terminal forwards the paste key", async () => {
+		const { ctx, spies } = createContext();
+		const readImage = vi.fn(async () => null);
+		const readText = vi.fn(async () => "server clipboard");
+		const controller = new InputController(ctx, { readImage, readText, isTerminalLocal: () => false });
+
+		expect(await controller.handleImagePaste()).toBe(false);
+		await controller.handleClipboardTextRawPaste();
+
+		expect(readImage).not.toHaveBeenCalled();
+		expect(readText).not.toHaveBeenCalled();
+		expect(spies.pasteText).not.toHaveBeenCalled();
+		expect(spies.insertText).not.toHaveBeenCalled();
+		expect(spies.showStatus).toHaveBeenCalledTimes(2);
 	});
 });
