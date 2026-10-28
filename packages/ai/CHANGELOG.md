@@ -5,6 +5,14 @@
 ### Fixed
 
 - Discovered Anthropic routes without advertised thinking controls no longer convert stale effort selections into client-inferred budgets, while mandatory native thinking defaults remain intact ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+- Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+- Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+
+## [18.13.3] - 2026-10-28
+
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
 
 ## [18.13.2] - 2026-10-27
 
