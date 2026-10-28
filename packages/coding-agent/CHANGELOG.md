@@ -4,12 +4,20 @@
 
 ### Added
 
+- Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
+- Set `PI_LINK_SCHEME` (and optionally `PI_LINK_HOST`) to make file links in SSH/tmux sessions open through a desktop protocol handler such as `ompfile://<host>/<path>?line=N&col=M` ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu))
 - Added per-call `model` role selectors and candidate lists: a task item or eval `agent()`/`workpool()` can name a configured chat role (`@review`, `@review:high`) or an ordered array of exact ids and roles, tried in order at spawn and skipping candidates that are unavailable or lack credentials. Role expansion uses grant-authority settings and spawn-time preferences; every expanded candidate is checked, including unconditional refusal of Factory server-side fallback models. Cold revival restores the saved exact identity and effort rather than re-resolving the role. `task.perCallModelAllow` also accepts configured `@role` entries and provider-scoped globs (only `*`/`?`, brackets literal); exact entries stay literal and the list only narrows grants. Enabled tool descriptions advertise usable `@role` selectors ([#16793](https://github.com/can1357/oh-my-pi/pull/16793) by [@Xytronix](https://github.com/Xytronix))
 - Added `task.perCallModel` (`off` by default, `eval`, `on`): task items and eval `agent()`/`workpool()` can select one exact `provider/model-id[@upstream][:level]`, limited to configured chat-role values, the selected bundled or user-level agent's own frontmatter while it is still discovered and not disabled, or the parent's live model; `task.perCallModelAllow` narrows those grants to exact models. Per-call workers recheck approval on every main-loop request and cold revival, disable retry fallback, context promotion and prewalk, and refuse Factory models with attached server-side fallback chains. `task.maxEffort` caps the requested effort, though an endpoint's effort-negotiation retry may round to its nearest supported tier ([#12229](https://github.com/can1357/oh-my-pi/pull/12229) by [@Xytronix](https://github.com/Xytronix))
 
 ### Changed
 
 - A task call, eval `agent()` or `workpool()` that passes `model` while `task.perCallModel` does not allow it now fails with an error instead of having `model` silently dropped ([#12229](https://github.com/can1357/oh-my-pi/pull/12229) by [@Xytronix](https://github.com/Xytronix))
+
+### Fixed
+
+- Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
+- A failed Hindsight memory recall (for example `recall request timed out after 30s`) now shows a warning instead of silently sending the prompt without memories; `omp -p` writes it, and Hindsight retain failures, to stderr ([#17278](https://github.com/can1357/oh-my-pi/pull/17278) by [@enieuwy](https://github.com/enieuwy))
+- Fixed cancelling an MCP OAuth login or `/mcp` auth lookup at the wrong moment crashing the session with an unhandled rejection ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.3] - 2026-10-28
 
