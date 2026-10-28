@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the TSP `json` kind (`TspJsonProps`: a raw JSON `value` and `open`, the container levels expanded below the top-level entries), which the terminal draws as an interactive tree
+- Added `TspEditorProps.typeahead`: a program that cannot read input yet asks the terminal to keep what is typed into the field, draw it at the caret and send it once the prop clears
+
+## [18.13.3] - 2026-10-28
+
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
+### Removed
+
+- Removed `TspPalette` definition and `t` verb from the protocol specification
+
+## [18.12.3] - 2026-10-19
+
+### Added
+
+- Added `min`, `max` and dashed reference `marks` to bars/spark `chart` nodes, a `tone` per series column, and the common `hovercard` prop: a node tree Tern floats over the node while the pointer rests on it
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added `TspPickerMark.icon`: an icon a picker mark draws instead of its initials when the terminal has it (`provider:<id>` names a model provider's logo)
+
+## [18.8.8] - 2026-10-10
+
+### Added
+
+- Added `TspToolProps.command` (the command line Copy command copies), `TspToolProps.preview: "children"` (the collapsed body stays whole while its children clamp) and `TspCodeProps.preview`
+
 ## [18.8.0] - 2026-10-07
 
 ### Changed

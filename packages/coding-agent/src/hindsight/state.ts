@@ -1,4 +1,5 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
+import { findPersistedRecall, persistRecall } from "../memory-backend/recall-entry";
 import type { MemoryPromptPreparation } from "../memory-backend/types";
 import type { AgentSession } from "../session/agent-session";
 import { type BankScope, ensureBankExists } from "./bank";
@@ -19,6 +20,14 @@ import {
 	tryLoadMentalModelsBlock,
 } from "./mental-models";
 import { countUserTurns, extractMessages } from "./transcript";
+
+/** `notice` source of Hindsight recall/retain failures; print mode writes these to stderr. */
+export const HINDSIGHT_NOTICE_SOURCE = "Hindsight";
+
+/** Error text for a failure notice: it can carry server response text, so strip terminal controls and bound it. */
+function noticeErrorText(errorText: string): string {
+	return truncate(sanitizeText(errorText).replace(/\s+/g, " ").trim(), 200);
+}
 
 const RETAIN_FLUSH_BATCH_SIZE = 16;
 const RETAIN_FLUSH_INTERVAL_MS = 5_000;
@@ -182,8 +191,8 @@ export class HindsightRetainQueue {
 		const noun = count === 1 ? "memory" : "memories";
 		this.#state.session.emitNotice(
 			"warning",
-			`Memory retention failed for ${count} ${noun}: ${errorText}`,
-			"Hindsight",
+			`Memory retention failed for ${count} ${noun}: ${noticeErrorText(errorText)}`,
+			HINDSIGHT_NOTICE_SOURCE,
 		);
 	}
 }
@@ -292,6 +301,7 @@ export class HindsightSessionState {
 	}
 
 	async recallForContext(query: string, signal?: AbortSignal): Promise<RecallOutcome> {
+		const generation = this.#recallGeneration;
 		try {
 			const response = await this.client.recall(this.bankId, query, {
 				budget: this.config.recallBudget,
@@ -308,8 +318,17 @@ export class HindsightSessionState {
 			const block = `<memories>\n${this.config.recallPromptPreamble}\n\n${formatted}\n</memories>`;
 			return { context: block, ok: true };
 		} catch (err) {
-			if (this.config.debug) {
-				logger.debug("Hindsight: recall failed", { bankId: this.bankId, error: String(err) });
+			// A cancelled turn (Esc) is not a failure.
+			if (signal?.aborted) return { context: null, ok: false };
+			const errorText = err instanceof Error ? err.message : String(err);
+			logger.warn("Hindsight: recall failed", { bankId: this.bankId, error: errorText });
+			// A conversation reset or session switch since the request makes its failure stale.
+			if (this.#recallGeneration === generation) {
+				this.session.emitNotice(
+					"warning",
+					`Memory recall failed: ${noticeErrorText(errorText)}`,
+					HINDSIGHT_NOTICE_SOURCE,
+				);
 			}
 			return { context: null, ok: false };
 		}
@@ -444,6 +463,15 @@ export class HindsightSessionState {
 		const latestPrompt = promptText.trim();
 		if (!latestPrompt) return undefined;
 		const generation = ++this.#recallGeneration;
+		// Reuse this transcript's recall so a resumed session sends the same prompt. Hindsight
+		// memories cannot be looked up by id, so changes since are not reported.
+		const persisted = findPersistedRecall(this.session.sessionManager, this.#recallScope());
+		if (persisted !== undefined) {
+			return {
+				context: persisted.text || undefined,
+				commit: () => this.#commitRecall(generation, persisted.text, false),
+			};
+		}
 
 		const history = extractMessages(this.session.sessionManager);
 		const queryMessages = [...history, { role: "user" as const, content: latestPrompt }];
@@ -454,22 +482,41 @@ export class HindsightSessionState {
 
 		return {
 			context: context ?? undefined,
-			commit: () => {
-				if (this.#recallGeneration !== generation) return false;
-				this.hasRecalledForFirstTurn = true;
-				if (context) this.lastRecallSnippet = context;
-				return true;
-			},
+			commit: () => this.#commitRecall(generation, context ?? "", true),
 		};
 	}
 
-	async recallForCompaction(messages: HindsightMessage[]): Promise<string | undefined> {
+	/** Adopts a first-turn recall unless a newer turn or reset superseded it; `""` means it found nothing. */
+	#commitRecall(generation: number, context: string, persist: boolean): boolean {
+		if (this.#recallGeneration !== generation) return false;
+		this.hasRecalledForFirstTurn = true;
+		if (context) this.lastRecallSnippet = context;
+		if (persist) persistRecall(this.session.sessionManager, this.#recallScope(), { text: context, memories: [] });
+		return true;
+	}
+
+	/**
+	 * Identifies the server, account, bank and tag filter a recall reads, so a persisted
+	 * recall is only reused for the same ones. The account is a hash of the API token.
+	 */
+	#recallScope(): string {
+		return JSON.stringify([
+			"hindsight",
+			this.config.hindsightApiUrl,
+			Bun.hash(this.config.hindsightApiToken ?? "").toString(16),
+			this.bankId,
+			this.recallTags ?? [],
+			this.recallTagsMatch ?? null,
+		]);
+	}
+
+	async recallForCompaction(messages: HindsightMessage[], signal?: AbortSignal): Promise<string | undefined> {
 		const lastUser = messages.findLast(m => m.role === "user");
 		if (!lastUser) return undefined;
 
 		const query = composeRecallQuery(lastUser.content, messages, this.config.recallContextTurns);
 		const truncated = truncateRecallQuery(query, lastUser.content, this.config.recallMaxQueryChars);
-		const { context } = await this.recallForContext(truncated);
+		const { context } = await this.recallForContext(truncated, signal);
 		return context ?? undefined;
 	}
 
