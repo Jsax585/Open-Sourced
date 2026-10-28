@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `freeformText` to the generated Cursor `AskQuestionSuccess_Answer`, carrying typed "Other" answers ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
 
-- Added `freeformText` to the generated Cursor `AskQuestionSuccess_Answer`, carrying typed "Other" answers ([#16497](https://github.com/can1357/oh-my-pi/pull/16497) by [@morali](https://github.com/morali))
 - Added DeepSeek V4.1 Flash 1017 to the Factory Droid provider for accounts with Factory's 1017 flag; turning thinking off on its Baseten route disables reasoning instead of falling back to low effort ([#17234](https://github.com/can1357/oh-my-pi/pull/17234) by [@skipper019](https://github.com/skipper019))
 
 ### Changed
