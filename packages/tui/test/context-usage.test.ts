@@ -145,7 +145,6 @@ describe("estimateToolSchemaTokens", () => {
 	});
 });
 
-
 describe("deferred tool schema accounting", () => {
 	it("does not let Cursor's server-side MCP catalog force compaction below provider usage", () => {
 		const spec: ModelSpec<"anthropic-messages"> = {

@@ -570,4 +570,3 @@ export function computeContextBreakdown(session: ContextUsageSession, options: C
 		snapcompact: options.snapcompact,
 	};
 }
-
