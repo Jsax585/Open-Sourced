@@ -1150,7 +1150,7 @@ export class SessionManager {
 	 * reopening a session it already runs — is refused here and moved to a
 	 * sibling, the same way a second process is.
 	 */
-	#claimSession(): void {
+	#claimSession(options?: { handover?: boolean }): void {
 		const sessionId = this.#sessionId;
 		const sessionFile = this.#sessionFile;
 		if (!this.#persist || !sessionFile || !this.#storage.claimSession) return;
@@ -1162,7 +1162,11 @@ export class SessionManager {
 		// moves this session to a sibling instead of appending into that journal.
 		this.#sessionClaim = {
 			sessionId,
-			release: this.#storage.claimSession(sessionId, sessionFile, { writer: true }) ?? undefined,
+			release:
+				this.#storage.claimSession(sessionId, sessionFile, {
+					writer: true,
+					handover: options?.handover,
+				}) ?? undefined,
 		};
 	}
 
@@ -2365,6 +2369,23 @@ export class SessionManager {
 			clone.#fileIsCurrent = false;
 			clone.#rewriteRequired = false;
 			clone.#forceFileCreation = false;
+		} else if (this.#sessionClaim?.release) {
+			// A clone of the manager that holds this journal's claim is that
+			// writer handing the journal over, not a second writer on it:
+			// `BashRunner.beginSessionTransition` clones just before the host
+			// moves to another session, and `newSession` does the same. Without
+			// this the clone's first append is refused by the one-writer rule and
+			// the detached work goes to a sibling file nobody reads — and on a
+			// backend whose full rewrites fail, nowhere at all.
+			//
+			// Its OWN slot, never a copy of this manager's claim record: two
+			// managers sharing one release closure would each disarm the other,
+			// so the first of them to switch away or close would leave the
+			// journal reading `free` while the other still appends to it, and
+			// that is exactly the live-journal-offered-as-parked state this
+			// change exists to end.
+			clone.#writerOwned = this.#writerOwned;
+			clone.#claimSession({ handover: true });
 		}
 		return clone;
 	}

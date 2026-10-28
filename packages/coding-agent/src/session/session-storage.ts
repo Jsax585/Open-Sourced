@@ -155,6 +155,16 @@ export interface SessionClaimOptions {
 	 * refused rather than admitted beside the first.
 	 */
 	writer?: boolean;
+	/**
+	 * Take a writer slot beside the writer that already holds this journal,
+	 * for a manager taking the journal over from it rather than opening the
+	 * session a second time ({@link SessionManager.cloneCurrentSession}).
+	 * Honoured only when the current writer appends to the same file: a second
+	 * writer on another path under one session id is the copy this refuses.
+	 * Each holder releases its own slot, so the journal reads live until the
+	 * last of them lets go.
+	 */
+	handover?: boolean;
 }
 
 export interface SessionStorage {
@@ -246,9 +256,11 @@ export interface SessionStorage {
 	 *
 	 * `options.writer` claims as the journal's one writer: it is refused while
 	 * another writer in THIS process holds the session, so two session managers
-	 * can never append to one journal. Claims without it (a transfer guard held
-	 * across an operation that then opens the session) keep sharing the
-	 * process's lease.
+	 * can never append to one journal. The one exception is
+	 * {@link SessionClaimOptions.handover}, for a clone taking the same journal
+	 * over from the writer that holds it. Claims without `writer` (a transfer
+	 * guard held across an operation that then opens the session) keep sharing
+	 * the process's lease.
 	 *
 	 * Optional because only backends with a process-owned lock can tell that
 	 * another process writes a session.
@@ -1435,7 +1447,16 @@ export class FileSessionStorage implements SessionStorage {
 		const writer = options?.writer === true;
 		let held = sessionLeases.get(sessionId);
 		if (held) {
-			if (writer && held.writers > 0) return null;
+			// A handover takes a slot beside the writer of the SAME journal, and
+			// only that: the manager being cloned keeps appending until it moves
+			// on, and each of the two releases its own slot, so the journal reads
+			// live throughout. A writer on any other path under this session id
+			// is the copy the one-writer rule exists to refuse.
+			const handover =
+				options?.handover === true &&
+				held.writerPath !== undefined &&
+				isSameJournalFile(held.writerPath, sessionPath);
+			if (writer && held.writers > 0 && !handover) return null;
 		} else {
 			let lease: FileLockHandle | null;
 			try {
