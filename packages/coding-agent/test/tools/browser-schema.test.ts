@@ -47,17 +47,20 @@ describe("browser prelude", () => {
 		await expect(prelude.invoke({ action: "call", name: "x", chain: [] }, context)).rejects.toThrow(
 			"Action 'call' requires a non-empty 'chain'.",
 		);
-		for (const invalid of [
-			{ init_scripts: ["valid", 1] },
-			{ downloads: false },
-			{ user_agent: 1 },
-			{ ignore_https_errors: "yes" },
-			{ allow_file_access: 1 },
-			{ headed: "yes" },
-		]) {
-			await expect(prelude.invoke({ action: "open", ...invalid }, context)).rejects.toThrow(
-				/browser received invalid arguments/,
-			);
+		for (const [invalid, expected] of [
+			[{ action: "goto" }, /action must be .*"open".*"targets" \(was "goto"\)/],
+			[{ wait_until: "networkidle" }, /wait_until must be .*"networkidle0".*"networkidle2" \(was "networkidle"\)/],
+			[{ dialogs: "ignore" }, /dialogs must be .*"accept".*"dismiss" \(was "ignore"\)/],
+			[{ app: { relay: "yes" } }, /app\.relay must be boolean/],
+			[{ init_scripts: ["valid", 1] }, /init_scripts\[1\] must be a string/],
+			[{ downloads: false }, /downloads must be a string/],
+			[{ user_agent: 1 }, /user_agent must be a string/],
+			[{ ignore_https_errors: "yes" }, /ignore_https_errors must be boolean/],
+			[{ allow_file_access: 1 }, /allow_file_access must be boolean/],
+			[{ headed: "yes" }, /headed must be boolean/],
+			[{ timeout: "30" }, /timeout must be a number/],
+		] as const) {
+			await expect(prelude.invoke({ action: "open", ...invalid }, context)).rejects.toThrow(expected);
 		}
 	});
 
