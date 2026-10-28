@@ -285,19 +285,21 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 			await restartRelayDaemon({ cdpUrl, signal: opts.signal, idleOnly: true });
 			outcome = await waitForRelayExtension(cdpUrl, opts.signal);
 		}
+		const ownChromium =
+			"A page that needs no sign-in can skip the relay with `app: { relay: false }`, which opens omp's own Chromium.";
 		if (outcome === "unreachable") {
 			throw new ToolError(
-				`omp browser relay is not reachable at ${cdpUrl}. Start it with \`omp browser-relay\` (or check the endpoint), and make sure the OMP Browser Relay extension is loaded in Chrome.`,
+				`omp browser relay is not reachable at ${cdpUrl}. Start it with \`omp browser-relay\` (or check the endpoint), and make sure the OMP Browser Relay extension is loaded in Chrome. ${ownChromium}`,
 			);
 		}
 		if (outcome === "no-extension") {
 			throw new ToolError(
-				`omp browser relay is serving at ${cdpUrl} but its extension never connected. Install it with \`omp browser-relay install\` and check the toolbar badge shows "on".`,
+				`omp browser relay is serving at ${cdpUrl} but its extension never connected. Chrome may be closed, or the OMP Browser Relay extension turned off or not installed. Open Chrome and check the extension's toolbar badge shows "on"; run \`omp browser-relay install\` only if the extension is missing. ${ownChromium}`,
 			);
 		}
 		if (outcome === "extension-gone") {
 			throw new ToolError(
-				`omp browser relay is serving at ${cdpUrl} but its extension disconnected and has not come back. Open Chrome with the OMP Browser Relay extension and check the toolbar badge shows "on".`,
+				`omp browser relay is serving at ${cdpUrl} but its extension disconnected and has not come back, usually because Chrome quit. Open Chrome with the OMP Browser Relay extension and check the toolbar badge shows "on". ${ownChromium}`,
 			);
 		}
 		if (outcome === "outdated-relay") {
