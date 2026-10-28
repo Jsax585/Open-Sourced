@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed prewalk skipping a handoff to a target that differs from the active model only by its upstream route, in main sessions and subagents
+- Fixed a slow automatic thinking classification overriding a model or thinking level selected meanwhile
+- Fixed an explicit model or thinking selection leaving a pending auto-prewalk handoff that later switched away from it
+- Fixed an automatic prewalk handoff overriding a model, thinking level, or `/prewalk` chosen while it was switching, including one an SDK subscriber selects
+- Fixed auto-prewalk leaving later tasks on a context-promoted handoff model instead of the model the task started on
+- Fixed an automatic prewalk handoff not returning to its planning model after `prewalk.auto` was set to `suggest` or `off`, or after `/prewalk off`
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
@@ -42,11 +51,6 @@
 - The plan review's edit button in Tern names your editor ("Edit in Notepad", "Edit in nvim") instead of "Edit in $EDITOR"
 - Fixed `/tan` clones ending without a final answer when they call `ask`; the clone now keeps running and the parent receives its final answer instead of an empty result ([#17223](https://github.com/can1357/oh-my-pi/pull/17223) by [@trukhinyuri](https://github.com/trukhinyuri))
 - Fixed GitHub `/review` diff links keeping the snapshot that built the request after the cached diff refreshes in the background, instead of opening whatever file now sits at the same index ([#16310](https://github.com/can1357/oh-my-pi/pull/16310) by [@tkossak](https://github.com/tkossak))
-### Fixed
-
-- Fixed route-only prewalk handoffs being skipped in main sessions and subagents.
-- Fixed delayed auto-thinking judgments overriding later model or thinking selections.
-- Fixed explicit model or thinking selections leaving an automatic prewalk handoff armed.
 
 ## [18.13.2] - 2026-10-27
 
