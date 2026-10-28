@@ -22,7 +22,6 @@ import { createAgentSession } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { installRetryFallbackRole } from "../session/retry-fallback-chains";
 import type { AuthStorage } from "../session/auth-storage";
-import { EPHEMERAL_MODEL_CHANGE_ROLE } from "../session/session-entries";
 import {
 	extractSessionInit,
 	hasConversationalHistory,
@@ -36,6 +35,7 @@ import {
 	createMCPProxyTools,
 	createSubagentSettings,
 	followMCPTools,
+	lastRunPerCallModel,
 	replayRevivedAgentStart,
 	subagentRetryFallbackRole,
 } from "./executor";
@@ -82,23 +82,6 @@ export function persistedAgentDefinition(displayName: string, init: PersistedSes
 		systemPrompt: init.systemPrompt.join("\n\n"),
 		source: "user",
 	};
-}
-
-/**
- * The exact model a per-call worker last ran: the newest retry-fallback switch on the branch
- * (`task.perCallModelFallbacks: runtime`, recorded as its routed identity, including a switch
- * back to the primary), else the canonical identity the spawn persisted separately from effort.
- * A later explicit selection (`/model`, `/switch`) clears that fallback, and a per-call worker
- * never switches models, so it then revives on the canonical identity.
- */
-function lastRunPerCallModel(session: SessionManager, savedIdentity: string): string {
-	const branch = session.getBranch();
-	for (let index = branch.length - 1; index >= 0; index--) {
-		const entry = branch[index];
-		if (entry.type !== "model_change") continue;
-		return entry.role === EPHEMERAL_MODEL_CHANGE_ROLE && entry.model ? entry.model : savedIdentity;
-	}
-	return savedIdentity;
 }
 
 /**
