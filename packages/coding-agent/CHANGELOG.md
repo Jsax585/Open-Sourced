@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Hooks and extensions can listen for `session_clear`, fired after `/clear` resets the context in place, to invalidate cached "already injected" instructions; it is not a `session_switch` and keeps the session id ([#17142](https://github.com/can1357/oh-my-pi/issues/17142))
+
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4
