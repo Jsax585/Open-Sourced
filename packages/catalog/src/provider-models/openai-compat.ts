@@ -832,7 +832,6 @@ type OpenAICompatibleModelManagerBuilderOptions<TApi extends Api> = {
 	config?: SimpleProviderConfig;
 	headers?: SimpleProviderDiscoveryHeaders;
 	dynamicModelsAuthoritative?: true;
-	dynamicCostAuthoritative?: true;
 	requireApiKey?: true;
 	dropCachedModelIdsOnStaticMismatch?: readonly string[];
 	cacheProviderId?: string;
@@ -859,7 +858,6 @@ function createOpenAICompatibleModelManagerOptions<TApi extends Api>(
 		providerId: options.providerId,
 		...(options.cacheProviderId && { cacheProviderId: options.cacheProviderId }),
 		...(options.dynamicModelsAuthoritative && { dynamicModelsAuthoritative: true }),
-		...(options.dynamicCostAuthoritative && { dynamicCostAuthoritative: true }),
 		...(options.dropCachedModelIdsOnStaticMismatch && {
 			dropCachedModelIdsOnStaticMismatch: options.dropCachedModelIdsOnStaticMismatch,
 		}),
@@ -4808,7 +4806,7 @@ function togetherRate(value: unknown): number | undefined {
 /**
  * Together's `/v1/models` `pricing` block is already USD per million tokens
  * (`input`, `output`, `cached_input`) — the catalog's unit — unlike the
- * per-token blocks other hosts publish. Only `chat`/`language` rows are
+ * per-token blocks other hosts publish. Only `chat`/`language`/`code` rows are
  * token-billed: image, video, audio, and embedding rows price in their own
  * unit and keep the fallback card. A chat row with an hourly rate and no
  * token rate is a dedicated-endpoint base, not a free serverless model.
@@ -4816,8 +4814,9 @@ function togetherRate(value: unknown): number | undefined {
 function togetherPricing(
 	type: unknown,
 	pricing: unknown,
+	fallback: TokenCost,
 ): Pick<ModelSpec<"openai-completions">, "cost" | "pricingStatus"> | undefined {
-	if ((type !== "chat" && type !== "language") || !isRecord(pricing)) return undefined;
+	if ((type !== "chat" && type !== "language" && type !== "code") || !isRecord(pricing)) return undefined;
 	const input = togetherRate(pricing.input);
 	const output = togetherRate(pricing.output);
 	if (input === undefined || output === undefined) return undefined;
@@ -4833,8 +4832,10 @@ function togetherPricing(
 			pricingStatus: "free",
 		};
 	}
+	// An absent/unreadable cache leg is not a zero rate: keep the row's own
+	// cache card (an explicit `cached_input: 0` still maps to zero).
 	return {
-		cost: { input, output, cacheRead: togetherRate(pricing.cached_input) ?? 0, cacheWrite: 0 },
+		cost: { input, output, cacheRead: togetherRate(pricing.cached_input) ?? fallback.cacheRead, cacheWrite: 0 },
 	};
 }
 
@@ -4854,15 +4855,14 @@ function mapTogetherModel(
 	);
 	return {
 		...model,
-		...togetherPricing(entry.type, entry.pricing),
+		...togetherPricing(entry.type, entry.pricing, model.cost),
 		contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
 	};
 }
 
 /**
- * Together's `/v1/models` roster is the serverless catalog, so a key-backed
- * fetch replaces the bundled snapshot. Rows carry their own tariff, limits,
- * and display name.
+ * Together's `/v1/models` rows carry their own tariff, limits, and display
+ * name; a key-backed fetch adds every live row to the bundled snapshot.
  */
 export function togetherModelManagerOptions(
 	config?: TogetherModelManagerConfig,
@@ -4872,8 +4872,6 @@ export function togetherModelManagerOptions(
 		providerId: "together",
 		defaultBaseUrl: "https://api.together.xyz/v1",
 		config,
-		dynamicModelsAuthoritative: true,
-		dynamicCostAuthoritative: true,
 		requireApiKey: true,
 		mapModel: mapTogetherModel,
 	});

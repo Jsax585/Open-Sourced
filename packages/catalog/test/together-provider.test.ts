@@ -62,6 +62,11 @@ describe("Together discovery", () => {
 						type: "chat",
 						pricing: { hourly: 0, input: 0, output: 0 },
 					},
+					{
+						id: "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+						type: "code",
+						pricing: { hourly: 0, input: 2, output: 2 },
+					},
 				]),
 			}).fetchDynamicModels?.()) ?? [];
 
@@ -75,6 +80,41 @@ describe("Together discovery", () => {
 		});
 		expect(getModelPricingStatus(byId["meta-llama/Llama-4-70B-Instruct-Reference"])).toBe("variable");
 		expect(getModelPricingStatus(byId["Prism-ML/Ternary-Bonsai-27B"])).toBe("free");
+		expect(byId["Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8"].cost).toEqual({
+			input: 2,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+	});
+
+	test("a missing cache leg keeps the bundled cache rate; an explicit zero does not", async () => {
+		const models =
+			(await togetherModelManagerOptions({
+				apiKey: "together-test-key",
+				fetch: rosterFetch([
+					{ id: "deepseek-ai/DeepSeek-V4.1-Flash", type: "chat", pricing: { input: 0.3, output: 1.2 } },
+					{
+						id: "deepseek-ai/DeepSeek-V3.1",
+						type: "chat",
+						pricing: { input: 0.6, output: 1.25, cached_input: 0 },
+					},
+				]),
+			}).fetchDynamicModels?.()) ?? [];
+
+		const byId = Object.fromEntries(models.map(model => [model.id, model]));
+		expect(byId["deepseek-ai/DeepSeek-V4.1-Flash"].cost).toEqual({
+			input: 0.3,
+			output: 1.2,
+			cacheRead: 0.006,
+			cacheWrite: 0,
+		});
+		expect(byId["deepseek-ai/DeepSeek-V3.1"].cost).toEqual({
+			input: 0.6,
+			output: 1.25,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
 	});
 
 	test("an unreadable pricing block keeps the bundled card", async () => {
