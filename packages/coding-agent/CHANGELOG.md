@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
 - Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
 - Set `PI_LINK_SCHEME` (and optionally `PI_LINK_HOST`) to make file links in SSH/tmux sessions open through a desktop protocol handler such as `ompfile://<host>/<path>?line=N&col=M` ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu))
 - Extensions can start `/live` voice sessions with the audio on their own WebRTC peer, such as a phone browser, through `ctx.startLive({ sdpOffer })`; the RPC `live_connect` command does the same for RPC clients ([#17013](https://github.com/can1357/oh-my-pi/pull/17013) by [@materemias](https://github.com/materemias))
@@ -23,8 +24,14 @@
 ### Fixed
 
 - Proxy-discovered models now recover catalog-backed thinking controls and respect server-reported output limits, input modalities, and empty or off-only reasoning advertisements instead of silently using incompatible catalog defaults ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+- Fixed cached approvals offering a directory grant that would not cover every target in the call ([#17309](https://github.com/can1357/oh-my-pi/pull/17309) by [@iliaal](https://github.com/iliaal)).
+- Fixed `pr://` metadata and diffs staying stale after successful `git push` calls through `bash` ([#17183](https://github.com/can1357/oh-my-pi/pull/17183) by [@alphastorm](https://github.com/alphastorm))
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
+- Fixed `wait` treating a peer's "on it" acknowledgement as its answer: peers send interim notes to `agent://<id>?progress`, and the requester keeps waiting for the real reply even while the peer idles ([#17176](https://github.com/can1357/oh-my-pi/pull/17176) by [@alphastorm](https://github.com/alphastorm))
 - A failed Hindsight memory recall (for example `recall request timed out after 30s`) now shows a warning instead of silently sending the prompt without memories; `omp -p` writes it, and Hindsight retain failures, to stderr ([#17278](https://github.com/can1357/oh-my-pi/pull/17278) by [@enieuwy](https://github.com/enieuwy))
+- Fixed reading semicolon-joined `:conflicts` paths failing when their combined filename exceeds the filesystem name limit ([#17177](https://github.com/can1357/oh-my-pi/pull/17177) by [@alphastorm](https://github.com/alphastorm))
+- Fixed `conflict://` block and side reads rejecting line ranges, tail selectors and `:raw` instead of paging the selected content ([#17177](https://github.com/can1357/oh-my-pi/pull/17177) by [@alphastorm](https://github.com/alphastorm))
+- Fixed stale conflict IDs surviving aborted merges or external file changes and inflating bulk-resolution counts or returning obsolete block content ([#17177](https://github.com/can1357/oh-my-pi/pull/17177) by [@alphastorm](https://github.com/alphastorm))
 - Fixed cancelling an MCP OAuth login or `/mcp` auth lookup at the wrong moment crashing the session with an unhandled rejection ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 - Large Python dicts and lists printed or left as a cell's last expression in eval now show as a collapsible JSON tree instead of a line cut off at 768 bytes
 - Fixed a spurious `failed: worker connection closed` row in the progress HUD when an unused local tiny model's worker exited after 15 idle minutes ([#17305](https://github.com/can1357/oh-my-pi/pull/17305) by [@H4vC](https://github.com/H4vC))
