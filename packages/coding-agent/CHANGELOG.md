@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Fixed
+
+- Fixed the `read`, `grep`, and `web_search` tool descriptions still advertising web-URL reads when `fetch.enabled` is off, including after turning it off mid-session and in a handoff request issued right after the toggle ([#11347](https://github.com/can1357/oh-my-pi/issues/11347), [#16453](https://github.com/can1357/oh-my-pi/pull/16453) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Added
 
@@ -64,7 +67,6 @@
 - Updated Bun engine requirement to ≥1.4.4
 
 ### Fixed
-- Fixed the `read`, `grep`, and `web_search` tool descriptions still advertising web-URL reads when `fetch.enabled` is off, including after turning it off mid-session and in a handoff request issued right after the toggle ([#11347](https://github.com/can1357/oh-my-pi/issues/11347), [#16453](https://github.com/can1357/oh-my-pi/pull/16453) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - A running job's glance keeps the whole a meter counts instead of the bare numerator: a widget whose headline restated `140` beside a `140/190` bar now draws `140/190` in the job card, the HUD pill and the status line ([#17226](https://github.com/can1357/oh-my-pi/pull/17226) by [@iacore](https://github.com/iacore))
 - Fixed the managed-skills root guard rejecting a symlinked store outright; a root that resolves to a directory now accepts writes inside its target, while a broken link or a link to a non-directory is still refused ([#17201](https://github.com/can1357/oh-my-pi/pull/17201) by [@iacore](https://github.com/iacore))
