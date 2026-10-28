@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a JSON Schema for `marketplace.json` catalogs (`marketplace-schema.json`) so marketplace authors can validate catalogs in their editor or CI; the docs' example `$schema` now points to it instead of a URL that returned 404 ([#15506](https://github.com/can1357/oh-my-pi/pull/15506) by [@sonsu-lee](https://github.com/sonsu-lee))
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
 - Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
 - Set `PI_LINK_SCHEME` (and optionally `PI_LINK_HOST`) to make file links in SSH/tmux sessions open through a desktop protocol handler such as `ompfile://<host>/<path>?line=N&col=M` ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu))
@@ -938,8 +939,6 @@
 - Fixed anonymized session exports losing whether bash timing was shown ([#15468](https://github.com/can1357/oh-my-pi/pull/15468) by [@iliaal](https://github.com/iliaal))
 - Added `omp --restore <session>`: resumes a session like `--resume`, then goes on with what its last process left unfinished when it crashed or was killed, both the interrupted turn and the subagents it was running (their results reach the parent as usual); Tern's session daemon now restarts omp with it after a crash
 - Kept private prompt-cache routing keys out of shared sessions and HTML exports ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
-- Added a JSON Schema for `marketplace.json` catalogs (`marketplace-schema.json`) so marketplace authors can validate catalogs in their editor or CI; the docs' example `$schema` now points to it instead of a URL that returned 404
-- Added a JSON Schema for `marketplace.json` catalogs (`marketplace-schema.json`) so marketplace authors can validate catalogs in their editor or CI; the docs' example `$schema` now points to it instead of a URL that returned 404 ([#15506](https://github.com/can1357/oh-my-pi/pull/15506) by [@sonsu-lee](https://github.com/sonsu-lee))
 
 ## [18.10.2] - 2026-10-12
 
