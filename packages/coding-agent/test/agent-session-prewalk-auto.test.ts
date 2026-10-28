@@ -644,18 +644,36 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
 		});
 
-		it("suggest never moves models, even over an earlier auto handoff", async () => {
-			stubJudge([PREWALK, PRIMARY]);
-			const f = createFixture([...cycle(), done("two")], { auto: "on" });
+		it("/new returns an auto handoff to its planning model with prewalk.auto off", async () => {
+			stubJudge([PREWALK]);
+			const f = createFixture(cycle(), { auto: "on" });
 			await f.session.prompt(TASK);
 			expect(f.session.model?.id).toBe(f.target.id);
+			cfgPrewalkAuto.override(f.settings, "off");
 
-			cfgPrewalkAuto.override(f.settings, "suggest");
-			await f.session.prompt("what races in the cache layer?");
+			expect(await f.session.newSession()).toBe(true);
 
-			expect(f.requested.at(-1)).toBe(f.target.id);
-			expect(f.notices.at(-1)).toBe("Auto-prewalk: primary (prewalk 0.10)");
+			expect(f.session.model?.id).toBe(f.primary.id);
+			expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
 		});
+
+		it.each(["suggest", "off", "/prewalk off"] as const)(
+			"an earlier auto handoff returns to its planning model when prewalk.auto is %s",
+			async mode => {
+				stubJudge([PREWALK, PRIMARY]);
+				const f = createFixture([...cycle(), done("two")], { auto: "on" });
+				await f.session.prompt(TASK);
+				expect(f.session.model?.id).toBe(f.target.id);
+
+				if (mode === "/prewalk off") await executeBuiltinSlashCommand("/prewalk off", { ctx: f.ctx });
+				else cfgPrewalkAuto.override(f.settings, mode);
+				await f.session.prompt("what races in the cache layer?");
+
+				expect(f.requested.at(-1)).toBe(f.primary.id);
+				expect(f.efforts.at(-1)).toBe(Effort.High);
+				if (mode === "suggest") expect(f.notices.at(-1)).toBe("Auto-prewalk: primary (prewalk 0.10)");
+			},
+		);
 	});
 
 	describe("manual control", () => {

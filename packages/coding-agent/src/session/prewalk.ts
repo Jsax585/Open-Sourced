@@ -208,7 +208,7 @@ export class PrewalkCoordinator {
 		this.#autoSuppressed = false;
 		const restoreSource =
 			handoff !== undefined &&
-			(enabled || (handoff.auto && this.#autoMode() === "on")) &&
+			(enabled || handoff.auto) &&
 			this.#onHandoffTarget(handoff);
 		this.#scrubPlanNudge(undefined, true);
 		this.#clearPrewalkState();
@@ -264,12 +264,11 @@ export class PrewalkCoordinator {
 	}
 
 	/**
-	 * Starts a new user task under `prewalk.auto: on`. An auto handoff belongs to the task that armed it, so the
-	 * session returns to that task's planning model unless a later explicit selection took ownership. An auto arm
-	 * the previous task never used is dropped so this task is judged on its own. Manual and configured arms stay.
+	 * Starts a new user task in any mode. An auto handoff belongs to the task that armed it, so the session
+	 * returns to that task's planning model unless a later explicit selection took ownership. An auto arm the
+	 * previous task never used is dropped so this task is judged on its own. Manual and configured arms stay.
 	 */
 	async beginAutoTask(): Promise<void> {
-		if (this.#autoMode() !== "on") return;
 		if (this.#autoArm && this.#autoArm === this.#prewalk) {
 			this.#scrubPlanNudge(undefined, true);
 			this.#clearPrewalkState();
