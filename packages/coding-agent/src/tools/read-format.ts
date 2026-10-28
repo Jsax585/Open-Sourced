@@ -43,6 +43,20 @@ export function toReadTruncationStats(result: TruncationResult): ReadTruncationS
 	return stats;
 }
 
+/** Keep descriptive diagnostics out of raw source text while retaining them in the result. */
+export function appendReadNotice(text: string, notice: string, details: ReadToolDetails, separator = "\n"): string {
+	if (details.raw) {
+		(details.notes ??= []).push(notice);
+		return text;
+	}
+	return text ? `${text}${separator}${notice}` : notice;
+}
+
+/** Carry raw mode through readers that pass suffix-resolution metadata to the shared prefix emitter. */
+export function markRawSuffixResolution(resolution: ReadToolDetails["suffixResolution"], raw: boolean): void {
+	if (resolution && raw) resolution.raw = true;
+}
+
 function prependLineNumbers(text: string, startNum: number): string {
 	const textLines = text.split("\n");
 	return textLines.map((line, i) => `${startNum + i}|${line}`).join("\n");
@@ -327,6 +341,7 @@ export async function buildInMemoryTextResult(
 	const displayMode = resolveFileDisplayMode(session, { raw: options.raw, immutable: options.immutable });
 	const details = options.details ?? {};
 	const rawDisplay = options.raw === true;
+	if (rawDisplay) details.raw = true;
 	// Raw mode addresses verbatim `\n` segments and shows no block context, so it
 	// slices the window straight out of `text`; only addressable reads need every line.
 	const allLines = rawDisplay ? undefined : splitAddressableFileLines(text);
@@ -372,11 +387,8 @@ export async function buildInMemoryTextResult(
 			totalLines === 0
 				? `The ${options.entityLabel} is empty.`
 				: `Use :1 to read from the start, or :${totalLines} to read the last line.`;
-		return resultBuilder
-			.text(
-				`Line ${requestedStart + 1} is beyond end of ${options.entityLabel} (${totalLines} lines total). ${suggestion}`,
-			)
-			.done();
+		const notice = `Line ${requestedStart + 1} is beyond end of ${options.entityLabel} (${totalLines} lines total). ${suggestion}`;
+		return resultBuilder.text(appendReadNotice("", notice, details)).done();
 	}
 
 	// Measure the range as a substring of `text` (equal to joining it) so a large range isn't
@@ -561,6 +573,7 @@ export async function buildInMemoryMultiRangeResult(
 	const snapshotPath = options.snapshotPath ?? options.sourcePath;
 	const displayMode = resolveFileDisplayMode(session, { raw: options.raw, immutable: options.immutable });
 	const details = options.details ?? {};
+	if (options.raw) details.raw = true;
 	// Raw mode only emits the requested windows, so it never splits the whole text.
 	const allLines = options.raw === true ? undefined : splitAddressableFileLines(text);
 	const totalLines = allLines ? allLines.length : countRawLines(text);
@@ -612,7 +625,7 @@ export async function buildInMemoryMultiRangeResult(
 
 	let outputText = "";
 	if (!allLines) {
-		outputText = rawParts.length > 0 ? rawParts.join("\n\n…\n\n") : "";
+		outputText = rawParts.join("\n");
 	} else if (visibleSpans.length > 0) {
 		if (options.sourcePath && !spansCoverEveryLine(visibleSpans, totalLines)) {
 			await warmBlockContext({ path: options.sourcePath, text });
@@ -636,8 +649,7 @@ export async function buildInMemoryMultiRangeResult(
 		const bound = range.endLine !== undefined ? `${range.startLine}-${range.endLine}` : `${range.startLine}`;
 		notices.push(`[Range ${bound} is beyond end of ${options.entityLabel} (${totalLines} lines total); skipped]`);
 	}
-	const finalText =
-		notices.length > 0 ? (outputText ? `${outputText}\n${notices.join("\n")}` : notices.join("\n")) : outputText;
+	const finalText = notices.length > 0 ? appendReadNotice(outputText, notices.join("\n"), details) : outputText;
 	if (hashContext?.tag && snapshotPath && seenLines) {
 		getEditStore(session).recordSeenLines(snapshotPath, hashContext.tag, seenLines);
 	}
@@ -657,8 +669,11 @@ export function decodeUtf8Text(bytes: Uint8Array): string | null {
 	}
 }
 
-export function prependSuffixResolutionNotice(text: string, suffixResolution?: { from: string; to: string }): string {
-	if (!suffixResolution) return text;
+export function prependSuffixResolutionNotice(
+	text: string,
+	suffixResolution?: ReadToolDetails["suffixResolution"],
+): string {
+	if (!suffixResolution || suffixResolution.raw) return text;
 
 	const notice = `[Path '${suffixResolution.from}' not found; resolved to '${suffixResolution.to}' via suffix match]`;
 	return text ? `${notice}\n${text}` : notice;

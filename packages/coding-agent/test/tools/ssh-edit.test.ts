@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { ShellFsFileType } from "@oh-my-pi/pi-natives";
 import * as capability from "../../src/capability";
 import { Settings } from "../../src/config/settings";
 import { EditTool, getEditStore } from "../../src/edit";
@@ -70,6 +71,20 @@ describe("SSH read/edit snapshots (#12125)", () => {
 		const after = await read.execute("read-after", { path: url });
 		expect(headerOf(after)).not.toBe(header);
 		expect(textOf(after)).toContain("2:BETA");
+	});
+
+	it("edits a HOME-relative SSH file at the remote account's path with the regular-file guard", async () => {
+		vi.spyOn(fileTransfer, "remoteHomeDirectory").mockResolvedValue("/home/remote");
+		const url = "ssh://oracle/~/notes.txt";
+		const before = await new ReadTool(session).execute("read-home", { path: url });
+		const edited = await new EditTool(session, "hashline").execute("edit-home", {
+			input: `${headerOf(before)}\nPUT 2.=2:\n+BETA`,
+		});
+		expect(edited.isError, textOf(edited)).not.toBe(true);
+		expect(remoteText).toBe("alpha\nBETA\ngamma\n");
+		expect(readRemote.mock.calls.at(-1)?.[1]).toBe("/home/remote/notes.txt");
+		expect(writeRemote.mock.calls[0]?.[1]).toBe("/home/remote/notes.txt");
+		expect(writeRemote.mock.calls[0]?.[3].requireRegularFile).toBe(true);
 	});
 
 	it.each([
@@ -256,7 +271,9 @@ describe("SSH read/edit snapshots (#12125)", () => {
 
 	it("keeps directory listings uneditable and without a snapshot header", async () => {
 		vi.spyOn(fileTransfer, "statRemotePath").mockResolvedValue("directory");
-		vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([{ name: "notes.txt", isDirectory: false }]);
+		vi.spyOn(fileTransfer, "listRemoteDir").mockResolvedValue([
+			{ name: "notes.txt", fileType: ShellFsFileType.File },
+		]);
 		const listing = await new ReadTool(session).execute("read", { path: URL });
 		expect(textOf(listing)).not.toMatch(/#[0-9A-Fa-f]{4}\]/);
 		const edited = await new EditTool(session, "replace").execute("edit", {
@@ -277,7 +294,9 @@ describe("SSH read/edit snapshots (#12125)", () => {
 		const unseen = await edit.execute("unseen", { input: `${header}\nPUT 40.=40:\n+unseen` });
 		expect(unseen.isError).toBe(true);
 		expect(fileTransfer.writeRemoteFile).not.toHaveBeenCalled();
-		await read.execute("raw", { path: `${URL}:raw:40-40,70-70` });
+		const raw = await read.execute("raw", { path: `${URL}:raw:40-40,70-70,100-100` });
+		expect(textOf(raw)).toBe("line 40\nline 70");
+		expect(raw.details?.notes?.join("\n")).toContain("beyond end");
 		const seen = await edit.execute("seen", { input: `${header}\nPUT 40.=40:\n+seen` });
 		expect(seen.isError).not.toBe(true);
 		expect(remoteText.split("\n")[39]).toBe("seen");
