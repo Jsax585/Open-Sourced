@@ -71,7 +71,7 @@ let failedPath: string | undefined;
 function closeHandle(): void {
 	if (!handle) return;
 	try {
-		handle.registration.close(false);
+		handle.registration.close({ checkpoint: false });
 	} catch {}
 }
 

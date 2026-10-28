@@ -1,17 +1,34 @@
+/**
+ * Coordinates HistoryStorage and session-index connections to each history.db.
+ * On POSIX file replacement, every old connection must close before any reopens:
+ * otherwise SQLite can reuse their shared, orphaned SHM. Set PERSIST_WAL on all
+ * old handles before finalizing or closing any so they preserve live sidecars.
+ *
+ * When the main inode is unchanged, inspect pending WAL frames with NOOP only
+ * after confirming SQLite >= 3.51; older versions treat unknown modes as PASSIVE.
+ * Unsafe recovery disables writes and retains the path and its handles for the
+ * process lifetime, even on close, to avoid stale checkpoints. Reads may continue.
+ * Bun still checkpoints native handles at VM exit; suppressing that needs runtime support.
+ */
+
 import { constants, type Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { checkpointWal, logger } from "@oh-my-pi/pi-utils";
 
+/** Connection and lifecycle callbacks supplied by HistoryStorage or the session index after initialization. */
 export interface HistoryDatabaseClient {
 	db: Database;
 	finalize: () => void;
 	reopen: () => void;
 }
 
+/** Write and close guards used by HistoryStorage and session-index callers. */
 export interface HistoryDatabaseRegistration {
+	/** Returns false when this path is disabled or this registration is no longer active; callers must not write. */
 	beforeWrite(): boolean;
-	close(checkpoint?: boolean): void;
+	/** Closes a safe connection, optionally checkpointing first; disabled paths retain their handles. */
+	close(options?: { checkpoint?: boolean }): void;
 }
 
 interface DatabaseIdentity {
@@ -95,18 +112,16 @@ function recoverDatabase(database: DatabasePath, current: DatabaseIdentity, clos
 			// SQLite's databaseIsUnmoved prevents a checkpoint into a replaced main
 			// inode. A lost WAL on the same main inode needs a read-only inspection.
 			if (!sameFile(identity.main, current.main)) continue;
-			const version = client.db.query("SELECT sqlite_version() AS version").get() as { version: string } | null;
+			const version = client.db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get();
 			const parts = version?.version.match(/^(\d+)\.(\d+)\.(\d+)(?:\D|$)/);
 			if (!parts || Number(parts[1]) < 3 || (Number(parts[1]) === 3 && Number(parts[2]) < 51)) {
 				// Older SQLite treats an unknown checkpoint mode as PASSIVE, so NOOP
 				// must never be issued before confirming support.
 				throw new Error("Safe history WAL inspection requires SQLite 3.51 or newer");
 			}
-			const checkpoint = client.db.query("PRAGMA wal_checkpoint(NOOP)").get() as {
-				busy: number;
-				log: number;
-				checkpointed: number;
-			} | null;
+			const checkpoint = client.db
+				.query<{ busy: number; log: number; checkpointed: number }, []>("PRAGMA wal_checkpoint(NOOP)")
+				.get();
 			if (
 				checkpoint?.busy !== 0 ||
 				typeof checkpoint.log !== "number" ||
@@ -150,6 +165,7 @@ function recoverDatabase(database: DatabasePath, current: DatabaseIdentity, clos
 	return !database.disabled;
 }
 
+/** Registers an initialized HistoryStorage or session-index connection for coordinated recovery and write guarding. */
 export function registerHistoryDatabase(client: HistoryDatabaseClient): HistoryDatabaseRegistration {
 	const dbPath = resolveDatabasePath(client.db.filename);
 	let database = databases.get(dbPath);
@@ -189,7 +205,7 @@ export function registerHistoryDatabase(client: HistoryDatabaseClient): HistoryD
 			}
 			return identitiesCurrent(database, current) || recoverDatabase(database, current);
 		},
-		close(checkpoint = true): void {
+		close({ checkpoint = true } = {}): void {
 			if (database.disabled || !registered.active) return;
 			if (!isWindows) {
 				let current: DatabaseIdentity;
@@ -214,7 +230,7 @@ export function registerHistoryDatabase(client: HistoryDatabaseClient): HistoryD
 	};
 }
 
-/** Guard cold initialization/DDL, not reads through an already-open handle. */
+/** Guards cold initialization/DDL; false permits only read-only opening without schema changes or recovery. */
 export function prepareHistoryDatabaseOpen(dbPath: string): boolean {
 	const database = databases.get(resolveDatabasePath(dbPath));
 	if (!database) return true;

@@ -123,40 +123,42 @@ export class HistoryStorage {
 	// Cache substring-fallback prepared statements keyed by token count.
 	#substringStmts = new Map<number, Statement>();
 
-	private constructor(db: Database) {
-		this.#initialize(db);
+	private constructor(db: Database, options: { readonly?: boolean } = {}) {
+		this.#initialize(db, options);
 	}
 
-	#initialize(db: Database): void {
+	#initialize(db: Database, options: { readonly?: boolean } = {}): void {
 		this.#db = db;
 
-		// One-shot statements go through the query cache, which close() finalizes; a
-		// stray prepare() would turn close() into a zombie that keeps the files open.
-		const hadFts = this.#db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_fts'").get();
-		this.#db.run(`
+		if (!options.readonly) {
+			// One-shot statements go through the query cache, which close() finalizes; a
+			// stray prepare() would turn close() into a zombie that keeps the files open.
+			const hadFts = this.#db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_fts'").get();
+			this.#db.run(`
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 ${HISTORY_TABLE_DDL}
-		`);
+			`);
 
-		// Additive column on stores created before the counter existed; runs before
-		// the rebuild so the dump below always sees it.
-		this.#ensureColumn("use_count", "INTEGER NOT NULL DEFAULT 1");
-		const rebuilt = this.#rebuildHistory();
+			// Additive column on stores created before the counter existed; runs before
+			// the rebuild so the dump below always sees it.
+			this.#ensureColumn("use_count", "INTEGER NOT NULL DEFAULT 1");
+			const rebuilt = this.#rebuildHistory();
 
-		this.#db.run(`
+			this.#db.run(`
 CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(prompt, content='history', content_rowid='id');
 
 CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
 	INSERT INTO history_fts(rowid, prompt) VALUES (new.id, new.prompt);
 END;
-		`);
+			`);
 
-		if (rebuilt || !hadFts) {
-			try {
-				this.#db.run("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
-			} catch (error) {
-				logger.warn("HistoryStorage FTS rebuild failed", { error: String(error) });
+			if (rebuilt || !hadFts) {
+				try {
+					this.#db.run("INSERT INTO history_fts(history_fts) VALUES('rebuild')");
+				} catch (error) {
+					logger.warn("HistoryStorage FTS rebuild failed", { error: String(error) });
+				}
 			}
 		}
 		this.#assertRecentWindowReadable();
@@ -190,7 +192,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 	/**
 	 * Opens the process-wide prompt history database. A corrupt store is
 	 * quarantined once and the rows it can still decode are copied into the
-	 * replacement.
+	 * replacement. Disabled paths open read-only without migrations or recovery.
 	 */
 	static open(dbPath: string = getHistoryDbPath()): HistoryStorage {
 		const existing = HistoryStorage.#instance;
@@ -199,9 +201,9 @@ ON CONFLICT(prompt) DO UPDATE SET
 		fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 		// Windows cannot move history.db aside while the session index holds it open.
 		closeSessionIndex();
-		if (!prepareHistoryDatabaseOpen(dbPath)) throw new Error("History writes are disabled for this database");
-		return HistoryStorage.#openDatabase(dbPath, db => {
-			const instance = new HistoryStorage(db);
+		const readonly = !prepareHistoryDatabaseOpen(dbPath);
+		const initialize = (db: Database) => {
+			const instance = new HistoryStorage(db, { readonly });
 			// Exit-only: a keep-alive cleanup leaves the handle valid so the editor can
 			// keep submitting prompts; the real exit closes. Register before publishing
 			// so a real-exit-in-progress late registration cannot close this instance.
@@ -210,7 +212,15 @@ ON CONFLICT(prompt) DO UPDATE SET
 			});
 			HistoryStorage.#instance = instance;
 			return instance;
-		});
+		};
+		if (!readonly) return HistoryStorage.#openDatabase(dbPath, initialize);
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			return initialize(db);
+		} catch (error) {
+			db.close();
+			throw error;
+		}
 	}
 
 	static #openDatabase(dbPath: string, initialize: (db: Database) => HistoryStorage): HistoryStorage {
@@ -235,7 +245,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 	}
 
 	#close(): void {
-		this.#registration.close(true);
+		this.#registration.close({ checkpoint: true });
 	}
 
 	#finalizeStatements(): void {
@@ -246,14 +256,13 @@ ON CONFLICT(prompt) DO UPDATE SET
 		this.#searchStmt.finalize();
 	}
 
-	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): boolean {
-		if (!this.#registration.beforeWrite()) return false;
+	#insertBatch(rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>): void {
+		if (!this.#registration.beforeWrite()) throw new Error("History writes are disabled for this database");
 		this.#db.transaction((rows: Array<Pick<HistoryEntry, "prompt" | "cwd" | "sessionId">>) => {
 			for (const row of rows) {
 				this.#upsertRowStmt.run(row.prompt, row.cwd ?? null, row.sessionId ?? null);
 			}
 		})(rows);
-		return true;
 	}
 
 	/**
@@ -288,9 +297,7 @@ ON CONFLICT(prompt) DO UPDATE SET
 		if (!trimmed) return Promise.resolve();
 		const session = sessionId ?? this.#sessionResolver?.();
 		try {
-			if (!this.#insertBatch([{ prompt: trimmed, cwd: cwd ?? undefined, sessionId: session || undefined }])) {
-				return Promise.resolve();
-			}
+			this.#insertBatch([{ prompt: trimmed, cwd: cwd ?? undefined, sessionId: session || undefined }]);
 		} catch (error) {
 			logger.error("HistoryStorage add failed", { error: String(error) });
 			if (!this.#writeFailureReported) {

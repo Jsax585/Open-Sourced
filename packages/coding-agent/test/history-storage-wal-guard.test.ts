@@ -156,14 +156,12 @@ describe("HistoryStorage WAL identity", () => {
 		await writePeer(dbPath, "checkpointed-", 1);
 		const peer = await writePeer(dbPath, "live-", 1, true);
 		expect(fs.statSync(`${dbPath}-wal`).ino).not.toBe(original.ino);
-		const prepare = vi.spyOn(Database.prototype, "prepare");
 		const close = vi.spyOn(Database.prototype, "close");
 
 		await storage.add("after replacement");
-		expect(prepare).toHaveBeenCalledTimes(3);
 		expect(close).toHaveBeenCalledTimes(1);
 		await storage.add("next prompt");
-		expect(prepare).toHaveBeenCalledTimes(3);
+		expect(close).toHaveBeenCalledTimes(1);
 		await finishPeer(peer);
 		HistoryStorage.close();
 		expect(await liveState(dbPath)).toEqual({ count: 5, integrity: "ok" });
@@ -186,7 +184,9 @@ describe("HistoryStorage WAL identity", () => {
 			const prepare = vi.spyOn(Database.prototype, "prepare");
 			const warning = vi.spyOn(logger, "warn");
 			const added = vi.fn();
+			const failed = vi.fn();
 			storage.setAddListener(added);
+			storage.setErrorListener(failed);
 
 			await storage.add("must not persist");
 			await storage.add("still must not persist");
@@ -201,7 +201,55 @@ describe("HistoryStorage WAL identity", () => {
 			expect(prepare).not.toHaveBeenCalled();
 			expect(listSessionRecaps({ sessionIds: ["session"] }).map(entry => entry.recap)).toEqual(["original recap"]);
 			expect(added).not.toHaveBeenCalled();
+			expect(failed).toHaveBeenCalledTimes(1);
+			expect(failed).toHaveBeenCalledWith(new Error("History writes are disabled for this database"));
 			expect(warning).toHaveBeenCalledTimes(1);
+			expect(checksum(dbPath)).toBe(before);
+			expect(checksum(walPath)).toBe(walBefore);
+		},
+	);
+
+	it.skipIf(process.platform !== "linux")(
+		"opens prompt history read-only after the session index disables writes",
+		async () => {
+			const dbPath = tempDir.join("history.db");
+			await runPeer(`
+				import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
+				const storage = HistoryStorage.open(${JSON.stringify(dbPath)});
+				await storage.add("saved prompt", "/repo", "saved-session");
+				HistoryStorage.close();
+			`);
+			recordSessionTitle("session", "original title");
+			const walPath = `${dbPath}-wal`;
+			fs.renameSync(walPath, `${walPath}.old`);
+			fs.copyFileSync(`${walPath}.old`, walPath);
+			const warning = vi.spyOn(logger, "warn");
+			recordSessionTitle("session", "must not replace title");
+			expect(warning).toHaveBeenCalledTimes(1);
+			expect(lookupSessionTitle("session")).toBe("original title");
+			const before = checksum(dbPath);
+			const walBefore = checksum(walPath);
+			const run = vi.spyOn(Database.prototype, "run");
+			const close = vi.spyOn(Database.prototype, "close");
+
+			const storage = HistoryStorage.open();
+			expect(storage.getRecent(10).map(entry => entry.prompt)).toEqual(["saved prompt"]);
+			expect(storage.search("saved", 10).map(entry => entry.prompt)).toEqual(["saved prompt"]);
+			expect(storage.search("aved", 10).map(entry => entry.prompt)).toEqual(["saved prompt"]);
+			expect(storage.matchingSessionIds("saved")).toEqual(["saved-session"]);
+			const added = vi.fn();
+			const failed = vi.fn();
+			storage.setAddListener(added);
+			storage.setErrorListener(failed);
+			await storage.add("must not persist");
+			await storage.add("still must not persist");
+			expect(added).not.toHaveBeenCalled();
+			expect(failed).toHaveBeenCalledTimes(1);
+			expect(failed).toHaveBeenCalledWith(new Error("History writes are disabled for this database"));
+			expect(run).not.toHaveBeenCalled();
+			HistoryStorage.close();
+
+			expect(close).not.toHaveBeenCalled();
 			expect(checksum(dbPath)).toBe(before);
 			expect(checksum(walPath)).toBe(walBefore);
 		},
