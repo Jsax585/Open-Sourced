@@ -1,8 +1,8 @@
 # Changelog
 
 ## [Unreleased]
-### Changed
 
+### Changed
 - Built-in themes beyond the active dark/light pair now load on first use instead of at startup, so launching with a non-default theme no longer parses all 100 bundled theme files up front ([#17094](https://github.com/can1357/oh-my-pi/pull/17094) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 ### Breaking Changes
