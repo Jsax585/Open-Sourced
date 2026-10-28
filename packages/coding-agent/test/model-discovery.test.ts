@@ -4374,6 +4374,71 @@ describe("ModelRegistry runtime discovery", () => {
 		}
 	});
 
+	test("public proxy streaming preserves images for every case of the reviewed DeepSeek alias", async () => {
+		const ids = [
+			"deepseek-v4-1-flash-261017",
+			"DEEPSEEK-V4-1-FLASH-261017",
+			"DeepSeek-v4-1-Flash-261017",
+			"team/deepseek-v4-1-flash-261017",
+			"TEAM/DEEPSEEK-V4-1-FLASH-261017",
+			"Team/DeepSeek-v4-1-Flash-261017",
+		];
+		const models = await discoverProxyModels(
+			{
+				provider: "proxy-test",
+				api: "openai-completions",
+				baseUrl: "https://proxy.example",
+				discovery: { type: "proxy" },
+			},
+			{
+				fetch: async () => Response.json({ data: ids.map(id => ({ id, supported_endpoint_types: ["openai"] })) }),
+				getBearerApiKeyResolver: async () => "local-secret",
+			},
+		);
+		const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+		const context: Context = {
+			messages: [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Describe this image." },
+						{ type: "image", data: png, mimeType: "image/png" },
+					],
+					timestamp: 0,
+				},
+			],
+		};
+		for (const id of ids) {
+			const model = models.find(candidate => candidate.id === id);
+			if (!model || model.api !== "openai-completions") throw new Error(`Missing proxy image model: ${id}`);
+			let body: Record<string, unknown> | undefined;
+			const result = await streamSimple(model, context, {
+				apiKey: "local-secret",
+				fetch: async (_input, init) => {
+					body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+					return new Response(
+						'data: {"id":"proxy-image","object":"chat.completion.chunk","created":0,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+						{ headers: { "Content-Type": "text/event-stream" } },
+					);
+				},
+			}).result();
+			expect(result.stopReason).toBe("stop");
+			expect(model.input).toContain("image");
+			expect(body?.model).toBe(id);
+			expect(body?.messages).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: expect.arrayContaining([
+						expect.objectContaining({
+							type: "image_url",
+							image_url: expect.objectContaining({ url: `data:image/png;base64,${png}` }),
+						}),
+					]),
+				}),
+			);
+		}
+	});
+
 	test("proxy discovery leaves unreviewed and opaque ids unknown and does not inherit routed effort siblings", async () => {
 		const unknownIds = [
 			"nku/deepseek-v4-1-flash-261018",

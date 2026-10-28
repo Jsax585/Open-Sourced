@@ -85,9 +85,9 @@ class "deepseek" {
 	// throwing AmbiguousOverlapError. Only the strip is disabled; the declared
 	// modality stays host-derived, so endpoints whose OpenAI-compatible surface
 	// rejects `image_url` keep their text-only contract.
-	// The reviewed hyphenated 2026-10-17 alias is exact, with an optional
-	// namespace prefix; adjacent dates do not inherit this vision contract.
-	models "*v4.1-flash*" "deepseek-v4-1-flash-261017" "*/deepseek-v4-1-flash-261017" priority=10 {
+	// The reviewed hyphenated 2026-10-17 alias is whole-ID and case-insensitive,
+	// with an optional namespace prefix; adjacent dates do not inherit this contract.
+	models "*v4.1-flash*" "*/deepseek-v4-1-flash-261017" glob="deepseek-v4-1-flash-261017" priority=10 {
 		strip-image-input #false
 	}
 	// V4.1 Flash is natively multimodal (vision encoder + projector, image-text

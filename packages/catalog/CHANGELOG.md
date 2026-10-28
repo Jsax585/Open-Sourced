@@ -6,6 +6,7 @@
 
 - Namespaced proxy models can recover portable effort controls from catalog references, including the reviewed DeepSeek V4.1 Flash 1017 alias, without inheriting another provider's model-ID routing or effort remaps; discovery-declared no-control surfaces survive catalog rebuilds without disabling known reasoning capability ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
 - Kimi Code live rows marked mandatory-thinking without usable effort metadata keep server-side reasoning defaults instead of sending a disabled-thinking block or inventing effort levels ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
+- Bare uppercase and mixed-case forms of the reviewed DeepSeek dated alias now retain image attachments; the KDL carve-out uses an explicitly case-insensitive whole-ID glob without broadening prefix or suffix matches ([#17167](https://github.com/can1357/oh-my-pi/pull/17167) by [@KamijoToma](https://github.com/KamijoToma))
 - Fixed DeepSeek V4.1 Flash image attachments being stripped on publisher-namespaced ids such as `ds/deepseek-flash` ([#16470](https://github.com/can1357/oh-my-pi/pull/16470) by [@ZanDev32](https://github.com/ZanDev32))
 
 ## [18.13.3] - 2026-10-28
