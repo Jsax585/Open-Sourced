@@ -98,16 +98,12 @@ const DEFAULT_TAB_NAME = "main";
 const BROWSER_RUN_SCOPE: readonly string[] = ["tab", "page", "browser", "wait", "assert"];
 
 const appSchema = type({
-	"path?": type("string").describe("binary path to spawn"),
-	"cdp_url?": type("string").describe("existing cdp endpoint"),
-	"relay?": type("boolean").describe(
-		"true drives the user's own tabs via the omp browser relay; false skips a relay the settings enable",
-	),
-	"tern?": type("boolean").describe("inside Tern: true forces a Tern picture-in-picture, false opts out"),
-	"args?": type("string[]").describe("extra cli args"),
-	"target?": type("string").describe(
-		"URL/title substring picking the page to drive; inside Tern, adopts the user's browser block (or its id)",
-	),
+	"path?": "string",
+	"cdp_url?": "string",
+	"relay?": "boolean",
+	"tern?": "boolean",
+	"args?": "string[]",
+	"target?": "string",
 });
 
 const tabCallStepSchema = type({
@@ -116,34 +112,32 @@ const tabCallStepSchema = type({
 });
 
 const browserSchema = type({
-	action: type("'open' | 'close' | 'run' | 'call' | 'tabs' | 'targets'").describe("operation"),
-	"name?": type("string").describe("tab id (default 'main')"),
-	"url?": type("string").describe("url to open"),
+	action: "'open' | 'close' | 'run' | 'call' | 'tabs' | 'targets'",
+	"name?": "string",
+	"url?": "string",
 	"app?": appSchema,
 	"viewport?": {
 		width: "number",
 		height: "number",
 		"scale?": "number",
 	},
-	"wait_until?": type("'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'").describe(
-		"navigation wait condition",
-	),
-	"dialogs?": type("'accept' | 'dismiss'").describe("auto-handle dialogs"),
-	"allowed_domains?": type("string[]").describe("allowed request hostnames"),
-	"init_scripts?": type("string[]").describe("document-start JavaScript sources or cwd-relative file paths"),
-	"downloads?": type("string").describe("cwd-relative download directory"),
-	"user_agent?": type("string").describe("tab user agent override"),
-	"ignore_https_errors?": type("boolean").describe("ignore invalid HTTPS certificates"),
-	"allow_file_access?": type("boolean").describe("allow file URLs to read local files"),
-	"headed?": type("boolean").describe("override the configured Chromium display mode"),
-	"code?": type("string").describe("js body to run in tab"),
-	"fn?": type("string").describe("serialized JavaScript function to run in tab"),
-	"args?": type("unknown[]").describe("arguments passed to a serialized function"),
+	"wait_until?": "'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'",
+	"dialogs?": "'accept' | 'dismiss'",
+	"allowed_domains?": "string[]",
+	"init_scripts?": "string[]",
+	"downloads?": "string",
+	"user_agent?": "string",
+	"ignore_https_errors?": "boolean",
+	"allow_file_access?": "boolean",
+	"headed?": "boolean",
+	"code?": "string",
+	"fn?": "string",
+	"args?": "unknown[]",
 	"chain?": tabCallStepSchema.array(),
-	"timeout?": type("number").describe("timeout in seconds"),
-	"all?": type("boolean").describe("release every managed tab"),
-	"kill?": type("boolean").describe("also kill spawned-app browsers"),
-	"persist?": type("boolean").describe("keep tab live across turn settle and idle close"),
+	"timeout?": "number",
+	"all?": "boolean",
+	"kill?": "boolean",
+	"persist?": "boolean",
 });
 
 type BrowserParams = typeof browserSchema.infer;
