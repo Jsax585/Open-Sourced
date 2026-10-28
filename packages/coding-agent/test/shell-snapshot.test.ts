@@ -24,7 +24,7 @@ const HELPER_BASH = process.platform === "win32" ? procmgr.resolveWindowsShell()
 /** Mirrors the per-uid snapshot dir name computed in `getOrCreateSnapshot`. */
 function snapshotDirIn(tmpRoot: string): string {
 	const uid = process.getuid?.();
-	return path.join(tmpRoot, uid === undefined ? "omp-shell-snapshots" : `omp-shell-snapshots-${uid}`);
+	return path.join(tmpRoot, "omp", uid === undefined ? "shell-snapshots" : `shell-snapshots-${uid}`);
 }
 
 // `sanitizeSnapshotForBrush` is the snapshot-side mitigation for brush's

@@ -1,6 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import {
@@ -14,7 +12,16 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { ProviderHttpError } from "@oh-my-pi/pi-ai/error";
 import { getEffectiveTokenCost } from "@oh-my-pi/pi-catalog/models";
-import { isEnoent, logger, parseImageMetadata, prompt, ptree, Snowflake, untilAborted } from "@oh-my-pi/pi-utils";
+import {
+	isEnoent,
+	logger,
+	parseImageMetadata,
+	prompt,
+	ptree,
+	Snowflake,
+	tempSubpath,
+	untilAborted,
+} from "@oh-my-pi/pi-utils";
 import { type RoleChainCandidate, resolveModelRoleValue, resolveRoleChain } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import { isAuthenticated, type ModelRegistry } from "../config/model-registry";
@@ -131,7 +138,7 @@ function imageExtension(mimeType: string): string {
 async function saveImagesToTemp(images: ImageGenerationResult["images"]): Promise<string[]> {
 	return Promise.all(
 		images.map(async image => {
-			const filepath = path.join(os.tmpdir(), `omp-image-${Snowflake.next()}.${imageExtension(image.mimeType)}`);
+			const filepath = tempSubpath(`image-${Snowflake.next()}.${imageExtension(image.mimeType)}`);
 			await Bun.write(filepath, Buffer.from(image.data, "base64"));
 			return filepath;
 		}),

@@ -7,6 +7,7 @@ import {
 	isEnoent,
 	isRecord,
 	logger,
+	mkdtempInTempRoot,
 	removeWithRetries,
 	toError,
 	untilAborted,
@@ -657,7 +658,7 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 	// (issue #7058). `removeUserDataDir` cleans it up on our terms instead.
 	let userDataDir: string | undefined;
 	if (!launchArgs.some(arg => arg.startsWith("--user-data-dir"))) {
-		userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-chrome-profile-"));
+		userDataDir = await mkdtempInTempRoot("chrome-profile-");
 		launchArgs.push(`--user-data-dir=${userDataDir}`);
 	}
 	try {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `getTempRoot()`, `tempSubpath()`, `mkdtempInTempRoot()` and `mkdtempInTempRootSync()`, which place omp's temp paths under `<os temp>/omp/` instead of beside it ([#17274](https://github.com/can1357/oh-my-pi/pull/17274) by [@iacore](https://github.com/iacore))
+
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4
