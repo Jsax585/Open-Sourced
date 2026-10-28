@@ -813,7 +813,8 @@ describe("AgentSession auto-prewalk", () => {
 				}
 				const selections: string[] = [];
 				f.session.subscribe(event => {
-					if (event.type === "model_changed" || event.type === "thinking_level_changed") selections.push(event.type);
+					if (event.type === "model_changed" || event.type === "thinking_level_changed")
+						selections.push(event.type);
 				});
 				const task = f.session.prompt(TASK);
 				await entered.promise;

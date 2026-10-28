@@ -206,10 +206,7 @@ export class PrewalkCoordinator {
 	async resetForNewSession(enabled: boolean): Promise<void> {
 		const handoff = this.#handoff;
 		this.#autoSuppressed = false;
-		const restoreSource =
-			handoff !== undefined &&
-			(enabled || handoff.auto) &&
-			this.#onHandoffTarget(handoff);
+		const restoreSource = handoff !== undefined && (enabled || handoff.auto) && this.#onHandoffTarget(handoff);
 		this.#scrubPlanNudge(undefined, true);
 		this.#clearPrewalkState();
 		this.releaseHandoff();
