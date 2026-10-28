@@ -633,6 +633,10 @@ function createCursorExecHandlersCodec(handlers: CursorExecHandlers, onEncoded: 
 				return result.answers ? { ...result, answers: encodeCursorResult(result.answers, onEncoded) } : result;
 			}
 		: undefined;
+	const sourceAskQuestionReservedLabels = handlers.askQuestionReservedLabels;
+	const askQuestionReservedLabels: CursorExecHandlers["askQuestionReservedLabels"] = sourceAskQuestionReservedLabels
+		? multi => sourceAskQuestionReservedLabels.call(handlers, multi).map(encodeGlyphText)
+		: undefined;
 
 	// Preserve class-backed handler objects; object spread drops prototype methods.
 	return new Proxy(handlers, {
@@ -654,6 +658,8 @@ function createCursorExecHandlersCodec(handlers: CursorExecHandlers, onEncoded: 
 					return piLs;
 				case "askQuestion":
 					return askQuestion;
+				case "askQuestionReservedLabels":
+					return askQuestionReservedLabels;
 				default: {
 					const value = Reflect.get(target, property, receiver);
 					// A method called on the proxy cannot reach the class's `#private` fields.
