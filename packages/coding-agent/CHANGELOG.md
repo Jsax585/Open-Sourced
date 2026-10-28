@@ -5,6 +5,13 @@
 ### Added
 
 - Added `metadata()` to JavaScript and Python completion handles to inspect model routing, request effort, and fallback attempts without changing completion results ([#14962](https://github.com/can1357/oh-my-pi/pull/14962) by [@xiangnan0811](https://github.com/xiangnan0811))
+- Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
+
+### Fixed
+
+- Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
+- A failed Hindsight memory recall (for example `recall request timed out after 30s`) now shows a warning instead of silently sending the prompt without memories; `omp -p` writes it, and Hindsight retain failures, to stderr ([#17278](https://github.com/can1357/oh-my-pi/pull/17278) by [@enieuwy](https://github.com/enieuwy))
+- Fixed cancelling an MCP OAuth login or `/mcp` auth lookup at the wrong moment crashing the session with an unhandled rejection ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 
 ## [18.13.3] - 2026-10-28
 
