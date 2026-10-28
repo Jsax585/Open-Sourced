@@ -391,12 +391,9 @@ export class SessionTools {
 	#runtimeSelectedToolNames: ReadonlySet<string> | undefined;
 	#baseSystemPrompt: string[];
 	/**
-	 * Per-turn system prompt returned by a `before_agent_start` extension hook
-	 * ("replace the system prompt for this turn"). While set, base-prompt
-	 * rebuilds keep this override on the agent instead of the rebuilt base, so a
-	 * rebuild landing in the prompt window (compaction/promotion, memory
-	 * promotion, MCP/RPC tool refresh, hindsight MM-TTL refresh) cannot silently
-	 * drop it before the request. Cleared when the turn ends.
+	 * Prepared policy returned by a `before_agent_start` extension hook. Base
+	 * rebuilds preserve it for ordinary and autonomous continuations until the
+	 * next preparation replaces it or a conversation reset clears it.
 	 */
 	#turnSystemPromptOverride: string[] | undefined;
 	/** The latest per-turn override and the base its hook was given; kept after the turn ends. */
@@ -557,9 +554,12 @@ export class SessionTools {
 		this.#host.agent.setSystemPrompt(this.#turnSystemPromptOverride ?? base);
 	}
 
+	get turnSystemPromptOverride(): string[] | undefined {
+		return this.#turnSystemPromptOverride;
+	}
 	/**
-	 * Registers the per-turn `before_agent_start` system-prompt override and
-	 * applies it to the agent. Base rebuilds during the turn preserve it until
+	 * Registers prepared `before_agent_start` policy and applies it to the agent.
+	 * Base rebuilds preserve it until the next preparation or conversation reset calls
 	 * {@link clearTurnSystemPromptOverride}.
 	 */
 	setTurnSystemPromptOverride(prompt: string[], base: string[]): void {
@@ -576,7 +576,7 @@ export class SessionTools {
 		return prompt === this.#lastTurnSystemPromptOverride?.prompt ? this.#lastTurnSystemPromptOverride.base : prompt;
 	}
 
-	/** Drops the active per-turn override; later rebuilds fall back to the base prompt. */
+	/** Drops prepared extension policy; later rebuilds fall back to the base prompt. */
 	clearTurnSystemPromptOverride(): void {
 		this.#turnSystemPromptOverride = undefined;
 	}

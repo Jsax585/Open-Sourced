@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Extension system-prompt policy now survives tool refreshes during autonomous continuations, until the next prompt prepares new policy or the conversation is reset.
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

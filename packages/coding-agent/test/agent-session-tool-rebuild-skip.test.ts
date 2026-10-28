@@ -109,6 +109,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		deviceOnlyWrite?: boolean;
 		/** Scripted mock model responses; enables driving `session.prompt()`. */
 		responses?: MockResponseSource;
+		readExecute?: AgentTool["execute"];
 		/** Persisted history seeded into the agent, e.g. to model a resumed session. */
 		initialMessages?: AgentMessage[];
 		/**
@@ -119,6 +120,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		exposeXdevCatalog?: boolean;
 		/** Optional per-turn system prompt replacement returned by before_agent_start. */
 		beforeAgentStartSystemPrompt?: string[];
+		beforeAgentStart?: ExtensionRunner["emitBeforeAgentStart"];
 		/** Pre-loaded skills handed to the session's hint snapshot. */
 		skills?: Skill[];
 	}
@@ -132,6 +134,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		contexts: Message[][];
 		/** Provider-call system prompt snapshots, one per model request. */
 		systemPrompts: string[][];
+		providerTools: string[][];
 		/** Mutable registry shared with the session, for lifecycle-only mount fixtures. */
 		toolRegistry: Map<string, AgentTool>;
 		isDeviceOnlyWrite: () => boolean;
@@ -139,6 +142,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		isToolActive: (name: string) => boolean;
 	} {
 		const readTool = createBasicTool("read", "Read");
+		if (options.readExecute) readTool.execute = options.readExecute;
 		const initialMcp = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
 		const writeTool = createBasicTool("write", "Write");
 		const toolRegistry = options.xdev?.tools ?? new Map<string, AgentTool>();
@@ -150,6 +154,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 		const mock = options.responses ? createMockModel({ responses: options.responses }) : undefined;
 		const contexts: Message[][] = [];
 		const systemPrompts: string[][] = [];
+		const providerTools: string[][] = [];
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -167,6 +172,7 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 				? (model, context, streamOptions) => {
 						contexts.push([...context.messages]);
 						systemPrompts.push([...(context.systemPrompt ?? [])]);
+					providerTools.push((context.tools ?? []).map(tool => tool.name));
 						return mock.stream(model, context, streamOptions);
 					}
 				: undefined,
@@ -195,10 +201,11 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			setPendingFullWriteDescription: enabled => {
 				pendingFullWriteDescription = enabled;
 			},
-			extensionRunner: options.beforeAgentStartSystemPrompt
+			extensionRunner: options.beforeAgentStartSystemPrompt || options.beforeAgentStart
 				? ({
-						emitBeforeAgentStart: async () => ({ systemPrompt: options.beforeAgentStartSystemPrompt }),
+					emitBeforeAgentStart: options.beforeAgentStart ?? (async () => ({ systemPrompt: options.beforeAgentStartSystemPrompt })),
 						emit: async () => undefined,
+					hasHandlers: () => false,
 					} as unknown as ExtensionRunner)
 				: undefined,
 			rebuildSystemPrompt: async (toolNames, _tools) => {
@@ -216,11 +223,66 @@ describe("AgentSession refreshMCPTools rebuild skipping", () => {
 			session,
 			contexts,
 			systemPrompts,
+			providerTools,
 			toolRegistry,
 			isDeviceOnlyWrite: () => deviceOnlyWrite,
 			isPendingFullWriteDescription: () => pendingFullWriteDescription,
 			isToolActive: name => activeToolNames.has(name),
 		};
+	}
+
+	for (const path of ["ordinary", "idle-aside"] as const) {
+		it(`preserves append-only extension policy through ${path} tool refresh`, async () => {
+			const prefix = "BASE POLICY\nPreserve exact bytes.\n";
+			const suffix = "APPEND-ONLY EXTENSION POLICY";
+			const expected = [prefix, suffix];
+			let hookCalls = 0;
+			let rebuilds = 0;
+			let toolExecutions = 0;
+			const responses: MockResponseSource = [
+				...(path === "idle-aside" ? [{ content: ["initial user turn complete"] }] : []),
+				{ content: [{ type: "toolCall", name: "read", arguments: { value: "refresh" } }] },
+				{ content: ["tool continuation complete"] },
+				...(path === "idle-aside" ? [{ content: ["next user turn complete"] }] : []),
+			];
+			const { session, systemPrompts, providerTools } = newSession(async () => {
+				rebuilds++;
+				return prefix;
+			}, {
+				responses,
+				readExecute: async () => {
+					toolExecutions++;
+					await session.refreshMCPTools([search, fetch]);
+					return { content: [{ type: "text", text: "real MCP roster refreshed" }] };
+				},
+				beforeAgentStart: async (_prompt, _images, systemPrompt) => {
+					hookCalls++;
+					return { systemPrompt: [...systemPrompt, suffix] };
+				},
+			});
+			const search = createMcpCustomTool("mcp__nucleus_search", "nucleus", "search", "Search nucleus");
+			const fetch = createMcpCustomTool("mcp__nucleus_fetch", "nucleus", "fetch", "Fetch nucleus");
+			await session.refreshMCPTools([search]);
+			await session.prompt("ordinary user input");
+			if (path === "idle-aside") {
+				expect(session.isStreaming).toBe(false);
+				await session.sendCustomMessage({ customType: "peer-message", content: "peer aside", display: true, attribution: "agent" }, { deliverAs: "aside" });
+				await session.prompt("next ordinary user input");
+			}
+			expect(toolExecutions).toBe(1);
+			expect(rebuilds).toBe(2);
+			expect(systemPrompts).toHaveLength(path === "ordinary" ? 2 : 4);
+			expect(hookCalls).toBe(path === "ordinary" ? 1 : 2);
+			const first = path === "ordinary" ? 0 : 1;
+			expect(providerTools[first]).not.toContain(fetch.name);
+			expect(providerTools[first + 1]).toContain(fetch.name);
+			if (path === "idle-aside") expect(systemPrompts[3]).toEqual(expected);
+			for (const prompt of systemPrompts) {
+				expect(prompt[0]).toBe(prefix);
+				expect(prompt.filter(part => part === expected[1])).toHaveLength(1);
+				expect(prompt).toEqual(expected);
+			}
+		});
 	}
 
 	it("skips rebuild when an MCP refresh produces an identical tool set", async () => {
