@@ -1,12 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { TUI } from "@oh-my-pi/pi-tui";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import type { TranscriptEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import type { SessionMessageEntryLike } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { VirtualTerminal } from "./virtual-terminal";
 
 const usage = {
 	input: 0,
@@ -17,8 +19,8 @@ const usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function entry(id: string, message: unknown): TranscriptEntryLike {
-	return { type: "message", id, parentId: null, timestamp: new Date(0).toISOString(), message } as TranscriptEntryLike;
+function entry(id: string, message: AgentMessage): SessionMessageEntryLike {
+	return { type: "message", id, parentId: null, timestamp: new Date(0).toISOString(), message };
 }
 
 describe("ChatTranscriptBuilder — aborted turn tool calls", () => {
@@ -33,11 +35,8 @@ describe("ChatTranscriptBuilder — aborted turn tool calls", () => {
 
 	it("shows the real results of an aborted Cursor turn instead of its abort row", () => {
 		setChatTranscriptDisplayPreferences({ readToolResultPreview: true });
-		const builder = new ChatTranscriptBuilder({
-			ui: { requestRender: () => {}, requestComponentRender: () => {} } as unknown as TUI,
-			cwd: "/tmp",
-			requestRender: () => {},
-		});
+		const tui = new TUI(new VirtualTerminal(120, 24));
+		const builder = new ChatTranscriptBuilder({ ui: tui, cwd: "/tmp", requestRender: () => tui.requestRender() });
 		builder.rebuild([
 			entry("a", {
 				role: "assistant",
