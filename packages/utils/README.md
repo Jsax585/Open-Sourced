@@ -46,7 +46,7 @@ so applications can handle errors before choosing a translator.
 bun add @oh-my-pi/pi-utils
 ```
 
-Ships TypeScript source directly (no build step); requires Bun ≥ 1.3.14.
+Ships TypeScript source directly (no build step); requires Bun ≥ 1.4.4.
 
 ## References
 

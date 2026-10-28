@@ -5,6 +5,9 @@
 ### Added
 
 - Added an isolated translation helper with English fallback, semantic contexts, and validated positional placeholders ([#17203](https://github.com/can1357/oh-my-pi/pull/17203) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
 
 ## [18.13.2] - 2026-10-27
 
