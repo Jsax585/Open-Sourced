@@ -75,6 +75,38 @@ export class TempDir {
 
 const kTempDir = os.tmpdir();
 
+/**
+ * `os.tmpdir()/omp`, the single directory omp keeps its own temp paths in.
+ *
+ * A shared `/tmp` then holds one entry per user instead of one per run, and
+ * `rm -rf "$TMPDIR/omp"` clears everything omp left behind. New temp paths
+ * belong under `tempSubpath()` / `mkdtempInTempRoot()` rather than beside it.
+ * The directory is created (0700) on first use, so every path it returns is
+ * writable.
+ */
+export function getTempRoot(): string {
+	// `os.tmpdir()` is re-read per call: tests swap TMPDIR mid-process and the
+	// staging paths must follow it.
+	const root = path.join(os.tmpdir(), "omp");
+	fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+	return root;
+}
+
+/** Joins leaf segments below `getTempRoot()`; leaves carry no `omp-` prefix. */
+export function tempSubpath(...segments: string[]): string {
+	return path.join(getTempRoot(), ...segments);
+}
+
+/** `mkdtemp` below `getTempRoot()`. */
+export function mkdtempInTempRootSync(prefix: string): string {
+	return fs.mkdtempSync(path.join(getTempRoot(), prefix));
+}
+
+/** Async `mkdtempInTempRootSync`. */
+export async function mkdtempInTempRoot(prefix: string): Promise<string> {
+	return fsPromises.mkdtemp(path.join(getTempRoot(), prefix));
+}
+
 function normalizePrefix(prefix?: string): string {
 	if (!prefix) {
 		return `${kTempDir}${path.sep}pi-temp-`;
