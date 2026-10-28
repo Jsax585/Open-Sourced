@@ -256,6 +256,15 @@ export interface SessionStorage {
 	 */
 	claimSession?(sessionId: string, sessionPath: string, options?: SessionClaimOptions): (() => void) | null;
 	/**
+	 * Point this process's writer claim for `sessionId` at the file it appends
+	 * to now, after a move carried the journal to a new path. The claim is kept
+	 * (a move must not give the lease up for an instant), only its path
+	 * changes, so a liveness probe still reads the moved journal as the one a
+	 * session here is running rather than a copy of it. Optional, like
+	 * {@link claimSession}, whose claims it retargets.
+	 */
+	retargetWriterClaim?(sessionId: string, sessionPath: string): void;
+	/**
 	 * Atomically delete a session and its artifacts only when `shouldDelete`
 	 * accepts the current session content. Optional because backends without a
 	 * cross-process conditional-delete primitive must skip opportunistic GC.
@@ -1460,6 +1469,11 @@ export class FileSessionStorage implements SessionStorage {
 			sessionLeases.delete(sessionId);
 			claim.lease.release();
 		};
+	}
+
+	retargetWriterClaim(sessionId: string, sessionPath: string): void {
+		const held = sessionLeases.get(sessionId);
+		if (held && held.writers > 0) held.writerPath = sessionPath;
 	}
 
 	/**

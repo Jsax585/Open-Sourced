@@ -2672,6 +2672,16 @@ export class SessionManager {
 							await moveFileAcrossDevices(oldSessionFile, newSessionFile);
 						}
 						sessionMoved = true;
+						// The claim names the file its writer appends to, and the
+						// journal is at the new path from here on. Point it there
+						// before the artifact directory is relocated below — an
+						// awaited rename a scan can land in the middle of — and
+						// without giving the lease up for an instant, which a move
+						// must not do. A scan then still reads this journal as the
+						// one a session here is running, not as a copy of it.
+						if (this.#sessionClaim?.release) {
+							this.#storage.retargetWriterClaim?.(this.#sessionClaim.sessionId, newSessionFile);
+						}
 					}
 
 					if (artifactPathChanged) {
@@ -2732,6 +2742,12 @@ export class SessionManager {
 				if (sessionPathChanged && !sessionMoved) this.#expectedDiskSize = null;
 				this.#artifactManager = null;
 				this.#artifactManagerSessionFile = null;
+				// Idempotent with the retarget above, which runs as the journal is
+				// renamed; this one also covers a path change with no rename to do
+				// (a session with nothing on disk yet).
+				if (this.#sessionClaim?.release) {
+					this.#storage.retargetWriterClaim?.(this.#sessionClaim.sessionId, newSessionFile);
+				}
 				// Path is repointed; hot-path appends may use `#sessionFile` again.
 				this.#sessionFileRelocating = null;
 			}
