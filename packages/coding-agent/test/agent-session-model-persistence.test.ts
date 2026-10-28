@@ -1,10 +1,11 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, type Context, Effort, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -34,6 +35,7 @@ describe("AgentSession model persistence", () => {
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 		sharedAuthStorage.keys.setRuntime("zai", "test-key");
+		sharedAuthStorage.keys.setRuntime("openrouter", "test-key");
 		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
 	});
 
@@ -102,6 +104,7 @@ describe("AgentSession model persistence", () => {
 		selectInitialModel?: (availableModels: Model<Api>[]) => Model<Api>;
 		modelRoles?: Record<string, string>;
 		persist?: boolean;
+		scopedModels?: Array<{ model: Model<Api> }>;
 	}): Promise<{ modelRegistry: ModelRegistry; settings: Settings; session: AgentSession }> {
 		const modelRegistry = sharedModelRegistry;
 		const model =
@@ -135,6 +138,7 @@ describe("AgentSession model persistence", () => {
 				: SessionManager.inMemory(),
 			settings: sessionSettings,
 			modelRegistry,
+			scopedModels: options?.scopedModels,
 		});
 
 		return { modelRegistry, settings: sessionSettings, session };
@@ -417,6 +421,50 @@ describe("AgentSession model persistence", () => {
 
 		expect(result.session.model?.id).toBe(temporaryModel.id);
 	});
+
+	it.each(["setModel", "setModelTemporary", "scoped cycle", "available cycle"] as const)(
+		"startup resume preserves the upstream selected by a route-only %s publication",
+		async publication => {
+			const selector = "openrouter/anthropic/claude-sonnet-4.5";
+			const available = sharedModelRegistry.getAvailable();
+			const source = parseModelPattern(`${selector}@google`, available).model;
+			const target = parseModelPattern(`${selector}@anthropic`, available).model;
+			if (!source || !target) throw new Error("Expected routed OpenRouter models");
+			const created = await createSession({
+				initialModel: source,
+				modelRoles: { default: `${selector}@google` },
+				persist: true,
+				scopedModels: publication === "scoped cycle" ? [{ model: source }, { model: target }] : undefined,
+			});
+			const manager = created.session.sessionManager;
+			manager.appendMessage({ role: "user", content: "preserve this route", timestamp: Date.now() });
+			manager.appendMessage(createAssistantMessage("ready"));
+			if (publication === "setModel") {
+				await created.session.setModel(target);
+			} else if (publication === "setModelTemporary") {
+				await created.session.setModelTemporary(target);
+			} else {
+				const availableModels =
+					publication === "available cycle"
+						? vi.spyOn(sharedModelRegistry, "getAvailable").mockReturnValue([source, target])
+						: undefined;
+				try {
+					await created.session.cycleModel();
+				} finally {
+					availableModels?.mockRestore();
+				}
+			}
+			expect(formatModelStringWithRouting(created.session.model!)).toBe(`${selector}@anthropic`);
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session");
+			await created.session.dispose();
+			session = undefined;
+
+			const resumed = await createStartupResumeSession(sessionFile);
+
+			expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+		},
+	);
 
 	it("activates auto thinking on startup resume when modelRoles.default carries an explicit :auto suffix", async () => {
 		const defaultModel = getAnthropicModelOrThrow("claude-sonnet-4-5");

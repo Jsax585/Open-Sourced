@@ -53,6 +53,8 @@ Calls to other tools do not trigger the handoff. A read-only `xd://` device requ
 
 The switch is one-shot: after the handoff, prewalk disarms itself, removes the planning nudge, and steers the target with an implementation checklist. It changes the session's active model and optional thinking level without rewriting model-role assignments. A same-model handoff can still change thinking; when the model, pinned upstream route, and effective thinking configuration already match, prewalk disarms without switching.
 
+Pinned upstream routes are saved with model selections and preserved when resuming a session or reviving a parked subagent.
+
 The handoff is recorded in the session, so resuming it, restoring it with `--restore`, or reviving a parked subagent continues on the handoff model and thinking level instead of returning to the planning model. A retry fallback taken after the handoff supersedes it, as for any session-local model. A revived subagent does not arm its prewalk again while it is still on that target.
 
 ## Arm from an active session
@@ -133,6 +135,8 @@ An automatic handoff belongs to the task that armed it. When the next task start
 
 An explicit model or thinking-level selection while an automatic handoff is armed, switching, or complete takes ownership: a pending automatic handoff is canceled, and a switch already loading metadata yields to the selection. If the model has already been published, a later effort selection is preserved. A manual `/prewalk` arm made during the switch also survives. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk.
 
+Trying to cycle thinking on a model without effort selectors makes no selection and does not cancel an automatic handoff.
+
 ### What is classified
 
 Only new, user-authored tasks in the top-level session: typed prompts, user-invoked `/skill:` prompts, and queued follow-ups when they are delivered. Steering is never classified, since it amends the task already running. Acknowledgements such as `ok` or `thanks`, synthetic continuation turns, agent-attributed messages, subagents, plan mode, and tasks where prewalk is already armed are skipped.
@@ -145,7 +149,7 @@ A follow-up such as `do that` or `continue` cannot be judged alone, so the judge
 
 A negative, direct, or sub-threshold decision, or a classifier error, leaves the model, thinking level, and prewalk exactly as they were.
 
-A pending prewalk from `/prewalk`, `prewalk.enabled`, or `--prewalk` is never replaced, retargeted, or reclassified. `/prewalk off` and `--no-prewalk` keep auto-prewalk out of the session (for `--no-prewalk`, the startup session) until `/new`, and neither switches models. An explicit `/prewalk` or `/prewalk restart` takes over a pending auto arm, which then behaves like a manual one.
+A pending prewalk from `/prewalk`, `prewalk.enabled`, or `--prewalk` is never replaced, retargeted, or reclassified. `/prewalk off` and `--no-prewalk` keep auto-prewalk out of the session (for `--no-prewalk`, the startup session) until `/new`, and neither switches models. An explicit `/prewalk` takes over a pending auto arm, even when the requested target or effort differs; a matching `/prewalk restart` also takes manual ownership.
 
 ### Failure behavior
 

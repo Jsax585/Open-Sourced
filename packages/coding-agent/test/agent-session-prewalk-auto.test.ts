@@ -154,6 +154,7 @@ describe("AgentSession auto-prewalk", () => {
 
 	interface FixtureOptions {
 		auto?: "off" | "suggest" | "on";
+		primary?: Model;
 		/** Credential the native judge (default true). */
 		judge?: boolean;
 		agentKind?: "main" | "sub";
@@ -166,7 +167,7 @@ describe("AgentSession auto-prewalk", () => {
 	}
 
 	function createFixture(responses: MockResponse[], options: FixtureOptions = {}) {
-		const primary = modelOrThrow("claude-sonnet-4-5");
+		const primary = options.primary ?? modelOrThrow("claude-sonnet-4-5");
 		const target = modelOrThrow("claude-sonnet-4-6");
 		authStorage = createInMemoryAuthStorage();
 		authStorage.keys.setRuntime("anthropic", "test-key");
@@ -793,22 +794,26 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.requested).toEqual([f.primary.id, f.primary.id, configured.id]);
 		});
 
-		it("an explicit /prewalk takes over a pending auto arm, so the next task keeps it", async () => {
-			const calls = stubJudge([PREWALK]);
-			const f = createFixture(
-				[{ content: ["plan only"] }, { content: ["still planning"] }, ...cycle(), done("three")],
-				{ auto: "on" },
-			);
-			await f.session.prompt(TASK);
+		it.each(["arm", "restart"] as const)(
+			"an explicit matching /prewalk %s takes over a pending auto arm, so the next task keeps it",
+			async action => {
+				const calls = stubJudge([PREWALK]);
+				const f = createFixture(
+					[{ content: ["plan only"] }, { content: ["still planning"] }, ...cycle(), done("three")],
+					{ auto: "on" },
+				);
+				await f.session.prompt(TASK);
 
-			expect(f.session.armPrewalk(f.target, Effort.Low)).toBe(true);
-			await f.session.prompt("go ahead");
-			expect(f.session.model?.id).toBe(f.target.id);
-			await f.session.prompt("task three");
+				if (action === "arm") expect(f.session.armPrewalk(f.target, Effort.Low)).toBe(true);
+				else expect(await f.session.restartPrewalk(f.primary, Effort.High, f.target, Effort.Low)).toBe("armed");
+				await f.session.prompt("go ahead");
+				expect(f.session.model?.id).toBe(f.target.id);
+				await f.session.prompt("task three");
 
-			expect(asked(calls)).toHaveLength(2);
-			expect(f.requested.at(-1)).toBe(f.target.id);
-		});
+				expect(asked(calls)).toHaveLength(2);
+				expect(f.requested.at(-1)).toBe(f.target.id);
+			},
+		);
 
 		it("/prewalk off keeps auto-prewalk out of the session until /new", async () => {
 			const calls = stubJudge([PREWALK]);
@@ -880,6 +885,157 @@ describe("AgentSession auto-prewalk", () => {
 				expect(f.nudges.flat()).not.toContain("prewalk-checklist");
 				expect(f.session.getPrewalkState()).toBeUndefined();
 				expect(f.session.model?.id).toBe(selected.id);
+			},
+		);
+
+		it.each(
+			(["metadata", "reconciliation"] as const).flatMap(phase =>
+				(["different target", "matching target", "different effort"] as const).map(takeover => ({
+					phase,
+					takeover,
+				})),
+			),
+		)(
+			"a direct manual $takeover arm during automatic target $phase owns the pending handoff",
+			async ({ phase, takeover }) => {
+				stubJudge([PREWALK, DIRECT]);
+				const f = createFixture([...cycle(), done("read only")], { auto: "on" });
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				let held = false;
+				if (phase === "metadata") {
+					const refresh = f.modelRegistry.refreshSelectedModelMetadata.bind(f.modelRegistry);
+					vi.spyOn(f.modelRegistry, "refreshSelectedModelMetadata").mockImplementation(async model => {
+						if (!held && model.id === f.target.id && f.requested.length === 2) {
+							held = true;
+							entered.resolve();
+							await release.promise;
+						}
+						return refresh(model);
+					});
+				} else {
+					const reconcile = SessionTools.prototype.reconcileThinkTool;
+					vi.spyOn(SessionTools.prototype, "reconcileThinkTool").mockImplementation(async function (
+						this: SessionTools,
+						...args
+					) {
+						if (!held && f.session.model?.id === f.target.id) {
+							held = true;
+							entered.resolve();
+							await release.promise;
+						}
+						return reconcile.apply(this, args);
+					});
+				}
+				const selections: string[] = [];
+				f.session.subscribe(event => {
+					if (event.type === "model_changed" || event.type === "thinking_level_changed")
+						selections.push(event.type);
+				});
+				const task = f.session.prompt(TASK);
+				await entered.promise;
+				const automaticArm = f.session.getPrewalkState();
+				const target = takeover === "different target" ? modelOrThrow("claude-opus-4-6") : f.target;
+				const effort =
+					takeover === "matching target"
+						? Effort.Low
+						: takeover === "different effort"
+							? Effort.Medium
+							: Effort.Max;
+				let manualArm = automaticArm;
+				try {
+					expect(f.session.armPrewalk(target, effort)).toBe(true);
+					manualArm = f.session.getPrewalkState();
+				} finally {
+					release.resolve();
+					await task;
+				}
+				expect(f.session.getPrewalkState()).toBe(manualArm);
+				expect(manualArm).toMatchObject({ target, thinkingLevel: effort });
+				expect(manualArm).not.toBe(automaticArm);
+				const selected = phase === "metadata" ? f.primary : f.target;
+				expect(f.session.model?.id).toBe(selected.id);
+				expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
+				expect(selections).toEqual(phase === "metadata" ? [] : ["model_changed"]);
+				expect(f.requested.at(-1)).toBe(selected.id);
+				expect(f.efforts.at(-1)).toBe(Effort.High);
+				expect(f.notices.some(notice => notice.startsWith("Prewalk: switched"))).toBe(false);
+				expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+
+				await f.session.prompt("explain the cursor without changing any files");
+
+				expect(f.requested.at(-1)).toBe(selected.id);
+				expect(f.efforts.at(-1)).toBe(Effort.High);
+				expect(f.session.getPrewalkState()).toBe(manualArm);
+				expect(f.nudges.flat()).not.toContain("prewalk-checklist");
+			},
+		);
+
+		it("a rejected restart leaves a pending automatic arm and its steering unchanged", async () => {
+			stubJudge([PREWALK]);
+			let checked = false;
+			const f = createFixture(cycle(), {
+				auto: "on",
+				beforeStream: async () => {
+					if (checked) return;
+					checked = true;
+					const arm = f.session.getPrewalkState();
+					const steering = f.session.agent.peekSteeringQueue();
+					const notices = f.notices.length;
+					expect(
+						await f.session.restartPrewalk(f.primary, Effort.High, modelOrThrow("claude-opus-4-6"), Effort.Max),
+					).toBe("rejected");
+					expect(f.session.getPrewalkState()).toBe(arm);
+					expect(f.session.agent.peekSteeringQueue()).toEqual(steering);
+					expect(f.session.model?.id).toBe(f.primary.id);
+					expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
+					expect(f.notices.slice(notices)).toEqual([
+						`Prewalk: already armed for ${f.target.provider}/${f.target.id}, waiting for the first edit/write.`,
+					]);
+				},
+			});
+			await f.session.prompt(TASK);
+			expect(checked).toBe(true);
+			expect(f.requested.at(-1)).toBe(f.target.id);
+			expect(f.efforts.at(-1)).toBe(Effort.Low);
+		});
+
+		it.each([{ supported: false }, { supported: true }])(
+			"cycling thinking with supported selectors $supported only releases a pending auto arm when it selects",
+			async ({ supported }) => {
+				stubJudge([PREWALK]);
+				let cycled = false;
+				let selected: ConfiguredThinkingLevel | undefined;
+				const primary = { ...modelOrThrow("claude-sonnet-4-5"), reasoning: supported };
+				const f = createFixture(cycle(), {
+					auto: "on",
+					primary,
+					beforeStream: async () => {
+						if (cycled) return;
+						cycled = true;
+						const arm = f.session.getPrewalkState();
+						expect(arm).toBeDefined();
+						const steering = f.session.agent.peekSteeringQueue();
+						selected = f.session.cycleThinkingLevel();
+						if (supported) {
+							expect(selected).toBeDefined();
+							expect(f.session.getPrewalkState()).toBeUndefined();
+							expect(f.session.agent.peekSteeringQueue()).not.toContainEqual(
+								expect.objectContaining({ customType: "prewalk-continue" }),
+							);
+						} else {
+							expect(selected).toBeUndefined();
+							expect(f.session.getPrewalkState()).toBe(arm);
+							expect(f.session.agent.peekSteeringQueue()).toEqual(steering);
+						}
+					},
+				});
+				await f.session.prompt(TASK);
+				expect(cycled).toBe(true);
+				expect(f.nudges[0]).toContain("prewalk-plan");
+				expect(f.requested.at(-1)).toBe(supported ? f.primary.id : f.target.id);
+				expect(f.efforts.at(-1)).toBe(supported ? selected : Effort.Low);
+				expect(f.nudges.flat().includes("prewalk-checklist")).toBe(!supported);
 			},
 		);
 
@@ -985,6 +1141,7 @@ describe("AgentSession auto-prewalk", () => {
 					await f.session.setModelTemporary(model, level);
 					return true;
 				},
+				invalidateAutomaticSelection: () => {},
 				setActiveToolsByName: unused,
 				restoreNonMCPToolPresentation: unused,
 				getAllToolNames: () => ["todo", "write"],

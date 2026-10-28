@@ -87,6 +87,7 @@ export interface PrewalkCoordinatorHost {
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
 	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<boolean>;
+	invalidateAutomaticSelection(): void;
 	setActiveToolsByName(names: string[]): Promise<void>;
 	restoreNonMCPToolPresentation(
 		nonMCPToolNames: string[],
@@ -148,12 +149,13 @@ export class PrewalkCoordinator {
 		const handoff = prewalk ? host.sessionManager.getSessionLocalModelChange() : undefined;
 		// A revived session still on the target its recorded handoff switched to has spent this prewalk;
 		// one that starts elsewhere (an explicit startup model, a fallback) keeps the arm.
-		const target = prewalk ? `${prewalk.target.provider}/${prewalk.target.id}` : undefined;
+		const target = prewalk ? formatModelStringWithRouting(prewalk.target) : undefined;
 		const current = host.model();
 		const spent =
 			handoff?.role === PREWALK_MODEL_CHANGE_ROLE &&
 			handoff.model === target &&
-			`${current?.provider}/${current?.id}` === target;
+			current !== undefined &&
+			formatModelStringWithRouting(current) === target;
 		this.#prewalk = spent ? undefined : prewalk;
 		this.#planYolo = options.planYolo;
 		this.#autoSuppressed = options.suppressAutoPrewalk === true;
@@ -432,8 +434,12 @@ export class PrewalkCoordinator {
 		);
 	}
 
-	/** Arms a prewalk immediately for an explicit slash-command request; it takes over a matching auto arm. */
+	/** Arms a prewalk immediately for an explicit slash-command request, replacing an automatic arm. */
 	arm(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
+		if (this.#autoArm && this.#autoArm === this.#prewalk) {
+			this.#host.invalidateAutomaticSelection();
+			this.releaseHandoff();
+		}
 		const active = this.#prewalk;
 		if (active) {
 			this.#host.emitNotice(
@@ -444,7 +450,6 @@ export class PrewalkCoordinator {
 			const matches =
 				formatModelStringWithRouting(active.target) === formatModelStringWithRouting(target) &&
 				active.thinkingLevel === thinkingLevel;
-			if (matches) this.#autoArm = undefined;
 			return matches;
 		}
 		const planMessage = this.#armPending(target, thinkingLevel);
@@ -495,12 +500,16 @@ export class PrewalkCoordinator {
 			(formatModelStringWithRouting(active.target) !== formatModelStringWithRouting(target) ||
 				active.thinkingLevel !== targetThinkingLevel)
 		) {
-			this.arm(target, targetThinkingLevel);
+			this.#host.emitNotice(
+				"info",
+				`Prewalk: already armed for ${active.target.provider}/${active.target.id}, waiting for the first edit/write.`,
+				"prewalk",
+			);
 			return "rejected";
 		}
 
 		if (!(await this.#host.setModelTemporary(source, sourceThinkingLevel))) return "rejected";
-		if (!active) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
+		if (!active || active === this.#autoArm) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();
 			this.#disarmNoop(active);
