@@ -179,6 +179,25 @@ describe("skill description failure caching and shutdown", () => {
 		expect(retry).toHaveBeenCalledTimes(0);
 	});
 
+	it("resolves the model once for cached unusable answers across a skill catalog", async () => {
+		using store = SkillDescriptionStore.open(path.join(tempDir, "cache.db"));
+		const skills = Array.from({ length: 90 }, (_, index) => skill(`migration-${index}`));
+		const first = new SkillDescriptionCatalog({ store, compress: fast(async () => "Bad\nanswer") });
+		first.render(skills);
+		await first.waitForPending();
+
+		const compress = vi.fn(async () => compressed);
+		const modelKey = vi.fn(() => "test/fast");
+		const second = new SkillDescriptionCatalog({ store, compress: { modelKey, compress } });
+		const rendered = second.render(skills);
+		expect(rendered.map(entry => entry.description)).toEqual(
+			skills.map(entry => previewSkillDescription(entry.description)),
+		);
+		expect(modelKey).toHaveBeenCalledTimes(1);
+		await second.waitForPending();
+		expect(compress).toHaveBeenCalledTimes(0);
+	});
+
 	it("asks a newly selected model after the previous model's answer was unusable", async () => {
 		using store = SkillDescriptionStore.open(path.join(tempDir, "cache.db"));
 		const entry = skill();
@@ -191,6 +210,39 @@ describe("skill description failure caching and shutdown", () => {
 		second.render([entry]);
 		await second.waitForPending();
 		expect(retry).toHaveBeenCalledTimes(1);
+		expect(new SkillDescriptionCatalog({ store }).render([entry])[0].description).toBe(compressed);
+	});
+
+	it("attributes a queued unusable answer to the model selected before a role change", async () => {
+		using store = SkillDescriptionStore.open(path.join(tempDir, "cache.db"));
+		const authStorage = createInMemoryAuthStorage();
+		authStorages.push(authStorage);
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		const settings = Settings.isolated({ modelRoles: { smol: "anthropic/claude-sonnet-4-5" } });
+		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { settings });
+		const complete = vi
+			.spyOn(agentCore, "instrumentedCompleteSimple")
+			.mockResolvedValue(
+				createAssistantMessage("one two three four five six seven eight nine ten eleven twelve thirteen"),
+			);
+		const entry = skill();
+		const first = new SkillDescriptionCatalog({
+			store,
+			compress: createSkillDescriptionCompressor(registry, settings),
+		});
+		first.render([entry]);
+		settings.overrideModelRoles({ smol: "anthropic/claude-haiku-4-5" });
+		await first.waitForPending();
+		expect(complete.mock.calls[0]?.[0].id).toBe("claude-sonnet-4-5");
+
+		complete.mockResolvedValue(createAssistantMessage(compressed));
+		const next = new SkillDescriptionCatalog({
+			store,
+			compress: createSkillDescriptionCompressor(registry, settings),
+		});
+		next.render([entry]);
+		await next.waitForPending();
+		expect(complete.mock.calls[1]?.[0].id).toBe("claude-haiku-4-5");
 		expect(new SkillDescriptionCatalog({ store }).render([entry])[0].description).toBe(compressed);
 	});
 
