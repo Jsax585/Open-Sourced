@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reused cached provider model snapshots for scoped availability queries instead of recomposing the bundled catalog on every call ([#16511](https://github.com/can1357/oh-my-pi/pull/16511) by [@Komzpa](https://github.com/Komzpa))
+
 ### Fixed
 
 - Fixed `read` rejecting artifact URLs from truncation hints when cached approvals or restricted folders are configured ([#17282](https://github.com/can1357/oh-my-pi/pull/17282) by [@iliaal](https://github.com/iliaal)).
