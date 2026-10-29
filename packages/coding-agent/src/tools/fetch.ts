@@ -10,6 +10,7 @@ import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
 import { $which, ptree } from "@oh-my-pi/pi-utils";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "@oh-my-pi/pi-utils/ar";
 import type { Element } from "@oh-my-pi/pi-utils/dom";
+import { decodeEntities } from "@oh-my-pi/pi-utils/dom/parser";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../sdk";
@@ -547,6 +548,161 @@ function stripDataUriImages(markdown: string): string {
 	return markdown.replace(DATA_URI_IMAGE_RE, (_match, alt: string) => (alt.trim() ? `![${alt}]` : ""));
 }
 
+/**
+ * What `pruneHtmlForReader` steps through: comments and every start tag, so text
+ * inside any tag's quoted attribute (`<img alt="<meta …>">`) is never taken for a
+ * tag. A tag name ends at whitespace, `/` or `>`.
+ */
+const PRUNE_SCAN_RE = /<(?:!--|([a-z][^\s/>]*))/gi;
+
+/** End of a comment, or of an element whose content is raw text (a `<meta>` written in a `<title>` or a script is text). */
+const RAW_TEXT_END_RE = new Map<string, RegExp>([
+	["!--", /-->/g],
+	["script", /<\/script(?=[\s/>])/gi],
+	["style", /<\/style(?=[\s/>])/gi],
+	["title", /<\/title(?=[\s/>])/gi],
+	["textarea", /<\/textarea(?=[\s/>])/gi],
+	["xmp", /<\/xmp(?=[\s/>])/gi],
+	["iframe", /<\/iframe(?=[\s/>])/gi],
+	["noembed", /<\/noembed(?=[\s/>])/gi],
+	["noframes", /<\/noframes(?=[\s/>])/gi],
+]);
+
+/** The next `=` or `>` inside a start tag. */
+const TAG_DELIMITER_RE = /[=>]/g;
+
+/** A quote opening an attribute value: right after `=` and any whitespace. */
+const VALUE_QUOTE_RE = /[\t\n\f\r ]*(["'])/y;
+
+/**
+ * Where a start tag ends, just past the first `>` outside a quoted value, as HTML
+ * reads it: a quote opens a value only right after `=`, so the apostrophe in
+ * `title=it's` is text. `from` is just past the tag name. -1 when the tag never
+ * closes: it then runs to the end of the document, so the scan stops there and
+ * never restarts inside a tag.
+ */
+function startTagEnd(html: string, from: number): number {
+	TAG_DELIMITER_RE.lastIndex = from;
+	for (let delimiter = TAG_DELIMITER_RE.exec(html); delimiter; delimiter = TAG_DELIMITER_RE.exec(html)) {
+		if (delimiter[0] === ">") return TAG_DELIMITER_RE.lastIndex;
+		VALUE_QUOTE_RE.lastIndex = TAG_DELIMITER_RE.lastIndex;
+		const quote = VALUE_QUOTE_RE.exec(html)?.[1];
+		if (quote === undefined) continue;
+		const closing = html.indexOf(quote, VALUE_QUOTE_RE.lastIndex);
+		if (closing === -1) return -1;
+		TAG_DELIMITER_RE.lastIndex = closing + 1;
+	}
+	return -1;
+}
+
+/** Named `<meta>` tags worth their tokens to a reader; Open Graph, Twitter Card, viewport and verification tags are not. */
+const KEPT_META_NAMES: Record<string, true> = {
+	description: true,
+	author: true,
+	"article:published_time": true,
+	"article:modified_time": true,
+};
+
+/**
+ * One attribute of a start tag as written: its name and its value with any quotes.
+ * Quoted values are matched whole, so text inside one is never taken for another
+ * attribute.
+ */
+const TAG_ATTRIBUTE_RE = /([^\s"'=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g;
+
+/**
+ * The first `name` attribute of a start tag (later duplicates are ignored, as in
+ * HTML): its value with character references decoded, and where it is written.
+ * `value` is null when the value holds a named reference the decoder does not know,
+ * so the tag can't be judged and is left alone.
+ */
+function findTagAttribute(tag: string, name: string): { value: string | null; start: number; end: number } | null {
+	TAG_ATTRIBUTE_RE.lastIndex = tag.search(/[\s/>]/);
+	for (let match = TAG_ATTRIBUTE_RE.exec(tag); match; match = TAG_ATTRIBUTE_RE.exec(tag)) {
+		if (match[1].toLowerCase() !== name) continue;
+		const raw = match[2];
+		if (raw === undefined) return null;
+		const end = match.index + match[0].length;
+		const quoted = raw.startsWith('"') || raw.startsWith("'");
+		const value = decodeEntities(quoted ? raw.slice(1, -1) : raw);
+		return { value: /&[a-z][a-z0-9]*;/i.test(value) ? null : value, start: end - raw.length, end };
+	}
+	return null;
+}
+
+/** Whether `<base href>` sends `#…` links off the page they are on. */
+function baseMovesFragments(base: string, pageUrl: string): boolean {
+	try {
+		return new URL("#", new URL(base, pageUrl)).href !== new URL("#", pageUrl).href;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Drop markup the native converter turns into tokens a reader cannot use: every
+ * named `<meta>` tag but the description, author and dates (each becomes a
+ * front-matter line), and the targets of links to anchors on the same page (API
+ * references and docs link every heading, row and citation to one). Such a link
+ * still renders as `[text](#)`. Kept: hash routes (`#/…`, `#!…`), which lead to
+ * another view, and every `#…` link when `<base href>` points them at another page.
+ * Only the `href` value is rewritten, so every other attribute reaches the converter
+ * as written; comments and raw-text elements are skipped, so code and text are
+ * untouched.
+ */
+function pruneHtmlForReader(html: string, pageUrl: string): string {
+	const parts: string[] = [];
+	const anchors: Array<{ part: number; tag: string }> = [];
+	// `null`: a `<base href>` whose target can't be read, so no `#…` link is judged.
+	let base: string | null | undefined;
+	let copied = 0;
+	PRUNE_SCAN_RE.lastIndex = 0;
+	for (let match = PRUNE_SCAN_RE.exec(html); match; match = PRUNE_SCAN_RE.exec(html)) {
+		const element = match[1]?.toLowerCase() ?? "!--";
+		if (element !== "!--") {
+			const end = startTagEnd(html, PRUNE_SCAN_RE.lastIndex);
+			if (end === -1) break;
+			PRUNE_SCAN_RE.lastIndex = end;
+		}
+		const rawTextEnd = RAW_TEXT_END_RE.get(element);
+		if (rawTextEnd) {
+			rawTextEnd.lastIndex = PRUNE_SCAN_RE.lastIndex;
+			// Unclosed, it runs to the end of the document.
+			if (!rawTextEnd.exec(html)) break;
+			PRUNE_SCAN_RE.lastIndex = rawTextEnd.lastIndex;
+			continue;
+		}
+		if (element !== "meta" && element !== "a" && element !== "base") continue;
+		const tag = html.slice(match.index, PRUNE_SCAN_RE.lastIndex);
+		let replacement = "";
+		if (element === "base") {
+			const href = findTagAttribute(tag, "href");
+			if (href && base === undefined) base = href.value;
+			continue;
+		}
+		if (element === "meta") {
+			const name = findTagAttribute(tag, "name") ?? findTagAttribute(tag, "property");
+			if (!name || name.value === null || KEPT_META_NAMES[name.value.toLowerCase()] === true) continue;
+		} else {
+			const target = findTagAttribute(tag, "href");
+			const value = target?.value;
+			if (!target || !value?.startsWith("#") || value.startsWith("#/") || value.startsWith("#!")) continue;
+			replacement = `${tag.slice(0, target.start)}"#"${tag.slice(target.end)}`;
+			anchors.push({ part: parts.length + 1, tag });
+		}
+		parts.push(html.slice(copied, match.index), replacement);
+		copied = PRUNE_SCAN_RE.lastIndex;
+	}
+	parts.push(html.slice(copied));
+	if (base !== undefined && (base === null || baseMovesFragments(base, pageUrl))) {
+		for (const { part, tag } of anchors) parts[part] = tag;
+	}
+	return parts.join("");
+}
+
+/** Reader output at or under this many characters is no rendering of the page. */
+const MIN_RENDERED_CHARS = 100;
+
 /** Reader backends for {@link renderHtmlToText}, in default priority order. */
 export type FetchProvider = "native" | "trafilatura" | "lynx" | "parallel" | "firecrawl" | "jina";
 
@@ -600,7 +756,13 @@ export async function renderHtmlToText(
 	const runners: Record<FetchProvider, () => Promise<string | null>> = {
 		// Purely local, no network/subprocess: still works on already-loaded HTML
 		// even after remote/subprocess attempts are aborted by the budget.
-		native: () => htmlToMarkdown(html, { cleanContent: true, hiddenContent: "reachable" }),
+		native: async () => {
+			const options = { cleanContent: true, hiddenContent: "reachable" };
+			const pruned = await htmlToMarkdown(pruneHtmlForReader(html, url), options);
+			// A page whose only content is its `<head>` can fall under the length check once
+			// pruned; it is converted whole so the check judges it as before.
+			return stripDataUriImages(pruned).trim().length > MIN_RENDERED_CHARS ? pruned : htmlToMarkdown(html, options);
+		},
 		trafilatura: async () => {
 			if (overallSignal?.aborted) return null;
 			const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
@@ -671,7 +833,7 @@ export async function renderHtmlToText(
 			const rendered = await runners[method]();
 			if (!rendered) continue;
 			const content = stripDataUriImages(rendered);
-			if (content.trim().length <= 100) continue;
+			if (content.trim().length <= MIN_RENDERED_CHARS) continue;
 			if (!isLowQualityOutput(content, method)) {
 				return { content, ok: true, method };
 			}
