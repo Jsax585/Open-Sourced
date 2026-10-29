@@ -250,6 +250,34 @@ describe("copy picker", () => {
 		expect(picks.at(-1)).toBe("user message:find the ack");
 		expect(props(selector.describe(pickerCx)).focus).toBe("list");
 	});
+
+	test("keyboard table picks copy the selected format and table without surrounding prose", () => {
+		const first = "| 项目 | 说明 |\n| --- | --- |\n| 中文 | a,b |";
+		const second = "| ID | 值 |\n| --- | --- |\n| 2 | 另表 |";
+		const entries = [
+			entry("u", null, user("show tables")),
+			entry("a", "u", assistant([{ type: "text", text: `Before\n\n${first}\n\nBetween\n\n${second}\n\nAfter` }])),
+		];
+		const picks: string[] = [];
+		for (const index of [0, 1, 2, 3]) {
+			const selector = new CopySelectorComponent(entries, {
+				ui,
+				cwd: "/tmp",
+				requestRender: () => {},
+				onPick: content => picks.push(content),
+				onCancel: () => {},
+			});
+			try {
+				selector.handleNativeEvent({ type: "select", key: "", item: "a" });
+				selector.handleInput("\x1b[C");
+				for (let step = 0; step < index; step++) selector.handleInput("\x1b[B");
+				selector.handleInput("\r");
+			} finally {
+				selector.dispose();
+			}
+		}
+		expect(picks).toEqual(["项目\t说明\n中文\ta,b", '项目,说明\n中文,"a,b"', first, "ID\t值\n2\t另表"]);
+	});
 });
 
 describe("session tree picker", () => {

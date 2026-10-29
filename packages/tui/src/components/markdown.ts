@@ -21,11 +21,12 @@ import {
 	mathStartIndex,
 } from "@oh-my-pi/pi-utils/math-delimiters";
 import { listMayContinueAt } from "@oh-my-pi/pi-utils/marked-list";
+import { hasTranscriptActions, runTranscriptAction } from "../chat/transcript-actions";
 import { latexToBlock } from "../latex-block";
 import { isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
 import { plainText } from "../native/spans";
-import { md } from "../native/describe";
-import type { DescribeContext, NativeNode } from "../native/node";
+import { col, keyed, md, node, stableKey } from "../native/describe";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import {
 	extensionLinkScheme,
 	extensionLinksVersion,
@@ -50,6 +51,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils";
+import { formatTableForClipboard, type TableCopyFormat } from "./markdown-table-copy";
 
 // Marked treats the backslash in an ST-terminated OSC 8 sequence (`ESC \\`) as
 // Markdown punctuation when it is immediately followed by markup such as a
@@ -1491,6 +1493,24 @@ export function lexDocument(text: string): TokensList {
 	return markdownParser.lexer(text);
 }
 
+/** Tables in document order, including lists/quotes, with whole-document reference resolution. */
+export function extractMarkdownTables(text: string): Tokens.Table[] {
+	return tablesInBlocks(lexDocument(text));
+}
+
+function tablesInBlocks(tokens: readonly Token[]): Tokens.Table[] {
+	const tables: Tokens.Table[] = [];
+	for (const token of tokens) {
+		if (isTableToken(token)) tables.push(token);
+		else if (isListToken(token)) {
+			for (const item of token.items) tables.push(...tablesInBlocks(item.tokens));
+		} else if (token.type === "blockquote") {
+			tables.push(...tablesInBlocks((token as Tokens.Blockquote).tokens));
+		}
+	}
+	return tables;
+}
+
 /**
  * `source` as a fenced code block in `lang`: the fence is one backtick longer
  * than any backtick run in the source (at least three), so the block always
@@ -2395,7 +2415,8 @@ export class Markdown implements Component {
 	#extensionLinkBlock = 0;
 	#extensionLinkOrdinal = 0;
 	#ignoreTight = false;
-	#native?: { text: string; stream: boolean; node: NativeNode };
+	#native?: { text: string; stream: boolean; actions: boolean; node: NativeNode };
+	#tableCopyActions?: Map<string, { table: Tokens.Table; format: TableCopyFormat }>;
 	setIgnoreTight(ignore: boolean): this {
 		this.#ignoreTight = ignore;
 		this.invalidate();
@@ -2510,22 +2531,111 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * The unrendered source as an `md` node, `stream` while the streaming
-	 * (transient) cache is on. Append-only growth yields a fresh node of the
-	 * same kind and key whose text extends the previous one, which the
-	 * reconciler sends as `text append`.
+	 * Keep Markdown source rendering; insert copy controls after each table's
+	 * top-level block (after the containing list/quote for nested tables).
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		const stream = this.#transientRenderCache;
+		const actions = hasTranscriptActions();
 		const cached = this.#native;
-		if (cached?.text === this.#text && cached.stream === stream) return cached.node;
+		if (cached?.text === this.#text && cached.stream === stream && cached.actions === actions) return cached.node;
+		this.#tableCopyActions = undefined;
 		// Sources are model text; OSC 8 / SGR bytes a caller spliced in are the terminal's to style, not ours.
 		const plain = this.#text.includes("\x1b") ? plainText(this.#text) : this.#text;
-		const described = stream
-			? md(speculativeStreamingSource(holdPartialTableRow(plain)), { stream: true })
-			: md(plain);
-		this.#native = { text: this.#text, stream, node: described };
+		const source = stream ? speculativeStreamingSource(holdPartialTableRow(plain)) : plain;
+		let described = md(source, stream ? { stream: true } : undefined);
+		if (actions && source.includes("|")) {
+			const tokens = lexDocument(source);
+			const tables = tablesInBlocks(tokens);
+			if (tables.length > 0) {
+				const copyActions = new Map<string, { table: Tokens.Table; format: TableCopyFormat }>();
+				this.#tableCopyActions = copyActions;
+				const definitions: string[] = [];
+				const tags = new Set<string>();
+				let duplicateDefinitions = false;
+				markdownParser.walkTokens(tokens, token => {
+					if (token.type !== "def") return;
+					const definition = token as Tokens.Def;
+					if (tags.has(definition.tag)) duplicateDefinitions = true;
+					tags.add(definition.tag);
+					definitions.push(definition.raw);
+				});
+				// Prepend definitions so references also resolve in isolated blocks and open-fence tails.
+				const references = definitions.length > 0 ? `${definitions.join("\n")}\n\n` : "";
+				const blocks: NativeNode[] = [];
+				let prose = "";
+				let tableIndex = 0;
+				const flush = (): void => {
+					if (!prose) return;
+					blocks.push(
+						keyed(md(references + prose, stream ? { stream: true } : undefined), `prose-${blocks.length}`),
+					);
+					prose = "";
+				};
+				const tableBlock = (raw: string, blockTables: readonly Tokens.Table[]): void => {
+					flush();
+					const key = `table-${tableIndex}`;
+					const children: NativeNode[] = [
+						keyed(md(references + raw, stream ? { stream: true } : undefined), "body"),
+					];
+					for (const table of blockTables) {
+						const index = tableIndex++;
+						const controlsKey = `copy-${index}-${stableKey(JSON.stringify(table))}`;
+						const controls: NativeNode[] = [];
+						for (const format of ["tsv", "csv", "markdown"] as const) {
+							const label = `Copy ${format === "markdown" ? "Markdown" : format.toUpperCase()}`;
+							copyActions.set(`${key}/${controlsKey}/${format}`, { table, format });
+							controls.push(
+								node(
+									"text",
+									{
+										text: label,
+										aria: `${label} from table ${index + 1}`,
+										title: `${label} from table ${index + 1}`,
+										role: "omp.table.copy",
+										actions: { click: `copy-table-${format}` },
+									},
+									undefined,
+									format,
+								),
+							);
+						}
+						children.push(
+							node(
+								"row",
+								{ gap: "sm", wrap: true, role: "omp.table.actions", aria: `Table ${index + 1}` },
+								controls,
+								controlsKey,
+							),
+						);
+					}
+					blocks.push(node("col", { role: "omp.table" }, children, key));
+				};
+				if (duplicateDefinitions || tokens.map(token => token.raw).join("") !== source) {
+					// Keep document-wide precedence and source bytes when normalization prevents a lossless split.
+					tableBlock(source, tables);
+				} else {
+					for (const token of tokens) {
+						const blockTables = tablesInBlocks([token]);
+						if (blockTables.length > 0) tableBlock(token.raw, blockTables);
+						else prose += token.raw;
+					}
+					flush();
+				}
+				described = col(blocks);
+			}
+		}
+		this.#native = { text: this.#text, stream, actions, node: described };
 		return described;
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action" || !hasTranscriptActions()) return;
+		const cached = this.#native;
+		if (cached?.text !== this.#text || cached.stream !== this.#transientRenderCache) return;
+		const action = this.#tableCopyActions?.get(event.key);
+		if (!action || event.act !== `copy-table-${action.format}`) return;
+		runTranscriptAction({ act: "copy", text: formatTableForClipboard(action.table, action.format) });
 	}
 
 	/**
