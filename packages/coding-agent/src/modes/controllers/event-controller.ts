@@ -365,7 +365,11 @@ export class EventController {
 				: null,
 		);
 		this.#streamingReveal = new StreamingRevealController({
-			getSmoothStreaming: () => cfgDisplaySmoothStreaming.get(this.ctx.settings),
+			// Extension text renderers get the full text so far on each drawn update (deltas within one
+			// frame are coalesced), never a partly revealed prefix from the typing reveal.
+			getSmoothStreaming: () =>
+				cfgDisplaySmoothStreaming.get(this.ctx.settings) &&
+				!this.ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.().length,
 			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: component => this.ctx.ui.requestComponentRender(component),
@@ -396,6 +400,9 @@ export class EventController {
 			tool_execution_end: e => this.#handleToolExecutionEnd(e),
 			auto_compaction_start: e => this.#handleAutoCompactionStart(e),
 			auto_compaction_end: e => this.#handleAutoCompactionEnd(e),
+			// `/compact` drives its own loader (command-controller); these exist for RPC hosts.
+			manual_compaction_start: async () => {},
+			manual_compaction_end: async () => {},
 			auto_retry_start: e => this.#handleAutoRetryStart(e),
 			auto_retry_end: e => this.#handleAutoRetryEnd(e),
 			cache_warming_start: async () => {},
@@ -527,6 +534,34 @@ export class EventController {
 		for (const component of this.#postToolAssistantComponents.values()) {
 			component.markTranscriptBlockFinalized();
 		}
+	}
+
+	/**
+	 * Post-tool text segments of the reply still streaming. The reply is not in the session's
+	 * committed messages until `message_end`, so a transcript rebuild must carry these over itself;
+	 * segments of replies already committed are replayed instead.
+	 */
+	liveAssistantSegments(): AssistantMessageComponent[] {
+		const live = this.ctx.viewSession.agent.state.streamMessage;
+		if (live?.role !== "assistant") return [];
+		const segments: AssistantMessageComponent[] = [];
+		for (const block of live.content) {
+			if (block.type !== "toolCall") continue;
+			const segment = this.#postToolAssistantComponents.get(block.id);
+			if (segment) segments.push(segment);
+		}
+		return segments;
+	}
+
+	/**
+	 * Hand the streaming reply's components the current extension text renderers (the setting enabling
+	 * them changed). Renderers take the full text, so a running typing reveal is dropped first.
+	 */
+	applyAssistantTextRenderers(): void {
+		this.#streamingReveal.resyncSmoothStreaming();
+		const renderers = this.ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.() ?? [];
+		this.ctx.streamingComponent?.setTextRenderers(renderers);
+		for (const segment of this.liveAssistantSegments()) segment.setTextRenderers(renderers);
 	}
 	#approvalPreviewGate(toolCallId: string): ApprovalPreviewGate {
 		let gate = this.#approvalPreviewGates.get(toolCallId);
@@ -750,6 +785,7 @@ export class EventController {
 	#upsertPostToolAssistantSegment(
 		toolCallId: string,
 		segment: AssistantMessage | undefined,
+		contentOffset: number | undefined,
 		linkTargets?: ReadonlyMap<string, string>,
 		opts?: { transient?: boolean },
 	): AssistantMessageComponent | undefined {
@@ -762,7 +798,7 @@ export class EventController {
 			existing.updateContent(segment, opts);
 			return existing;
 		}
-		const component = createAssistantMessageComponent(this.ctx, undefined, linkTargets);
+		const component = createAssistantMessageComponent(this.ctx, undefined, linkTargets, contentOffset);
 		component.updateContent(segment, opts);
 		this.#postToolAssistantComponents.set(toolCallId, component);
 		if (!this.#insertAfterTranscriptComponent(this.#toolTimelineComponents.get(toolCallId), component)) {
@@ -1639,6 +1675,7 @@ export class EventController {
 				const component = this.#upsertPostToolAssistantSegment(
 					toolCallId,
 					segment,
+					timeline.contentOffsets.get(toolCallId),
 					linkTargets ? assistantMessageLinkTargets(segment, linkTargets) : undefined,
 					closed ? undefined : { transient: true },
 				);
@@ -1821,6 +1858,7 @@ export class EventController {
 				const component = this.#upsertPostToolAssistantSegment(
 					toolCallId,
 					segment,
+					displayTimeline.contentOffsets.get(toolCallId),
 					assistantMessageLinkTargets(segment, linkTargets),
 				);
 				component?.markTranscriptBlockFinalized();
