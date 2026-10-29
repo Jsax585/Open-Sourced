@@ -4,24 +4,25 @@
 
 ### Breaking Changes
 
-- Removed the raw `@oh-my-pi/pi-catalog/models.json` export; use the bundled model registry APIs instead
+- Removed the raw `@oh-my-pi/pi-catalog/models.json` export; use the bundled model registry APIs instead.
 
 ### Added
 
-- Added `retainModelCacheConnection(dbPath)`, which keeps one connection to a non-default model cache path open until disposed, so batched reads and writes stop reopening the database each time
-- Added `nextBuildPriceChange(cost, now)`, the next instant at which `buildModel` would pick a different dated price card, so callers can safely reuse earlier builds until then
-- Added the `selector-revision-suffix` catalog axis, set to `@default` on Google Vertex, so `google-vertex/claude-opus-4-8` names `claude-opus-4-8@default` exactly ([#16297](https://github.com/can1357/oh-my-pi/pull/16297) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `nextBuildPriceChange(cost, now)` to identify when a model's dated pricing card may change, allowing callers to safely reuse earlier builds until that time.
+- Added the `selector-revision-suffix` catalog axis for Google Vertex, so `google-vertex/claude-opus-4-8` resolves exactly to `claude-opus-4-8@default`.
+- Added AI Stupid Level as a built-in provider with `/login aistupidlevel` or `AISTUPIDLEVEL_API_KEY`: its benchmark routing modes (default `auto-coding`) and the model ids it can pin come from live discovery as text-only models, and thinking levels are sent as `reasoning_effort` ([#16867](https://github.com/can1357/oh-my-pi/pull/16867) by [@StudioPlatforms](https://github.com/StudioPlatforms))
 
 ### Changed
 
-- Reduced bundled model catalog size and loading overhead
-- Made Factory Droid's image models the last `image` role defaults, so `generate_image` works with only a Factory login ([#17351](https://github.com/can1357/oh-my-pi/pull/17351) by [@will-bogusz](https://github.com/will-bogusz))
-- Removed `cerebras/zai-glm` from the `smol` role defaults and `openai-codex/gpt-5.5` from the `slow` ones: no bundled model has either id, and `cerebras/zai-glm-4.6` and `openai-codex/gpt-5.6-sol` already come earlier in those lists ([#12884](https://github.com/can1357/oh-my-pi/issues/12884)) ([#16297](https://github.com/can1357/oh-my-pi/pull/16297) by [@will-bogusz](https://github.com/will-bogusz))
+- Reduced the bundled model catalog size and loading overhead.
+- Updated role defaults so Factory Droid image models are preferred for the `image` role, allowing `generate_image` to work with only a Factory login.
+- Updated `smol` and `slow` role defaults to use the currently bundled Cerebras and OpenAI Codex model identifiers.
 
 ### Fixed
 
-- Fixed Mistral-hosted DeepSeek conversations failing with HTTP 422 on later turns when assistant reasoning history was replayed ([#17365](https://github.com/can1357/oh-my-pi/issues/17365)).
-- Fixed DeepSeek V4.1 Flash image attachments being stripped on publisher-namespaced ids such as `ds/deepseek-flash` ([#16470](https://github.com/can1357/oh-my-pi/pull/16470) by [@ZanDev32](https://github.com/ZanDev32))
+- Fixed Mistral reasoning models so streamed thinking appears in the transcript and is preserved for subsequent turns.
+- Fixed later-turn HTTP 422 errors in Mistral-hosted DeepSeek conversations when assistant reasoning history is included.
+- Fixed DeepSeek V4.1 Flash image attachments being dropped for publisher-namespaced model IDs such as `ds/deepseek-flash`.
 
 ## [18.13.3] - 2026-10-28
 
@@ -63,7 +64,6 @@
 
 - Added the `requiresThinkingPresence` model compat (KDL `requires-thinking-presence`) for Anthropic-compatible endpoints that reject a thinking-mode request whose current turn has an assistant message without a `thinking` block ([#16739](https://github.com/can1357/oh-my-pi/pull/16739) by [@lz37](https://github.com/lz37))
 - Added `resolveAnthropicApiVersion()`: Anthropic model discovery sends API version 2026-10-21 to the official API when `PI_ANTHROPIC_API_VERSION=2026-10-21` is set ([#16706](https://github.com/can1357/oh-my-pi/pull/16706) by [@H4vC](https://github.com/H4vC))
-- Added AI Stupid Level as a built-in provider with `/login aistupidlevel` or `AISTUPIDLEVEL_API_KEY`: its benchmark routing modes (default `auto-coding`) and the model ids it can pin come from live discovery as text-only models, and thinking levels are sent as `reasoning_effort` ([#16867](https://github.com/can1357/oh-my-pi/pull/16867) by [@StudioPlatforms](https://github.com/StudioPlatforms))
 - OpenCode Go `muse-spark-1.3-contributor`, `muse-spark-1.2-contributor`, `gpt-5.6-luna`, `gpt-6-luna`, `grok-4.6` (Responses) and `deepseek-v4-pro`, `omen-alpha` (Completions) opt into shared prompt caching; lanes that warmed under any key stay off ([#16988](https://github.com/can1357/oh-my-pi/pull/16988) by [@rafalopilowski1](https://github.com/rafalopilowski1))
 - Added `CatalogPolicyInputs` so catalog-policy lookups accept a reduced model view ([#16988](https://github.com/can1357/oh-my-pi/pull/16988) by [@rafalopilowski1](https://github.com/rafalopilowski1))
 - Added a catalog conformance test that fails the build when a `bundle="always"` seed row is missing from the bundled `models.json`, so a stale-snapshot regeneration can no longer silently drop an engine the way `web/deepseek` was lost in 18.12.2 ([#16610](https://github.com/can1357/oh-my-pi/issues/16610), [#17053](https://github.com/can1357/oh-my-pi/pull/17053) by [@ouyangjiahong26](https://github.com/ouyangjiahong26))
