@@ -8,6 +8,8 @@
 
 ### Added
 
+- Added `MCPResourceLinkContent` (including the link's `size`, `annotations`, `icons` and `_meta`) to the `MCPContent` union and exported the shared `MCPAnnotations` and `MCPIcon` types, so `MCPToolDetails.rawContent` can hold MCP `resource_link` tool-result blocks ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+- Added `modelEnds` to `GroupedFileSection`: per file, the model-line index just past its last line, so a caller cutting the output can tell which files it shows whole ([#16594](https://github.com/can1357/oh-my-pi/pull/16594) by [@will-bogusz](https://github.com/will-bogusz))
 - Added file-backed task previews and optional `taskFile` and `taskFileSha256` provenance on `AgentProgress` and `SingleResult` ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
 - Added `Editor.nativeTypeahead` (published as the TSP `typeahead` prop) and `Composer.releaseHeldInput()`: a deferred-input `Composer.start` asks Tern to keep and draw startup typing until the app releases the held input
 - Added `PI_LINK_SCHEME` and `PI_LINK_HOST` for host-qualified file links with optional line and column positions in remote sessions ([#15855](https://github.com/can1357/oh-my-pi/pull/15855) by [@KunoLu](https://github.com/KunoLu)).

@@ -23,8 +23,13 @@
 - Adjusted view placement to align with column‑capped output, fixing view offsets after line truncation
 - In Tern, warnings, errors, the update notice, `@file` reads and finished background jobs, tangents and supervised processes read like the rest of the chat: an icon and the message instead of a raw terminal line
 
+### Changed
+
+- Moved the `MCPAnnotations` and `MCPIcon` types to `@oh-my-pi/pi-tui/tools/mcp`, where MCP resource links share them; import them from there or from `@oh-my-pi/pi-coding-agent/mcp` instead of `@oh-my-pi/pi-coding-agent/mcp/types` ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+
 ### Fixed
 
+- Fixed MCP tool results made of resource links (`resource_link` content) reaching the model as an empty result; each link's URI, title or name, and description are now included ([#16561](https://github.com/can1357/oh-my-pi/pull/16561) by [@mottopanikeiku](https://github.com/mottopanikeiku))
 - Fixed Bash services failing to start with `ready.port must be an integer from 1 to 65535` when the model sent `port: 0` beside a `log` condition; a zero port now counts as unset
 - Fixed omp's title staying on the terminal tab after exit in terminals without a title stack; Windows consoles get their original title back ([#17321](https://github.com/can1357/oh-my-pi/pull/17321) by [@asuffield](https://github.com/asuffield))
 - Fixed cached approvals offering a directory grant that would not cover every target in the call ([#17309](https://github.com/can1357/oh-my-pi/pull/17309) by [@iliaal](https://github.com/iliaal)).
