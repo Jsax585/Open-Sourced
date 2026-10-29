@@ -288,7 +288,7 @@ export class ModelControls {
 	 * refreshing OAuth or running command-backed key programs), saves to session
 	 * log but NOT to settings.
 	 * @throws Error if no API key available for the model
-	 * @returns Whether this call published its model.
+	 * @returns Whether this call published its model and remains the latest model publication.
 	 */
 	async setModelTemporary(
 		model: Model,
@@ -333,13 +333,11 @@ export class ModelControls {
 				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
 			}
 		} else {
-			// Re-clamping for a stale switch must not advance the generation owned by the newer one.
-			const owner = this.#selectionGeneration;
-			this.setThinkingLevel(this.configuredThinkingLevel());
-			this.#selectionGeneration = owner;
+			// Re-clamping is not a selection; subscribers can still select an effort during its event.
+			this.#setThinkingLevel(this.configuredThinkingLevel());
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
-		return true;
+		return this.#modelPublication === publication;
 	}
 
 	/**
@@ -558,6 +556,10 @@ export class ModelControls {
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		this.#selectionGeneration++;
+		this.#setThinkingLevel(level, persist);
+	}
+
+	#setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
 		if (level === AUTO_THINKING) {
 			const provisional = clampThinkingLevelToCeiling(
 				this.#model,

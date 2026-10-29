@@ -86,6 +86,7 @@ export interface PrewalkCoordinatorHost {
 	/** Judges a new task for `prewalk.auto`; undefined when there is nothing to judge. */
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
+	/** Returns whether the model was published and not superseded by another model publication. */
 	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<boolean>;
 	invalidateAutomaticSelection(): void;
 	setActiveToolsByName(names: string[]): Promise<void>;
@@ -393,10 +394,12 @@ export class PrewalkCoordinator {
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
-		if (!(await this.#host.setModelTemporary(target, prewalk.thinkingLevel))) return;
+		const switched = await this.#host.setModelTemporary(target, prewalk.thinkingLevel);
 		// An explicit selection (it drops an auto arm) or a newer arm owns the session now.
 		if (this.#prewalk !== prewalk) return;
 		this.#clearPrewalkState();
+		// Consume this one-shot attempt even when a newer selection prevented or superseded the switch.
+		if (!switched) return;
 		if (source) {
 			this.#handoff = {
 				source,
@@ -510,11 +513,14 @@ export class PrewalkCoordinator {
 
 		if (!(await this.#host.setModelTemporary(source, sourceThinkingLevel))) return "rejected";
 		if (!active || active === this.#autoArm) return this.arm(target, targetThinkingLevel) ? "armed" : "reset";
+		if (this.#prewalk !== active) return "rejected";
 		if (this.#isNoop(active)) {
 			this.#scrubPlanNudge();
 			this.#disarmNoop(active);
 			return "reset";
 		}
+		// A successful restart owns a new handoff, not an older switch's in-flight continuation.
+		this.#prewalk = { ...active };
 		return "armed";
 	}
 

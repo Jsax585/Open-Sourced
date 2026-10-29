@@ -77,7 +77,7 @@ Run these slash commands without restarting OMP:
 
 After a handoff, `/prewalk restart` immediately returns the session to the current `@default` assignment and re-arms the handoff to `@smol`. Both roles are resolved when the command runs, so the cycle is independent of concrete model names and does not alter either role's persisted configuration.
 
-If prewalk is already armed, `/prewalk` leaves the existing target in place. `/prewalk restart` also preserves a matching arm; if its existing target differs from the current `@smol` resolution, restart is rejected before changing the active model. To choose a different target at startup, use `--prewalk-into`.
+If prewalk is already armed, `/prewalk` leaves the existing target in place. `/prewalk restart` preserves a matching target and effort as a fresh handoff attempt, so an older switch cannot consume a successful restart. If another operation consumes, disarms, or replaces that arm while the planning model is being restored, restart is rejected rather than reporting an inactive arm as successful. A different existing target rejects restart before changing the active model. To choose a different target at startup, use `--prewalk-into`.
 
 ## Auto-prewalk
 
@@ -137,7 +137,11 @@ An automatic retry fallback to a different model or pinned upstream route supers
 
 Switching to a different saved session discards the outgoing task's automatic handoff without restoring its planning model into the opened session. A cancelled or failed switch keeps the outgoing task's restoration intact.
 
-An explicit model or thinking-level selection while an automatic handoff is armed, switching, or complete takes ownership: a pending automatic handoff is canceled, and a switch already loading metadata yields to the selection. If the model has already been published, a later effort selection is preserved. A manual `/prewalk` arm made during the switch also survives. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk.
+An explicit model or thinking-level selection while an automatic handoff is armed, switching, or complete takes ownership: a pending automatic handoff is canceled, and a switch already loading metadata yields to the selection. Explicit model publication cancels the pending automatic handoff before notifying subscribers, without waiting for model-dependent setup to finish, so it cannot deliver an obsolete implementation checklist. If the model has already been published, a later effort selection is preserved, including one made by a subscriber while a stale switch re-clamps effort. A manual `/prewalk` arm made during the switch also survives. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk.
+
+If an explicit model pick supersedes a manual handoff while it is switching, that consumed arm is cleared: another edit/write cannot replay it, and the obsolete switch does not record a completed handoff for `/new` to restore. A replacement arm created during the switch is left intact.
+
+A selection made while that attempt loads model metadata can prevent publication. The consumed arm is still cleared rather than retried on the next edit/write; arm `/prewalk` again to request another handoff.
 
 Trying to cycle thinking on a model without effort selectors makes no selection and does not cancel an automatic handoff.
 
