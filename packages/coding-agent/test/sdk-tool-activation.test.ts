@@ -2589,6 +2589,216 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 	});
 
+	it("authorizes final rewritten input and call IDs in a two-call batch", async () => {
+		const tempDir = makeTempDir();
+		const originalCalls: Array<{ id: string; command: unknown }> = [];
+		const authorizedCalls: Array<{ id: string; input: unknown; kind: string; sessionId: string }> = [];
+		const executed: Array<{ id: string; command: string }> = [];
+		const retained = { command: "rewritten first" };
+		const reviewer: ExtensionFactory = pi => {
+			pi.on("tool_call", event => {
+				if (!("command" in event.input)) return;
+				originalCalls.push({ id: event.toolCallId, command: event.input.command });
+			});
+			pi.on("tool_authorization", async (event, ctx) => {
+				await Promise.resolve();
+				authorizedCalls.push({
+					id: event.toolCallId,
+					input: event.input,
+					kind: ctx.agent.kind,
+					sessionId: event.sessionId,
+				});
+				retained.command = "unreviewed late mutation";
+				return { decision: "allow" };
+			});
+		};
+		const rewriter: ExtensionFactory = pi => {
+			pi.on("tool_call", event => (event.toolCallId === "batch-first" ? { input: retained } : undefined));
+		};
+		const parameters = type({ command: "string" });
+		const tool = {
+			name: "guarded_command",
+			label: "Guarded command",
+			description: "Records final input without running a command",
+			parameters,
+			approval: "exec",
+			async execute(id, input) {
+				executed.push({ id, command: input.command });
+				return { content: [{ type: "text", text: "recorded" }] };
+			},
+		} satisfies CustomTool<typeof parameters>;
+		const provider = createMockModel({
+			responses: [
+				{
+					content: [
+						{ type: "toolCall", id: "batch-first", name: tool.name, arguments: { command: "first" } },
+						{ type: "toolCall", id: "batch-second", name: tool.name, arguments: { command: "second" } },
+					],
+				},
+				{ content: ["Finished."] },
+			],
+		});
+		await withProviderAuth(["openai"], async () => {
+			const { session } = await createAgentSession({
+				...baseOptions(tempDir),
+				settings: Settings.isolated({ "tools.approvalMode": "always-ask", "compaction.enabled": false }),
+				toolNames: [tool.name],
+				customTools: [tool],
+				extensions: [reviewer, rewriter],
+			});
+			try {
+				vi.spyOn(session.agent, "streamFn").mockImplementation(provider.stream);
+				await session.prompt("Review both commands.");
+				expect(originalCalls).toEqual([
+					{ id: "batch-first", command: "first" },
+					{ id: "batch-second", command: "second" },
+				]);
+				expect(authorizedCalls).toEqual([
+					{ id: "batch-first", input: { command: "rewritten first" }, kind: "main", sessionId: session.sessionId },
+					{ id: "batch-second", input: { command: "second" }, kind: "main", sessionId: session.sessionId },
+				]);
+				expect(executed).toEqual([
+					{ id: "batch-first", command: "rewritten first" },
+					{ id: "batch-second", command: "second" },
+				]);
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
+
+	it("preserves advisor identity at final tool_authorization", async () => {
+		const tempDir = makeTempDir();
+		const target = path.join(tempDir, "advisor-authorization.txt");
+		const identities: Array<{ id: string; kind: string; parentId?: string }> = [];
+		await withProviderAuth(["openai"], async () => {
+			const { session } = await createAgentSession({
+				...baseOptions(tempDir),
+				settings: Settings.isolated({ "advisor.enabled": true, "tools.approvalMode": "always-ask" }),
+				extensions: [
+					pi => {
+						pi.on("tool_authorization", (_event, ctx) => {
+							identities.push({ id: ctx.agent.id, kind: ctx.agent.kind, parentId: ctx.agent.parentId });
+							return ctx.agent.id === "advisor" ? { decision: "allow" } : { decision: "deny" };
+						});
+					},
+				],
+			});
+			try {
+				session.applyAdvisorConfigs([{ name: "writer", tools: ["write"], model: "gpt-4o-mini" }], undefined);
+				const advisor = session.getAdvisorAgent();
+				if (!advisor) throw new Error("Expected SDK advisor");
+				const provider = createMockModel({
+					responses: [
+						{
+							content: [
+								{
+									type: "toolCall",
+									id: "advisor-write",
+									name: "write",
+									arguments: { path: target, content: "authorized" },
+								},
+							],
+						},
+						{ content: ["Finished."] },
+					],
+				});
+				vi.spyOn(advisor, "streamFn").mockImplementation(provider.stream);
+				await advisor.prompt("Write the fixture.");
+				expect(await Bun.file(target).text()).toBe("authorized");
+				expect(identities).toEqual([
+					{
+						id: "advisor",
+						kind: "sub",
+						parentId: session.extensionRunner?.createContext().agent.id,
+					},
+				]);
+			} finally {
+				await session.dispose();
+			}
+		});
+	});
+
+	it("runs a real wrapped EditTool in ACP with default TTSR rules", async () => {
+		const tempDir = makeTempDir();
+		const target = path.join(tempDir, "acp-edit.txt");
+		const input = "*** Begin Patch\n*** Add File: acp-edit.txt\n+authorized edit\n*** End Patch";
+		const authorized: unknown[] = [];
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			sessionManager: SessionManager.inMemory(tempDir),
+			rules: undefined,
+			settings: Settings.isolated({ "edit.mode": "apply_patch", "compaction.enabled": false }),
+			toolNames: ["edit"],
+			extensions: [
+				pi => {
+					pi.on("tool_authorization", event => {
+						authorized.push(event.input);
+					});
+				},
+			],
+		});
+		try {
+			const requestPermission = vi.fn(
+				async () => ({ outcome: "selected", optionId: "allow_once", kind: "allow_once" }) as const,
+			);
+			session.setClientBridge({ capabilities: { requestPermission: true }, requestPermission });
+			const provider = createMockModel({
+				responses: [
+					{ content: [{ type: "toolCall", id: "acp-edit", name: "edit", arguments: { input } }] },
+					{ content: ["Finished."] },
+				],
+			});
+			vi.spyOn(session.agent, "streamFn").mockImplementation(provider.stream);
+			await withProviderAuth(["openai"], async () => {
+				await session.prompt("Create the fixture using edit.");
+			});
+			const result = session.messages.find(
+				(message): message is ToolResultMessage =>
+					message.role === "toolResult" && message.toolCallId === "acp-edit",
+			);
+			expect(result?.isError).toBe(false);
+			expect(await Bun.file(target).text()).toBe("authorized edit\n");
+			expect(authorized).toEqual([{ input }]);
+			expect(requestPermission).not.toHaveBeenCalled();
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("tool_authorization ask denies auto-allowed ACP bash without native UI", async () => {
+		const tempDir = makeTempDir();
+		const nativeDecisions: string[] = [];
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			settings: Settings.isolated({ "bash.patterns": [{ match: "echo reviewed", approval: "allow" }] }),
+			toolNames: ["bash"],
+			extensions: [
+				pi => {
+					pi.on("tool_authorization", event => {
+						nativeDecisions.push(event.nativeDecision);
+						return { decision: "ask" };
+					});
+				},
+			],
+		});
+		try {
+			const requestPermission = vi.fn(
+				async () => ({ outcome: "selected", optionId: "allow_once", kind: "allow_once" }) as const,
+			);
+			session.setClientBridge({ capabilities: { requestPermission: true }, requestPermission });
+			const bash = session.agent.state.tools.find(tool => tool.name === "bash");
+			if (!bash) throw new Error("Expected ACP bash tool");
+			await expect(bash.execute("acp-ask", { command: "echo reviewed" })).rejects.toThrow(
+				"requires extension approval but no interactive UI",
+			);
+			expect(nativeDecisions).toEqual(["allow"]);
+			expect(requestPermission).not.toHaveBeenCalled();
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("runs advisor tools through the approval gate", async () => {
 		// The advisor's tools are built straight from `BUILTIN_TOOLS`, outside
 		// the registry loop that wraps everything else. Its own loop and its

@@ -397,6 +397,18 @@ export function buildAggregatedToolCallResult(
 	};
 }
 
+export type ToolAuthorizationDecision = "allow" | "ask" | "deny";
+
+/**
+ * Final authorization combines by strictness: deny > ask > allow.
+ * Returning undefined abstains; allow overrides tools.approvalMode for this call, but cannot
+ * waive tool-owned/explicit policy, restricted-folder prompts, or provider safety checks.
+ */
+export interface ToolAuthorizationEventResult {
+	decision: ToolAuthorizationDecision;
+	reason?: string;
+}
+
 /**
  * Return type for `tool_result` handlers.
  * Allows handlers to modify tool results and attach passive context.

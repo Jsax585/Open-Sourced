@@ -15,7 +15,11 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ExtensionRuntime, loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import {
+	ExtensionRuntime,
+	loadExtensionFromFactory,
+	loadExtensions,
+} from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import {
 	EXTENSION_HANDLER_TIMEOUT_MS,
 	ExtensionRunner,
@@ -26,13 +30,16 @@ import {
 import type {
 	Extension,
 	ExtensionError,
+	ExtensionFactory,
 	ExtensionUIContext,
 	InputEvent,
 	InputEventResult,
+	ToolAuthorizationEventResult,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
 import { createAssistantMessage } from "./helpers/agent-session-setup";
 
@@ -67,6 +74,7 @@ describe("ExtensionRunner", () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		testSetExtensionHandlerTimeoutMs(EXTENSION_HANDLER_TIMEOUT_MS);
 		testSetSessionShutdownHandlerTimeoutMs(SESSION_SHUTDOWN_HANDLER_TIMEOUT_MS);
 		tempDir.removeSync();
@@ -4147,6 +4155,644 @@ describe("ExtensionRunner", () => {
 
 			expect(order).toEqual(["tool_call", "tool_approval_requested", "ui_select"]);
 			delete globalState.__orderEvents;
+		});
+
+		describe("tool_authorization", () => {
+			const authorizationRunner = async (...factories: ExtensionFactory[]): Promise<ExtensionRunner> => {
+				const runtime = new ExtensionRuntime();
+				const extensions: Extension[] = [];
+				for (const factory of factories) {
+					extensions.push(await loadExtensionFromFactory(factory, tempDir.path(), new EventBus(), runtime));
+				}
+				return new ExtensionRunner(extensions, runtime, tempDir.path(), sessionManager, modelRegistry);
+			};
+			const parameters = Type.Object({ command: Type.String() });
+			const recordingTool = () => ({
+				name: "guarded_command",
+				label: "Guarded command",
+				description: "Records authorized execution",
+				parameters,
+				approval: "exec" as const,
+				execute: vi.fn(async (_id: string, _input: { command: string }) => ({
+					content: [{ type: "text" as const, text: "recorded" }],
+				})),
+			});
+			const cases: Array<{
+				name: string;
+				decisions: Array<ToolAuthorizationEventResult | undefined | "throw">;
+				prompts: number;
+				blocked?: string;
+			}> = [
+				{
+					name: "ask beats earlier and later allow",
+					decisions: [{ decision: "allow" }, { decision: "ask" }, { decision: "allow" }],
+					prompts: 1,
+				},
+				{
+					name: "deny beats allow and ask",
+					decisions: [{ decision: "allow" }, { decision: "ask" }, { decision: "deny" }],
+					prompts: 0,
+					blocked: "denied by an extension",
+				},
+				{
+					name: "a later allow cannot undo deny",
+					decisions: [{ decision: "deny" }, { decision: "allow" }],
+					prompts: 0,
+					blocked: "denied by an extension",
+				},
+				{
+					name: "abstentions preserve allow",
+					decisions: [undefined, { decision: "allow" }, undefined],
+					prompts: 0,
+				},
+				{ name: "all abstentions preserve native approval", decisions: [undefined, undefined], prompts: 1 },
+				{
+					name: "handler errors fail closed",
+					decisions: ["throw", { decision: "allow" }],
+					prompts: 0,
+					blocked: "authorization failed",
+				},
+			];
+			for (const { name, decisions, prompts, blocked } of cases) {
+				it(name, async () => {
+					const runner = await authorizationRunner(
+						...decisions.map(
+							decision =>
+								(pi => {
+									pi.on("tool_authorization", () => {
+										if (decision === "throw") throw new Error("authorization failed");
+										return decision;
+									});
+								}) satisfies ExtensionFactory,
+						),
+					);
+					const select = vi.fn(async () => "Approve");
+					initApprovalRunner(runner, select);
+					const tool = recordingTool();
+					const execution = new ExtensionToolWrapper(tool, runner).execute(
+						"authorization-call",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						alwaysAskContext,
+					);
+					if (blocked) await expect(execution).rejects.toThrow(blocked);
+					else await execution;
+					expect(tool.execute).toHaveBeenCalledTimes(blocked ? 0 : 1);
+					expect(select).toHaveBeenCalledTimes(prompts);
+				});
+			}
+
+			for (const answer of ["Approve", "Deny", undefined]) {
+				it(`extension ask requires native UI approval: ${answer ?? "no UI"}`, async () => {
+					const runner = await authorizationRunner(pi => {
+						pi.on("tool_authorization", () => ({ decision: "ask" }));
+					});
+					const select = vi.fn(async () => answer);
+					if (answer !== undefined) initApprovalRunner(runner, select);
+					const tool = recordingTool();
+					const execution = new ExtensionToolWrapper(tool, runner).execute(
+						"ask-call",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						yoloContext,
+					);
+					if (answer === "Approve") await execution;
+					else
+						await expect(execution).rejects.toThrow(
+							answer === undefined ? "no interactive UI" : "denied by user",
+						);
+					expect(tool.execute).toHaveBeenCalledTimes(answer === "Approve" ? 1 : 0);
+					expect(select).toHaveBeenCalledTimes(answer === undefined ? 0 : 1);
+				});
+			}
+
+			it("extension ask is not satisfied by an earlier native session grant", async () => {
+				let ask = false;
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_authorization", () => (ask ? { decision: "ask" } : undefined));
+				});
+				const select = vi.fn(async (_title: string, options: string[]) =>
+					ask ? "Deny" : options.find(option => option.endsWith("for this session")),
+				);
+				initApprovalRunner(runner, select);
+				const tool = recordingTool();
+				const wrapped = new ExtensionToolWrapper(tool, runner);
+				await wrapped.execute("native-grant", { command: "reviewed" }, undefined, undefined, alwaysAskContext);
+				await wrapped.execute("cached-grant", { command: "reviewed" }, undefined, undefined, alwaysAskContext);
+				expect(select).toHaveBeenCalledTimes(1);
+				ask = true;
+				await expect(
+					wrapped.execute("extension-ask", { command: "reviewed" }, undefined, undefined, alwaysAskContext),
+				).rejects.toThrow("denied by user");
+				expect(select).toHaveBeenCalledTimes(2);
+				expect(tool.execute).toHaveBeenCalledTimes(2);
+			});
+
+			for (const gate of ["policy-prompt", "policy-deny", "override", "restriction", "safety"] as const) {
+				it(`allow cannot bypass native ${gate}`, async () => {
+					const runner = await authorizationRunner(pi => {
+						pi.on("tool_authorization", () => ({ decision: "allow" }));
+					});
+					const select = vi.fn(async () => "Deny");
+					initApprovalRunner(runner, select);
+					const tool: AgentTool<typeof parameters> = recordingTool();
+					if (gate === "override") {
+						tool.approval = () => ({ tier: "exec", policy: "prompt", override: true });
+					} else if (gate === "restriction") {
+						tool.approvalRestrictionPaths = () => [tempDir.path()];
+					}
+					const context = {
+						settings: Settings.isolated({
+							"tools.approvalMode": "yolo",
+							...(gate === "restriction" ? { "tools.restrictedFolders": [tempDir.path()] } : {}),
+							...(gate.startsWith("policy-")
+								? { "tools.approval": { guarded_command: gate === "policy-deny" ? "deny" : "prompt" } }
+								: {}),
+						}),
+						...(gate === "safety"
+							? {
+									toolCall: {
+										batchId: "native-batch",
+										index: 0,
+										total: 1,
+										toolCalls: [{ id: "native-call", name: tool.name }],
+										providerMetadata: {
+											type: "computer",
+											actions: [],
+											pendingSafetyChecks: [{ id: "safety-check", message: "Require human confirmation" }],
+										},
+									},
+								}
+							: {}),
+					} as unknown as AgentToolContext;
+					await expect(
+						new ExtensionToolWrapper(tool, runner).execute(
+							"native-call",
+							{ command: "reviewed" },
+							undefined,
+							undefined,
+							context,
+						),
+					).rejects.toThrow(gate === "policy-deny" ? "blocked" : "denied by user");
+					expect(tool.execute).not.toHaveBeenCalled();
+					expect(select).toHaveBeenCalledTimes(gate === "policy-deny" ? 0 : 1);
+				});
+			}
+
+			it("isolates authorizer mutations from execution and later authorizers", async () => {
+				const retained = { command: "reviewed" };
+				const observed: unknown[] = [];
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_call", () => ({ input: retained }));
+					pi.on("tool_authorization", async event => {
+						event.input.command = "authorizer mutation";
+						await Promise.resolve();
+						retained.command = "late rewrite";
+						return { decision: "allow" };
+					});
+					pi.on("tool_authorization", event => {
+						observed.push(event.input.command);
+					});
+				});
+				const tool = recordingTool();
+				await new ExtensionToolWrapper(tool, runner).execute(
+					"snapshot-call",
+					{ command: "original" },
+					undefined,
+					undefined,
+					yoloContext,
+				);
+				expect(observed).toEqual(["reviewed"]);
+				expect(tool.execute.mock.calls[0]?.[1]).toEqual({ command: "reviewed" });
+			});
+
+			it("normalizes final hashline paths without adding inspection fields to execution", async () => {
+				const input = "[src/guarded.ts#ABCD]\nPUT 1.=1:\n+reviewed";
+				const retained = { input, _path: "spoofed.ts" };
+				const observed: Record<string, unknown>[] = [];
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_call", () => ({ input: retained }));
+					pi.on("tool_authorization", event => {
+						observed.push(structuredClone(event.input));
+						event.input.path = "mutated.ts";
+						event.input.paths = [];
+						return { decision: "allow" };
+					});
+					pi.on("tool_authorization", event => {
+						observed.push(event.input);
+					});
+				});
+				const execute = vi.fn(async (_id: string, _params: { input: string; _path?: string }) => ({
+					content: [{ type: "text" as const, text: "edited" }],
+				}));
+				const tool = {
+					...createHashlineEditTool(),
+					parameters: Type.Object({ input: Type.String(), _path: Type.Optional(Type.String()) }),
+					execute,
+				};
+				await new ExtensionToolWrapper(tool, runner).execute(
+					"hashline-authorization",
+					{ input: "original" },
+					undefined,
+					undefined,
+					yoloContext,
+				);
+				expect(observed).toEqual([
+					{ ...retained, path: "src/guarded.ts", paths: ["src/guarded.ts"] },
+					{ ...retained, path: "src/guarded.ts", paths: ["src/guarded.ts"] },
+				]);
+				expect(execute.mock.calls[0]?.[1]).toEqual(retained);
+				expect(execute.mock.calls[0]?.[1]).not.toBe(retained);
+			});
+
+			it("snapshots computer actions and safety checks retained by tool_call before authorizers await", async () => {
+				const actions = [{ type: "type" as const, text: "reviewed text" }];
+				const checks = [{ id: "reviewed-check", message: "Review this action" }];
+				const expected = { actions: structuredClone(actions), pendingSafetyChecks: structuredClone(checks) };
+				const observed: Record<string, unknown>[] = [];
+				let retained: Record<string, unknown> | undefined;
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_call", event => {
+						retained = { ...event.input };
+					});
+					pi.on("tool_authorization", async event => {
+						observed.push(structuredClone(event.input));
+						event.input.actions = [];
+						event.input.pendingSafetyChecks = [];
+						await Promise.resolve();
+						if (!retained) throw new Error("Expected tool_call input");
+						(retained.actions as typeof actions)[0].text = "late action";
+						(retained.pendingSafetyChecks as typeof checks).splice(0);
+						return { decision: "allow" };
+					});
+					pi.on("tool_authorization", event => {
+						observed.push(event.input);
+					});
+				});
+				const select = vi.fn(async (_title: string) => "Approve");
+				initApprovalRunner(runner, select);
+				const tool = {
+					name: "computer",
+					label: "Computer",
+					description: "Synthetic provider-native computer",
+					native: { type: "computer" as const },
+					parameters: Type.Object({}),
+					approval: "exec" as const,
+					execute: vi.fn(
+						async (
+							_id: string,
+							params: object,
+							_signal?: AbortSignal,
+							_update?: unknown,
+							context?: AgentToolContext,
+						) => {
+							expect(params).toEqual({});
+							expect(context?.toolCall?.providerMetadata).toEqual({
+								type: "computer",
+								providerItemId: "computer-item",
+								...expected,
+							});
+							expect(context?.providerSafetyApproved).toBe(true);
+							return { content: [{ type: "text" as const, text: "computer action" }] };
+						},
+					),
+				};
+				const context = {
+					settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
+					toolCall: {
+						batchId: "computer-batch",
+						index: 0,
+						total: 1,
+						toolCalls: [{ id: "computer-call", name: "computer" }],
+						providerMetadata: {
+							type: "computer",
+							providerItemId: "computer-item",
+							actions,
+							pendingSafetyChecks: checks,
+						},
+					},
+				} as AgentToolContext;
+				await new ExtensionToolWrapper(tool, runner).execute("computer-call", {}, undefined, undefined, context);
+				expect(observed).toEqual([expected, expected]);
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(select.mock.calls[0]?.[0]).toContain("Review this action");
+				expect(context.providerSafetyApproved).toBe(true);
+				expect(tool.execute).toHaveBeenCalledTimes(1);
+			});
+
+			for (const nativeGate of ["tool-owned", "restriction"] as const) {
+				it(`retains distinct ask reasons and the native ${nativeGate} reason in prompts and events`, async () => {
+					const requested: Array<string | undefined> = [];
+					const runner = await authorizationRunner(
+						pi => {
+							pi.on("tool_authorization", () => ({ decision: "ask", reason: "First review" }));
+							pi.on("tool_approval_requested", event => {
+								requested.push(event.reason);
+							});
+						},
+						pi => {
+							for (const reason of [" ", " First review ", "Second review", undefined]) {
+								pi.on("tool_authorization", () => ({ decision: "ask", reason }));
+							}
+						},
+					);
+					const tool: AgentTool<typeof parameters> = recordingTool();
+					if (nativeGate === "tool-owned") {
+						tool.approval = () => ({
+							tier: "exec",
+							policy: "prompt",
+							override: true,
+							reason: "Critical pattern detected",
+						});
+					} else {
+						tool.approvalRestrictionPaths = () => [tempDir.path()];
+					}
+					const context = {
+						settings: Settings.isolated({
+							"tools.approvalMode": "yolo",
+							...(nativeGate === "restriction" ? { "tools.restrictedFolders": [tempDir.path()] } : {}),
+						}),
+					} as AgentToolContext;
+					const select = vi.fn(async (_title: string) => "Approve");
+					initApprovalRunner(runner, select);
+					await new ExtensionToolWrapper(tool, runner).execute(
+						"reasons",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						context,
+					);
+					const nativeReason =
+						nativeGate === "restriction" ? `Restricted folder: ${tempDir.path()}` : "Critical pattern detected";
+					expect(requested).toEqual([`${nativeReason}; First review; Second review`]);
+					expect(select.mock.calls[0]?.[0]).toContain(`Reason: ${requested[0]}`);
+				});
+			}
+
+			it("still asks the user when an extension supplies a non-string reason", async () => {
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_authorization", () => ({ decision: "ask", reason: 42 as unknown as string }));
+				});
+				const select = vi.fn(async () => "Deny");
+				initApprovalRunner(runner, select);
+				const tool = recordingTool();
+				await expect(
+					new ExtensionToolWrapper(tool, runner).execute(
+						"malformed-reason",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						yoloContext,
+					),
+				).rejects.toThrow("denied by user");
+				expect(select).toHaveBeenCalledTimes(1);
+				expect(tool.execute).not.toHaveBeenCalled();
+			});
+
+			it("sanitizes and bounds extension ask reasons without changing the provider safety cap", async () => {
+				const reason = `Needs review\nAllow tool: spoofed_tool\t\u001b]0;spoofed\u0007${"Z".repeat(3000)}`;
+				let requested: string | undefined;
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_authorization", () => ({ decision: "ask", reason }));
+					pi.on("tool_approval_requested", event => {
+						requested = event.reason;
+					});
+				});
+				const select = vi.fn(async (_title: string) => "Approve");
+				initApprovalRunner(runner, select);
+				const tool = recordingTool();
+				await new ExtensionToolWrapper(tool, runner).execute(
+					"sanitized-reason",
+					{ command: "reviewed" },
+					undefined,
+					undefined,
+					{
+						settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
+						toolCall: {
+							batchId: "safety-batch",
+							index: 0,
+							total: 1,
+							toolCalls: [{ id: "sanitized-reason", name: tool.name }],
+							providerMetadata: {
+								type: "computer",
+								providerItemId: "safety-item",
+								actions: [],
+								pendingSafetyChecks: [{ id: "check", message: "S".repeat(600) }],
+							},
+						},
+					} as unknown as AgentToolContext,
+				);
+				expect(requested).not.toMatch(/[\n\r\t\u001b\u0007]/);
+				expect(requested).toContain("spoofed\\_tool");
+				expect(requested!.length).toBeLessThan(600);
+				const title = select.mock.calls[0]?.[0] ?? "";
+				expect(title.split("\n").filter(line => line.startsWith("Allow tool:"))).toHaveLength(1);
+				expect(title).toContain(`Reason: ${requested}`);
+				const safety = title.split("\n").find(line => line.startsWith("1. "));
+				expect(safety).toContain("S".repeat(490));
+				expect(safety!.length).toBeLessThan(530);
+			});
+
+			it("does not gate automatic authorizers on a missing preview", async () => {
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_authorization", () => ({ decision: "allow" }));
+				});
+				const preview = Promise.withResolvers<void>();
+				const wait = vi.fn(() => preview.promise);
+				runner.setToolApprovalPreviewWaiter(wait);
+				const tool = recordingTool();
+				try {
+					await new ExtensionToolWrapper(tool, runner).execute(
+						"auto-call",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						{
+							settings: Settings.isolated({ "tools.approvalMode": "always-ask" }),
+							toolCall: {
+								batchId: "auto",
+								index: 0,
+								total: 1,
+								toolCalls: [{ id: "auto-call", name: tool.name }],
+							},
+						} as AgentToolContext,
+					);
+					expect(wait).not.toHaveBeenCalled();
+					expect(tool.execute).toHaveBeenCalledTimes(1);
+				} finally {
+					preview.resolve();
+				}
+			});
+
+			it("gates custom authorizer modals before calling the host UI", async () => {
+				const entered = Promise.withResolvers<void>();
+				const preview = Promise.withResolvers<void>();
+				const runner = await authorizationRunner(pi => {
+					pi.on("tool_authorization", async (_event, ctx) => {
+						entered.resolve();
+						await ctx.ui.custom(() => ({ render: () => [], invalidate: () => {} }));
+						return { decision: "allow" };
+					});
+				});
+				initApprovalRunner(runner, async () => "Approve");
+				const opened = vi.fn();
+				runner.getUIContext().custom = async <T>() => {
+					opened();
+					return undefined as T;
+				};
+				runner.setToolApprovalPreviewWaiter(() => preview.promise);
+				const tool = recordingTool();
+				const execution = new ExtensionToolWrapper(tool, runner).execute(
+					"custom-call",
+					{ command: "reviewed" },
+					undefined,
+					undefined,
+					{
+						settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
+						toolCall: {
+							batchId: "custom",
+							index: 0,
+							total: 1,
+							toolCalls: [{ id: "custom-call", name: tool.name }],
+						},
+					} as AgentToolContext,
+				);
+				try {
+					await entered.promise;
+					expect(opened).not.toHaveBeenCalled();
+					expect(tool.execute).not.toHaveBeenCalled();
+					preview.resolve();
+					await execution;
+					expect(opened).toHaveBeenCalledTimes(1);
+					expect(tool.execute).toHaveBeenCalledTimes(1);
+				} finally {
+					preview.resolve();
+				}
+			});
+
+			for (const dialog of ["select", "custom"] as const) {
+				it(`honors a caller-owned ${dialog} cancellation while the preview is pending`, async () => {
+					const entered = Promise.withResolvers<void>();
+					const preview = Promise.withResolvers<void>();
+					const caller = new AbortController();
+					let customError: unknown;
+					const runner = await authorizationRunner(pi => {
+						pi.on("tool_authorization", async (_event, ctx) => {
+							entered.resolve();
+							if (dialog === "select") {
+								expect(await ctx.ui.select("Review", ["Approve"], { signal: caller.signal })).toBeUndefined();
+							} else {
+								try {
+									await ctx.ui.custom(() => ({ render: () => [], invalidate: () => {} }), {
+										signal: caller.signal,
+									});
+								} catch (error) {
+									customError = error;
+								}
+							}
+							return { decision: "deny", reason: "caller cancelled" };
+						});
+					});
+					initApprovalRunner(runner, async () => "Approve");
+					const opened = vi.fn();
+					runner.getUIContext().select = async (_title, _options, options) => {
+						if (options?.signal?.aborted) return undefined;
+						opened();
+						return "Approve";
+					};
+					runner.getUIContext().custom = async <T>() => {
+						opened();
+						return undefined as T;
+					};
+					runner.setToolApprovalPreviewWaiter(() => preview.promise);
+					const tool = recordingTool();
+					const execution = new ExtensionToolWrapper(tool, runner).execute(
+						"caller-cancel",
+						{ command: "reviewed" },
+						undefined,
+						undefined,
+						{
+							settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
+							toolCall: {
+								batchId: "cancel",
+								index: 0,
+								total: 1,
+								toolCalls: [{ id: "caller-cancel", name: tool.name }],
+							},
+						} as AgentToolContext,
+					);
+					const settled = execution.then(
+						() => undefined,
+						error => error,
+					);
+					try {
+						await entered.promise;
+						caller.abort(new Error("caller dialog cancelled"));
+						expect(String(await settled)).toContain("caller cancelled");
+						if (dialog === "custom") expect(String(customError)).toContain("caller dialog cancelled");
+						expect(opened).not.toHaveBeenCalled();
+						expect(tool.execute).not.toHaveBeenCalled();
+					} finally {
+						preview.resolve();
+					}
+				});
+			}
+
+			for (const outcome of ["ready", "abort", "error"] as const) {
+				it(`gates authorizer dialogs on the preview and handles ${outcome}`, async () => {
+					testSetExtensionHandlerTimeoutMs(20);
+					vi.useFakeTimers();
+					const entered = Promise.withResolvers<void>();
+					const preview = Promise.withResolvers<void>();
+					const abort = new AbortController();
+					const runner = await authorizationRunner(pi => {
+						pi.on("tool_authorization", async (_event, ctx) => {
+							entered.resolve();
+							await ctx.ui.select("Authorizer review", ["Approve"]);
+							return { decision: "allow" };
+						});
+					});
+					const wait = vi.fn((_id: string) => preview.promise);
+					runner.setToolApprovalPreviewWaiter(wait);
+					const select = vi.fn(async () => "Approve");
+					initApprovalRunner(runner, select);
+					const tool = recordingTool();
+					const execution = new ExtensionToolWrapper(tool, runner).execute(
+						"dialog-call",
+						{ command: "reviewed" },
+						abort.signal,
+						undefined,
+						{
+							settings: Settings.isolated({ "tools.approvalMode": "yolo" }),
+							toolCall: {
+								batchId: "dialog",
+								index: 0,
+								total: 1,
+								toolCalls: [{ id: "dialog-call", name: tool.name }],
+							},
+						} as AgentToolContext,
+					);
+					await entered.promise;
+					vi.advanceTimersByTime(30);
+					expect(wait).toHaveBeenCalledWith("dialog-call");
+					expect(select).not.toHaveBeenCalled();
+					expect(tool.execute).not.toHaveBeenCalled();
+					if (outcome === "ready") {
+						preview.resolve();
+						await execution;
+						expect(select).toHaveBeenCalledTimes(1);
+						expect(tool.execute).toHaveBeenCalledTimes(1);
+					} else {
+						if (outcome === "abort") abort.abort();
+						else preview.reject(new Error("preview failed"));
+						await expect(execution).rejects.toThrow(outcome === "abort" ? "cancelled" : "preview failed");
+						expect(select).not.toHaveBeenCalled();
+						expect(tool.execute).not.toHaveBeenCalled();
+					}
+				});
+			}
 		});
 	});
 	describe("hasHandlers", () => {

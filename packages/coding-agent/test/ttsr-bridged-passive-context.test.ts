@@ -12,8 +12,9 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CursorExecHandlers } from "@oh-my-pi/pi-coding-agent/cursor";
 import { TtsrManager } from "@oh-my-pi/pi-coding-agent/export/ttsr";
-import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import type { ExtensionFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -21,6 +22,7 @@ import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { Tool, ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
@@ -63,18 +65,12 @@ const BUILTIN_RULE: Rule = {
  * bridged-call preflight, with a real `write` tool behind the real wrapper.
  * Only the model is stubbed; nothing here calls a provider.
  */
-async function createBridgedHarness(dir: string, rules: Rule[] = [RULE]) {
+async function createBridgedHarness(dir: string, rules: Rule[] = [RULE], factory?: ExtensionFactory) {
 	const manager = SessionManager.inMemory(dir);
 	const settings = Settings.isolated({ "compaction.enabled": false, "tools.approvalMode": "yolo" });
-	const extensionRunner = new ExtensionRunner(
-		[],
-		new ExtensionRuntime(),
-		dir,
-		manager,
-		modelRegistry,
-		undefined,
-		settings,
-	);
+	const runtime = new ExtensionRuntime();
+	const extensions = factory ? [await loadExtensionFromFactory(factory, dir, new EventBus(), runtime)] : [];
+	const extensionRunner = new ExtensionRunner(extensions, runtime, dir, manager, modelRegistry, undefined, settings);
 	const mock = createMockModel({ responses: [] });
 	const toolSession: ToolSession = {
 		cwd: dir,
@@ -126,6 +122,48 @@ const texts = (content: ReadonlyArray<{ type: string; text?: string }>): string[
 	content.flatMap(block => (block.type === "text" && block.text !== undefined ? [block.text] : []));
 
 describe("TTSR reminders on bridged tool calls", () => {
+	it("does not claim the next bridged call's TTSR reminder when snapshot cloning fails", async () => {
+		using dir = TempDir.createSync("@pi-ttsr-bridged-clone-");
+		const { session, settings, wrappedWrite, injectedRules } = await createBridgedHarness(dir.path(), [RULE], pi => {
+			pi.on("tool_authorization", () => ({ decision: "allow" }));
+		});
+		const sink: string[] = [];
+		const context = {
+			settings,
+			addAdditionalContext: (text: string) => {
+				sink.push(text);
+			},
+		} as unknown as AgentToolContext;
+		try {
+			const failedTarget = `${dir.path()}/uncloneable.ts`;
+			await expect(
+				wrappedWrite.execute(
+					"uncloneable",
+					{ path: failedTarget, content: "FORBIDDEN_TOKEN\n", thirdPartyCallback: () => {} },
+					undefined,
+					undefined,
+					context,
+				),
+			).rejects.toThrow("can not be cloned");
+			expect(await Bun.file(failedTarget).exists()).toBe(false);
+			expect(sink).toEqual([]);
+			const target = `${dir.path()}/next.ts`;
+			await wrappedWrite.execute(
+				"next",
+				{ path: target, content: "FORBIDDEN_TOKEN\n" },
+				undefined,
+				undefined,
+				context,
+			);
+			expect(await Bun.file(target).text()).toBe("FORBIDDEN_TOKEN\n");
+			expect(sink).toHaveLength(1);
+			expect(sink[0]).toContain(RULE.content);
+			expect(injectedRules()).toEqual([RULE.name]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("preserves each overlapping bridge's regex excerpt through AST matching and escapes harness tags", async () => {
 		using dir = TempDir.createSync("@pi-ttsr-bridged-excerpt-");
 		const { session, settings, wrappedWrite } = await createBridgedHarness(dir.path(), [

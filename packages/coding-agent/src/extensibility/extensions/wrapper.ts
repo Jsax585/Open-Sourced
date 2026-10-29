@@ -328,6 +328,22 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
 			}
 		}
+		const hasFinalAuthorization = this.runner.hasHandlers("tool_authorization");
+		const xdevBypass = context?.xdevPolicyKey !== undefined && effectiveParams === params;
+		// A rewriting extension may retain its result. Own the input before any
+		// authorizer awaits, so neither late rewrites nor authorizer mutations can change execution.
+		if (hasFinalAuthorization) {
+			effectiveParams = structuredClone(effectiveParams);
+			if (context?.toolCall?.providerMetadata?.type === "computer") {
+				// Computer execution lives in metadata, which tool_call also exposes by reference.
+				// Keep the call's context/sinks, but detach the actions and safety checks it executes.
+				context.toolCall = {
+					...context.toolCall,
+					providerMetadata: structuredClone(context.toolCall.providerMetadata),
+				};
+			}
+		}
+
 		if (!loopDispatchedToolCall) {
 			const preflight = await this.runner.runToolCallPreflightBefore?.(
 				toolCallId,
@@ -369,7 +385,6 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const policyKey = resolved.policyKey ?? this.tool.name;
 		const explicitPrompt =
 			resolved.override || (Object.hasOwn(userPolicies, policyKey) && policyKey !== context?.xdevPolicyKey);
-		const xdevBypass = context?.xdevPolicyKey !== undefined && effectiveParams === params;
 		const acpBypass =
 			context !== undefined &&
 			Object.hasOwn(context, "acpApprovedArgs") &&
@@ -387,19 +402,62 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 		const sessionScope =
 			pendingSafetyChecks.length === 0 && !cacheTargets ? sessionApprovalScope(resolved, this.tool.name) : undefined;
 		const sessionApproved = sessionScope !== undefined && this.runner.hasSessionApproval(sessionScope.key);
-		const approvalCheck = {
+		let approvalCheck = {
 			required:
 				pendingSafetyChecks.length > 0 ||
 				(resolved.policy === "prompt" && !acpBypass && !sessionApproved && (explicitPrompt || !xdevBypass)),
 			reason: resolved.reason,
 		};
+		const nativeApprovalRequired = approvalCheck.required;
+		const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
+		const matchesScheduledCall =
+			scheduledCall?.id === toolCallId &&
+			(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName);
+		let extensionApprovalRequired = false;
+		if (hasFinalAuthorization) {
+			const manualApprovalRequired =
+				pendingSafetyChecks.length > 0 || (resolved.policy === "prompt" && resolved.source !== "mode");
+			const authorization = await this.runner.emitToolAuthorization(
+				{
+					type: "tool_authorization",
+					sessionId: this.runner.sessionId,
+					toolName: this.tool.name,
+					toolCallId,
+					input: normalizeToolEventInput(
+						this.tool.name,
+						resolveToolEventInput(this.tool, toolEventArgs(effectiveParams, context)),
+					),
+					approvalMode,
+					nativeDecision: approvalCheck.required ? "ask" : "allow",
+					manualApprovalRequired,
+					...(approvalCheck.reason ? { reason: approvalCheck.reason } : {}),
+				},
+				signal,
+				this.#agent,
+				matchesScheduledCall ? () => this.runner.waitForToolApprovalPreview(toolCallId) : undefined,
+			);
+			if (authorization?.decision === "deny") {
+				cancelPreflight();
+				throw new Error(authorization.reason || `Tool execution was denied by an extension: ${this.tool.name}`);
+			}
+			if (authorization?.decision === "ask") {
+				extensionApprovalRequired = true;
+				const extensionReason = authorization.reason ? approvalData(authorization.reason) : "";
+				let reason = approvalCheck.reason || undefined;
+				if (extensionReason && extensionReason !== reason) {
+					reason = reason ? `${reason}; ${extensionReason}` : extensionReason;
+				}
+				approvalCheck = { required: true, reason };
+			} else if (authorization?.decision === "allow" && !manualApprovalRequired) {
+				approvalCheck.required = false;
+			}
+			if (matchesScheduledCall && approvalCheck.required !== nativeApprovalRequired) {
+				this.runner.reportToolApprovalState(toolCallId, approvalCheck.required);
+			}
+		}
 
 		if (approvalCheck.required) {
-			const scheduledCall = context?.toolCall?.toolCalls[context.toolCall.index];
-			if (
-				scheduledCall?.id === toolCallId &&
-				(scheduledCall.name === this.tool.name || scheduledCall.name === this.tool.customWireName)
-			) {
+			if (matchesScheduledCall) {
 				await untilAborted(signal, () => this.runner.waitForToolApprovalPreview(toolCallId));
 			}
 
@@ -447,6 +505,11 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 							`A restricted folder (tools.restrictedFolders) asks in every approval mode.`,
 					);
 				}
+				if (extensionApprovalRequired) {
+					throw new Error(
+						`Tool "${this.tool.name}" requires extension approval but no interactive UI is available.`,
+					);
+				}
 				throw new Error(
 					`Tool "${this.tool.name}" requires approval but no interactive UI available.\n` +
 						`Options:\n` +
@@ -461,12 +524,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
 			let approved: boolean;
 			try {
-				const answer = await requestApproval(uiContext, this.tool, resolvedArgs, {
+				const pendingApproval = requestApproval(uiContext, this.tool, resolvedArgs, {
 					reason: approvalCheck.reason,
 					appendix: safetyAppendix,
-					sessionSubject: sessionScope?.subject,
-					grants: cacheTargets,
+					sessionSubject: extensionApprovalRequired ? undefined : sessionScope?.subject,
+					grants: !extensionApprovalRequired && cacheTargets,
 				});
+				const answer =
+					hasFinalAuthorization && matchesScheduledCall
+						? await pendingApproval.finally(() => this.runner.reportToolApprovalState(toolCallId, false))
+						: await pendingApproval;
 				approved = answer !== "deny";
 				if (answer === "session" && sessionScope) this.runner.grantSessionApproval(sessionScope.key);
 				if (typeof answer === "object" && approvalGrants) {
