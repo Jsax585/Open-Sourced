@@ -578,10 +578,21 @@ export const cfgTuiMouse = register({
 		tab: "appearance",
 		group: "Display",
 		label: "Mouse Click-to-Focus",
-		get description() {
-			const shift = formatKeyHint("shift");
-			return `Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target, and clicks on extension-owned links reach their extension (the link-hint key picks them without the mouse). Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
-		},
+		description:
+			"Focus live subagent cards, HUD rows, and extension-owned links (the link-hint key picks them without the mouse) on a completed click, with a hover highlight on focus targets. Transcript drag selection, wheel scrolling, and table copy controls are governed by `tui.transcriptMouse`",
+	},
+});
+
+export const cfgTuiTranscriptMouse = register({
+	id: "tui.transcriptMouse",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Mouse Transcript Selection",
+		description:
+			"Select and copy transcript text, browse earlier output with the wheel, and show inline table copy controls in classic terminals. Off by default: native selection and terminal scrollback keep working, and table copy stays available through /copy and Tern",
 	},
 });
 

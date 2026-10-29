@@ -2,11 +2,39 @@
  * SGR mouse report parsing (`\x1b[<button;col;rowM` / `…m`).
  *
  * Mouse tracking is enabled while a fullscreen overlay holds the alternate
- * screen (see tui.ts MOUSE_TRACKING_ON), or — opt-in via `tui.mouse` — on the
- * normal buffer whenever no overlay is visible. Consumers hit-test
+ * screen (see tui.ts MOUSE_TRACKING_ON), or when an inline host owns transcript
+ * selection, scrolling, or click-to-focus. Consumers hit-test
  * against their own rendered frame: the frame paints from screen row 0, hence
  * `row`/`col` are exposed 0-based for direct indexing into rendered lines.
  */
+
+/** A rendered control in zero-based local display cells; bounds are half-open. */
+export interface InlineControl {
+	readonly id: object;
+	readonly row: number;
+	readonly from: number;
+	readonly to: number;
+	activate(): boolean;
+}
+
+/** Pure hit-testing; activation is deferred until the host completes the gesture. */
+export type InlineControlResolver = (column: number, row: number) => InlineControl | undefined;
+
+/** Translate a child-local resolver and its controls into parent-local rows. */
+export function offsetInlineControlResolver(resolve: InlineControlResolver, rowOffset: number): InlineControlResolver {
+	if (rowOffset === 0) return resolve;
+	const controls = new WeakMap<InlineControl, InlineControl>();
+	return (column, row) => {
+		const control = resolve(column, row - rowOffset);
+		if (control === undefined) return undefined;
+		let shifted = controls.get(control);
+		if (shifted === undefined) {
+			shifted = { ...control, row: control.row + rowOffset, activate: () => control.activate() };
+			controls.set(control, shifted);
+		}
+		return shifted;
+	};
+}
 
 /** A decoded SGR mouse report. */
 export interface SgrMouseEvent {

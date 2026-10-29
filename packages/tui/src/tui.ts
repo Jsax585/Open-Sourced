@@ -24,6 +24,7 @@ import { TuiDebugServer } from "./debug-server";
 import { extractPrintableText, isKeyRelease, matchesKey } from "./keys";
 import { KITTY_PLACEHOLDER } from "./kitty-graphics";
 import { LoopWatchdog } from "./loop-watchdog";
+import { type InlineControl, type InlineControlResolver, offsetInlineControlResolver } from "./mouse";
 import { assumedTspHello, NativeBackend, type NativeHost } from "./native/backend";
 import { col } from "./native/describe";
 import { TSP_PREFIX, type TspHello } from "./native/encode";
@@ -61,6 +62,7 @@ import {
 	normalizeTerminalOutput,
 	osc66MaxScale,
 	sliceByColumn,
+	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
 } from "./utils";
@@ -189,7 +191,13 @@ export interface HistoryBatch {
 export interface TerminalFramePlan {
 	readonly history?: HistoryBatch;
 	readonly viewport: readonly string[];
+	/** Temporary paint over visible native history; never changes the committed ledger or viewport origin. */
+	readonly historyViewport?: readonly string[];
+	/** Exact immutable snapshot authorizing historical content replacement, not just selection styling. */
+	readonly historyViewportSource?: readonly string[];
 }
+
+const EMPTY_HISTORY_VIEWPORT: readonly string[] = [];
 
 /** Produces bounded terminal frames and retires acknowledged history batches. */
 export interface TerminalFrameProvider {
@@ -266,6 +274,9 @@ export interface Component {
 	 * last time.
 	 */
 	render(width: number): readonly string[];
+
+	/** Snapshot hit-testing for controls in the last classic render, using zero-based local cell coordinates. */
+	getInlineControlResolver?(width: number): InlineControlResolver | undefined;
 
 	/**
 	 * Describe the component semantically for a Tern Surface Protocol
@@ -637,6 +648,60 @@ export class Container implements Component {
 		return lines;
 	}
 
+	/** Child controls in the last concatenated render; custom renderers must preserve these coordinates. */
+	getChildInlineControlResolver(width: number): InlineControlResolver | undefined {
+		const lines = this.#memoLines;
+		if (lines === undefined || this.#memoWidth !== width) return undefined;
+		const targets: { start: number; end: number; resolve: InlineControlResolver }[] = [];
+		let start = 0;
+		for (let index = 0; index < this.children.length; index++) {
+			const child = this.children[index]!;
+			const end = start + (this.#memoChildLines[index]?.length ?? 0);
+			const resolve =
+				child.getInlineControlResolver?.(width) ??
+				(child instanceof Container && child.render === Container.prototype.render
+					? child.getChildInlineControlResolver(width)
+					: undefined);
+			if (resolve !== undefined) targets.push({ start, end, resolve: offsetInlineControlResolver(resolve, start) });
+			start = end;
+		}
+		if (targets.length === 0) return undefined;
+		const children = this.children.slice();
+		const valid = () => {
+			if (this.#memoLines !== lines || this.#memoWidth !== width || children.length !== this.children.length)
+				return false;
+			for (let index = 0; index < children.length; index++) {
+				if (children[index] !== this.children[index]) return false;
+			}
+			return true;
+		};
+		const controls = new WeakMap<InlineControl, InlineControl>();
+		return (column, row) => {
+			if (
+				!valid() ||
+				!Number.isInteger(column) ||
+				column < 0 ||
+				column >= width ||
+				!Number.isInteger(row) ||
+				row < 0 ||
+				row >= lines.length
+			)
+				return undefined;
+			for (const target of targets) {
+				if (row < target.start || row >= target.end) continue;
+				const control = target.resolve(column, row);
+				if (control === undefined) return undefined;
+				let guarded = controls.get(control);
+				if (guarded === undefined) {
+					guarded = { ...control, activate: () => valid() && control.activate() };
+					controls.set(control, guarded);
+				}
+				return guarded;
+			}
+			return undefined;
+		};
+	}
+
 	describe(_cx: DescribeContext): NativeNode | null {
 		const children = this.children;
 		const previous = this.#nativeChildren;
@@ -904,6 +969,8 @@ export class TUI extends Container {
 	// the established differential comparison and resize accounting.
 	#providerWindow: string[] = [];
 	#providerPreparedRows: PreparedLine[] = [];
+	#providerHistoryRows: readonly string[] = EMPTY_HISTORY_VIEWPORT;
+	#providerPaintedHistoryRows: readonly string[] = EMPTY_HISTORY_VIEWPORT;
 	// Rows of the last marker-stripping prepare pass keyed by their stripped
 	// raw line, so rows that only moved (a scroll or a history commit shifts
 	// every row under the positional sidecar) reuse their preparation. Swapped
@@ -1052,7 +1119,7 @@ export class TUI extends Container {
 	// against the next one.
 	#altActive = false;
 	#mouseTracking: MouseTrackingState = "off";
-	/** Product-owned probe for opt-in normal-buffer click capture (`tui.mouse`). Read every frame. */
+	/** Product-owned probe for normal-buffer control and click-to-focus capture. */
 	#inlineMouseProvider: (() => boolean) | undefined;
 	#altPreviousLines: string[] = [];
 	#altPreparedRows: PreparedLine[] = [];
@@ -1160,6 +1227,7 @@ export class TUI extends Container {
 		this.#frameProvider = provider;
 		this.#providerWindow = [];
 		this.#providerPreparedRows = [];
+		this.#providerHistoryRows = this.#providerPaintedHistoryRows = EMPTY_HISTORY_VIEWPORT;
 		this.#resizeReplaySize = undefined;
 		this.requestRender(true);
 	}
@@ -1400,6 +1468,17 @@ export class TUI extends Container {
 		return { top: this.#providerViewportTop - this.#providerViewportPadTop, length: this.#providerWindow.length };
 	}
 
+	/** Exact on-screen history above the published viewport, excluding unknown resize-pulled rows. */
+	getVisibleProviderHistory(): readonly string[] {
+		const { top, length } = this.getMutableViewport();
+		return length > 0 &&
+			this.#previousWidth === this.terminal.columns &&
+			this.#previousHeight === this.terminal.rows &&
+			top === this.#providerHistoryRows.length
+			? this.#providerHistoryRows
+			: EMPTY_HISTORY_VIEWPORT;
+	}
+
 	/**
 	 * Rows of native history the last paint left on screen above a mutable
 	 * viewport that reached the bottom row, or `undefined` when that paint left
@@ -1422,13 +1501,18 @@ export class TUI extends Container {
 	}
 
 	/**
-	 * Probe for opt-in normal-buffer click capture. The provider is read every
-	 * frame; while it returns true (and no fullscreen overlay owns the
+	 * Probe for normal-buffer click capture. The provider is read every
+	 * frame; while it returns true (and no visible overlay owns the
 	 * display) the terminal reports button clicks as SGR events for inline
 	 * click targets. Native text selection becomes Shift+drag while on.
 	 */
 	setInlineMouseTrackingProvider(provider: (() => boolean) | undefined): void {
 		this.#inlineMouseProvider = provider;
+	}
+
+	/** Whether this normal-buffer frame is receiving SGR mouse reports. */
+	isInlineMouseTrackingActive(): boolean {
+		return this.#mouseTracking === "inline";
 	}
 
 	/** Transition mouse reporting, emitting only the sequences a change needs. */
@@ -2709,6 +2793,14 @@ export class TUI extends Container {
 		this.#clearScrollbackOnNextRender = false;
 		// The surface already holds the transcript; there's no row history to retire.
 		if (!nativeWasLive) this.#flushHistoryBeforeStop();
+		if (
+			!nativeWasLive &&
+			this.#previousWidth === this.terminal.columns &&
+			this.#previousHeight === this.terminal.rows
+		) {
+			const restore = this.#paintHistoryViewport(this.#providerHistoryRows, undefined, this.terminal.columns, true);
+			if (restore) this.terminal.write(`${restore}\x1b[${Math.max(0, this.#hardwareCursorRow) + 1};1H`);
+		}
 		// Deliberately leave transmitted images in the terminal's graphics store:
 		// placeholder cells committed to native scrollback render only while their
 		// image data lives, so a delete-by-id here blanks every transcript image
@@ -3477,7 +3569,19 @@ export class TUI extends Container {
 			viewport = this.#compositeVisibleOverlays(viewport, width, height);
 		} while (this.#imageBudget.endPass());
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
-		this.#emitPlanFrame(width, height, viewport, plan.history, provider);
+		this.#emitPlanFrame(
+			width,
+			height,
+			viewport,
+			plan.history,
+			provider,
+			plan.historyViewport,
+			plan.historyViewportSource,
+		);
+		// Controls may appear or retire during renderFrame; use the newly painted targets.
+		if (this.#getTopmostVisibleOverlay() === undefined) {
+			this.#setMouseTracking(this.#inlineMouseProvider?.() === true ? "inline" : "off");
+		}
 	}
 	/**
 	 * Re-offer finalized history once after a settled resize.
@@ -3608,6 +3712,8 @@ export class TUI extends Container {
 		viewportRows: string[],
 		offered: HistoryBatch | undefined,
 		provider: TerminalFrameProvider | undefined,
+		historyViewport?: readonly string[],
+		historyViewportSource?: readonly string[],
 	): void {
 		// Callers composite their overlays inside the budget pass, so `viewportRows`
 		// is already the complete frame. Bound the store here rather than at
@@ -3719,6 +3825,10 @@ export class TUI extends Container {
 			!this.#forceViewportRepaintOnNextRender &&
 			!destructiveReset &&
 			this.#providerWindow.length > 0;
+		// Selection styling must never be pushed into permanent terminal scrollback.
+		if (geometryStable && !destructiveReset && (historyRows.length > 0 || startTop !== newTop)) {
+			buffer += this.#paintHistoryViewport(this.#providerHistoryRows, undefined, width, true);
+		}
 		buffer += this.#retireImagePlacements(this.#screenImagePlacements, prepared.lines, newTop, !diffable);
 		for (const sequence of this.#imageBudget.takeTransmits()) append(sequence);
 		if (diffable) {
@@ -3796,6 +3906,28 @@ export class TUI extends Container {
 		const mutableTop = newTop + replayViewportRows;
 		const mutablePreparedLines = replayViewportRows > 0 ? prepared.lines.slice(replayViewportRows) : prepared.lines;
 		const mutablePreparedRows = replayViewportRows > 0 ? prepared.rows.slice(replayViewportRows) : prepared.rows;
+		const oldHistory = this.#providerHistoryRows;
+		const historyGeometryStable = geometryStable && !destructiveReset && oldHistory.length === startTop;
+		let visibleHistory: readonly string[] = EMPTY_HISTORY_VIEWPORT;
+		if (newTop > 0) {
+			if (preparedHistory.lines.length === 0 && historyGeometryStable) {
+				visibleHistory = newTop === oldHistory.length ? oldHistory : oldHistory.slice(-newTop);
+			} else {
+				const known = historyGeometryStable ? [...oldHistory, ...preparedHistory.lines] : preparedHistory.lines;
+				if (known.length >= newTop) visibleHistory = known.slice(-newTop);
+			}
+		}
+		if (replayViewportRows > 0 && visibleHistory.length === newTop) {
+			visibleHistory = [...visibleHistory, ...prepared.lines.slice(0, replayViewportRows)];
+		}
+		const preserveHistoryPaint = historyGeometryStable && historyRows.length === 0 && mutableTop === startTop;
+		buffer += this.#paintHistoryViewport(
+			visibleHistory,
+			preserveHistoryPaint ? historyViewport : undefined,
+			width,
+			preserveHistoryPaint,
+			preserveHistoryPaint ? historyViewportSource : undefined,
+		);
 		const marker = markers[0];
 		const target =
 			marker !== undefined && rows > 0
@@ -3871,6 +4003,53 @@ export class TUI extends Container {
 			// complete, so pumping it would create a second visible redraw/write.
 			if (history.kind !== "replay") this.requestRender();
 		}
+	}
+
+	#paintHistoryViewport(
+		raw: readonly string[],
+		decoration: readonly string[] | undefined,
+		width: number,
+		geometryStable: boolean,
+		source?: readonly string[],
+	): string {
+		let wanted = raw;
+		if (
+			decoration?.length === raw.length &&
+			decoration.every(
+				(line, row) =>
+					line === raw[row] ||
+					(source === raw
+						? visibleWidth(line) <= width
+						: visibleWidth(line) === visibleWidth(raw[row]!) &&
+							stripTerminalSequences(line) === stripTerminalSequences(raw[row]!)),
+			)
+		) {
+			wanted = decoration;
+		}
+		const previouslyDecorated =
+			this.#providerPaintedHistoryRows !== this.#providerHistoryRows &&
+			this.#providerPaintedHistoryRows.some((line, row) => line !== this.#providerHistoryRows[row]);
+		const previous = geometryStable
+			? this.#providerPaintedHistoryRows
+			: previouslyDecorated
+				? EMPTY_HISTORY_VIEWPORT
+				: raw;
+		let prepared: { lines: string[]; rows: PreparedLine[] } | undefined;
+		let buffer = "";
+		for (let row = 0; row < raw.length; row++) {
+			if (wanted[row] === previous[row]) continue;
+			prepared ??= this.#prepareLinesArray(wanted, width);
+			buffer += `\x1b[${row + 1};1H${this.#lineRewriteSequence(
+				prepared.rows[row]!,
+				width,
+				row,
+				this.#osc66SpacerGlyphWidth(prepared.lines, row),
+				{ imagePlacements: this.#screenImagePlacements, imageRow: row },
+			)}`;
+		}
+		this.#providerHistoryRows = raw;
+		this.#providerPaintedHistoryRows = wanted;
+		return buffer;
 	}
 
 	/** Render one frame: alt-screen modal, provider plan, or children fallback. */

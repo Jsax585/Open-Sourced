@@ -830,23 +830,39 @@ export class InputController {
 	}
 
 	/**
-	 * Inline click-to-focus (`tui.mouse`): left-clicks on live subagent cards
-	 * and HUD rows focus that agent in one action, and pointer motion lights up
-	 * the hover band on the target under the cursor. Every SGR report is consumed
-	 * while inline tracking owns the terminal so button/wheel bytes never reach
-	 * the editor as typed input; clicks on chrome simply swallow.
+	 * Transcript gestures first: selection, table controls, wheel browsing and
+	 * click-to-focus candidates. Extension-owned links and agent/HUD focus follow
+	 * only when the gesture resolved to a plain click and `tui.mouse` is on.
+	 * Every SGR report is consumed while inline tracking owns the terminal so
+	 * button/wheel bytes never reach the editor as typed input.
 	 */
 	#handleInlineMouse(data: string): { consume?: boolean; data?: string } | undefined {
 		if (!data.startsWith("\x1b[<")) return undefined;
-		if (!cfgTuiMouse.get(this.ctx.settings)) return undefined;
+		const focusOnClick = cfgTuiMouse.get(this.ctx.settings);
+		if (!focusOnClick && !this.ctx.ui.isInlineMouseTrackingActive()) return undefined;
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
-		if (event.motion) this.#updateHoverHighlight(event.row);
-		else if (event.leftClick && !this.#activateClickedLink(event.row, event.col)) this.#focusClickedAgent(event.row);
+		const viewport = this.ctx.ui.getMutableViewport();
+		if (viewport.length > 0) {
+			// Links keep their press semantics: a terminal may report the press without a release.
+			if (event.leftClick && focusOnClick && this.#activateClickedLink(event.row, event.col)) {
+				this.clearHoverHighlight();
+				return { consume: true };
+			}
+			const local = viewport.top === 0 ? event : { ...event, row: event.row - viewport.top };
+			const result = this.ctx.handleTranscriptMouse(local);
+			if (result.click && focusOnClick && !result.handled) this.#focusClickedAgent(result.click.row + viewport.top);
+			if (result.handled || result.click) {
+				if (result.handled) this.clearHoverHighlight();
+				return { consume: true };
+			}
+		}
+		// HUD/chrome is not transcript text; preserve its existing opt-in press behavior.
+		if (event.leftClick && focusOnClick) this.#focusClickedAgent(event.row);
+		if (event.motion && focusOnClick) this.#updateHoverHighlight(event.row);
 		return { consume: true };
 	}
-
 	/**
 	 * Keyboard link picking. `app.links.hint` enters link-hint mode, which then owns the keyboard
 	 * while the editor has focus: a lowercase letter narrows the tags, and any other key cancels and

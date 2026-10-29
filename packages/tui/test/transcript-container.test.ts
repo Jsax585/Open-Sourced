@@ -1087,6 +1087,70 @@ describe("TranscriptContainer", () => {
 		expect(transcript.renderTail(80, 0)).toEqual([]);
 	});
 
+	it("pages semantic history with clipped spans and clamps at the oldest row without retirement", () => {
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Block(["a1", "a2"], true));
+		transcript.addChild(new Block([], true));
+		transcript.addChild(new Block(["b1", "", "b3"], true));
+		transcript.addChild(new Block(["c1", "c2"], true));
+		const batch = transcript.peekFlushBatch(80)!;
+		transcript.acknowledgeFinalizedBatch(batch.id);
+		const states = transcript.blockStates();
+		const full = transcript.render(80);
+		for (const requested of [0, 1, 3, 6, 100]) {
+			const offset = Math.min(requested, full.length - 3);
+			const end = full.length - offset;
+			expect(transcript.renderTail(80, 3, requested, true)).toEqual(full.slice(end - 3, end));
+			expect(transcript.getTailOffset()).toBe(offset);
+			expect(transcript.blockStates()).toEqual(states);
+			expect(transcript.peekFinalizedBatch(80, 0)).toBeUndefined();
+			for (const span of transcript.getLastViewportSpans()) {
+				expect(span.start).toBeGreaterThanOrEqual(0);
+				expect(span.end).toBeLessThanOrEqual(3);
+			}
+		}
+		transcript.releaseTailViewport();
+	});
+
+	it("walks only the requested history window instead of rendering the whole ledger", () => {
+		const transcript = new TranscriptContainer();
+		const blocks = Array.from({ length: 100 }, (_, index) => new CountingBlock([`row ${index}`]));
+		for (const block of blocks) transcript.addChild(block);
+		expect(transcript.renderTail(80, 3, 4, true)).toEqual(["row 96", "", "row 97"]);
+		expect(blocks.reduce((sum, block) => sum + block.renders, 0)).toBe(4);
+		transcript.releaseTailViewport();
+	});
+
+	it("anchors history to a block-local boundary while newer content grows and messages append", () => {
+		const transcript = new TranscriptContainer();
+		const older = new Block(
+			Array.from({ length: 10 }, (_, index) => `old ${index}`),
+			true,
+		);
+		const streaming = new Block(["live 0", "live 1"], false);
+		transcript.addChild(older);
+		transcript.addChild(streaming);
+		const epoch = transcript.interactionEpoch;
+		const original = transcript.renderTail(80, 4, 5, true);
+		expect(original).toEqual(["old 4", "old 5", "old 6", "old 7"]);
+		streaming.finalize(["live 0", "live 1", "live 2"]);
+		expect(transcript.renderTail(80, 4, transcript.getTailOffset(), true)).toEqual(original);
+		expect(transcript.getTailOffset()).toBe(6);
+		transcript.addChild(new Block(["new 0", "new 1"], false));
+		expect(transcript.interactionEpoch).toBe(epoch);
+		expect(transcript.renderTail(80, 4, transcript.getTailOffset(), true)).toEqual(original);
+		expect(transcript.getTailOffset()).toBe(9);
+		expect(transcript.renderTail(80, 4, transcript.getTailOffset() - 3, true)).toEqual([
+			"old 7",
+			"old 8",
+			"old 9",
+			"",
+		]);
+		transcript.clear();
+		expect(transcript.interactionEpoch).toBeGreaterThan(epoch);
+		expect(transcript.renderTail(80, 4, 0, true)).toEqual([]);
+	});
+
 	it("cancels a pending replay so shutdown flush emits only un-retired rows", () => {
 		const transcript = new TranscriptContainer();
 		transcript.addChild(new Block(["committed"], true));
@@ -1201,8 +1265,8 @@ describe("TranscriptContainer viewport click spans", () => {
 
 		expect(transcript.renderViewport(80, 10, frame)).toEqual(["a1", "a2", "", "b1"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
-			{ component: first, start: 0, end: 2 },
-			{ component: second, start: 3, end: 4 },
+			{ component: first, start: 0, end: 2, rowOffset: 0 },
+			{ component: second, start: 3, end: 4, rowOffset: 0 },
 		]);
 	});
 
@@ -1215,9 +1279,28 @@ describe("TranscriptContainer viewport click spans", () => {
 
 		expect(transcript.renderViewport(80, 5, frame)).toEqual(["a4", "b1", "b2", "b3", "b4"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
-			{ component: first, start: 0, end: 1 },
-			{ component: second, start: 1, end: 5 },
+			{ component: first, start: 0, end: 1, rowOffset: 3 },
+			{ component: second, start: 1, end: 5, rowOffset: 0 },
 		]);
+	});
+
+	it("keeps component coordinates through blank trimming and head clipping", () => {
+		const transcript = new TranscriptContainer();
+		const block = new Block(["", "  ", "first", "second", "third", ""], false);
+		transcript.addChild(block);
+		expect(transcript.renderViewport(80, 2, frame)).toEqual(["second", "third"]);
+		expect(transcript.getLastViewportSpans()).toEqual([{ component: block, start: 0, end: 2, rowOffset: 3 }]);
+	});
+
+	it("keeps component coordinates after stable rows leave the live viewport", () => {
+		const transcript = new TranscriptContainer();
+		const block = new AppendBlock(["", "stable", "control"], ["stable"]);
+		transcript.addChild(block);
+		const batch = transcript.peekFinalizedBatch(80, 1)!;
+		expect(batch.rows).toEqual(["stable"]);
+		transcript.acknowledgeFinalizedBatch(batch.id);
+		expect(transcript.renderViewport(80, 1, frame)).toEqual(["control"]);
+		expect(transcript.getLastViewportSpans()).toEqual([{ component: block, start: 0, end: 1, rowOffset: 2 }]);
 	});
 
 	it("leaves the emergency summary row unmapped", () => {

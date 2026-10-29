@@ -5,7 +5,7 @@
  * alternate screen and moves the same dotted outline the esc-esc rewind
  * selector uses over the rendered items; Enter copies the outlined turn's
  * text. Right descends into the turn's inner blocks — fenced code, `>`-quotes,
- * bash/eval commands, tool output, and links — replacing the turn's rendered
+ * tables in TSV/CSV/Markdown, bash/eval commands, tool output, and links — replacing the turn's rendered
  * region with a stacked, syntax-highlighted block view whose outline steps per
  * block; Left/Esc ascend back to the transcript. Every block caption carries a
  * clickable `⧉ copy` control and link blocks add `↗ open`; the overlay is
@@ -32,6 +32,8 @@ import { formatKeyHint } from "../app-keybindings";
 import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { highlightCode, type ThemeColor, theme } from "../theme/theme";
 import { commandFromToolCall, extractBlocks, extractLinks } from "./copy-targets";
+import { extractMarkdownTables } from "../components/markdown";
+import { formatTableForClipboard } from "../components/markdown-table-copy";
 import { matchesAppToolsExpand, matchesSelectCancel, matchesSelectDown, matchesSelectUp } from "../keybinding-matchers";
 import { ChatTranscriptBuilder } from "../chat/chat-transcript-builder";
 import { TranscriptBrowser, type TranscriptBrowserFrame } from "../chat/transcript-browser";
@@ -1061,6 +1063,17 @@ function pushMarkdownBlocks(blocks: CopyBlock[], text: string, entry: Transcript
 			});
 		} else {
 			blocks.push({ label: "quote", content: block.text, entry, kind: "quote" });
+		}
+	}
+	for (const [index, table] of extractMarkdownTables(text).entries()) {
+		for (const format of ["tsv", "csv", "markdown"] as const) {
+			blocks.push({
+				label: `table ${index + 1}${theme.sep.dot}${format.toUpperCase()}`,
+				content: formatTableForClipboard(table, format),
+				entry,
+				kind: "code",
+				language: format,
+			});
 		}
 	}
 	// Links follow the message's blocks. The preview shows the whole URL on one

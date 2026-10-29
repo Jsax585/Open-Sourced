@@ -1,6 +1,7 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { presentNarrationAsAnswer } from "@oh-my-pi/pi-ai/utils/narration";
 import { type Component, Container } from "../tui";
+import type { InlineControl, InlineControlResolver } from "../mouse";
 import { Image, type ImageBudget } from "../components/image";
 import { ImageProtocol, TERMINAL } from "../terminal-capabilities";
 import {
@@ -866,6 +867,27 @@ export class AssistantMessageComponent extends Container {
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
 		return rows;
+	}
+
+	getInlineControlResolver(width: number): InlineControlResolver | undefined {
+		const resolve = this.getChildInlineControlResolver(width);
+		if (resolve === undefined) return undefined;
+		const version = this.#blockVersion;
+		const controls = new WeakMap<InlineControl, InlineControl>();
+		return (column, row) => {
+			if (this.#blockVersion !== version) return undefined;
+			const control = resolve(column, row);
+			if (control === undefined) return undefined;
+			let guarded = controls.get(control);
+			if (guarded === undefined) {
+				guarded = {
+					...control,
+					activate: () => this.#blockVersion === version && control.activate(),
+				};
+				controls.set(control, guarded);
+			}
+			return guarded;
+		};
 	}
 
 	/**

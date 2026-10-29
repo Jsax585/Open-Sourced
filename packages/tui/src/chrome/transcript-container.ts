@@ -4,6 +4,7 @@ import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { measureRender, renderForScrollback } from "../components/image";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
+import type { InlineControlResolver } from "../mouse";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isUsageRowBlock } from "../overlays/usage-row";
 import { isToolActivityComponent } from "./tool-activity";
@@ -256,6 +257,10 @@ export interface TranscriptViewportSpan {
 	component: Component;
 	start: number;
 	end: number;
+	/** Full component-render row at `start`; absent for synthetic emergency summaries. */
+	rowOffset?: number;
+	/** Snapshot captured while an interactive historical window keeps this block's caches alive. */
+	resolveControl?: InlineControlResolver;
 }
 
 /** Owns transcript order, live capacity, and ordered immutable retirement. */
@@ -276,6 +281,9 @@ export class TranscriptContainer extends Container {
 	#pinnedFrontier: { index: number; since: number; logged: boolean } | undefined;
 	/** Block spans of the last `renderViewport` output, for click hit-testing. */
 	#lastViewportSpans: TranscriptViewportSpan[] = [];
+	#tailPinned = new Set<TranscriptEntry>();
+	#tailOffset = 0;
+	#tailAnchor: { entry: TranscriptEntry; index: number; end: number; width: number } | undefined;
 	/**
 	 * The composed frame {@link beginFrame} opened; `undefined` outside one.
 	 * {@link renderViewport} closes it, so it never outlives the synchronous
@@ -292,13 +300,22 @@ export class TranscriptContainer extends Container {
 	#frameRows = new Map<TranscriptEntry, MeasuredBlock>();
 	#frameRowsWidth = 0;
 	#releaseFailures = new WeakSet<Component>();
+	#renderedRowOffsets = new WeakMap<Component, number>();
 	/** The `children` array `#entries` last mirrored; see {@link #syncEntries}. */
 	#syncedChildren: Component[] | undefined;
 	/** Forces the next {@link #syncEntries} to compare every entry, not just the live tail. */
 	#entriesUnverified = false;
+	#interactionEpoch = 0;
 	/** Block list handed to the native frame provider, reused while the children are unchanged. */
 	#nativeBlocks: readonly Component[] = [];
 	#nativeNode: NativeNode | undefined;
+
+	/** Append-only growth keeps pointer windows valid; destructive topology changes do not. */
+	get interactionEpoch(): number {
+		this.#syncEntries();
+		return this.#interactionEpoch;
+	}
+
 	override addChild(component: Component): void {
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
@@ -330,6 +347,7 @@ export class TranscriptContainer extends Container {
 			this.#entriesUnverified = false;
 			return;
 		}
+		this.#interactionEpoch++;
 		const [moved] = this.children.splice(from, 1);
 		if (moved) this.children.splice(index, 0, moved);
 		const [entry] = this.#entries.splice(this.#entries.length - 1, 1);
@@ -342,6 +360,7 @@ export class TranscriptContainer extends Container {
 	override removeChild(component: Component): void {
 		const index = this.#removableIndex(component);
 		if (index < 0) return;
+		this.#interactionEpoch++;
 		// #removableIndex synced entries, which now mirror children index for
 		// index. This class renders through its own entries, never Container's
 		// memoized render, so splicing children directly is the whole removal.
@@ -353,6 +372,8 @@ export class TranscriptContainer extends Container {
 
 	override clear(): void {
 		super.clear();
+		this.#interactionEpoch++;
+		this.releaseTailViewport();
 		this.#entries = [];
 		this.#frontier = 0;
 		this.#offered = undefined;
@@ -452,6 +473,13 @@ export class TranscriptContainer extends Container {
 	emittedStableRows(): readonly number[] {
 		this.#syncEntries();
 		return this.#entries.map(entry => entry.emitted);
+	}
+
+	/** Whether the semantic tail includes rows already accepted into native history. */
+	hasRetiredRows(): boolean {
+		this.#syncEntries();
+		const head = this.#entries[this.#frontier];
+		return this.#frontier > 0 || (head?.emitted ?? 0) > 0 || head?.split !== undefined;
 	}
 
 	/** Whether any block is still streaming or otherwise unfinalized. */
@@ -571,7 +599,12 @@ export class TranscriptContainer extends Container {
 	}
 
 	/** Collapse a per-line owner list into run-length block spans, clamped to `length`. */
-	#commitViewportSpans(owners: readonly (Component | undefined)[], length: number = owners.length): void {
+	#commitViewportSpans(
+		owners: readonly (Component | undefined)[],
+		length: number = owners.length,
+		rowOffsets?: ReadonlyMap<Component, number>,
+		drop = 0,
+	): void {
 		const spans: TranscriptViewportSpan[] = [];
 		let index = 0;
 		while (index < length) {
@@ -582,7 +615,13 @@ export class TranscriptContainer extends Container {
 			}
 			let end = index + 1;
 			while (end < length && owners[end] === component) end++;
-			spans.push({ component, start: index, end });
+			const offset = rowOffsets?.get(component);
+			spans.push({
+				component,
+				start: index,
+				end,
+				rowOffset: offset === undefined ? undefined : offset + index + drop,
+			});
 			index = end;
 		}
 		this.#lastViewportSpans = spans;
@@ -661,18 +700,26 @@ export class TranscriptContainer extends Container {
 		if (total <= capacity) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
+			const rowOffsets = new Map<Component, number>();
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
 				if (output.length > 0) {
 					output.push("");
 					owners.push(undefined);
 				}
 				const component = shown[blockIndex]!.entry.component;
+				const { entry, index } = shown[blockIndex]!;
+				rowOffsets.set(
+					component,
+					(this.#renderedRowOffsets.get(component) ?? 0) +
+						this.#projectedEmittedRowCount(entry, index, width) -
+						output.length,
+				);
 				for (const line of blocks[blockIndex]!) {
 					output.push(line);
 					owners.push(component);
 				}
 			}
-			this.#commitViewportSpans(owners, output.length);
+			this.#commitViewportSpans(owners, output.length, rowOffsets);
 			return output;
 		}
 
@@ -697,21 +744,30 @@ export class TranscriptContainer extends Container {
 		}
 		const output: string[] = [];
 		const owners: (Component | undefined)[] = [];
+		const rowOffsets = new Map<Component, number>();
 		for (let index = 0; index < shown.length; index++) {
 			const candidate = shown[index]!;
 			const allocated = allocation[index]!;
 			this.#setAllocation(candidate.entry.component, allocated, frame);
-			const rendered = this.#renderEntry(candidate.entry, width).slice(
-				this.#projectedEmittedRowCount(candidate.entry, candidate.index, width),
-			);
+			const full = this.#renderEntry(candidate.entry, width);
+			const emitted = this.#projectedEmittedRowCount(candidate.entry, candidate.index, width);
+			const rendered = full.slice(emitted);
 			const visible = rendered.length <= allocated ? rendered : rendered.slice(rendered.length - allocated);
+			rowOffsets.set(
+				candidate.entry.component,
+				(this.#renderedRowOffsets.get(candidate.entry.component) ?? 0) +
+					emitted +
+					rendered.length -
+					visible.length -
+					output.length,
+			);
 			for (const line of visible) {
 				output.push(line);
 				owners.push(candidate.entry.component);
 			}
 		}
 		const drop = Math.max(0, output.length - capacity);
-		this.#commitViewportSpans(owners.slice(drop), output.length - drop);
+		this.#commitViewportSpans(owners.slice(drop), output.length - drop, rowOffsets, drop);
 		return drop > 0 ? output.slice(drop) : output;
 	}
 
@@ -984,26 +1040,109 @@ export class TranscriptContainer extends Container {
 	}
 
 	/**
-	 * Render only the trailing `maxRows` semantic rows, walking blocks bottom-up.
-	 * Used by the transient resize-buffer repaint, which needs one viewport of
-	 * tail rows per resize event — never the full committed ledger.
+	 * Render a bounded semantic window, walking newest-first only as far as its
+	 * offset requires. Interactive windows retain only visible committed caches,
+	 * so their snapshot controls remain valid without pinning the whole ledger.
 	 */
-	renderTail(width: number, maxRows: number): readonly string[] {
+	renderTail(width: number, maxRows: number, offset = 0, interactive = false): readonly string[] {
 		this.#syncEntries();
 		const cap = Math.max(0, Math.trunc(maxRows));
-		if (cap === 0) return EMPTY_ROWS;
-		const rows: string[] = [];
-		for (let index = this.#entries.length - 1; index >= 0; index--) {
+		let skip = Math.max(0, Math.trunc(offset));
+		const previous = this.#tailAnchor;
+		const anchor =
+			interactive &&
+			this.#tailOffset > 0 &&
+			previous?.width === width &&
+			this.#entries[previous.index] === previous.entry
+				? previous
+				: undefined;
+		const delta = skip - this.#tailOffset;
+		const chunks: {
+			entry: TranscriptEntry;
+			index: number;
+			rows: readonly string[];
+			rowOffset: number;
+			start: number;
+		}[] = [];
+		let total = 0;
+		let index = this.#entries.length - 1;
+		for (
+			;
+			cap > 0 && index >= 0 && (total < cap + skip || (anchor !== undefined && index >= anchor.index));
+			index--
+		) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-			const block = trimBlankEdges(entry.component.render(width));
-			if (entry.state === "committed") this.#releaseRenderCaches(entry);
-			if (block.length === 0) continue;
-			if (rows.length > 0) rows.unshift("");
-			rows.unshift(...block);
-			if (rows.length >= cap) break;
+			const rendered = entry.component.render(width);
+			const block = trimBlankEdges(rendered);
+			if (block.length > 0) {
+				if (total > 0) total++;
+				const below = total;
+				total += block.length;
+				if (entry === anchor?.entry) {
+					skip = Math.max(0, below + block.length - Math.min(anchor.end, block.length + 1) + delta);
+				}
+				chunks.push({ entry, index, rows: block, rowOffset: rendered.indexOf(block[0]!), start: -total });
+			}
+			if (entry.state === "committed" && !interactive && !this.#tailPinned.has(entry))
+				this.#releaseRenderCaches(entry);
 		}
-		return rows.length > cap ? rows.slice(rows.length - cap) : rows;
+		this.#tailOffset = cap === 0 ? 0 : index < 0 ? Math.min(skip, Math.max(0, total - cap)) : skip;
+		const end = total - this.#tailOffset;
+		const start = Math.max(0, end - cap);
+		const rows: string[] = [];
+		const spans: TranscriptViewportSpan[] = [];
+		const pinned = new Set<TranscriptEntry>();
+		let nextAnchor: { entry: TranscriptEntry; index: number; end: number; width: number } | undefined;
+		for (const chunk of chunks.toReversed()) {
+			const blockStart = total + chunk.start;
+			const blockEnd = blockStart + chunk.rows.length;
+			if (end > blockStart && end <= blockEnd + (blockEnd < total ? 1 : 0)) {
+				nextAnchor = { entry: chunk.entry, index: chunk.index, end: end - blockStart, width };
+			}
+			const from = Math.max(start, blockStart);
+			const to = Math.min(end, blockStart + chunk.rows.length);
+			if (from >= to) {
+				if (chunk.entry.state === "committed" && !this.#tailPinned.has(chunk.entry))
+					this.#releaseRenderCaches(chunk.entry);
+				continue;
+			}
+			while (rows.length < from - start) rows.push("");
+			const spanStart = rows.length;
+			rows.push(...chunk.rows.slice(from - blockStart, to - blockStart));
+			if (interactive) {
+				const resolveControl = chunk.entry.component.getInlineControlResolver?.(width);
+				spans.push({
+					component: chunk.entry.component,
+					start: spanStart,
+					end: rows.length,
+					rowOffset: chunk.rowOffset + from - blockStart,
+					resolveControl,
+				});
+				if (chunk.entry.state === "committed") pinned.add(chunk.entry);
+			}
+		}
+		while (rows.length < end - start) rows.push("");
+		if (interactive) {
+			this.#tailAnchor = nextAnchor;
+			for (const entry of this.#tailPinned) if (!pinned.has(entry)) this.#releaseRenderCaches(entry);
+			this.#tailPinned = pinned;
+			this.#lastViewportSpans = spans;
+		}
+		return rows;
+	}
+
+	/** Actual clamped offset of the most recent semantic window. */
+	getTailOffset(): number {
+		return this.#tailOffset;
+	}
+
+	/** Release the visible historical snapshots when leaving the app-owned window. */
+	releaseTailViewport(): void {
+		for (const entry of this.#tailPinned) this.#releaseRenderCaches(entry);
+		this.#tailPinned.clear();
+		this.#tailOffset = 0;
+		this.#tailAnchor = undefined;
 	}
 
 	/**
@@ -1060,7 +1199,11 @@ export class TranscriptContainer extends Container {
 	}
 
 	#renderEntry(entry: TranscriptEntry, width: number): readonly string[] {
-		const rendered = trimBlankEdges(entry.component.render(width));
+		const full = entry.component.render(width);
+		const rendered = trimBlankEdges(full);
+		let offset = 0;
+		if (rendered !== full) while (offset < full.length && isPlainBlank(full[offset]!)) offset++;
+		this.#renderedRowOffsets.set(entry.component, offset);
 		if (entry.state === "committed" || entry.mode === "mutable" || entry.stableFrozen) return rendered;
 		const appendOnly = entry.component as Component & AppendOnlyTranscriptBlock;
 		const stable = appendOnly.getTranscriptStableRows();
@@ -1387,7 +1530,8 @@ export class TranscriptContainer extends Container {
 
 	#releaseCommittedRenderCaches(): void {
 		for (let index = 0; index < this.#frontier; index++) {
-			this.#releaseRenderCaches(this.#entries[index]!);
+			const entry = this.#entries[index]!;
+			if (!this.#tailPinned.has(entry)) this.#releaseRenderCaches(entry);
 		}
 	}
 
@@ -1499,6 +1643,7 @@ export class TranscriptContainer extends Container {
 
 		const output = hiddenActive > 0 ? [`${hiddenActive} more transcript blocks active`] : [];
 		const owners: (Component | undefined)[] = hiddenActive > 0 ? [undefined] : [];
+		const rowOffsets = new Map<Component, number>();
 		for (const candidate of visible) {
 			if (candidate === emergencyCandidate) {
 				output.push(emergencyRow ?? "");
@@ -1514,14 +1659,18 @@ export class TranscriptContainer extends Container {
 				owners.push(candidate.entry.component);
 				continue;
 			}
-			const rendered = this.#renderEntry(candidate.entry, width).slice(
-				this.#projectedEmittedRowCount(candidate.entry, candidate.index, width),
+			const full = this.#renderEntry(candidate.entry, width);
+			const emitted = this.#projectedEmittedRowCount(candidate.entry, candidate.index, width);
+			const rendered = full.slice(emitted);
+			rowOffsets.set(
+				candidate.entry.component,
+				(this.#renderedRowOffsets.get(candidate.entry.component) ?? 0) + emitted - output.length,
 			);
 			output.push(rendered[0] ?? "");
 			owners.push(candidate.entry.component);
 		}
 		const visibleOutput = output.slice(0, rows);
-		this.#commitViewportSpans(owners, visibleOutput.length);
+		this.#commitViewportSpans(owners, visibleOutput.length, rowOffsets);
 		return visibleOutput;
 	}
 
@@ -1568,6 +1717,7 @@ export class TranscriptContainer extends Container {
 		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
 		if (this.#entriesMatch(children, 0)) return;
+		this.#interactionEpoch++;
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		this.#entries = this.children.map(
 			component =>

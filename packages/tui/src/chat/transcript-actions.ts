@@ -16,7 +16,12 @@ export type TranscriptAction =
 	/** Put `text` on the clipboard. */
 	| { readonly act: "copy"; readonly text: string };
 
-type Handler = (action: TranscriptAction) => void;
+export interface TranscriptActionOptions {
+	/** Suppress successful copy feedback without hiding failures. */
+	readonly quiet?: boolean;
+}
+
+type Handler = (action: TranscriptAction, options?: TranscriptActionOptions) => void;
 
 let handler: Handler | undefined;
 
@@ -26,13 +31,30 @@ export function setTranscriptActionHandler(next: Handler | undefined): void {
 }
 
 /** Run `action` through the host; false when no host handles actions. */
-export function runTranscriptAction(action: TranscriptAction): boolean {
+export function runTranscriptAction(action: TranscriptAction, options?: TranscriptActionOptions): boolean {
 	if (!handler) return false;
-	handler(action);
+	handler(action, options);
 	return true;
 }
 
 /** Whether a host handles actions (controls are only described when one does). */
 export function hasTranscriptActions(): boolean {
 	return handler !== undefined;
+}
+
+let transcriptMouse = false;
+
+/**
+ * Enable the host's transcript pointer layer in classic terminals: drag
+ * selection, wheel browsing, and the inline table copy controls. Off unless the
+ * user opts in, because terminal mouse reporting takes native selection and
+ * scrollback away from the terminal.
+ */
+export function setTranscriptMouseEnabled(enabled: boolean): void {
+	transcriptMouse = enabled;
+}
+
+/** Whether the host routes transcript pointer gestures in classic terminals. */
+export function isTranscriptMouseEnabled(): boolean {
+	return transcriptMouse;
 }

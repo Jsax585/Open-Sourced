@@ -8,9 +8,11 @@ import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extens
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { cfgExtensionAssistantTextRenderers } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { runTranscriptAction, setTranscriptActionHandler } from "@oh-my-pi/pi-tui/chat/transcript-actions";
+import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { getMarkdownTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -18,9 +20,10 @@ import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
-import { cfgTuiMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgTuiMouse, cfgTuiTranscriptMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 
 function plainRows(rows: readonly string[]): string[] {
@@ -62,6 +65,8 @@ describe("inline click-to-focus geometry", () => {
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		mode?.stop();
+		setTranscriptActionHandler(undefined);
+		vi.restoreAllMocks();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
@@ -647,5 +652,79 @@ describe("inline click-to-focus geometry", () => {
 		runner.setSuspendedExtensions(() => false);
 		await Promise.resolve();
 		expect(chat()).toContain("Open the details NOW.");
+	});
+
+	it("keeps the real host transcript, epoch and editor position unchanged after repeated pointer copies", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		cfgTuiTranscriptMouse.set(mode.settings, true);
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+		mode.chatContainer.clear();
+		mode.chatContainer.addChild(
+			new Markdown("| Name | Value |\n| --- | --- |\n| pointer | selection |", 0, 0, getMarkdownTheme()),
+		);
+		mode.editor.setText("COPY_EDITOR_PROBE");
+		mode.ui.renderNow();
+		const children = mode.chatContainer.children.slice();
+		const transcript = plainRows(mode.chatContainer.render(120));
+		const epoch = mode.chatContainer.interactionEpoch;
+		const before = plainRows(term.getViewport());
+		const editorRow = before.findIndex(row => row.includes("COPY_EDITOR_PROBE"));
+		expect(editorRow).toBeGreaterThanOrEqual(0);
+		const send = (button: number, column: number, row: number, release = false) =>
+			term.sendInput(`\x1b[<${button};${column + 1};${row + 1}${release ? "m" : "M"}`);
+		for (let repeat = 0; repeat < 2; repeat++) {
+			const rows = plainRows(term.getViewport());
+			const row = rows.findIndex(line => line.includes("[Copy TSV]"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			const column = rows[row]!.indexOf("[Copy TSV]");
+			send(0, column, row);
+			send(0, column, row, true);
+			await Promise.resolve();
+			mode.ui.renderNow();
+			expect(copy).toHaveBeenLastCalledWith("Name\tValue\npointer\tselection");
+			expect(mode.chatContainer.children).toEqual(children);
+			expect(mode.chatContainer.interactionEpoch).toBe(epoch);
+			expect(plainRows(mode.chatContainer.render(120))).toEqual(transcript);
+			expect(plainRows(term.getViewport()).findIndex(line => line.includes("COPY_EDITOR_PROBE"))).toBe(editorRow);
+		}
+		const rows = plainRows(term.getViewport());
+		const row = rows.findIndex(line => line.includes("selection"));
+		expect(row).toBeGreaterThanOrEqual(0);
+		const column = rows[row]!.indexOf("selection");
+		send(0, column, row);
+		send(32, column + "selection".length, row);
+		send(0, column + "selection".length, row, true);
+		await Promise.resolve();
+		mode.ui.renderNow();
+		expect(copy).toHaveBeenCalledTimes(3);
+		expect(copy).toHaveBeenLastCalledWith("selection");
+		expect(mode.chatContainer.children).toEqual(children);
+		expect(mode.chatContainer.interactionEpoch).toBe(epoch);
+		expect(plainRows(mode.chatContainer.render(120))).toEqual(transcript);
+		expect(plainRows(term.getViewport()).findIndex(line => line.includes("COPY_EDITOR_PROBE"))).toBe(editorRow);
+		expect(plainRows(term.getViewport()).join("\n")).not.toContain("Copied to clipboard");
+	});
+
+	it("keeps default copy notices and shows quiet copy failures through the real host", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		await mode.init({ suppressWelcomeIntro: true });
+		mode.chatContainer.clear();
+		expect(runTranscriptAction({ act: "copy", text: "native copy" })).toBe(true);
+		await Promise.resolve();
+		expect(copy).toHaveBeenLastCalledWith("native copy");
+		expect(plainRows(mode.chatContainer.render(120)).join("\n")).toContain("Copied to clipboard");
+		const firstNotice = mode.chatContainer.children.at(-1);
+		const epoch = mode.chatContainer.interactionEpoch;
+		runTranscriptAction({ act: "copy", text: "keyboard copy" });
+		await Promise.resolve();
+		expect(mode.chatContainer.children).toHaveLength(1);
+		expect(mode.chatContainer.children.at(-1)).not.toBe(firstNotice);
+		expect(mode.chatContainer.interactionEpoch).toBeGreaterThan(epoch);
+		copy.mockRejectedValue(new Error("clipboard unavailable"));
+		runTranscriptAction({ act: "copy", text: "quiet copy" }, { quiet: true });
+		await Promise.resolve();
+		expect(plainRows(mode.chatContainer.render(120)).join("\n")).toContain("Copy failed: clipboard unavailable");
 	});
 });

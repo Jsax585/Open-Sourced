@@ -2,6 +2,8 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import type { Component, Container, EditorTheme, KeyId, Loader, TUI } from "@oh-my-pi/pi-tui";
+import type { SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
+import type { TranscriptSelectionResult } from "@oh-my-pi/pi-tui/components/transcript-selection";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import type { CollabController } from "../collab/controller";
@@ -223,6 +225,8 @@ export interface InteractiveModeContext {
 	typeLinkHint(letter: string): void;
 	/** Leave link-hint mode without activating a link. */
 	cancelLinkHints(): void;
+	/** Route a mouse gesture in zero-based mutable-viewport coordinates. */
+	handleTranscriptMouse(event: SgrMouseEvent): TranscriptSelectionResult;
 	/** Flip the pinned jump list between its collapsed few and the full list. */
 	togglePinnedHudExpanded(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */

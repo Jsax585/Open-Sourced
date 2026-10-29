@@ -1,5 +1,13 @@
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
+import { TranscriptSelection, type TranscriptSelectionResult } from "../components/transcript-selection";
+import { hasTranscriptActions, isTranscriptMouseEnabled, runTranscriptAction } from "../chat/transcript-actions";
+import {
+	type InlineControl,
+	type InlineControlResolver,
+	offsetInlineControlResolver,
+	type SgrMouseEvent,
+} from "../mouse";
 import type { StatusLineComponent } from "../status-line/component";
 import { compositeLineAt } from "../render/composite";
 import { type ExtensionLinkLabel, extensionLinkLabels, linkHintTags } from "../render/extension-links";
@@ -18,7 +26,7 @@ import {
 	type TUIOptions,
 	type ViewportSize,
 } from "../tui";
-import { wrapLiteralLine } from "../utils";
+import { extractSegments, sliceWithWidth, stripTerminalSequences, visibleWidth, wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
 import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
@@ -155,6 +163,8 @@ export interface ViewportClickSpan {
 	end: number;
 	/** Candidate subagent ids for a span-local row. */
 	candidates: (local: number) => string[];
+	/** Pure control resolution in the same coordinate system as start/end. */
+	resolveControl?: InlineControlResolver;
 }
 
 /**
@@ -304,6 +314,18 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#lastClickSpans: ViewportClickSpan[] = [];
 	/** Rows of the last `renderFrame` viewport, before the hover band; read to hit-test extension links. */
 	#lastViewportRows: readonly string[] = [];
+	#lastClickSize: ViewportSize | undefined;
+	readonly #selection = new TranscriptSelection();
+	#pressedControl: InlineControl | undefined;
+	#hoveredControl: InlineControl | undefined;
+	#historyViewportRows: readonly string[] = [];
+	#nativeHistoryRows: readonly string[] = [];
+	#lastTranscriptEnd = 0;
+	#mouseTranscript: TranscriptContainer | undefined;
+	#mouseEpoch = -1;
+	#scrollOffset = 0;
+	#latestTranscriptLayout: { before: readonly string[]; end: number; offset: number } | undefined;
+	#transcriptScrollable = false;
 	/** Click-candidate id under the pointer, painted with the hover band. Id-anchored so it follows streaming rows. */
 	#hoveredClickId: string | undefined;
 	/**
@@ -428,7 +450,13 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.setFocus(this.editor);
 		// A settle timer that fires while the TUI is stopped (external editor, suspend) is dropped;
 		// forget it on restart so the next frame re-arms instead of waiting on it forever.
-		this.ui.addStartListener(() => this.#resetIdleChrome());
+		this.ui.addStartListener(() => {
+			this.#resetIdleChrome();
+			this.#clearTranscriptMouse();
+		});
+		this.ui.addPaintListener(paint => {
+			if (paint.alt || this.ui.hasOverlay()) this.#clearTranscriptMouse();
+		});
 	}
 	/**
 	 * Rows the below-transcript chrome under `root` (editor, status line, …)
@@ -439,11 +467,26 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		return this.#rowsBelow.get(root);
 	}
 
+	/** Transcript pointer gestures need a clipboard host and the user's opt-in. */
+	#pointerEnabled(): boolean {
+		return hasTranscriptActions() && isTranscriptMouseEnabled();
+	}
+
 	/** Compose the bounded mutable viewport and the next ordered history append. */
 	renderFrame(viewport: ViewportSize): TerminalFramePlan {
 		if (!this.#started || this.#stopped) return { viewport: [] };
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		const pointer = this.#pointerEnabled();
+		if (
+			!pointer ||
+			this.ui.hasOverlay() ||
+			(this.#nativeHistoryRows.length > 0 && this.ui.getVisibleProviderHistory() !== this.#nativeHistoryRows) ||
+			(this.#lastClickSize !== undefined &&
+				(this.#lastClickSize.columns !== viewport.columns || this.#lastClickSize.rows !== viewport.rows))
+		)
+			this.#clearTranscriptMouse();
+		this.#lastClickSize = viewport;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
 			this.#resizeRetiredHeaderStart = undefined;
@@ -454,6 +497,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			: [this.#header, this.#bootstrapInputGap, this.editor, this.#statusHost];
 		const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
 		if (transcriptIndex < 0) {
+			this.#clearTranscriptMouse();
 			this.#lastClickSpans = [];
 			this.#lastViewportRows = [];
 			this.#syncLinkHints([], 0);
@@ -466,6 +510,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			return { viewport: viewport.slice(-rows) };
 		}
 		const transcript = roots[transcriptIndex] as TranscriptContainer;
+		if (this.#mouseTranscript !== transcript || this.#mouseEpoch !== transcript.interactionEpoch) {
+			this.#clearTranscriptMouse();
+			this.#mouseTranscript = transcript;
+			this.#mouseEpoch = transcript.interactionEpoch;
+		}
 		const preRoots = this.#renderRoots(roots.slice(0, transcriptIndex), width);
 		const afterRoots = roots.slice(transcriptIndex + 1);
 		const after: string[] = [];
@@ -488,6 +537,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const promotedChromeContracted = this.#chromeFloorPromoted && eligibleChrome < (this.#chromeFloor ?? 0);
 		this.#chromeFloor = Math.min(this.#chromeFloor ?? eligibleChrome, eligibleChrome);
 		this.#rebaselineChromeFloor(this.#runActive || transcript.hasActiveBlock(), eligibleChrome);
+		if (this.#scrollOffset > 0 && this.#latestTranscriptLayout) {
+			return this.#renderTranscriptWindow(transcript, width, rows, after, afterSpans);
+		}
 		const belowFloor = this.#preferences.completeScrollback ? after.length : this.#chromeFloor;
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
@@ -509,11 +561,41 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// the `drop` slice below; they stay live until the chrome shrinks. With
 		// `completeScrollback` none are held back.
 		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
+		this.#nativeHistoryRows = pointer && history === undefined ? this.ui.getVisibleProviderHistory() : [];
+		this.#historyViewportRows = this.#nativeHistoryRows;
+		const historySnapshot =
+			this.#historyViewportRows.length > 0 && transcript.hasRetiredRows()
+				? this.#captureHistorySpans(transcript, width, active.length)
+				: undefined;
+		const historySpans = historySnapshot?.spans ?? [];
+		if (this.#historyViewportRows.length > 0) {
+			// Metadata capture must not leave live blocks at renderTail's unbounded allocation.
+			transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
+		}
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
-			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
-			if (!ids || ids.length === 0) continue;
-			activeSpans.push({ start: span.start, end: span.end, candidates: () => ids });
+			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.() ?? [];
+			const resolve =
+				span.rowOffset === undefined
+					? undefined
+					: (span.resolveControl ?? span.component.getInlineControlResolver?.(width));
+			if (ids.length === 0 && resolve === undefined) continue;
+			const translated =
+				resolve === undefined
+					? undefined
+					: offsetInlineControlResolver(resolve, span.start - (span.rowOffset ?? 0));
+			activeSpans.push({
+				start: span.start,
+				end: span.end,
+				candidates: () => ids,
+				resolveControl:
+					translated === undefined
+						? undefined
+						: (column, row) =>
+								this.#runtimeChildren.includes(transcript) && transcript.children.includes(span.component)
+									? translated(column, row)
+									: undefined,
+			});
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
@@ -560,20 +642,270 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				// A clipped head must offset the callback: without the skew the
 				// first visible row would hit-test as span-local row 0.
 				const skew = clamped - start;
-				spans.push({ start: clamped, end, candidates: (local: number) => span.candidates(local + skew) });
+				spans.push({
+					start: clamped,
+					end,
+					candidates: (local: number) => span.candidates(local + skew),
+					resolveControl:
+						span.resolveControl === undefined
+							? undefined
+							: offsetInlineControlResolver(span.resolveControl, base),
+				});
 			}
 		};
 		for (const span of activeSpans) shift(span, before.length - drop);
 		for (const span of afterSpans) shift(span, slack + before.length + active.length - drop);
-		this.#lastClickSpans = spans;
+		this.#lastClickSpans = [...historySpans, ...spans];
 		this.#lastViewportRows = mutable;
+		this.#lastTranscriptEnd = Math.max(0, Math.min(mutable.length, before.length + active.length - drop));
 		this.#lastViewportWidth = width;
 		this.#syncLinkHints(mutable, width);
 		if (history !== undefined && this.#offeredHistory?.source === "header") {
 			const visibleHeaderRows = Math.max(0, rows - (mutable.length + drop));
 			this.#retiredHeaderStart = Math.max(0, history.rows.length - visibleHeaderRows);
 		}
-		return { history, viewport: this.#paintLinkHints(this.#paintHoverBand(mutable, spans), width) };
+		this.#transcriptScrollable =
+			transcript.hasRetiredRows() || active.length >= Math.max(0, rows - before.length - belowFloor);
+		// A restored, fully retired transcript has no native paint to select yet.
+		if (
+			!this.#historyFlush &&
+			pointer &&
+			history === undefined &&
+			!this.ui.hasProviderHistory() &&
+			active.length === 0 &&
+			transcript.hasRetiredRows()
+		) {
+			const restored = transcript.renderTail(width, Math.max(0, rows - before.length - after.length), 0, true);
+			this.#lastViewportRows = [...before, ...restored, ...after].slice(-rows);
+			this.#lastTranscriptEnd = Math.max(0, this.#lastViewportRows.length - after.length);
+			this.#lastClickSpans = [
+				...this.#tailClickSpans(transcript, before.length),
+				...this.#lastClickSpans.map(span => ({
+					...span,
+					start: span.start + restored.length,
+					end: span.end + restored.length,
+					resolveControl:
+						span.resolveControl === undefined
+							? undefined
+							: offsetInlineControlResolver(span.resolveControl, restored.length),
+				})),
+			];
+		}
+		this.#latestTranscriptLayout = {
+			before: this.#lastViewportRows.slice(0, Math.max(0, before.length - drop)),
+			end: this.#lastTranscriptEnd,
+			offset: historySnapshot?.offset ?? 0,
+		};
+		return this.#transcriptFrame(width, history);
+	}
+
+	#captureHistorySpans(
+		transcript: TranscriptContainer,
+		width: number,
+		activeRows: number,
+	): { spans: ViewportClickSpan[]; offset: number } {
+		const prefix = this.#historyViewportRows;
+		const liveRows = transcript.liveRowCount(width);
+		const tail = transcript.renderTail(width, prefix.length, liveRows, true);
+		const shift = -tail.length;
+		const spans = this.#tailClickSpans(transcript, shift).flatMap(span => {
+			const start = Math.max(-prefix.length, span.start);
+			const end = Math.min(0, span.end);
+			if (start >= end) return [];
+			for (let row = start; row < end; row++) {
+				if (
+					stripTerminalSequences(prefix[row + prefix.length]!).trimEnd() !==
+					stripTerminalSequences(tail[row - shift]!).trimEnd()
+				)
+					return [];
+			}
+			return [{ ...span, start, end }];
+		});
+		return { spans, offset: Math.max(0, liveRows - activeRows) };
+	}
+
+	#transcriptFrame(width: number, history?: TerminalFramePlan["history"]): TerminalFramePlan {
+		const painted = this.#paintTranscriptSelection(width);
+		const prefix = this.#historyViewportRows.length;
+		const viewport = this.#paintLinkHints(painted.slice(prefix), width);
+		if (prefix === 0) return { history, viewport };
+		return {
+			history,
+			historyViewportSource: this.#nativeHistoryRows,
+			historyViewport: painted.slice(0, prefix),
+			viewport,
+		};
+	}
+
+	#paintTranscriptSelection(width: number): readonly string[] {
+		const prefix = this.#historyViewportRows.length;
+		let rows: readonly string[] =
+			prefix > 0 ? [...this.#historyViewportRows, ...this.#lastViewportRows] : this.#lastViewportRows;
+		if (this.#selection.hasSelection) {
+			const end = prefix + this.#lastTranscriptEnd;
+			const selected = this.#selection.paint(rows.slice(0, end), width);
+			rows = [...selected, ...rows.slice(end)];
+		}
+		return this.#paintControl(this.#paintHoverBand(rows, this.#lastClickSpans, prefix));
+	}
+
+	#paintControl(rows: readonly string[]): readonly string[] {
+		const pressed = this.#pressedControl;
+		if (pressed && !this.#sameControl(pressed, this.#resolveControl(pressed.from, pressed.row))) {
+			this.#pressedControl = undefined;
+		}
+		const hovered = this.#hoveredControl;
+		if (!hovered || this.#selection.active) return rows;
+		if (!this.#sameControl(hovered, this.#resolveControl(hovered.from, hovered.row))) {
+			this.#hoveredControl = undefined;
+			return rows;
+		}
+		if (this.#pressedControl && !this.#sameControl(this.#pressedControl, hovered)) return rows;
+		const row = hovered.row + this.#historyViewportRows.length;
+		const line = rows[row];
+		if (line === undefined) return rows;
+		const { before, after } = extractSegments(
+			line,
+			hovered.from,
+			hovered.to,
+			Math.max(0, visibleWidth(line) - hovered.to),
+			true,
+		);
+		const label = sliceWithWidth(line, hovered.from, hovered.to - hovered.from, true).text;
+		const highlighted = this.#pressedControl
+			? theme.bgFill("selectedBg", label.replace(NESTED_BG_OPEN_PATTERN, ""))
+			: `\x1b[4m${label}\x1b[24m`;
+		const painted = [...rows];
+		painted[row] = `${before}\x1b[0m${highlighted}\x1b[0m${after}`;
+		return painted;
+	}
+
+	#sameControl(left: InlineControl | undefined, right: InlineControl | undefined): boolean {
+		return (
+			left !== undefined &&
+			right !== undefined &&
+			left.id === right.id &&
+			left.row === right.row &&
+			left.from === right.from &&
+			left.to === right.to
+		);
+	}
+
+	#resolveControl(column: number, row: number): InlineControl | undefined {
+		if (
+			!Number.isInteger(column) ||
+			column < 0 ||
+			column >= (this.#lastClickSize?.columns ?? 0) ||
+			!Number.isInteger(row) ||
+			row < -this.#historyViewportRows.length ||
+			row >= this.#lastTranscriptEnd
+		)
+			return undefined;
+		for (const span of this.#lastClickSpans) {
+			if (row >= span.start && row < span.end) return span.resolveControl?.(column, row);
+		}
+		return undefined;
+	}
+
+	/** Browsing changes only mutable rows; it never replays or acknowledges native history. */
+	#renderTranscriptWindow(
+		transcript: TranscriptContainer,
+		width: number,
+		rows: number,
+		after: readonly string[],
+		afterSpans: readonly ViewportClickSpan[],
+	): TerminalFramePlan {
+		// Browsing replaces the rows the tags were anchored to.
+		this.#endLinkHints();
+		const latest = this.#latestTranscriptLayout!;
+		const before = latest.before;
+		const prefix = this.#nativeHistoryRows.length;
+		const mutableCapacity = Math.max(0, Math.min(latest.end, rows - after.length) - before.length);
+		const capacity = prefix + mutableCapacity;
+		const active = transcript.renderTail(width, capacity, latest.offset + this.#scrollOffset, true);
+		this.#scrollOffset = Math.max(0, transcript.getTailOffset() - latest.offset);
+		if (this.#scrollOffset === 0) return this.renderFrame({ columns: width, rows });
+		const transcriptRows = [...active, ...Array<string>(Math.max(0, capacity - active.length)).fill("")];
+		this.#historyViewportRows = transcriptRows.slice(0, prefix);
+		const mutableRows = transcriptRows.slice(prefix);
+		const drop = Math.max(0, after.length - rows);
+		const spans: ViewportClickSpan[] = [];
+		for (const span of this.#tailClickSpans(transcript, -prefix)) {
+			if (span.start < 0) spans.push({ ...span, end: Math.min(0, span.end) });
+			if (span.end > 0) {
+				spans.push({
+					...span,
+					start: Math.max(0, span.start) + before.length,
+					end: span.end + before.length,
+					resolveControl:
+						span.resolveControl === undefined
+							? undefined
+							: offsetInlineControlResolver(span.resolveControl, before.length),
+				});
+			}
+		}
+		for (const span of afterSpans) {
+			const start = Math.max(drop, span.start);
+			if (span.end <= start) continue;
+			const skew = start - span.start;
+			spans.push({
+				start: before.length + mutableCapacity + start - drop,
+				end: before.length + mutableCapacity + span.end - drop,
+				candidates: row => span.candidates(row + skew),
+				resolveControl:
+					span.resolveControl === undefined
+						? undefined
+						: offsetInlineControlResolver(span.resolveControl, before.length + mutableCapacity - drop),
+			});
+		}
+		const mutable = [...before, ...mutableRows, ...after.slice(drop)];
+		const overflow = Math.max(0, mutable.length - rows);
+		this.#lastClickSpans = spans.flatMap(span => {
+			if (span.start < 0) return [span];
+			const start = Math.max(overflow, span.start);
+			if (span.end <= start) return [];
+			return [
+				{
+					...span,
+					start: start - overflow,
+					end: span.end - overflow,
+					candidates: row => span.candidates(row + start - span.start),
+					resolveControl:
+						span.resolveControl === undefined
+							? undefined
+							: offsetInlineControlResolver(span.resolveControl, -overflow),
+				},
+			];
+		});
+		this.#lastTranscriptEnd = Math.max(0, before.length + mutableRows.length - overflow);
+		this.#lastViewportRows = overflow > 0 ? mutable.slice(overflow) : mutable;
+		return this.#transcriptFrame(width);
+	}
+
+	#tailClickSpans(transcript: TranscriptContainer, base: number): ViewportClickSpan[] {
+		const spans: ViewportClickSpan[] = [];
+		for (const span of transcript.getLastViewportSpans()) {
+			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.() ?? [];
+			const resolve = span.resolveControl;
+			const translated =
+				resolve === undefined
+					? undefined
+					: offsetInlineControlResolver(resolve, base + span.start - (span.rowOffset ?? 0));
+			if (ids.length === 0 && translated === undefined) continue;
+			spans.push({
+				start: base + span.start,
+				end: base + span.end,
+				candidates: () => ids,
+				resolveControl:
+					translated === undefined
+						? undefined
+						: (column, row) =>
+								this.#runtimeChildren.includes(transcript) && transcript.children.includes(span.component)
+									? translated(column, row)
+									: undefined,
+			});
+		}
+		return spans;
 	}
 
 	/**
@@ -744,14 +1076,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 * streams; a retired id matches no span and simply paints nothing. Only
 	 * the viewport copy is banded — retirement reads unbanded component rows.
 	 */
-	#paintHoverBand(viewport: string[], spans: readonly ViewportClickSpan[]): string[] {
+	#paintHoverBand(viewport: readonly string[], spans: readonly ViewportClickSpan[], prefix = 0): readonly string[] {
 		const hovered = this.#hoveredClickId;
 		if (hovered === undefined) return viewport;
 		let banded = false;
 		const painted = viewport.map((line, index) => {
 			for (const span of spans) {
-				if (index < span.start || index >= span.end) continue;
-				if (!span.candidates(index - span.start).includes(hovered)) continue;
+				if (index - prefix < span.start || index - prefix >= span.end) continue;
+				if (!span.candidates(index - prefix - span.start).includes(hovered)) continue;
 				banded = true;
 				// A wrapping band loses to background opens nested inside the row
 				// (live card rows carry the pending-tint bg, which would paint over
@@ -771,6 +1103,126 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 */
 	viewportClickCandidates(index: number): string[] {
 		return routeViewportClick(this.#lastClickSpans, index);
+	}
+
+	/** Whether this transcript owns ordinary pointer reports from the terminal. */
+	hasInlineClickTargets(): boolean {
+		return (
+			this.#started && !this.#stopped && this.#pointerEnabled() && (this.#mouseTranscript?.children.length ?? 0) > 0
+		);
+	}
+
+	/** Route mutable-viewport coordinates without re-rendering for hit testing. */
+	handleTranscriptMouse(event: SgrMouseEvent): TranscriptSelectionResult {
+		// `tui.mouse`-only capture still uses the frame's spans for hover and focus;
+		// leaving them intact keeps a plain SGR report from clearing that state.
+		if (!this.#pointerEnabled()) return { handled: false };
+		const transcript = this.#mouseTranscript;
+		if (
+			!this.#started ||
+			this.#stopped ||
+			this.ui.hasOverlay() ||
+			(this.#nativeHistoryRows.length > 0 && this.ui.getVisibleProviderHistory() !== this.#nativeHistoryRows) ||
+			this.#lastClickSize?.columns !== this.ui.terminal.columns ||
+			this.#lastClickSize.rows !== this.ui.terminal.rows ||
+			transcript === undefined ||
+			!this.#runtimeChildren.includes(transcript) ||
+			this.#mouseEpoch !== transcript.interactionEpoch
+		) {
+			this.#clearTranscriptMouse();
+			this.ui.requestRender();
+			return { handled: false };
+		}
+		const prefix = this.#historyViewportRows.length;
+		const inside = event.row >= -prefix && event.row < this.#lastTranscriptEnd;
+		if (event.wheel !== null) {
+			if (!inside) return { handled: false };
+			this.#selection.clear();
+			this.#pressedControl = undefined;
+			this.#hoveredControl = undefined;
+			this.#hoveredClickId = undefined;
+			if (!this.#transcriptScrollable) {
+				this.ui.requestRender();
+				return { handled: true };
+			}
+			this.#scrollOffset = Math.max(0, this.#scrollOffset - event.wheel * 3);
+			this.#lastClickSpans = [];
+			this.ui.requestRender();
+			return { handled: true };
+		}
+		if (event.leftClick) {
+			this.#pressedControl = undefined;
+			if (inside) this.#hoveredClickId = undefined;
+			this.#hoveredControl = inside ? this.#resolveControl(event.col, event.row) : undefined;
+			if (this.#hoveredControl) {
+				this.#selection.clear();
+				this.#pressedControl = this.#hoveredControl;
+				this.ui.requestRender();
+				return { handled: true };
+			}
+		}
+		if ((event.button & 3) !== 0 && this.#pressedControl) {
+			this.#pressedControl = undefined;
+			this.ui.requestRender();
+		}
+		if (this.#pressedControl) {
+			const pressed = this.#pressedControl;
+			const hovered = inside ? this.#resolveControl(event.col, event.row) : undefined;
+			const changed = hovered !== this.#hoveredControl && !this.#sameControl(hovered, this.#hoveredControl);
+			this.#hoveredControl = hovered;
+			if (event.release) {
+				this.#pressedControl = undefined;
+				if (this.#sameControl(pressed, this.#hoveredControl)) pressed.activate();
+			}
+			if (changed || event.release) this.ui.requestRender();
+			return { handled: true };
+		}
+		if (!inside && (event.leftClick || !this.#selection.active)) {
+			if (this.#hoveredControl) {
+				this.#hoveredControl = undefined;
+				this.ui.requestRender();
+			}
+			return { handled: false };
+		}
+		if (event.motion && !this.#selection.active) {
+			const hovered = this.#resolveControl(event.col, event.row);
+			if (hovered !== this.#hoveredControl && !this.#sameControl(hovered, this.#hoveredControl)) {
+				this.#hoveredControl = hovered;
+				this.ui.requestRender();
+			}
+			if (hovered) this.#hoveredClickId = undefined;
+			return { handled: hovered !== undefined };
+		}
+		const result = this.#selection.handle(
+			prefix > 0 ? { ...event, row: event.row + prefix } : event,
+			[...this.#historyViewportRows, ...this.#lastViewportRows.slice(0, this.#lastTranscriptEnd)],
+			this.#lastClickSize.columns,
+		);
+		if (result.handled) this.ui.requestRender();
+		if (result.text !== undefined) {
+			runTranscriptAction({ act: "copy", text: result.text }, { quiet: true });
+			return { handled: true };
+		}
+		if (result.click !== undefined)
+			return { handled: false, click: { ...result.click, row: result.click.row - prefix } };
+		return result;
+	}
+
+	#clearTranscriptMouse(): void {
+		this.#selection.clear();
+		this.#pressedControl = undefined;
+		this.#hoveredControl = undefined;
+		this.#mouseTranscript?.releaseTailViewport();
+		this.#mouseTranscript = undefined;
+		this.#mouseEpoch = -1;
+		this.#lastViewportRows = [];
+		this.#historyViewportRows = [];
+		this.#nativeHistoryRows = [];
+		this.#lastTranscriptEnd = 0;
+		this.#lastClickSpans = [];
+		this.#scrollOffset = 0;
+		this.#latestTranscriptLayout = undefined;
+		this.#transcriptScrollable = false;
 	}
 
 	/**
@@ -869,6 +1321,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (!this.#started || this.#stopped) return [];
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		this.#clearTranscriptMouse();
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -897,6 +1350,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 
 	/** Forces every currently eligible finalized prefix to retire before stop. */
 	beginHistoryFlush(): void {
+		this.#clearTranscriptMouse();
 		this.#historyFlush = true;
 		// A pending replay would re-render and re-stream the entire committed
 		// ledger during shutdown; the terminal already holds that history, so
@@ -1261,6 +1715,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
 	setRuntimeChildren(children: readonly Component[], options: RuntimeChildrenOptions = {}): void {
+		this.#clearTranscriptMouse();
 		if (this.#stopped) return;
 		this.#chromeFloor = undefined;
 		this.#chromeFloorPromoted = false;
@@ -1299,6 +1754,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Stop a composer that has not transferred terminal ownership. */
 	stop(): void {
 		if (!this.#started || this.#stopped || this.#transferred) return;
+		this.#clearTranscriptMouse();
 		this.#welcome?.stopIntro();
 		this.#disposeStartupStatus();
 		this.ui.stop();
@@ -1337,6 +1793,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#requestExit(code: number): void {
 		// Remains live after transfer until InteractiveMode installs its configured handlers.
 		if (this.#stopped) return;
+		this.#clearTranscriptMouse();
 		this.#welcome?.stopIntro();
 		if (this.#started) this.ui.stop();
 		this.#stopped = true;

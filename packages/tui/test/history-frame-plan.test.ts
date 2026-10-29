@@ -419,6 +419,135 @@ describe("terminal frame plans", () => {
 		tui.stop();
 	});
 
+	it("decorates visible native history without moving the input, cursor, or scrollback", () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const provider = new Provider({
+			history: { id: 1, rows: ["oldest", "history one", "history two"] },
+			viewport: [`ed${CURSOR_MARKER}it`, "status"],
+		});
+		const tui = new TUI(terminal, true, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		const raw = tui.getVisibleProviderHistory();
+		expect(raw.map(Bun.stripANSI)).toEqual(["history one", "history two"]);
+		const screen = terminal.getViewport();
+		const cursor = terminal.getCursor();
+		const position = tui.getMutableViewport();
+		const scrollback = terminal.getBufferPosition().baseY;
+		provider.plan = {
+			viewport: [`ed${CURSOR_MARKER}it`, "status"],
+			historyViewport: [`\x1b[48;2;40;60;80m${raw[0]}\x1b[49m`, raw[1]!],
+		};
+		tui.requestRender(true);
+		expect(terminal.getViewport()).toEqual(screen);
+		expect(terminal.getCursor()).toEqual(cursor);
+		expect(tui.getMutableViewport()).toEqual(position);
+		expect(terminal.getBufferPosition().baseY).toBe(scrollback);
+		expect(terminal.getViewportRowBackgroundColumns(0)).toEqual(Array.from({ length: 11 }, (_, col) => col));
+		expect(tui.getVisibleProviderHistory()).toBe(raw);
+		provider.plan = { viewport: [`ed${CURSOR_MARKER}it`, "status"] };
+		tui.requestRender(true);
+		expect(terminal.getViewportRowBackgroundColumns(0)).toEqual([]);
+		expect(terminal.getViewport()).toEqual(screen);
+		expect(provider.acknowledged).toEqual([1]);
+		tui.stop();
+	});
+
+	it("requires the current raw snapshot to browse native history and restores it without committing the view", () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const provider = new Provider({
+			history: { id: 1, rows: ["history one", "history two"] },
+			viewport: ["editor", "status"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		const raw = tui.getVisibleProviderHistory();
+		const position = tui.getMutableViewport();
+		const browsing = ["earlier one", "earlier two"];
+		for (const source of [undefined, [...raw]]) {
+			provider.plan = { viewport: ["editor", "status"], historyViewport: browsing, historyViewportSource: source };
+			tui.requestRender(true);
+			expect(terminal.getViewport().slice(0, 2)).toEqual(["history one", "history two"]);
+		}
+		provider.plan = { viewport: ["editor", "status"], historyViewport: browsing, historyViewportSource: raw };
+		tui.requestRender(true);
+		expect(terminal.getViewport()).toEqual(["earlier one", "earlier two", "editor", "status"]);
+		expect(tui.getVisibleProviderHistory()).toBe(raw);
+		expect(tui.getMutableViewport()).toEqual(position);
+		expect(terminal.getBufferPosition().baseY).toBe(0);
+		provider.plan = { viewport: ["editor", "status"] };
+		tui.requestRender(true);
+		expect(terminal.getViewport()).toEqual(["history one", "history two", "editor", "status"]);
+		expect(provider.acknowledged).toEqual([1]);
+		tui.stop();
+	});
+
+	it("does not push selection styling or a temporary history view into permanent scrollback", () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const provider = new Provider({
+			history: { id: 1, rows: ["history one", "history two"] },
+			viewport: ["editor", "status"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		const raw = tui.getVisibleProviderHistory();
+		provider.plan = {
+			viewport: ["editor", "status"],
+			historyViewport: ["\x1b[48;2;40;60;80mearlier one\x1b[49m", "earlier two"],
+			historyViewportSource: raw,
+		};
+		tui.requestRender(true);
+		expect(terminal.getViewportRowBackgroundColumns(0)).toEqual(Array.from({ length: 11 }, (_, col) => col));
+		provider.plan = {
+			history: { id: 2, rows: ["history three"] },
+			viewport: ["editor", "status"],
+			historyViewport: ["stale first", "stale second"],
+			historyViewportSource: raw,
+		};
+		tui.requestRender(true);
+		expect(tui.getVisibleProviderHistory().map(Bun.stripANSI)).toEqual(["history two", "history three"]);
+		expect(terminal.getScrollBuffer()).toEqual(["history one", "history two", "history three", "editor", "status"]);
+		terminal.scrollLines(-1);
+		expect(terminal.getViewport()[0]).toBe("history one");
+		expect(terminal.getViewportRowBackgroundColumns(0)).toEqual([]);
+		terminal.scrollLines(1);
+		tui.stop();
+	});
+
+	it("captures only the visible suffix of a replay for historical text selection", () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const history = Array.from({ length: 10 }, (_, row) => `history ${row}`);
+		const provider = new Provider({
+			history: { id: 1, rows: history, kind: "replay" },
+			viewport: ["editor", "status"],
+		});
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		expect(tui.getVisibleProviderHistory().map(Bun.stripANSI)).toEqual(history.slice(-4));
+		expect(tui.getMutableViewport()).toEqual({ top: 4, length: 2 });
+		tui.stop();
+	});
+
+	it("restores temporary native-history content and selection styling before terminal handoff", () => {
+		const terminal = new VirtualTerminal(20, 6);
+		const provider = new Provider({
+			history: { id: 1, rows: ["original history"] },
+			viewport: [`editor${CURSOR_MARKER}`],
+		});
+		const tui = new TUI(terminal, true, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		provider.plan = {
+			viewport: [`editor${CURSOR_MARKER}`],
+			historyViewport: ["\x1b[48;2;40;60;80mbrowsed history\x1b[49m"],
+			historyViewportSource: tui.getVisibleProviderHistory(),
+		};
+		tui.requestRender(true);
+		expect(terminal.getViewport()[0]).toBe("browsed history");
+		tui.stop();
+		expect(terminal.getViewport()[0]).toBe("original history");
+		expect(terminal.getViewportRowBackgroundColumns(0)).toEqual([]);
+		expect(terminal.getCursor()).toEqual({ row: 2, col: 0 });
+	});
+
 	it("uses the alternate buffer during resize and restores anchored history", () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const provider = new Provider({ history: { id: 1, rows: ["welcome"] }, viewport: ["editor"] });

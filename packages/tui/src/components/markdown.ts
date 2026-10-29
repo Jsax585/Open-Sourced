@@ -21,11 +21,13 @@ import {
 	mathStartIndex,
 } from "@oh-my-pi/pi-utils/math-delimiters";
 import { listMayContinueAt } from "@oh-my-pi/pi-utils/marked-list";
+import { hasTranscriptActions, isTranscriptMouseEnabled, runTranscriptAction } from "../chat/transcript-actions";
 import { latexToBlock } from "../latex-block";
 import { isBareMathEnvironment, latexToUnicode } from "../latex-to-unicode";
+import type { InlineControl, InlineControlResolver } from "../mouse";
 import { plainText } from "../native/spans";
-import { md } from "../native/describe";
-import type { DescribeContext, NativeNode } from "../native/node";
+import { col, keyed, md, node, stableKey } from "../native/describe";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "../native/node";
 import {
 	extensionLinkScheme,
 	extensionLinksVersion,
@@ -50,6 +52,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils";
+import { formatTableForClipboard, type TableCopyFormat } from "./markdown-table-copy";
 
 // Marked treats the backslash in an ST-terminated OSC 8 sequence (`ESC \\`) as
 // Markdown punctuation when it is immediately followed by markup such as a
@@ -1180,6 +1183,30 @@ const RENDER_CACHE_MAX_SIZE = 4 * 1024 * 1024;
 const RENDER_CACHE_MAX_ENTRY_SIZE = 512 * 1024;
 const EMPTY_RENDER_LINES: readonly string[] = [];
 
+// Cache-only metadata: a process nonce prevents model text from forging controls; render() strips every marker.
+const TABLE_COPY_MARKER = `\x1b]omp-table-${crypto.randomUUID()};`;
+const TABLE_COPY_MARKER_PATTERN = new RegExp(
+	`${TABLE_COPY_MARKER.replaceAll("[", "\\[").replaceAll("]", "\\]")}([a-z0-9]*);(tsv|csv|markdown)?\x07`,
+	"g",
+);
+
+interface InlineTableRegion {
+	row: number;
+	from: number;
+	to: number;
+	id: string;
+	format: TableCopyFormat;
+}
+
+interface InlineTableFrame {
+	source: string;
+	width: number;
+	rawRows: readonly string[];
+	rows: readonly string[];
+	regions: InlineTableRegion[];
+	resolveControl?: InlineControlResolver;
+}
+
 interface RenderedLine {
 	text: string;
 	literalCode?: true;
@@ -1489,6 +1516,24 @@ function stableBlockBoundary(
  */
 export function lexDocument(text: string): TokensList {
 	return markdownParser.lexer(text);
+}
+
+/** Tables in document order, including lists/quotes, with whole-document reference resolution. */
+export function extractMarkdownTables(text: string): Tokens.Table[] {
+	return tablesInBlocks(lexDocument(text));
+}
+
+function tablesInBlocks(tokens: readonly Token[]): Tokens.Table[] {
+	const tables: Tokens.Table[] = [];
+	for (const token of tokens) {
+		if (isTableToken(token)) tables.push(token);
+		else if (isListToken(token)) {
+			for (const item of token.items) tables.push(...tablesInBlocks(item.tokens));
+		} else if (token.type === "blockquote") {
+			tables.push(...tablesInBlocks((token as Tokens.Blockquote).tokens));
+		}
+	}
+	return tables;
 }
 
 /**
@@ -2150,6 +2195,7 @@ interface RenderSignature {
 	headingProbe: string;
 	/** Fallback glyphs for themes without `symbols`; their identity alone cannot tell presets apart. */
 	symbolsProbe: string;
+	tableCopy: boolean;
 }
 
 /** A shorter prefix the cached rows grew from: its length, its token count and the row count its rows end at. */
@@ -2395,7 +2441,10 @@ export class Markdown implements Component {
 	#extensionLinkBlock = 0;
 	#extensionLinkOrdinal = 0;
 	#ignoreTight = false;
-	#native?: { text: string; stream: boolean; node: NativeNode };
+	#native?: { text: string; stream: boolean; actions: boolean; node: NativeNode };
+	#tableCopyActions?: Map<string, { table: Tokens.Table; format: TableCopyFormat }>;
+	#inlineTableFrame?: InlineTableFrame;
+	#renderTableCopy = false;
 	setIgnoreTight(ignore: boolean): this {
 		this.#ignoreTight = ignore;
 		this.invalidate();
@@ -2499,6 +2548,7 @@ export class Markdown implements Component {
 		this.#cachedText = undefined;
 		this.#cachedWidth = undefined;
 		this.#cachedLines = undefined;
+		this.#inlineTableFrame = undefined;
 	}
 
 	releaseRenderCaches(): void {
@@ -2510,22 +2560,111 @@ export class Markdown implements Component {
 	}
 
 	/**
-	 * The unrendered source as an `md` node, `stream` while the streaming
-	 * (transient) cache is on. Append-only growth yields a fresh node of the
-	 * same kind and key whose text extends the previous one, which the
-	 * reconciler sends as `text append`.
+	 * Keep Markdown source rendering; insert copy controls after each table's
+	 * top-level block (after the containing list/quote for nested tables).
 	 */
 	describe(_cx: DescribeContext): NativeNode {
 		const stream = this.#transientRenderCache;
+		const actions = hasTranscriptActions();
 		const cached = this.#native;
-		if (cached?.text === this.#text && cached.stream === stream) return cached.node;
+		if (cached?.text === this.#text && cached.stream === stream && cached.actions === actions) return cached.node;
+		this.#tableCopyActions = undefined;
 		// Sources are model text; OSC 8 / SGR bytes a caller spliced in are the terminal's to style, not ours.
 		const plain = this.#text.includes("\x1b") ? plainText(this.#text) : this.#text;
-		const described = stream
-			? md(speculativeStreamingSource(holdPartialTableRow(plain)), { stream: true })
-			: md(plain);
-		this.#native = { text: this.#text, stream, node: described };
+		const source = stream ? speculativeStreamingSource(holdPartialTableRow(plain)) : plain;
+		let described = md(source, stream ? { stream: true } : undefined);
+		if (actions && source.includes("|")) {
+			const tokens = lexDocument(source);
+			const tables = tablesInBlocks(tokens);
+			if (tables.length > 0) {
+				const copyActions = new Map<string, { table: Tokens.Table; format: TableCopyFormat }>();
+				this.#tableCopyActions = copyActions;
+				const definitions: string[] = [];
+				const tags = new Set<string>();
+				let duplicateDefinitions = false;
+				markdownParser.walkTokens(tokens, token => {
+					if (token.type !== "def") return;
+					const definition = token as Tokens.Def;
+					if (tags.has(definition.tag)) duplicateDefinitions = true;
+					tags.add(definition.tag);
+					definitions.push(definition.raw);
+				});
+				// Prepend definitions so references also resolve in isolated blocks and open-fence tails.
+				const references = definitions.length > 0 ? `${definitions.join("\n")}\n\n` : "";
+				const blocks: NativeNode[] = [];
+				let prose = "";
+				let tableIndex = 0;
+				const flush = (): void => {
+					if (!prose) return;
+					blocks.push(
+						keyed(md(references + prose, stream ? { stream: true } : undefined), `prose-${blocks.length}`),
+					);
+					prose = "";
+				};
+				const tableBlock = (raw: string, blockTables: readonly Tokens.Table[]): void => {
+					flush();
+					const key = `table-${tableIndex}`;
+					const children: NativeNode[] = [
+						keyed(md(references + raw, stream ? { stream: true } : undefined), "body"),
+					];
+					for (const table of blockTables) {
+						const index = tableIndex++;
+						const controlsKey = `copy-${index}-${stableKey(JSON.stringify(table))}`;
+						const controls: NativeNode[] = [];
+						for (const format of ["tsv", "csv", "markdown"] as const) {
+							const label = `Copy ${format === "markdown" ? "Markdown" : format.toUpperCase()}`;
+							copyActions.set(`${key}/${controlsKey}/${format}`, { table, format });
+							controls.push(
+								node(
+									"text",
+									{
+										text: label,
+										aria: `${label} from table ${index + 1}`,
+										title: `${label} from table ${index + 1}`,
+										role: "omp.table.copy",
+										actions: { click: `copy-table-${format}` },
+									},
+									undefined,
+									format,
+								),
+							);
+						}
+						children.push(
+							node(
+								"row",
+								{ gap: "sm", wrap: true, role: "omp.table.actions", aria: `Table ${index + 1}` },
+								controls,
+								controlsKey,
+							),
+						);
+					}
+					blocks.push(node("col", { role: "omp.table" }, children, key));
+				};
+				if (duplicateDefinitions || tokens.map(token => token.raw).join("") !== source) {
+					// Keep document-wide precedence and source bytes when normalization prevents a lossless split.
+					tableBlock(source, tables);
+				} else {
+					for (const token of tokens) {
+						const blockTables = tablesInBlocks([token]);
+						if (blockTables.length > 0) tableBlock(token.raw, blockTables);
+						else prose += token.raw;
+					}
+					flush();
+				}
+				described = col(blocks);
+			}
+		}
+		this.#native = { text: this.#text, stream, actions, node: described };
 		return described;
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action" || !hasTranscriptActions()) return;
+		const cached = this.#native;
+		if (cached?.text !== this.#text || cached.stream !== this.#transientRenderCache) return;
+		const action = this.#tableCopyActions?.get(event.key);
+		if (!action || event.act !== `copy-table-${action.format}`) return;
+		runTranscriptAction({ act: "copy", text: formatTableForClipboard(action.table, action.format) });
 	}
 
 	/**
@@ -2931,6 +3070,101 @@ export class Markdown implements Component {
 	}
 
 	render(width: number): readonly string[] {
+		const tableCopy = this.#inlineControls();
+		if (this.#renderTableCopy !== tableCopy) {
+			this.#renderTableCopy = tableCopy;
+			this.releaseRenderCaches();
+		}
+		const rawRows = this.#renderRows(width);
+		const previous = this.#inlineTableFrame;
+		if (previous?.rawRows === rawRows && previous.source === this.#text && previous.width === width) {
+			return previous.rows;
+		}
+		this.#inlineTableFrame = undefined;
+		if (!tableCopy || !rawRows.some(line => line.includes(TABLE_COPY_MARKER))) return rawRows;
+		const rows: string[] = [];
+		const regions: InlineTableRegion[] = [];
+		for (const [row, raw] of rawRows.entries()) {
+			let line = "";
+			let cursor = 0;
+			let active: { id: string; format: TableCopyFormat; from: number } | undefined;
+			TABLE_COPY_MARKER_PATTERN.lastIndex = 0;
+			for (let match = TABLE_COPY_MARKER_PATTERN.exec(raw); match; match = TABLE_COPY_MARKER_PATTERN.exec(raw)) {
+				line += raw.slice(cursor, match.index);
+				if (active) {
+					regions.push({ ...active, row, to: visibleWidth(line) });
+					active = undefined;
+				}
+				const format = match[2];
+				if (match[1] && (format === "tsv" || format === "csv" || format === "markdown")) {
+					active = { id: match[1], format, from: visibleWidth(line) };
+				}
+				cursor = match.index + match[0].length;
+			}
+			rows.push(line + raw.slice(cursor));
+		}
+		this.#inlineTableFrame = { source: this.#text, width, rawRows, rows, regions };
+		return rows;
+	}
+
+	/** Classic inline controls need both a clipboard host and the host's transcript pointer layer. */
+	#inlineControls(): boolean {
+		return hasTranscriptActions() && isTranscriptMouseEnabled();
+	}
+
+	/** A snapshot of the last painted table controls; never redirects stale cell coordinates after a redraw. */
+	getInlineControlResolver(width: number): InlineControlResolver | undefined {
+		const frame = this.#inlineTableFrame;
+		if (!frame || frame.width !== width || frame.source !== this.#text || !this.#inlineControls()) return undefined;
+		if (frame.resolveControl) return frame.resolveControl;
+		const tabbed = this.#text.includes("\t") ? replaceTabs(this.#text) : this.#text;
+		const tokens = lexDocument(this.#transientRenderCache ? tabbed : repairOrphanClosingFence(tabbed));
+		const original = tablesInBlocks(tokens);
+		const tail = tokens.at(-1);
+		const speculated = this.#transientRenderCache && tail ? speculateStreamingToken(tail) : undefined;
+		const rendered = speculated ? tablesInBlocks([...tokens.slice(0, -1), speculated]) : original;
+		const tables = new Map<string, Tokens.Table>();
+		for (const [index, table] of rendered.entries()) {
+			const source = original[index];
+			if (source) tables.set(stableKey(table.raw), source);
+		}
+		const controls: InlineControl[] = [];
+		for (const region of frame.regions) {
+			const table = tables.get(region.id);
+			if (table === undefined) continue;
+			controls.push({
+				id: region,
+				row: region.row,
+				from: region.from,
+				to: region.to,
+				activate: () =>
+					this.#inlineTableFrame === frame &&
+					frame.source === this.#text &&
+					this.#inlineControls() &&
+					runTranscriptAction(
+						{ act: "copy", text: formatTableForClipboard(table, region.format) },
+						{ quiet: true },
+					),
+			});
+		}
+		frame.resolveControl = (column, row) => {
+			if (
+				this.#inlineTableFrame !== frame ||
+				frame.source !== this.#text ||
+				!this.#inlineControls() ||
+				!Number.isInteger(column) ||
+				!Number.isInteger(row)
+			)
+				return undefined;
+			for (const control of controls) {
+				if (control.row === row && column >= control.from && column < control.to) return control;
+			}
+			return undefined;
+		};
+		return frame.resolveControl;
+	}
+
+	#renderRows(width: number): readonly string[] {
 		// L1: per-instance cache — fastest path for repeated renders of the same
 		// instance at the same width (e.g. resize debounce, repeated redraws).
 		// Returning the cached reference is load-bearing: parents memoize their
@@ -3237,6 +3471,7 @@ export class Markdown implements Component {
 			bgColorProbe,
 			headingProbe,
 			symbolsProbe: this.#symbolsProbe,
+			tableCopy: this.#renderTableCopy,
 		};
 	}
 	// All-primitive signature — compare via the canonical render-cache encoding.
@@ -3245,7 +3480,7 @@ export class Markdown implements Component {
 	}
 
 	#renderCacheKey(normalizedText: string, signature: RenderSignature): string {
-		return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.extensionLinks}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}\x00${signature.symbolsProbe}`;
+		return `${normalizedText}\x00${signature.width}\x00${signature.paddingX}\x00${signature.paddingY}\x00${signature.codeBlockIndent}\x00${signature.themeId}\x00${signature.defaultTextStyleId}\x00${signature.imageProtocol}\x00${signature.hyperlinks ? 1 : 0}\x00${signature.extensionLinks}\x00${signature.textSizing ? 1 : 0}\x00${signature.bgColorProbe}\x00${signature.headingProbe}\x00${signature.symbolsProbe}\x00${signature.tableCopy ? 1 : 0}`;
 	}
 
 	#renderStreamingContentLines(
@@ -4611,6 +4846,7 @@ export class Markdown implements Component {
 		if (availableForCells < numCols) {
 			// Too narrow to render a stable table. Fall back to raw markdown.
 			const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
+			fallbackLines.push(...this.#tableCopyFooter(token.raw, availableWidth));
 			if (nextTokenType && nextTokenType !== "space") {
 				fallbackLines.push("");
 			}
@@ -4807,9 +5043,37 @@ export class Markdown implements Component {
 		const bottomBorderCells = columnWidths.map(w => h.repeat(w));
 		const bottomBorder = `${t.bottomLeft}${h}${bottomBorderCells.join(`${h}${t.teeUp}${h}`)}${h}${t.bottomRight}`;
 		lines.push(bottomBorder);
+		lines.push(...this.#tableCopyFooter(token.raw, availableWidth));
 		if (nextTokenType && nextTokenType !== "space") {
 			lines.push(""); // Add spacing after table
 		}
+		return lines;
+	}
+
+	#tableCopyFooter(raw: string | undefined, width: number): string[] {
+		if (!this.#renderTableCopy || !raw) return [];
+		const id = stableKey(raw);
+		const lines: string[] = [];
+		let line = "";
+		let used = 0;
+		for (const format of ["tsv", "csv", "markdown"] as const) {
+			const name = format === "markdown" ? "Markdown" : format.toUpperCase();
+			const full = `[Copy ${name}]`;
+			const label = truncateToWidth(visibleWidth(full) <= width ? full : `[${name}]`, width, Ellipsis.Omit);
+			const size = visibleWidth(label);
+			if (used > 0 && used + 1 + size > width) {
+				lines.push(line);
+				line = "";
+				used = 0;
+			}
+			if (used > 0) {
+				line += " ";
+				used++;
+			}
+			line += `${TABLE_COPY_MARKER}${id};${format}\x07${this.#theme.link(label)}${TABLE_COPY_MARKER};\x07`;
+			used += size;
+		}
+		if (line) lines.push(line);
 		return lines;
 	}
 }
