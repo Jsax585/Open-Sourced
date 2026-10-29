@@ -233,11 +233,11 @@ A call's per-call `model` (task item / flat call, eval `agent()` / `workpool()`;
 
 `task.perCallModel` decides where a model-facing call may pick its model:
 
-| Value | Behavior |
-| --- | --- |
-| `off` (default) | A task item, flat call, `agent()` or `workpool()` that passes `model` fails preflight. The field stays in the task schema so it is rejected rather than silently dropped. |
-| `eval` | Accepted by eval `agent()` and `workpool()` only; task items behave as `off`. Use it to route a specialist (e.g. a pinned `reviewer`) from a script while ordinary delegation keeps its configured routing. |
-| `on` | Accepted everywhere. |
+| Value           | Behavior                                                                                                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off` (default) | A task item, flat call, `agent()` or `workpool()` that passes `model` fails preflight. The field stays in the task schema so it is rejected rather than silently dropped.                                   |
+| `eval`          | Accepted by eval `agent()` and `workpool()` only; task items behave as `off`. Use it to route a specialist (e.g. a pinned `reviewer`) from a script while ordinary delegation keeps its configured routing. |
+| `on`            | Accepted everywhere.                                                                                                                                                                                        |
 
 A per-call `model` is one selector or a non-empty ordered array of them. A selector is either an exact `provider/model-id[@upstream][:level]` or a configured chat role `@role[:level]` (for example `anthropic/claude-sonnet-4-5:high` or `@review:high`). The optional `@upstream` pin is supported only by aggregators and is part of the model identity: pinned and unpinned routes are different models for approval. A literal catalog id wins over splitting a level-shaped suffix. Legacy `pi/<role>` aliases, comma lists, globs and partial ids fail preflight; when `task.perCallModel` refuses the call, that error is reported first. Exact ids have no fuzzy resolution, and non-chat models are rejected with that reason.
 
@@ -267,7 +267,7 @@ When per-call selection is enabled for a surface, the task/eval tool description
 
 A `model` for an agent with a `task.agentModelOverrides` entry fails preflight with a conflict error, so the operator's override is never silently replaced. Per-call `model` is not supported for the bundled seance agent, whose own `model` overrides its source session's saved model as before. A project or user agent that shadows the `seance` name is an ordinary agent: its `model` is a per-call `model`, held to every rule here.
 
-A per-call worker never moves to an unapproved main-loop model. Retry fallback, context promotion and agent prewalk are off, and an unavailable requested model or missing working credentials fails the call rather than using the parent's model. A candidate list is only an order of preference at spawn, never a runtime fallback. Factory models whose provider attaches a server-side fallback chain are refused, even if the fallback targets are granted. Every main-loop request is checked against the current operator grants. Preflight waits for any in-flight model catalog refresh; a cold registry or a model not yet found during background discovery is checked again before child-session creation once discovery settles.
+A per-call worker never moves to an unapproved main-loop model. Retry fallback, context promotion and agent prewalk are off, and an unavailable requested model or missing working credentials fails the call rather than using the parent's model. A candidate list is only an order of preference at spawn, never a runtime fallback. Factory models whose provider attaches a server-side fallback chain are not refused: the per-call request omits the chain, and a response served by another model (or carrying a fallback handoff block) fails the worker instead. Every main-loop request is checked against the current operator grants. Preflight waits for any in-flight model catalog refresh; a cold registry or a model not yet found during background discovery is checked again before child-session creation once discovery settles.
 
 Cold revival waits for model discovery, restores only the exact saved `perCallModelIdentity` route and `perCallThinkingLevel` selector, and rechecks current grants. An agent's frontmatter grants only while the agent is still discovered and enabled; the parent's model grants only from the worker's real parent while it is live (the root session for its direct children). Legacy per-call records missing either canonical field refuse revival rather than guessing from `resolvedModel`. Changing `task.perCallModel` affects new calls only.
 
