@@ -1141,6 +1141,10 @@ export class AgentSession implements SettingsScope {
 	#modelRegistry: ModelRegistry;
 	/** Creation-time permission for switchSession to keep the current model when a target's saved model is unrestorable. */
 	readonly #allowSessionModelFallback: boolean;
+	readonly #disableModelFallback: boolean;
+	readonly #disableContextPromotion: boolean;
+	readonly #pinnedRetryFallbackRole: string | undefined;
+	readonly #assertDispatchModel: ((model: Model) => void) | undefined;
 	/** Creation-time: false when the extension UI context cannot reach a human (ACP without form elicitation). */
 	readonly #interactivePrompts: boolean;
 	/** Newest usage reports, cached by fetchUsageReports. */
@@ -1941,6 +1945,10 @@ export class AgentSession implements SettingsScope {
 		this.memoryEnabled = config.memoryEnabled ?? true;
 		this.#modelRegistry = config.modelRegistry;
 		this.#allowSessionModelFallback = config.allowSessionModelFallback === true;
+		this.#disableModelFallback = config.disableModelFallback === true;
+		this.#disableContextPromotion = this.#disableModelFallback || config.disableContextPromotion === true;
+		this.#pinnedRetryFallbackRole = config.pinnedRetryFallbackRole;
+		this.#assertDispatchModel = config.assertDispatchModel;
 		this.#interactivePrompts = config.interactivePrompts !== false;
 		this.#extensionRoots =
 			config.extensionRoots ??
@@ -2133,6 +2141,17 @@ export class AgentSession implements SettingsScope {
 			configuredThinkingLevel: () => this.configuredThinkingLevel(),
 			setThinkingLevel: level => this.#models.setThinkingLevel(level),
 			thinkingLevelCeiling: () => this.#models.thinkingLevelCeiling,
+			modelFallbackDisabled: () => this.#disableModelFallback,
+			pinnedRetryFallbackRole: () => this.#pinnedRetryFallbackRole,
+			dispatchModelAllowed: model => {
+				if (!this.#assertDispatchModel) return true;
+				try {
+					this.#assertDispatchModel(model);
+					return true;
+				} catch {
+					return false;
+				}
+			},
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
 			isCompacting: () => this.isCompacting,
@@ -2672,6 +2691,7 @@ export class AgentSession implements SettingsScope {
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			isDisposed: () => this.#isDisposed,
+			contextPromotionDisabled: () => this.#disableContextPromotion,
 			isStreaming: () => this.isStreaming,
 			isGeneratingHandoff: () => this.isGeneratingHandoff,
 			promptGeneration: () => this.#promptGeneration,

@@ -14,7 +14,7 @@
  *    runtime for internal callers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
-import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentTool, validateAgentToolArguments } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
@@ -451,7 +451,12 @@ describe("task.batch validation", () => {
 
 			const toolResult = agent.state.messages.find(message => message.role === "toolResult");
 			const text = toolResult?.role === "toolResult" ? getFirstText(toolResult) : "";
-			expect(text).toContain(`\`${field}\` is only accepted for the \`seance\` agent.`);
+			// `model` doubles as the per-call selector, whose disabled gate is reported first.
+			expect(text).toContain(
+				field === "model"
+					? "Per-call model is disabled for task calls (task.perCallModel: off)."
+					: `\`${field}\` is only accepted for the \`seance\` agent.`,
+			);
 			expect(toolResult?.role === "toolResult" && toolResult.isError).toBe(true);
 			expect(run).not.toHaveBeenCalled();
 		},
@@ -907,4 +912,86 @@ describe("task.batch spawning", () => {
 		expect(last?.progress?.find(p => p.id === "Second")?.status).toBe("aborted");
 		expect(last?.progress?.find(p => p.id === "First")?.status).toBe("completed");
 	});
+});
+
+describe("batch model placement", () => {
+	afterEach(() => vi.restoreAllMocks());
+	it("rejects a top-level model before dispatch even when wire validation is bypassed", async () => {
+		mockDiscovery();
+		const run = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("Unexpected"));
+		const tool = await TaskTool.create(createSession({ settings: { "task.batch": true, "async.enabled": false } }));
+		const result = await tool.execute("batch-model", {
+			context: "Shared context",
+			model: "p/requested",
+			tasks: [{ task: "Do work" }],
+		});
+		expect(getFirstText(result)).toMatch(/model.*tasks|model.*item/i);
+		expect(result.isError).toBe(true);
+		expect(run).not.toHaveBeenCalled();
+	});
+
+	// `off` and `eval` refuse task calls through the same gate; one mode per shape covers it.
+	it.each([
+		["off", "batch"],
+		["eval", "flat"],
+	] as const)(
+		"rejects a task call's model before dispatch while task.perCallModel is %s (%s call)",
+		async (mode, shape) => {
+			const batch = shape === "batch";
+			mockDiscovery();
+			const run = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("Unexpected"));
+			const tool = await TaskTool.create(
+				createSession({ settings: { "task.batch": batch, "async.enabled": false, "task.perCallModel": mode } }),
+			);
+			// A role alias is not an exact selector, but the disabled gate is what the caller must hear first.
+			const work = { task: "Do work", solutionSpace: "c", model: "@smol" };
+			// Through shared argument validation, as a model's tool call arrives: `model` must reach preflight in both shapes.
+			const args = validateAgentToolArguments(tool as unknown as AgentTool, {
+				type: "toolCall",
+				id: "task-model",
+				name: tool.name,
+				arguments: batch ? { context: "Shared context", tasks: [work] } : work,
+			});
+			const result = await tool.execute("task-model", args as TaskParams);
+			expect(getFirstText(result)).toMatch(/per-call model is disabled/i);
+			expect(result.isError).toBe(true);
+			expect(run).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["off", "on"] as const)(
+		"holds a project agent named seance to the per-call gate while task.perCallModel is %s",
+		async mode => {
+			mockDiscovery([
+				taskAgent,
+				{ name: "seance", description: "Shadow", systemPrompt: "Work.", source: "project", model: ["p/own"] },
+			]);
+			const run = vi.spyOn(executorModule, "runSubprocess").mockResolvedValue(makeResult("Unexpected"));
+			const tool = await TaskTool.create(
+				createSession({
+					settings: {
+						"task.batch": true,
+						"async.enabled": false,
+						"task.perCallModel": mode,
+						"task.agentModelOverrides": { seance: "p/own" },
+					},
+				}),
+			);
+			const args = validateAgentToolArguments(tool as unknown as AgentTool, {
+				type: "toolCall",
+				id: "seance-shadow",
+				name: tool.name,
+				arguments: {
+					context: "Shared context",
+					tasks: [{ agent: "seance", task: "Do work", solutionSpace: "c", model: "p/ungranted" }],
+				},
+			});
+			const result = await tool.execute("seance-shadow", args as TaskParams);
+			expect(getFirstText(result)).toMatch(
+				mode === "off" ? /per-call model is disabled/i : /conflicts with task\.agentModelOverrides/,
+			);
+			expect(result.isError).toBe(true);
+			expect(run).not.toHaveBeenCalled();
+		},
+	);
 });
