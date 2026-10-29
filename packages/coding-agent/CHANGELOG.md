@@ -18,6 +18,7 @@
 - Extensions and RPC clients can start live voice sessions using their own WebRTC peer, including phone-browser clients, through ctx.startLive({ sdpOffer }) or live_connect.
 - Extensions can customize assistant-text rendering and rerender individual replies through the opt-in extensionRenderers.assistantText setting, and can register interactive link schemes with extension callbacks and renderer fallbacks.
 - /debug reports now include session-logs.txt containing all log records written by the reporting session and its subagents for the current day.
+- `read` returns a timestamped transcript of audio files and of a video's soundtrack (`clip.mp4:transcript`) when you're logged in to a model that hears audio, such as Gemini through a Google login or an audio model on OpenRouter; its times are video frame selectors. Without one, an audio read shows its duration and codec instead of refusing it as binary ([#16611](https://github.com/can1357/oh-my-pi/pull/16611) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
