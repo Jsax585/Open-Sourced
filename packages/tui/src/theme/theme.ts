@@ -11,7 +11,6 @@ import { ansi256ToHex, resolveThemeColors, resolveVarRefs } from "./color";
 import {
 	type CreateThemeOptions,
 	createTheme,
-	getBuiltinThemes,
 	loadTheme,
 	loadThemeJson,
 	loadThemeJsonSync,
@@ -21,7 +20,13 @@ import { isValidThemeBg, isValidThemeColor, type ThemeColor, type ThemeJson } fr
 import type { SymbolPreset } from "./symbols";
 import type { Theme } from "./theme-class";
 
-export { getAvailableThemes, getAvailableThemesWithPaths, getThemeByName, type ThemeInfo } from "./loader";
+export {
+	getAllBuiltinThemes,
+	getAvailableThemes,
+	getAvailableThemesWithPaths,
+	getThemeByName,
+	type ThemeInfo,
+} from "./loader";
 export { isValidThemeColor, type ThemeBg, type ThemeColor } from "./schema";
 export {
 	getAvailableSymbolPresets,
@@ -850,20 +855,14 @@ export async function getResolvedThemeColors(themeName?: string): Promise<Record
  */
 export function isLightTheme(themeName?: string): boolean {
 	const name = themeName ?? "dark";
-	const builtinThemes = getBuiltinThemes();
-	let themeJson: ThemeJson | undefined;
-	if (name in builtinThemes) {
-		themeJson = builtinThemes[name];
-	} else {
-		try {
-			const customPath = path.join(getCustomThemesDir(), `${name}.json`);
-			const content = fs.readFileSync(customPath, "utf-8");
-			themeJson = JSON.parse(content) as ThemeJson;
-		} catch {
-			return false;
-		}
+	try {
+		// Sync built-ins resolve through loadThemeJsonSync so names outside the
+		// eagerly loaded first-paint pair still classify correctly; custom
+		// files that fail to load read as dark, as before.
+		return isLightThemeJson(loadThemeJsonSync(name));
+	} catch {
+		return false;
 	}
-	return isLightThemeJson(themeJson);
 }
 
 /**

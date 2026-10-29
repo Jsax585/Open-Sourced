@@ -5,8 +5,8 @@ import { getCustomThemesDir } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import { detectColorMode, resolveThemeColors } from "./color";
 import darkThemeJson from "./dark.json" with { type: "json" };
-import { defaultThemes } from "./defaults";
 import lightThemeJson from "./light.json" with { type: "json" };
+import { defaultThemeNames, loadDefaultThemeJson } from "./defaults/lazy";
 import type { ColorMode, ThemeBg, ThemeColor, ThemeJson } from "./schema";
 import { normalizeSpinnerFramesOverride, type SymbolPreset } from "./symbols";
 import { Theme } from "./theme-class";
@@ -15,18 +15,48 @@ import { Theme } from "./theme-class";
 // Theme Loading
 // ============================================================================
 
-const BUILTIN_THEMES: Record<string, ThemeJson> = {
+const FIRST_PAINT_THEMES: Record<string, ThemeJson> = {
 	dark: darkThemeJson as ThemeJson,
 	light: lightThemeJson as ThemeJson,
-	...(defaultThemes as Record<string, ThemeJson>),
 };
+
+/**
+ * Lazily-completed built-in theme table.
+ *
+ * `dark`/`light` stay static for the synchronous first-paint path; the other
+ * 100 default themes load on first use through `./defaults/lazy` instead of
+ * riding the boot module graph.
+ */
+const BUILTIN_THEMES: Record<string, ThemeJson> = {
+	...FIRST_PAINT_THEMES,
+};
+
+let defaultsLoaded = false;
+
+/** Load the remaining default themes once; concurrent callers share one pass. */
+async function ensureDefaultThemes(): Promise<void> {
+	if (defaultsLoaded) return;
+	const entries = await Promise.all(
+		defaultThemeNames
+			.filter(name => !(name in BUILTIN_THEMES))
+			.map(async name => [name, await loadDefaultThemeJson(name)] as const),
+	);
+	for (const [name, themeJson] of entries) BUILTIN_THEMES[name] = themeJson;
+	defaultsLoaded = true;
+}
 
 export function getBuiltinThemes(): Record<string, ThemeJson> {
 	return BUILTIN_THEMES;
 }
 
+/** Built-in theme table with every default theme loaded. Async callers only. */
+export async function getAllBuiltinThemes(): Promise<Record<string, ThemeJson>> {
+	await ensureDefaultThemes();
+	return BUILTIN_THEMES;
+}
+
 export async function getAvailableThemes(): Promise<string[]> {
-	const themes = new Set<string>(Object.keys(getBuiltinThemes()));
+	const themes = new Set<string>([...Object.keys(getBuiltinThemes()), ...defaultThemeNames]);
 	const customThemesDir = getCustomThemesDir();
 	try {
 		const files = await fs.promises.readdir(customThemesDir);
@@ -49,8 +79,9 @@ export interface ThemeInfo {
 export async function getAvailableThemesWithPaths(): Promise<ThemeInfo[]> {
 	const result: ThemeInfo[] = [];
 
-	// Built-in themes (embedded, no file path)
-	for (const name of Object.keys(getBuiltinThemes())) {
+	// Built-in themes (embedded, no file path). The 100 default themes load
+	// lazily, so list every known default name here even before first use.
+	for (const name of new Set([...Object.keys(getBuiltinThemes()), ...defaultThemeNames])) {
 		result.push({ name, path: undefined });
 	}
 
@@ -111,6 +142,11 @@ export async function loadThemeJson(name: string): Promise<ThemeJson> {
 	if (name in builtinThemes) {
 		return builtinThemes[name];
 	}
+	if ((defaultThemeNames as readonly string[]).includes(name)) {
+		const themeJson = await loadDefaultThemeJson(name);
+		builtinThemes[name] = themeJson;
+		return themeJson;
+	}
 	const customThemesDir = getCustomThemesDir();
 	const themePath = path.join(customThemesDir, `${name}.json`);
 	try {
@@ -126,6 +162,15 @@ export function loadThemeJsonSync(name: string): ThemeJson {
 	const builtinThemes = getBuiltinThemes();
 	if (name in builtinThemes) {
 		return builtinThemes[name];
+	}
+	if ((defaultThemeNames as readonly string[]).includes(name)) {
+		// Sync callers (first paint, settings migration, native palette) can
+		// name a default theme before its async load ran. Bun consolidates
+		// `with { type: "json" }` modules in its registry, so a require here
+		// returns the same parsed value the async `import()` caches above.
+		const themeJson = require(`./defaults/${name}.json`) as ThemeJson;
+		builtinThemes[name] = themeJson;
+		return themeJson;
 	}
 	const themePath = path.join(getCustomThemesDir(), `${name}.json`);
 	try {

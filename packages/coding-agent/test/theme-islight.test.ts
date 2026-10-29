@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { generateThemeVars } from "@oh-my-pi/pi-coding-agent/export/html";
 import { defaultThemes } from "@oh-my-pi/pi-tui/theme/defaults";
-import { createTheme, getBuiltinThemes } from "@oh-my-pi/pi-tui/theme/loader";
+import { createTheme, getBuiltinThemes, loadThemeJsonSync } from "@oh-my-pi/pi-tui/theme/loader";
 import {
 	getEditorTheme,
 	getResolvedThemeColors,
@@ -100,8 +100,7 @@ describe("empty foreground contrast", () => {
 
 	it("uses the normal text token for transparent composer text", () => {
 		const { dark } = createBaseThemes();
-		const poimandresJson = getBuiltinThemes()["light-poimandres"];
-		if (!poimandresJson) throw new Error("Light Poimandres theme is unavailable");
+		const poimandresJson = loadThemeJsonSync("light-poimandres");
 		try {
 			// poimandres `text` is #506477 → rgb(80,100,119); a transparent composer
 			// must paint typed text with it, never the `userMessageText` (#ffffff)
