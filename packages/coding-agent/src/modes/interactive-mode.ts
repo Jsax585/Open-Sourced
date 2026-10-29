@@ -4,14 +4,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {
-	type Agent,
-	AgentBusyError,
-	type AgentMessage,
-	agentPauseGate,
-	EventLoopKeepalive,
-	ThinkingLevel,
-} from "@oh-my-pi/pi-agent-core";
+import { type Agent, AgentBusyError, type AgentMessage, agentPauseGate, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, ImageContent, Model, Usage, UsageReport } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -116,6 +109,7 @@ import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { GoalModeState } from "../goals/state";
 import { rebindMemoryBackendForCwd } from "../hindsight/backend";
 import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
+import { hasNativeJudge } from "../judgment";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
 import {
@@ -3199,7 +3193,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#scheduleLoopAutoSubmit();
 		this.#scheduleGoalContinuation();
 
-		using _ = new EventLoopKeepalive();
 		return await promise;
 	}
 
@@ -4099,12 +4092,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		setTerminalTextSizing(cfgTuiTextSizing.get(this.settings) && TERMINAL.supportsTextSizing);
 	}
 
-	/** Charts under assistant tables per `tui.autoGraph`; `smart` picks multi-series charts through the session's judge. */
+	/**
+	 * Charts under assistant tables per `tui.autoGraph`: `smart` picks charts through the session's judge,
+	 * `auto` only while the judge role resolves to a native backend (checked per table, so a login or
+	 * role change mid-session applies), else the local guess.
+	 */
 	#applyAutoGraphSetting(): void {
 		const mode = cfgTuiAutoGraph.get(this.settings);
-		setTableCharts(
-			mode,
-			mode === "smart" ? request => pickTableChart(request, this.session.tableChartJudge()) : undefined,
+		if (mode === "off" || mode === "always") {
+			setTableCharts(mode);
+			return;
+		}
+		setTableCharts("smart", request =>
+			mode === "auto" && !hasNativeJudge(this.settings, this.session.modelRegistry)
+				? undefined
+				: pickTableChart(request, this.session.tableChartJudge()),
 		);
 	}
 
@@ -4631,6 +4633,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.streamingComponent) liveSet.add(this.streamingComponent);
 			// Text after a tool call in the streaming reply is drawn by its own components.
 			for (const segment of this.#eventController.liveAssistantSegments()) liveSet.add(segment);
+			// So are replies a still-executing call's commands wrote to `out://`.
+			for (const reply of this.#eventController.liveToolReplies()) liveSet.add(reply);
 			for (const [id, component] of this.pendingTools) {
 				livePendingTools.set(id, component);
 				liveSet.add(component as unknown as Component);
@@ -7275,7 +7279,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#enterGoalMode({ objective, silent: true });
 		if (!this.goalModeEnabled) return;
 		this.#resetGoalContinuationSuppression();
-		using _keepalive = new EventLoopKeepalive();
 		await this.session.prompt(objective, { streamingBehavior: "steer" });
 	}
 
