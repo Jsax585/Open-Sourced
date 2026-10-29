@@ -20,9 +20,9 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 /**
  * An extension aside sent with `triggerTurn` that no running turn consumes still gets a turn,
- * also while an earlier user interrupt keeps auto-resume suppressed and in plan mode, unless a
- * user interrupt happened after it was sent. `agent_end` is tagged non-terminal only when a
- * stranded aside will start a turn.
+ * also while an interrupt that stopped something keeps auto-resume suppressed and in plan mode,
+ * unless a user interrupt happened after it was sent. `agent_end` is tagged non-terminal only
+ * when a stranded aside will start a turn.
  */
 describe("AgentSession triggerTurn aside", () => {
 	let tempDir: TempDir;
@@ -145,10 +145,28 @@ describe("AgentSession triggerTurn aside", () => {
 		return { requested: requested.promise, resolve: key.resolve, restore: () => spy.mockRestore() };
 	}
 
+	/**
+	 * An Esc that stops something, which is what latches auto-resume suppression: here a
+	 * prompt still in setup. An idle Esc stops no run and no queued work, so it suppresses
+	 * nothing, and background work keeps waking the session on its own.
+	 */
+	async function interruptPromptInSetup(target: AgentSession, modelRegistry: ModelRegistry): Promise<void> {
+		const keyLookup = holdNextKeyLookup(modelRegistry);
+		try {
+			const dropped = target.prompt("SETUP_INTERRUPTED", { synthetic: true });
+			await keyLookup.requested;
+			await target.abort({ reason: USER_INTERRUPT_LABEL });
+			keyLookup.resolve("openai-test-key");
+			await dropped;
+		} finally {
+			keyLookup.restore();
+		}
+	}
+
 	it("gets a turn when the prompt it was sent during is refused before its run", async () => {
 		const { session, mock, modelRegistry } = await createHarness();
-		// An earlier Esc leaves auto-resume suppressed; a synthetic prompt does not clear it.
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		// An interrupt whose suppression is still live; the aside is sent after it.
+		await interruptPromptInSetup(session, modelRegistry);
 		const keyLookup = holdNextKeyLookup(modelRegistry);
 		try {
 			const refused = session.prompt("SYNTHETIC_SETUP", { synthetic: true });
@@ -197,8 +215,8 @@ describe("AgentSession triggerTurn aside", () => {
 			sent = true;
 			await harness.session.sendCustomMessage(card("CARD_AFTER_POLL"), { deliverAs: "aside", triggerTurn: true });
 		});
-		const { session, mock, agentEnds } = harness;
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		const { session, mock, agentEnds, modelRegistry } = harness;
+		await interruptPromptInSetup(session, modelRegistry);
 
 		// An extension turn runs with the earlier interrupt's suppression still in effect.
 		expect(await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true })).toBe(true);
@@ -210,7 +228,7 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(agentEnds).toEqual([false, true]);
 	});
 
-	it("an aside without triggerTurn stranded after an interrupt folds, and that run's agent_end is terminal", async () => {
+	it("in plan mode, an aside without triggerTurn stranded after a run's last aside poll folds, and that run's agent_end is terminal", async () => {
 		let sent = false;
 		const harness = await createHarness(async () => {
 			if (sent) return;
@@ -218,7 +236,7 @@ describe("AgentSession triggerTurn aside", () => {
 			await harness.session.sendCustomMessage(card("PASSIVE_AFTER_POLL"), { deliverAs: "aside" });
 		});
 		const { session, mock, agentEnds } = harness;
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
 
 		await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
 		await settle(session);
@@ -228,9 +246,9 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(agentEnds).toEqual([true]);
 	});
 
-	it("at idle after an earlier interrupt, triggerTurn decides between a turn and a fold", async () => {
-		const { session, mock } = await createHarness();
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
+	it("at idle under an interrupt's suppression, triggerTurn decides between a turn and a fold", async () => {
+		const { session, mock, modelRegistry } = await createHarness();
+		await interruptPromptInSetup(session, modelRegistry);
 
 		expect(await session.sendCustomMessage(card("IDLE_PASSIVE"), { deliverAs: "aside" })).toBe(false);
 		await settle(session);
@@ -282,10 +300,10 @@ describe("AgentSession triggerTurn aside", () => {
 
 	it("of two sent at once to an idle session after an interrupt, the queued one gets a turn when the first run ends before its aside poll", async () => {
 		// The first run fails, so its loop ends without the stop-boundary aside poll that would take the queued aside.
-		const { session, mock } = await createHarness(undefined, [
+		const { session, mock, modelRegistry } = await createHarness(undefined, [
 			{ stopReason: "error", errorMessage: "400 bad request" },
 		]);
-		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		await interruptPromptInSetup(session, modelRegistry);
 
 		await Promise.all([
 			session.sendCustomMessage(card("FIRST_CARD"), { deliverAs: "aside", triggerTurn: true }),
@@ -299,7 +317,9 @@ describe("AgentSession triggerTurn aside", () => {
 	});
 
 	/** Strands a triggerTurn aside and then an aside without it after the extension turn's last aside poll. */
-	async function expectStrandedAsidesInQueueOrder(setup: (target: AgentSession) => Promise<void>): Promise<void> {
+	async function expectStrandedAsidesInQueueOrder(
+		setup: (target: AgentSession, modelRegistry: ModelRegistry) => Promise<void>,
+	): Promise<void> {
 		let sent = false;
 		const harness = await createHarness(async () => {
 			if (sent) return;
@@ -307,8 +327,8 @@ describe("AgentSession triggerTurn aside", () => {
 			await harness.session.sendCustomMessage(card("TRIGGER_FIRST"), { deliverAs: "aside", triggerTurn: true });
 			await harness.session.sendCustomMessage(card("PASSIVE_SECOND"), { deliverAs: "aside" });
 		});
-		const { session, mock } = harness;
-		await setup(session);
+		const { session, mock, modelRegistry } = harness;
+		await setup(session, modelRegistry);
 
 		await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
 		await settle(session);
@@ -326,7 +346,7 @@ describe("AgentSession triggerTurn aside", () => {
 	}
 
 	it("after an earlier interrupt, an aside without triggerTurn queued behind one with it rides that turn in queue order", async () => {
-		await expectStrandedAsidesInQueueOrder(target => target.abort({ reason: USER_INTERRUPT_LABEL }));
+		await expectStrandedAsidesInQueueOrder(interruptPromptInSetup);
 	});
 
 	it("in plan mode, an aside without triggerTurn queued behind one with it rides that turn in queue order", async () => {
@@ -357,9 +377,9 @@ describe("AgentSession triggerTurn aside", () => {
 			});
 			await harness.session.sendCustomMessage(card("PASSIVE_BEHIND_PEER"), { deliverAs: "aside" });
 		});
-		const { session, mock } = harness;
+		const { session, mock, modelRegistry } = harness;
 		try {
-			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			await interruptPromptInSetup(session, modelRegistry);
 			const releaseHold = session.holdIrcWakes();
 			await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
 			await settle(session);
