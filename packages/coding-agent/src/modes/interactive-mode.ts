@@ -285,12 +285,8 @@ import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { statusLineHost } from "./status-line-host";
 import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import {
-	Composer,
-	type ComposerPreferences,
-	type ComposerStatusCache,
-	PINNED_HUD_TOGGLE_ID,
-} from "@oh-my-pi/pi-tui/prompt/composer";
+import { Composer, type ComposerPreferences, type ComposerStatusCache } from "@oh-my-pi/pi-tui/prompt/composer";
+import { PINNED_HUD_TOGGLE_ID } from "../task/output-manager";
 import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
 import { MAGIC_KEYWORDS } from "./magic-keywords";
 import { sharedComposerCache } from "@oh-my-pi/pi-tui/prompt/composer-cache";
