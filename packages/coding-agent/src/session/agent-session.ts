@@ -1000,6 +1000,11 @@ export class AgentSession implements SettingsScope {
 	#runStartedAt: number | undefined;
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
+	/** The `agent_end` {@link #flushPendingAgentEnd} re-tagged non-terminal for a stranded IRC
+	 *  record or an admitted `triggerTurn` aside. A user interrupt that folds that turn away
+	 *  publishes it terminal ({@link #settleCancelledContinuation}), so a subscriber waiting for
+	 *  the settle is not left waiting for a turn that will never run. */
+	#continuationAgentEnd: Extract<AgentSessionEvent, { type: "agent_end" }> | undefined;
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<() => void>();
 	#observedSessionId: string | undefined;
@@ -1729,7 +1734,12 @@ export class AgentSession implements SettingsScope {
 				// had it come first: a triggerTurn aside sent before it no longer starts this turn.
 				if (this.#userInterruptCount !== userInterruptCount) {
 					records = this.#foldStrandedIrcAsidesBeforeWake(records);
-					if (records.length === 0) return;
+					if (records.length === 0) {
+						// The run that scheduled this wake published its end non-terminal for the
+						// turn these records promised. Nothing will run it now, so settle that end.
+						this.#settleCancelledContinuation();
+						return;
+					}
 				}
 				observation = this.#startTurnObservation(records);
 				return this.agent.prompt(records);
@@ -1965,7 +1975,25 @@ export class AgentSession implements SettingsScope {
 			((!this.#acpDefersAgentInitiatedTurns() &&
 				this.#irc.somePending(record => this.#strandedRecordWakes(record))) ||
 				admittedAsideTurn);
-		this.#emit(queuedContinuation || ircContinuation ? { ...pending, isTerminal: false } : pending);
+		const emitted = queuedContinuation || ircContinuation ? { ...pending, isTerminal: false } : pending;
+		// A queued steer or follow-up runs on its own and settles with its own end; only the IRC
+		// continuation can be folded away by an interrupt before any turn starts.
+		this.#continuationAgentEnd = ircContinuation && !queuedContinuation ? emitted : undefined;
+		this.#emit(emitted);
+	}
+
+	/**
+	 * Publish the terminal end of a run whose promised continuation an interrupt folded away.
+	 * No-op when no end is open, when a later run settled one, or when the continuation ran.
+	 */
+	#settleCancelledContinuation(): void {
+		const open = this.#continuationAgentEnd;
+		if (!open) return;
+		// Another record or admitted aside still carries the promise: its own settle ends the run.
+		if (this.#irc.somePending(record => this.#strandedRecordWakes(record))) return;
+		if (this.#admittedTurnRequestingAsides.size > 0) return;
+		this.#continuationAgentEnd = undefined;
+		this.#emit({ ...open, isTerminal: true });
 	}
 
 	/**
@@ -5827,6 +5855,8 @@ export class AgentSession implements SettingsScope {
 		options?: AgentEndSettleOptions,
 	): Promise<void> {
 		this.#settledAgentEnd = event;
+		// This run's own end supersedes any end an earlier run left open for a continuation.
+		this.#continuationAgentEnd = undefined;
 		this.#emitRunState("idle");
 		// Tagged isTerminal so subscribers can tell final settles from scheduled
 		// continuations, and `yielded` so they can tell the agent's own follow-up
@@ -10330,6 +10360,15 @@ export class AgentSession implements SettingsScope {
 			// interrupt since the send (the normalization await above, and any deferred extension
 			// load before it) still folds it.
 			const turnRequested = options.triggerTurn === true && userInterruptCount === this.#userInterruptCount;
+			if (options.triggerTurn === true && !turnRequested) {
+				// The user interrupted after the send, during the awaits above. Since #17243 such an
+				// interrupt latches auto-resume suppression only when it stops a run or queued work,
+				// so the suppression branch below misses an Esc on an otherwise idle session: fold
+				// the turn the user overtook, and settle the end the fold leaves open.
+				this.#recordWithoutTurn([normalizedAppMessage]);
+				this.#settleCancelledContinuation();
+				return false;
+			}
 			if (!turnRequested && this.#planModeState?.enabled) {
 				// Plan mode stays user-driven: fold into context without an autonomous turn, same as
 				// IrcBridge.deliver()/#resumeStrandedIrcAsides do in plan mode. Routed through the

@@ -404,7 +404,7 @@ describe("AgentSession triggerTurn aside", () => {
 			sent = true;
 			await harness.session.sendCustomMessage(card("CARD_BEFORE_ESC"), { deliverAs: "aside", triggerTurn: true });
 		});
-		const { session, mock } = harness;
+		const { session, mock, agentEnds } = harness;
 		// The stranded aside's turn joins a pending work-pool yield change before it starts: hold that change.
 		const turnWaiting = Promise.withResolvers<void>();
 		const yieldChange = Promise.withResolvers<void>();
@@ -428,6 +428,9 @@ describe("AgentSession triggerTurn aside", () => {
 
 		expect(mock.calls).toHaveLength(1);
 		expect(persisted(session, "CARD_BEFORE_ESC")).toBe(true);
+		// The run published its end non-terminal for the turn the aside asked for; the interrupt
+		// cancelled that turn, so the session must still publish a terminal end.
+		expect(agentEnds).toEqual([false, true]);
 	});
 
 	it("in an ACP session, one that lands after the run it was sent during has ended waits for the client's next turn", async () => {
@@ -693,6 +696,35 @@ describe("AgentSession triggerTurn aside", () => {
 
 		expect(mock.calls).toHaveLength(0);
 		expect(persisted(session, "CARD_BEFORE_LOAD_ESC")).toBe(true);
+	});
+
+	it("folds when an idle Esc lands during that load with no plan mode and nothing to suppress", async () => {
+		// The Esc stops no run and no queued work, so since #17243 it latches no suppression:
+		// only the interrupt the send was given folds this aside.
+		const { session, mock } = await createHarness();
+		const loadStarted = Promise.withResolvers<void>();
+		const releaseLoad = Promise.withResolvers<void>();
+		session.setDeferredExtensionLoader(async () => {
+			loadStarted.resolve();
+			await releaseLoad.promise;
+		});
+		try {
+			const sent = session.sendCustomMessage(card("CARD_BEFORE_IDLE_ESC"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+			await loadStarted.promise;
+
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			releaseLoad.resolve();
+			expect(await sent).toBe(false);
+			await settle(session);
+		} finally {
+			releaseLoad.resolve();
+		}
+
+		expect(mock.calls).toHaveLength(0);
+		expect(persisted(session, "CARD_BEFORE_IDLE_ESC")).toBe(true);
 	});
 
 	it("stays parked for a monitored wake when a rolled-back transition and a pooled contract catch its turn in the work-pool wait", async () => {
