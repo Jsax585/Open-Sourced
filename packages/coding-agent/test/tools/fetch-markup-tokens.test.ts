@@ -26,7 +26,7 @@ warning: BODY_FRONT_MATTER_LOOKALIKE
 <p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>, <a href="#/guide/install">Install guide</a>, <a title='See href="#setup"' href="#install">install</a>.</p>
 <p>${PROSE}</p>
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Link to this heading">¶</a></h2>
-<p>Install it, then see <a href="#options">the options</a> below. <a href="#figure"><img src="figure.png" alt="Diagram"></a> <a href="#print" title="Print article"><span>Print</span></a> ${PROSE}</p>
+<p>Install it, then see <a href="#options">the options</a> below. <a href="#figure"><img src="figure.png" alt="Diagram"></a> <a href="#print" title="Print article"><span>Print</span></a> <a href="#done" title="Done &check; &amp;lt;ok&amp;gt;">finished</a> ${PROSE}</p>
 <pre><code>[keep this](#literal-anchor)</code></pre>
 <blockquote><pre><code>[quoted code](#quoted-anchor)</code></pre></blockquote>
 <p>Inline <code>before \` [also kept](#inline-anchor)</code> stays as written.</p>
@@ -93,6 +93,8 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		expect(text).not.toContain("](#setup");
 		expect(text).not.toContain("](#options");
 		expect(text).toContain('[Print](# "Print article")');
+		// Only the target changes: the title reads as the converter renders it on any link.
+		expect(text).toContain('[finished](# "Done ✓ &amp;lt;ok&amp;gt;")');
 		expect(text).toContain(
 			'Contents: [Setup](#), [method](#), [other page](https://example.com/other#part), [Install guide](#/guide/install), [install](# "See href=\\"#setup\\"")',
 		);

@@ -562,9 +562,25 @@ const KEPT_META_NAMES: Record<string, true> = {
 	"article:modified_time": true,
 };
 
-/** `"` and `&` escaped, so an attribute value reads back as parsed. */
-function escapeAttributeValue(value: string): string {
-	return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+/**
+ * One attribute of a start tag as written: its name and its value with any quotes.
+ * Quoted values are matched whole, so text inside one is never taken for another
+ * attribute.
+ */
+const TAG_ATTRIBUTE_RE = /([^\s"'=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g;
+
+/** The first `name` attribute of a start tag (later duplicates are ignored, as in HTML), with where its value sits. */
+function findTagAttribute(tag: string, name: string): { value: string; start: number; end: number } | null {
+	TAG_ATTRIBUTE_RE.lastIndex = tag.search(/[\s/>]/);
+	for (let match = TAG_ATTRIBUTE_RE.exec(tag); match; match = TAG_ATTRIBUTE_RE.exec(tag)) {
+		if (match[1].toLowerCase() !== name) continue;
+		const raw = match[2];
+		if (raw === undefined) return null;
+		const end = match.index + match[0].length;
+		const quoted = raw.startsWith('"') || raw.startsWith("'");
+		return { value: quoted ? raw.slice(1, -1) : raw, start: end - raw.length, end };
+	}
+	return null;
 }
 
 /**
@@ -573,26 +589,18 @@ function escapeAttributeValue(value: string): string {
  * front-matter line), and the targets of links to anchors on the same page (API
  * references and docs link every heading, row and citation to one). Such a link
  * still renders as `[text](#)`; a hash route (`#/…`, `#!…`) leads elsewhere and is
- * kept. Each tag's attributes are read with the DOM parser, so text inside another
- * attribute's value is never taken for `name` or `href`. Edits tags only, so code
- * and text are untouched.
+ * kept. Only the `href` value is rewritten, so every other attribute reaches the
+ * converter as written. Edits tags only, so code and text are untouched.
  */
-async function pruneHtmlForReader(html: string): Promise<string> {
-	const { parseHTML } = await import("@oh-my-pi/pi-utils/dom");
+function pruneHtmlForReader(html: string): string {
 	return html.replace(PRUNED_TAG_RE, tag => {
-		const element = parseHTML(tag).document.querySelector("meta, a");
-		if (!element) return tag;
-		if (element.localName === "meta") {
-			const name = element.getAttribute("name") ?? element.getAttribute("property");
-			return name === null || KEPT_META_NAMES[name.toLowerCase()] === true ? tag : "";
+		if (tag[1] === "m" || tag[1] === "M") {
+			const name = findTagAttribute(tag, "name") ?? findTagAttribute(tag, "property");
+			return name === null || KEPT_META_NAMES[name.value.toLowerCase()] === true ? tag : "";
 		}
-		const href = element.getAttribute("href");
-		if (!href?.startsWith("#") || href.startsWith("#/") || href.startsWith("#!")) return tag;
-		let rewritten = "<a";
-		for (const { name, value } of element.attributes) {
-			rewritten += ` ${name}="${escapeAttributeValue(name.toLowerCase() === "href" ? "#" : value)}"`;
-		}
-		return `${rewritten}>`;
+		const href = findTagAttribute(tag, "href");
+		if (!href?.value.startsWith("#") || href.value.startsWith("#/") || href.value.startsWith("#!")) return tag;
+		return `${tag.slice(0, href.start)}"#"${tag.slice(href.end)}`;
 	});
 }
 
@@ -654,7 +662,7 @@ export async function renderHtmlToText(
 		// even after remote/subprocess attempts are aborted by the budget.
 		native: async () => {
 			const options = { cleanContent: true, hiddenContent: "reachable" };
-			const pruned = await htmlToMarkdown(await pruneHtmlForReader(html), options);
+			const pruned = await htmlToMarkdown(pruneHtmlForReader(html), options);
 			// A page whose only content is its `<head>` can fall under the length check once
 			// pruned; it is converted whole so the check judges it as before.
 			return stripDataUriImages(pruned).trim().length > MIN_RENDERED_CHARS ? pruned : htmlToMarkdown(html, options);
