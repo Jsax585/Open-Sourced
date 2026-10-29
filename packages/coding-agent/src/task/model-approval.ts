@@ -13,7 +13,6 @@
  * concrete `retry.fallbackChains` entries; those are never requestable.
  */
 import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { factoryDroidServerSideFallbackModels, isFactoryDroidModel } from "@oh-my-pi/pi-ai/providers/factory-droid";
 import type { AgentSource } from "@oh-my-pi/pi-tui/tools/task";
 import { MAX_THINKING_SUFFIX_OPTIONS, splitThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import type { ModelRegistry } from "../config/model-registry";
@@ -242,22 +241,6 @@ function isRuntimeFallback(
 		patternGrants(pattern, model, chat, catalog, grants.matchPreferences),
 	);
 }
-
-/**
- * Models Factory may switch to server-side. The client cannot approve these hidden switches,
- * so runtime opt-in never makes a model with an attached server-side fallback eligible.
- */
-function assertNoServerSideFallbacks(model: Model<Api>, agentName: string): void {
-	if (!isFactoryDroidModel(model)) return;
-	const fallbacks = factoryDroidServerSideFallbackModels(model).map(id =>
-		formatModelString({ provider: model.provider, id }),
-	);
-	if (fallbacks.length === 0) return;
-	throw new PerCallModelError(
-		`Per-call model ${formatModelStringWithRouting(model)} is not approved for agent "${agentName}": its provider may answer with another model server-side (${fallbacks.join(", ")}). Only checked client-side fallbacks are allowed; pick a model without a server-side fallback.`,
-	);
-}
-
 /** Throw {@link PerCallModelError} unless `model` is approved. */
 export function assertPerCallModelApproved(
 	model: Model<Api>,
@@ -265,10 +248,7 @@ export function assertPerCallModelApproved(
 	registry: ApprovalRegistry,
 ): void {
 	const chat = registry.getAvailable("chat");
-	if (isGranted(model, grants, chat, registry.getAll())) {
-		assertNoServerSideFallbacks(model, grants.agentName);
-		return;
-	}
+	if (isGranted(model, grants, chat, registry.getAll())) return;
 	const allowGuidance =
 		cfgTaskPerCallModelAllow.get(grants.settings.grantAuthority()).length > 0
 			? " It must also match an entry in task.perCallModelAllow."
@@ -288,8 +268,9 @@ function concreteChainEntries(settings: Settings): string[] {
 /**
  * Throw {@link PerCallModelError} unless a running per-call worker may send to
  * `model`: an approved model, or under `task.perCallModelFallbacks: runtime` a
- * concrete `retry.fallbackChains` entry the allowlist admits. Factory Droid models
- * with attached server-side fallback chains are always refused, even under `runtime`.
+ * concrete `retry.fallbackChains` entry the allowlist admits. A Factory model
+ * with an attached server-side fallback chain is eligible: the per-call request
+ * omits the chain, and a served-model handoff fails the worker.
  */
 export function assertPerCallDispatchModel(
 	model: Model<Api>,
@@ -311,7 +292,6 @@ export function assertPerCallDispatchModel(
 	const catalog = registry.getAll();
 	const target = formatModelStringWithRouting(model);
 	if (isGranted(model, grants, chat, catalog) || isRuntimeFallback(model, grants, chat, catalog)) {
-		assertNoServerSideFallbacks(model, grants.agentName);
 		return;
 	}
 	const allowGuidance =

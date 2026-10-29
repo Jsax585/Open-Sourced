@@ -1690,7 +1690,7 @@ describe("per-call model preflight", () => {
 		expect(usageOrder).toEqual(["mock/worker-b", "mock/worker-a"]);
 	});
 
-	it("refuses a role candidate with Factory server-side fallbacks even when its target is granted", async () => {
+	it("expands a role candidate with Factory server-side fallbacks now that the per-call request omits the chain", async () => {
 		mockDiscovery();
 		const fable = buildModel(
 			buildFactoryDroidModel(
@@ -1709,9 +1709,8 @@ describe("per-call model preflight", () => {
 				awaitBackgroundRefresh: async () => {},
 			},
 		});
-		await expect(resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }))).rejects.toThrow(
-			/No available approved model matches/,
-		);
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);
 	});
 
 	it("skips unavailable candidates in caller order and drops the role identity of a list", async () => {
