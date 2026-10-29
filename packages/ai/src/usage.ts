@@ -456,13 +456,24 @@ export interface CredentialRankingStrategy {
 	planGate?(context: CredentialRankingContext): PlanGate | undefined;
 	/** Idle window after which a session pin stops suppressing usage re-ranking because the provider's prompt cache cannot still be warm; omit for indefinite stickiness. */
 	stickyWarmMs?: number;
-	/** Extract the primary (short) and secondary (long) window limits from a usage report. */
+	/**
+	 * Extract the primary (short) and secondary (long) window limits from a usage
+	 * report, plus an optional monthly window.
+	 *
+	 * `monthly` is the one window whose quota dies once and stays dead until a
+	 * calendar reset, so it drives *ordering* only: when every account's monthly
+	 * headroom is normalised to a rate, all of them reach zero in the same hour
+	 * and the pool dies in one cliff. Ordering accounts by their own reset
+	 * timestamps instead staggers those deaths. It must never be added to
+	 * {@link scopeLimits}, which benches a credential outright.
+	 */
 	findWindowLimits(
 		report: UsageReport,
 		context?: CredentialRankingContext,
 	): {
 		primary?: UsageLimit;
 		secondary?: UsageLimit;
+		monthly?: UsageLimit;
 	};
 	/**
 	 * Restrict limits to the ones relevant for the requested model before

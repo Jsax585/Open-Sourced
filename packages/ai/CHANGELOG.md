@@ -26,6 +26,7 @@
 - Fixed pi-native clients crashing with `TypeError: undefined is not an object (evaluating 'event.error.stopReason')` when the auth-gateway reports a mid-stream upstream failure ([#17363](https://github.com/can1357/oh-my-pi/issues/17363))
 - Fixed Cursor turns ending after a mid-turn stream cut when the automatic retry hits a zero-token `PROVIDER_ERROR`; the retry now runs on the rotated conversation instead of surfacing the 400 ([#17319](https://github.com/can1357/oh-my-pi/pull/17319) by [@morali](https://github.com/morali))
 - Fixed the auth gateway's debug log saying it was retrying after a usage-limit error when it returned the error to the client without retrying ([#16579](https://github.com/can1357/oh-my-pi/pull/16579) by [@will-bogusz](https://github.com/will-bogusz))
+- OpenCode Go multi-key pools now spend one account's monthly allowance at a time, in the order each account's own monthly window resets, so accounts reach their monthly cap one by one instead of all in the same hour. A spent monthly window still never blocks an account: it only ranks last.
 
 ## [18.13.3] - 2026-10-28
 

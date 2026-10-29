@@ -188,19 +188,29 @@ export const opencodeGoUsageProvider: UsageProvider = {
 };
 
 /**
- * Multi-key pools rank by real headroom on the rolling and weekly windows.
+ * Multi-key pools rank by real headroom on the rolling and weekly windows, then
+ * order by the monthly window's own reset clock.
  *
- * The monthly window is deliberately display-only: an exhausted monthly can
- * still serve requests when the account's console "Use balance" fallback is
- * enabled, and the usage endpoint does not report that flag — blocking on it
- * would bench a working key until the subscription anniversary. Hard monthly
- * failures still rotate credentials via the `401 Insufficient balance`
- * usage-limit classification ([#3169](https://github.com/can1357/oh-my-pi/issues/3169)).
+ * The monthly window is deliberately excluded from `scopeLimits`: an exhausted
+ * monthly can still serve requests when the account's console "Use balance"
+ * fallback is enabled, and the usage endpoint does not report that flag —
+ * blocking on it would bench a working key until the subscription anniversary.
+ * Hard monthly failures still rotate credentials via the `401 Insufficient
+ * balance` usage-limit classification
+ * ([#3169](https://github.com/can1357/oh-my-pi/issues/3169)).
+ *
+ * It is not display-only either: `monthly` is exposed so ranking can stagger
+ * which account dies first. Ranking it by headroom or required drain would
+ * normalise every account to the same relative burn and empty the whole pool in
+ * one hour whenever demand exceeds the sustainable rate; ordering by the
+ * account's own reset timestamp instead drains them one at a time, in the order
+ * whose unused quota expires soonest.
  */
 export const opencodeGoRankingStrategy: CredentialRankingStrategy = {
 	findWindowLimits: report => ({
 		primary: report.limits.find(limit => limit.id === "rolling-5h"),
 		secondary: report.limits.find(limit => limit.id === "weekly"),
+		monthly: report.limits.find(limit => limit.id === "monthly"),
 	}),
 	scopeLimits: report => report.limits.filter(limit => limit.id !== "monthly"),
 	windowDefaults: {

@@ -195,7 +195,7 @@ describe("opencode-go usage provider", () => {
 });
 
 describe("opencode-go ranking strategy", () => {
-	it("ranks on rolling/weekly and keeps the monthly window display-only", async () => {
+	it("ranks on rolling/weekly and keeps the monthly window out of the block scope", async () => {
 		const report = await opencodeGoUsageProvider.fetchUsage(
 			{ provider: "opencode-go", credential: { type: "api_key", apiKey: "sk-test" } },
 			{ fetch: fakeFetch(usagePayload()) },
@@ -210,5 +210,21 @@ describe("opencode-go ranking strategy", () => {
 		// fallback) must not enter credential-wide exhaustion checks.
 		const scoped = opencodeGoRankingStrategy.scopeLimits?.(report);
 		expect(scoped?.map(limit => limit.id)).toEqual(["rolling-5h", "weekly"]);
+	});
+
+	it("exposes the monthly window for ordering while keeping it out of the block scope", async () => {
+		const report = await opencodeGoUsageProvider.fetchUsage(
+			{ provider: "opencode-go", credential: { type: "api_key", apiKey: "sk-test" } },
+			{ fetch: fakeFetch(usagePayload()) },
+		);
+		if (!report) throw new Error("expected report");
+
+		// Ordering needs the account's own monthly reset clock; blocking must
+		// never consult it, or a spent monthly benches a working key.
+		const windows = opencodeGoRankingStrategy.findWindowLimits(report);
+		expect(windows.monthly?.id).toBe("monthly");
+		expect(windows.monthly?.window?.resetsAt).toBe(Date.parse("2026-08-19T00:31:53.847Z"));
+		expect(windows.monthly?.window?.durationMs).toBeUndefined();
+		expect(opencodeGoRankingStrategy.scopeLimits?.(report)?.map(limit => limit.id)).toEqual(["rolling-5h", "weekly"]);
 	});
 });
