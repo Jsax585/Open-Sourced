@@ -1,4 +1,5 @@
 /** `github` — gh CLI dispatch: repo views, PRs, searches, Actions run watch. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, InvalidArg, Kv, KvGrid, Note, Output, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -34,7 +35,8 @@ function formatPr(pr: unknown): string | null {
 		if (id) parts.push(id);
 	}
 	if (parts.length === 0) return null;
-	if (parts.length > 3) return `${parts.slice(0, 3).join(", ")}, +${parts.length - 3} more`;
+	if (parts.length > 3)
+		return __ompTranslate("{0}, +{1} more", `${parts.slice(0, 3).join(", ")}`, `${parts.length - 3}`);
 	return parts.join(", ");
 }
 
@@ -66,7 +68,7 @@ function Salient({ args }: { args: Record<string, unknown> }): ReactNode {
 	if (op === "pr_create") {
 		const title = str(args.title);
 		if (title) return <span>{truncate(normalizeWs(title), 60)}</span>;
-		return args.fill === true ? <span className="tv-muted">fill from commits</span> : null;
+		return args.fill === true ? <span className="tv-muted">{__ompTranslate("fill from commits")}</span> : null;
 	}
 	if (op === "run_watch") {
 		const run = str(args.run);
@@ -87,7 +89,8 @@ function Summary(props: ToolRenderProps): ReactNode {
 	const op = str(props.args.op);
 	return (
 		<>
-			{op ? <Badge tone="accent">{op}</Badge> : <Badge tone="warn">no op</Badge>} <Salient args={props.args} />
+			{op ? <Badge tone="accent">{op}</Badge> : <Badge tone="warn">{__ompTranslate("no op")}</Badge>}{" "}
+			<Salient args={props.args} />
 		</>
 	);
 }
@@ -182,11 +185,26 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 	const runId = run ? num(run.id) : null;
 	let header: string;
 	if (str(watch.mode) === "run" && runId !== null) {
-		header = `${watching ? "watching " : ""}run #${runId} on ${repo}`;
+		header = ((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+			__ompTranslate("{2}run #{1} on {0}", __ompTranslateValue2, __ompTranslateValue1, __ompTranslateValue0))(
+			`${watching ? __ompTranslate("watching ") : ""}`,
+			`${runId}`,
+			`${repo}`,
+		);
 	} else {
 		const sha = str(watch.headSha);
-		const target = sha ? shortSha(sha) : "this commit";
-		header = watching ? `watching ${target} on ${repo}` : `workflow runs for ${target} on ${repo}`;
+		const target = sha ? shortSha(sha) : __ompTranslate("this commit");
+		header = watching
+			? ((__ompTranslateValue0, __ompTranslateValue1) =>
+					__ompTranslate("watching {1} on {0}", __ompTranslateValue1, __ompTranslateValue0))(
+					`${target}`,
+					`${repo}`,
+				)
+			: ((__ompTranslateValue0, __ompTranslateValue1) =>
+					__ompTranslate("workflow runs for {1} on {0}", __ompTranslateValue1, __ompTranslateValue0))(
+					`${target}`,
+					`${repo}`,
+				);
 	}
 	const note = str(watch.note);
 	const runs: Record<string, unknown>[] = [];
@@ -207,10 +225,10 @@ function WatchView({ watch }: { watch: Record<string, unknown> }): ReactNode {
 			))}
 			{failedLogs.map((entry, index) => {
 				if (!isRecord(entry)) return null;
-				const jobName = str(entry.jobName) ?? "job";
+				const jobName = str(entry.jobName) ?? __ompTranslate("job");
 				const workflow = str(entry.workflowName);
 				const failedRunId = num(entry.runId);
-				const context = workflow ?? "run";
+				const context = workflow ?? __ompTranslate("run");
 				const title = `${jobName} — ${context}${failedRunId !== null ? ` #${failedRunId}` : ""}`;
 				const tail = str(entry.tail);
 				if (!tail || entry.available === false) {
@@ -237,7 +255,7 @@ function CheckoutRows({ checkouts }: { checkouts: readonly unknown[] }): ReactNo
 					<Row k={prNumber !== null ? `#${prNumber}` : "PR"} key={prNumber ?? index}>
 						<span>{str(entry.branch) ?? ""}</span>
 						{worktree && <span className="tv-muted"> {shortenPath(worktree)}</span>}
-						{entry.reused === true && <Badge>reused</Badge>}
+						{entry.reused === true && <Badge>{__ompTranslate("reused")}</Badge>}
 					</Row>
 				);
 			})}
@@ -283,7 +301,7 @@ function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNo
 		}
 		if (ids.length > 0) {
 			rows.push(
-				<Kv k="runs" key="runs">
+				<Kv k={__ompTranslate("runs")} key="runs">
 					{ids.join(", ")}
 				</Kv>,
 			);
@@ -296,7 +314,7 @@ function DetailsGrid({ details }: { details: Record<string, unknown> }): ReactNo
 		}
 		if (jobs.length > 0) {
 			rows.push(
-				<Kv k="failedJobs" key="failedJobs">
+				<Kv k={__ompTranslate("failedJobs")} key="failedJobs">
 					<span className="tv-err-text">{jobs.join(", ")}</span>
 				</Kv>,
 			);
@@ -313,7 +331,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<ArgsGrid args={args} />
-			{bodyText && <Output text={bodyText} maxLines={8} title="body" />}
+			{bodyText && <Output text={bodyText} maxLines={8} title={__ompTranslate("body")} />}
 			{watch && <WatchView watch={watch} />}
 			{checkouts && checkouts.length > 0 && <CheckoutRows checkouts={checkouts} />}
 			{details && !watch && <DetailsGrid details={details} />}

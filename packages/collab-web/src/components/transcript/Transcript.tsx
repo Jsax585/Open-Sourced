@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { AssistantMessage, ImageContent, SessionEntry, TextContent, ToolResultMessage } from "@oh-my-pi/pi-wire";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
@@ -92,7 +93,7 @@ function MsgContent({ content }: { content: string | readonly (TextContent | Ima
 								key={i}
 								className="tr-msg-img"
 								src={`data:${block.mimeType};base64,${block.data}`}
-								alt="attachment"
+								alt={__ompTranslate("attachment")}
 							/>
 						);
 					default:
@@ -191,13 +192,13 @@ const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryR
 			switch (msg.role) {
 				case "user":
 					return (
-						<Row kind="user" gutter="host" title={entry.timestamp}>
+						<Row kind="user" gutter={__ompTranslate("host")} title={entry.timestamp}>
 							<MsgContent content={msg.content} />
 						</Row>
 					);
 				case "assistant":
 					return (
-						<Row kind="assistant" gutter="agent" title={entry.timestamp}>
+						<Row kind="assistant" gutter={__ompTranslate("agent")} title={entry.timestamp}>
 							<AssistantBody message={msg} results={results} active={active} pending={false} host={host} />
 						</Row>
 					);
@@ -214,7 +215,7 @@ const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryR
 					typeof details === "object" &&
 					typeof (details as Record<string, unknown>).from === "string"
 						? ((details as Record<string, unknown>).from as string)
-						: "guest";
+						: __ompTranslate("guest");
 				return (
 					<Row kind="user" gutter={<span className="tr-badge">{from}</span>} title={entry.timestamp}>
 						<MsgContent content={entry.content} />
@@ -240,7 +241,7 @@ const EntryRow = memo(function EntryRow({ entry, results, active, host }: EntryR
 		case "branch_summary":
 			return (
 				<div className="tr-divider" title={entry.summary}>
-					<span>branch summary</span>
+					<span>{__ompTranslate("branch summary")}</span>
 				</div>
 			);
 		case "model_change":
@@ -407,7 +408,7 @@ export function Transcript(props: TranscriptProps): ReactNode {
 				</Row>
 			)}
 			{tailTools.length > 0 && (
-				<Row kind="assistant" gutter={stream === null ? "agent" : ""}>
+				<Row kind="assistant" gutter={stream === null ? __ompTranslate("agent") : ""}>
 					{tailTools.map(tool => (
 						<ToolCard
 							key={tool.toolCallId}

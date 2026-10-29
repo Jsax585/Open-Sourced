@@ -1,4 +1,5 @@
 /** `debug` — DAP debugger sessions: launch/attach, breakpoints, stepping, evaluate. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, CodeBlock, Kv, KvGrid, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -41,7 +42,7 @@ function snapshotOf(result: ToolRenderProps["result"]): SessionSnapshot | null {
 
 function actionOf(props: ToolRenderProps): string {
 	const action = str(props.args.action) ?? str(detailsRecord(props.result)?.action);
-	return action ? action.replace(/_/g, " ") : "request";
+	return action ? action.replace(/_/g, " ") : __ompTranslate("request");
 }
 
 /** Mirrors the TUI's summarizeDebugCall target priority. */
@@ -79,35 +80,35 @@ function Summary(props: ToolRenderProps): ReactNode {
 
 /** Scalar args worth a KvGrid row, in display order (program/file/expression are special-cased). */
 const SCALAR_ARGS: ReadonlyArray<readonly [key: string, label: string]> = [
-	["adapter", "adapter"],
-	["cwd", "cwd"],
-	["function", "function"],
-	["name", "name"],
-	["condition", "condition"],
-	["hit_condition", "hit condition"],
-	["context", "context"],
-	["frame_id", "frame id"],
-	["scope_id", "scope id"],
-	["variable_ref", "variable ref"],
+	["adapter", __ompTranslate("adapter")],
+	["cwd", __ompTranslate("cwd")],
+	["function", __ompTranslate("function")],
+	["name", __ompTranslate("name")],
+	["condition", __ompTranslate("condition")],
+	["hit_condition", __ompTranslate("hit condition")],
+	["context", __ompTranslate("context")],
+	["frame_id", __ompTranslate("frame id")],
+	["scope_id", __ompTranslate("scope id")],
+	["variable_ref", __ompTranslate("variable ref")],
 	["pid", "pid"],
-	["host", "host"],
-	["port", "port"],
-	["levels", "levels"],
-	["memory_reference", "memory ref"],
-	["instruction_reference", "instruction ref"],
-	["instruction_count", "instruction count"],
-	["instruction_offset", "instruction offset"],
-	["offset", "offset"],
-	["count", "count"],
-	["data", "data"],
-	["data_id", "data id"],
-	["access_type", "access"],
-	["command", "command"],
-	["resolve_symbols", "resolve symbols"],
-	["allow_partial", "allow partial"],
-	["start_module", "start module"],
-	["module_count", "module count"],
-	["timeout", "timeout"],
+	["host", __ompTranslate("host")],
+	["port", __ompTranslate("port")],
+	["levels", __ompTranslate("levels")],
+	["memory_reference", __ompTranslate("memory ref")],
+	["instruction_reference", __ompTranslate("instruction ref")],
+	["instruction_count", __ompTranslate("instruction count")],
+	["instruction_offset", __ompTranslate("instruction offset")],
+	["offset", __ompTranslate("offset")],
+	["count", __ompTranslate("count")],
+	["data", __ompTranslate("data")],
+	["data_id", __ompTranslate("data id")],
+	["access_type", __ompTranslate("access")],
+	["command", __ompTranslate("command")],
+	["resolve_symbols", __ompTranslate("resolve symbols")],
+	["allow_partial", __ompTranslate("allow partial")],
+	["start_module", __ompTranslate("start module")],
+	["module_count", __ompTranslate("module count")],
+	["timeout", __ompTranslate("timeout")],
 ];
 
 function Body(props: ToolRenderProps): ReactNode {
@@ -128,20 +129,20 @@ function Body(props: ToolRenderProps): ReactNode {
 	}
 	if (programArgs.length > 0) {
 		argRows.push(
-			<Kv key="args" k="args">
+			<Kv key="args" k={__ompTranslate("args")}>
 				{truncate(programArgs.join(" "), 160)}
 			</Kv>,
 		);
 	}
 	if (file !== null) {
 		argRows.push(
-			<Kv key="file" k="file">
+			<Kv key="file" k={__ompTranslate("file\u0004tool.debug.file")}>
 				<PathText path={file} from={line ?? undefined} />
 			</Kv>,
 		);
 	} else if (line !== null) {
 		argRows.push(
-			<Kv key="line" k="line">
+			<Kv key="line" k={__ompTranslate("line")}>
 				{line}
 			</Kv>,
 		);
@@ -169,14 +170,16 @@ function Body(props: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{argRows.length > 0 && <KvGrid>{argRows}</KvGrid>}
-			{expression !== null && <CodeBlock code={expression} title="expression" maxLines={8} />}
-			{customArgsJson && <CodeBlock code={customArgsJson} lang="json" title="arguments" maxLines={10} />}
+			{expression !== null && <CodeBlock code={expression} title={__ompTranslate("expression")} maxLines={8} />}
+			{customArgsJson && (
+				<CodeBlock code={customArgsJson} lang="json" title={__ompTranslate("arguments")} maxLines={10} />
+			)}
 			{snapshot && (
 				<KvGrid>
-					{snapshot.id !== null && <Kv k="session">{snapshot.id}</Kv>}
-					{snapshot.adapter !== null && <Kv k="adapter">{snapshot.adapter}</Kv>}
+					{snapshot.id !== null && <Kv k={__ompTranslate("session")}>{snapshot.id}</Kv>}
+					{snapshot.adapter !== null && <Kv k={__ompTranslate("adapter")}>{snapshot.adapter}</Kv>}
 					{snapshot.status !== null && (
-						<Kv k="status">
+						<Kv k={__ompTranslate("status")}>
 							<Badge tone={snapshot.status === "exited" ? "warn" : "ok"}>{snapshot.status}</Badge>
 						</Kv>
 					)}
@@ -185,19 +188,21 @@ function Body(props: ToolRenderProps): ReactNode {
 							<PathText path={snapshot.program} />
 						</Kv>
 					)}
-					{snapshot.stopReason !== null && <Kv k="stop reason">{snapshot.stopReason}</Kv>}
-					{snapshot.frameName !== null && <Kv k="frame">{snapshot.frameName}</Kv>}
+					{snapshot.stopReason !== null && <Kv k={__ompTranslate("stop reason")}>{snapshot.stopReason}</Kv>}
+					{snapshot.frameName !== null && <Kv k={__ompTranslate("frame")}>{snapshot.frameName}</Kv>}
 					{snapshot.sourcePath !== null && snapshot.line !== null && (
-						<Kv k="location">
+						<Kv k={__ompTranslate("location")}>
 							<PathText
 								path={snapshot.sourcePath}
 								sel={snapshot.column !== null ? `${snapshot.line}:${snapshot.column}` : String(snapshot.line)}
 							/>
 						</Kv>
 					)}
-					{snapshot.exitCode !== null && <Kv k="exit code">{snapshot.exitCode}</Kv>}
+					{snapshot.exitCode !== null && <Kv k={__ompTranslate("exit code")}>{snapshot.exitCode}</Kv>}
 					{snapshot.needsConfigurationDone && (
-						<Kv k="configuration">pending configurationDone — set breakpoints, then continue</Kv>
+						<Kv k={__ompTranslate("configuration")}>
+							pending configurationDone — set breakpoints, then continue
+						</Kv>
 					)}
 				</KvGrid>
 			)}

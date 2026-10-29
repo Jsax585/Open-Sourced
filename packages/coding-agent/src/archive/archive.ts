@@ -281,7 +281,7 @@ function scopeLabel(cwd: string | undefined): string {
 
 /** Relative age of an ISO timestamp (`5m ago`); sub-minute ages read `just now`. */
 function ago(iso: string): string {
-	return formatAge(Math.max(1, (Date.now() - Date.parse(iso)) / 1000));
+	return formatAge(Math.max(1, (Date.now() - Date.parse(iso)) / 1000), "en");
 }
 
 function shortId(id: string): string {

@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getToolDashboardStats } from "../api";
@@ -44,17 +45,18 @@ export interface ToolsRouteProps {
 type CallMetric = "calls" | "errors";
 
 const METRIC_OPTIONS = [
-	{ value: "calls" as const, label: "Calls" },
-	{ value: "errors" as const, label: "Errors" },
+	{ value: "calls" as const, label: __ompTranslate("Calls") },
+	{ value: "errors" as const, label: __ompTranslate("Errors") },
 ];
 
 /** Tools stacked individually in the calls chart; the rest fold into "Other". */
 const TOP_TOOLS = 6;
 
-const ATTRIBUTION_NOTE =
-	"Tokens and API-equivalent cost of each invoking turn, split evenly across that turn's tool calls";
+const ATTRIBUTION_NOTE = __ompTranslate(
+	"Tokens and API-equivalent cost of each invoking turn, split evenly across that turn's tool calls",
+);
 
-const NO_CALLS = <EmptyState title="No tool calls in this range" />;
+const NO_CALLS = <EmptyState title={__ompTranslate("No tool calls in this range")} />;
 
 export function ToolsRoute({ active, range }: ToolsRouteProps) {
 	const tools = useQuery(["tools", range], ({ signal }) => getToolDashboardStats(range, signal), { enabled: active });
@@ -73,8 +75,11 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Tools"
-				description={`Which tools omp called in ${meta.windowLabel}, how often they failed, and what they cost.`}
+				title={__ompTranslate("Tools")}
+				description={__ompTranslate(
+					"Which tools omp called in {0}, how often they failed, and what they cost.",
+					`${meta.windowLabel}`,
+				)}
 			/>
 
 			<QueryView query={tools} skeleton={<ChartSkeleton height={112} />}>
@@ -84,63 +89,72 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 						<div data-stale={tools.stale} className="stack" style={{ gap: 16 }}>
 							<StatGrid min={190}>
 								<Stat
-									label="Tool calls"
+									label={__ompTranslate("Tool calls")}
 									value={formatInteger(t.calls)}
-									hint={`${formatInteger(t.errors)} failed`}
+									hint={__ompTranslate("{0} failed\u0004stats.tool.count", `${formatInteger(t.errors)}`)}
 									spark={view.totalCalls}
 								/>
 								<Stat
-									label="Distinct tools"
+									label={__ompTranslate("Distinct tools")}
 									value={formatInteger(t.tools)}
-									hint={view.rows[0] ? `Most used: ${view.rows[0].tool}` : undefined}
+									hint={view.rows[0] ? __ompTranslate("Most used: {0}", `${view.rows[0].tool}`) : undefined}
 								/>
 								<Stat
-									label="Error rate"
-									title="Tool results that came back flagged as errors"
+									label={__ompTranslate("Error rate")}
+									title={__ompTranslate("Tool results that came back flagged as errors")}
 									value={formatErrorRate(t.calls > 0 ? t.errors / t.calls : 0)}
-									hint={`${formatInteger(t.calls - t.errors)} succeeded`}
+									hint={__ompTranslate(
+										"{0} succeeded\u0004stats.tool.count",
+										`${formatInteger(t.calls - t.errors)}`,
+									)}
 									spark={view.totalErrors}
 									sparkColor="var(--bad)"
 								/>
 								<Stat
-									label="Attributed tokens"
+									label={__ompTranslate("Attributed tokens")}
 									title={ATTRIBUTION_NOTE}
 									value={formatCompact(Math.round(t.tokens))}
-									hint={`${formatCompact(Math.round(t.output))} output`}
+									hint={__ompTranslate("{0} output", `${formatCompact(Math.round(t.output))}`)}
 								/>
 								<Stat
-									label="Attributed cost"
-									title={`${ATTRIBUTION_NOTE}; API-equivalent estimate`}
+									label={__ompTranslate("Attributed cost")}
+									title={__ompTranslate("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`)}
 									value={formatEstimatedCost(t.cost, t.unpriced)}
 									hint={
 										t.unpriced > 0
-											? `${formatInteger(Math.round(t.unpriced))} unpriced requests`
-											: "API-equivalent"
+											? __ompTranslate("{0} unpriced requests", `${formatInteger(Math.round(t.unpriced))}`)
+											: __ompTranslate("API-equivalent")
 									}
 								/>
 							</StatGrid>
 							<StatGrid min={150}>
 								<Stat
 									size="sm"
-									label="Result text"
-									title="Characters of tool-result text fed back into context"
-									value={`${formatCompact(t.resultChars)} chars`}
+									label={__ompTranslate("Result text")}
+									title={__ompTranslate("Characters of tool-result text fed back into context")}
+									value={__ompTranslate("{0} chars", `${formatCompact(t.resultChars)}`)}
 								/>
 								<Stat
 									size="sm"
-									label="Call arguments"
-									title="Characters of serialized tool-call arguments"
-									value={`${formatCompact(t.argsChars)} chars`}
+									label={__ompTranslate("Call arguments")}
+									title={__ompTranslate("Characters of serialized tool-call arguments")}
+									value={__ompTranslate("{0} chars", `${formatCompact(t.argsChars)}`)}
 								/>
 								<Stat
 									size="sm"
-									label="Avg result per call"
-									value={`${formatCompact(t.calls > 0 ? Math.round(t.resultChars / t.calls) : 0)} chars`}
+									label={__ompTranslate("Avg result per call")}
+									value={__ompTranslate(
+										"{0} chars",
+										`${formatCompact(t.calls > 0 ? Math.round(t.resultChars / t.calls) : 0)}`,
+									)}
 								/>
 								<Stat
 									size="sm"
-									label="Avg arguments per call"
-									value={`${formatCompact(t.calls > 0 ? Math.round(t.argsChars / t.calls) : 0)} chars`}
+									label={__ompTranslate("Avg arguments per call")}
+									value={__ompTranslate(
+										"{0} chars",
+										`${formatCompact(t.calls > 0 ? Math.round(t.argsChars / t.calls) : 0)}`,
+									)}
 								/>
 							</StatGrid>
 						</div>
@@ -150,8 +164,12 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={1}
-				title={metric === "calls" ? "Calls over time" : "Errors over time"}
-				description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}, top ${TOP_TOOLS} tools stacked`}
+				title={metric === "calls" ? __ompTranslate("Calls over time") : __ompTranslate("Errors over time")}
+				description={__ompTranslate(
+					"Per {0}, top {1} tools stacked",
+					`${meta.bucketMs < 3_600_000 ? __ompTranslate("5 minutes") : meta.bucketMs < 86_400_000 ? __ompTranslate("hour") : __ompTranslate("day")}`,
+					`${TOP_TOOLS}`,
+				)}
 				actions={<Segmented size="sm" options={METRIC_OPTIONS} value={metric} onChange={setMetric} />}
 				stale={tools.stale}
 			>
@@ -165,7 +183,7 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 								hidden={hidden}
 								height={260}
 								formatTooltip={formatInteger}
-								emptyLabel={metric === "errors" ? "No tool errors in this range" : undefined}
+								emptyLabel={metric === "errors" ? __ompTranslate("No tool errors in this range") : undefined}
 							/>
 							<Legend
 								items={chartSeries.map(s => ({
@@ -184,8 +202,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={2}
-				title="By tool"
-				description={`${ATTRIBUTION_NOTE}. Select a tool to break it down by model.`}
+				title={__ompTranslate("By tool")}
+				description={__ompTranslate("{0}. Select a tool to break it down by model.", `${ATTRIBUTION_NOTE}`)}
 				flush
 				stale={tools.stale}
 			>
@@ -207,8 +225,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 
 			<Card
 				index={3}
-				title="By tool and model"
-				description="Which models call which tools, and how often those calls fail"
+				title={__ompTranslate("By tool and model")}
+				description={__ompTranslate("Which models call which tools, and how often those calls fail")}
 				flush
 				stale={tools.stale}
 				actions={
@@ -217,9 +235,9 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 							className="input tools-filter"
 							value={toolFilter ?? ""}
 							onChange={e => setToolFilter(e.target.value || null)}
-							aria-label="Filter by tool"
+							aria-label={__ompTranslate("Filter by tool")}
 						>
-							<option value="">All tools</option>
+							<option value="">{__ompTranslate("All tools")}</option>
 							{view.toolNames.map(name => (
 								<option key={name} value={name}>
 									{name}
@@ -233,8 +251,8 @@ export function ToolsRoute({ active, range }: ToolsRouteProps) {
 								data-size="sm"
 								data-variant="ghost"
 								data-icon="true"
-								title="Clear tool filter"
-								aria-label="Clear tool filter"
+								title={__ompTranslate("Clear tool filter")}
+								aria-label={__ompTranslate("Clear tool filter")}
 								onClick={() => setToolFilter(null)}
 							>
 								<X size={13} />
@@ -338,7 +356,7 @@ function buildToolColumns(
 	return [
 		{
 			key: "tool",
-			header: "Tool",
+			header: __ompTranslate("Tool"),
 			sort: row => row.tool,
 			render: row => (
 				<span className="row" style={{ gap: 8 }}>
@@ -351,8 +369,8 @@ function buildToolColumns(
 		},
 		{
 			key: "trend",
-			header: "Trend",
-			title: "Calls per bucket over the range",
+			header: __ompTranslate("Trend"),
+			title: __ompTranslate("Calls per bucket over the range"),
 			render: row => {
 				const values = trends.get(row.tool);
 				return values && values.length > 1 ? (
@@ -364,7 +382,7 @@ function buildToolColumns(
 		},
 		{
 			key: "calls",
-			header: "Calls",
+			header: __ompTranslate("Calls"),
 			align: "right",
 			sort: row => row.calls,
 			render: row => (
@@ -372,7 +390,7 @@ function buildToolColumns(
 					value={row.calls}
 					max={maxCalls}
 					display={
-						<span title={`${formatPercent(row.callFraction)} of all tool calls`}>
+						<span title={__ompTranslate("{0} of all tool calls", `${formatPercent(row.callFraction)}`)}>
 							{formatInteger(row.calls)}
 							<span className="dim tools-share">{formatPercent(row.callFraction, 0)}</span>
 						</span>
@@ -382,8 +400,8 @@ function buildToolColumns(
 		},
 		{
 			key: "errorRate",
-			header: "Errors",
-			title: "Calls whose result came back flagged as an error",
+			header: __ompTranslate("Errors"),
+			title: __ompTranslate("Calls whose result came back flagged as an error"),
 			align: "right",
 			sort: row => row.errorRate,
 			render: row => (
@@ -397,36 +415,39 @@ function buildToolColumns(
 		},
 		{
 			key: "args",
-			header: "Args",
-			title: "Characters of serialized tool-call arguments",
+			header: __ompTranslate("Args"),
+			title: __ompTranslate("Characters of serialized tool-call arguments"),
 			align: "right",
 			sort: row => row.argsChars,
 			render: row => <span className="num">{formatCompact(row.argsChars)}</span>,
 		},
 		{
 			key: "result",
-			header: "Result",
-			title: "Characters of tool-result text fed back into context",
+			header: __ompTranslate("Result"),
+			title: __ompTranslate("Characters of tool-result text fed back into context"),
 			align: "right",
 			sort: row => row.resultChars,
 			render: row => <span className="num">{formatCompact(row.resultChars)}</span>,
 		},
 		{
 			key: "avgResult",
-			header: "Result / call",
-			title: "Mean tool-result characters per call",
+			header: __ompTranslate("Result / call"),
+			title: __ompTranslate("Mean tool-result characters per call"),
 			align: "right",
 			sort: row => row.avgResultChars,
 			render: row => <span className="num muted">{formatCompact(Math.round(row.avgResultChars))}</span>,
 		},
 		{
 			key: "tokens",
-			header: "Attr. tokens",
+			header: __ompTranslate("Attr. tokens"),
 			title: ATTRIBUTION_NOTE,
 			align: "right",
 			sort: row => row.totalTokensShare,
 			render: row => (
-				<span className="num" title={`${formatPercent(row.tokenFraction)} of attributed tokens`}>
+				<span
+					className="num"
+					title={__ompTranslate("{0} of attributed tokens", `${formatPercent(row.tokenFraction)}`)}
+				>
 					{formatCompact(Math.round(row.totalTokensShare))}
 					<span className="dim tools-share">{formatPercent(row.tokenFraction, 0)}</span>
 				</span>
@@ -434,12 +455,15 @@ function buildToolColumns(
 		},
 		{
 			key: "cost",
-			header: "Attr. cost",
-			title: `${ATTRIBUTION_NOTE}; API-equivalent estimate`,
+			header: __ompTranslate("Attr. cost"),
+			title: __ompTranslate("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`),
 			align: "right",
 			sort: row => row.costShare,
 			render: row => (
-				<span className="num" title={`${formatPercent(row.costFraction)} of attributed cost`}>
+				<span
+					className="num"
+					title={__ompTranslate("{0} of attributed cost", `${formatPercent(row.costFraction)}`)}
+				>
 					{formatEstimatedCost(row.costShare, row.unpricedRequestsShare)}
 					<span className="dim tools-share">{formatPercent(row.costFraction, 0)}</span>
 				</span>
@@ -447,7 +471,7 @@ function buildToolColumns(
 		},
 		{
 			key: "lastUsed",
-			header: "Last used",
+			header: __ompTranslate("Last used"),
 			align: "right",
 			sort: row => row.lastUsed,
 			render: row => <span className="muted">{formatRelativeTime(row.lastUsed)}</span>,
@@ -485,7 +509,7 @@ function ToolModelTable({
 		return [
 			{
 				key: "tool",
-				header: "Tool",
+				header: __ompTranslate("Tool"),
 				sort: row => row.tool,
 				render: row => (
 					<span className="row" style={{ gap: 8 }}>
@@ -498,22 +522,25 @@ function ToolModelTable({
 			},
 			{
 				key: "model",
-				header: "Model",
+				header: __ompTranslate("Model"),
 				sort: row => row.model,
 				render: row => (
-					<LabelCell primary={<span className="mono">{row.model || "(unknown)"}</span>} secondary={row.provider} />
+					<LabelCell
+						primary={<span className="mono">{row.model || __ompTranslate("(unknown)")}</span>}
+						secondary={row.provider}
+					/>
 				),
 			},
 			{
 				key: "calls",
-				header: "Calls",
+				header: __ompTranslate("Calls"),
 				align: "right",
 				sort: row => row.calls,
 				render: row => <MeterCell value={row.calls} max={maxCalls} display={formatInteger(row.calls)} />,
 			},
 			{
 				key: "errorRate",
-				header: "Errors",
+				header: __ompTranslate("Errors"),
 				align: "right",
 				sort: row => row.errorRate,
 				render: row => (
@@ -527,15 +554,15 @@ function ToolModelTable({
 			},
 			{
 				key: "result",
-				header: "Result",
-				title: "Characters of tool-result text fed back into context",
+				header: __ompTranslate("Result"),
+				title: __ompTranslate("Characters of tool-result text fed back into context"),
 				align: "right",
 				sort: row => row.resultChars,
 				render: row => <span className="num">{formatCompact(row.resultChars)}</span>,
 			},
 			{
 				key: "tokens",
-				header: "Attr. tokens",
+				header: __ompTranslate("Attr. tokens"),
 				title: ATTRIBUTION_NOTE,
 				align: "right",
 				sort: row => row.totalTokensShare,
@@ -543,15 +570,15 @@ function ToolModelTable({
 			},
 			{
 				key: "cost",
-				header: "Attr. cost",
-				title: `${ATTRIBUTION_NOTE}; API-equivalent estimate`,
+				header: __ompTranslate("Attr. cost"),
+				title: __ompTranslate("{0}; API-equivalent estimate", `${ATTRIBUTION_NOTE}`),
 				align: "right",
 				sort: row => row.costShare,
 				render: row => <span className="num">{formatEstimatedCost(row.costShare, row.unpricedRequestsShare)}</span>,
 			},
 			{
 				key: "lastUsed",
-				header: "Last used",
+				header: __ompTranslate("Last used"),
 				align: "right",
 				sort: row => row.lastUsed,
 				render: row => <span className="muted">{formatRelativeTime(row.lastUsed)}</span>,
@@ -567,7 +594,15 @@ function ToolModelTable({
 			initialSort={{ key: "calls", dir: "desc" }}
 			limit={25}
 			dense
-			empty={<EmptyState title={tool ? `No calls to ${tool} in this range` : "No tool calls in this range"} />}
+			empty={
+				<EmptyState
+					title={
+						tool
+							? __ompTranslate("No calls to {0} in this range", `${tool}`)
+							: __ompTranslate("No tool calls in this range")
+					}
+				/>
+			}
 		/>
 	);
 }

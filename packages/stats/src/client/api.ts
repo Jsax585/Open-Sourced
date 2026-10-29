@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type {
 	CostDashboardStats,
 	FolderStats,
@@ -42,7 +43,11 @@ async function readErrorMessage(res: Response, endpoint: string): Promise<string
 	} catch {
 		// Non-JSON error body: fall through to the status line.
 	}
-	return `HTTP error ${res.status} on ${endpoint}`;
+	return ((__ompTranslateValue0, __ompTranslateValue1) =>
+		__ompTranslate("HTTP error {1} on {0}", __ompTranslateValue1, __ompTranslateValue0))(
+		`${res.status}`,
+		`${endpoint}`,
+	);
 }
 
 /**

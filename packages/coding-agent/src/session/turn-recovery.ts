@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import {
 	type Agent,
 	AgentBusyError,
@@ -1071,8 +1072,18 @@ export class TurnRecovery {
 				const reasoningDetail =
 					reasoningTokens === undefined
 						? ""
-						: ` (${reasoningTokens} reasoning token${reasoningTokens === 1 ? "" : "s"})`;
-				finalError = `Assistant returned an empty stop after retry cap; provider reported ${outputTokens} output token${outputTokens === 1 ? "" : "s"}${reasoningDetail}, but no text or tool calls were delivered. Usage alone does not establish the cause`;
+						: __ompTranslate(
+								" ({0} reasoning token{1})",
+								`${reasoningTokens}`,
+								`${reasoningTokens === 1 ? "" : "s"}`,
+							);
+				finalError = ((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+					__ompTranslate(
+						"Assistant returned an empty stop after retry cap; provider reported {0} output token{2}{1}, but no text or tool calls were delivered. Usage alone does not establish the cause",
+						__ompTranslateValue0,
+						__ompTranslateValue2,
+						__ompTranslateValue1,
+					))(`${outputTokens}`, `${outputTokens === 1 ? "" : "s"}`, `${reasoningDetail}`);
 			} else {
 				finalError =
 					"Assistant returned empty stop after retry cap; try switching models or `/shake images` to remove archived frames";

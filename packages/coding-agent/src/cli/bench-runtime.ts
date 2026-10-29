@@ -7,6 +7,7 @@
  * landing on an unauthenticated provider), and the injectable `streamSimple`
  * signature tests substitute for a synthetic stream.
  */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import type { ResolvedThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type {
 	Api,
@@ -216,7 +217,13 @@ export async function resolveBenchTargets(
 	for (const text of warnings.values()) writeStderr(`${chalk.yellow(`Warning: ${text}`)}\n`);
 	const errors = outcomes.filter((outcome): outcome is string => typeof outcome === "string");
 	if (errors.length > 0) {
-		throw new Error(`Could not resolve ${errors.length === 1 ? "model" : "models"}:\n${errors.join("\n")}`);
+		throw new Error(
+			((__ompTranslateValue0, __ompTranslateValue1) =>
+				__ompTranslate("Could not resolve {1}:\n{0}", __ompTranslateValue1, __ompTranslateValue0))(
+				`${errors.length === 1 ? "model" : "models"}`,
+				`${errors.join("\n")}`,
+			),
+		);
 	}
 	return outcomes as BenchTarget[];
 }

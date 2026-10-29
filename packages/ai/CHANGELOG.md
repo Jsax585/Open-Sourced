@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in Korean translations for interactive authentication prompts while retaining English model-facing contracts ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
+
 ### Fixed
 
 - Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))

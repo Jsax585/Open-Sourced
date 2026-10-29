@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit English-default language initialization, validated external Korean packs, safe fallback, and localized relative-time phrases ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
+
 ### Fixed
 
 - Fixed `untilAborted` leaving a promise passed to it unobserved when the signal was already aborted, so its later rejection crashed the process as unhandled ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))

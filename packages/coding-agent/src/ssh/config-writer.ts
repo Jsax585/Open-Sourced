@@ -3,6 +3,7 @@
  *
  * Utilities for reading/writing ssh.json files at user or project level.
  */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
@@ -35,7 +36,7 @@ export async function readSSHConfigFile(filePath: string): Promise<SSHConfigFile
 			return { hosts: {} };
 		}
 		if (error instanceof SyntaxError) {
-			throw new Error(`Failed to parse SSH config file ${filePath}: ${error.message}`);
+			throw new Error(__ompTranslate("Failed to parse SSH config file {0}: {1}", `${filePath}`, `${error.message}`));
 		}
 		throw error;
 	}
@@ -91,7 +92,7 @@ export async function addSSHHost(filePath: string, name: string, hostConfig: SSH
 
 	// Validate host field
 	if (!hostConfig.host) {
-		throw new Error("Host address cannot be empty");
+		throw new Error(__ompTranslate("Host address cannot be empty"));
 	}
 
 	// Read existing config
@@ -99,7 +100,13 @@ export async function addSSHHost(filePath: string, name: string, hostConfig: SSH
 
 	// Check for duplicate name
 	if (existing.hosts?.[name]) {
-		throw new Error(`Host "${name}" already exists in ${filePath}`);
+		throw new Error(
+			((__ompTranslateValue0, __ompTranslateValue1) =>
+				__ompTranslate('Host "{1}" already exists in {0}', __ompTranslateValue1, __ompTranslateValue0))(
+				`${name}`,
+				`${filePath}`,
+			),
+		);
 	}
 
 	// Add host
@@ -130,7 +137,7 @@ export async function updateSSHHost(filePath: string, name: string, hostConfig: 
 
 	// Validate host field
 	if (!hostConfig.host) {
-		throw new Error("Host address cannot be empty");
+		throw new Error(__ompTranslate("Host address cannot be empty"));
 	}
 
 	// Read existing config
@@ -160,7 +167,13 @@ export async function removeSSHHost(filePath: string, name: string): Promise<voi
 
 	// Check if host exists
 	if (!existing.hosts?.[name]) {
-		throw new Error(`Host "${name}" not found in ${filePath}`);
+		throw new Error(
+			((__ompTranslateValue0, __ompTranslateValue1) =>
+				__ompTranslate('Host "{1}" not found in {0}', __ompTranslateValue1, __ompTranslateValue0))(
+				`${name}`,
+				`${filePath}`,
+			),
+		);
 	}
 
 	// Remove host

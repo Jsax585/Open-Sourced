@@ -11,6 +11,7 @@
  * - Legacy .windsurfrules file
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { tryParseJson } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { readFile } from "../capability/fs";
@@ -41,7 +42,13 @@ function parseServerConfig(
 	scope: "user" | "project",
 ): { server?: MCPServer; warning?: string } {
 	if (typeof serverConfig !== "object" || serverConfig === null) {
-		return { warning: `Invalid server config for "${name}" in ${path}` };
+		return {
+			warning: ((__ompTranslateValue0, __ompTranslateValue1) =>
+				__ompTranslate('Invalid server config for "{1}" in {0}', __ompTranslateValue1, __ompTranslateValue0))(
+				`${name}`,
+				`${path}`,
+			),
+		};
 	}
 
 	const server = expandEnvVarsDeep(serverConfig as Record<string, unknown>);

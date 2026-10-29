@@ -1,3 +1,5 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
+import { browserLanguagePackScript, localizeBrowserHtml } from "@oh-my-pi/pi-utils/browser-i18n";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -73,7 +75,9 @@ async function getEmbeddedClientFiles(): Promise<Map<string, Blob>> {
 	const archive = decodeEmbeddedClientArchive(embeddedClientArchiveTxt);
 	if (!archive) {
 		throw new Error(
-			"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
+			__ompTranslate(
+				"Embedded stats client bundle missing. Rebuild the omp binary or npm bundle with embedded stats assets.",
+			),
 		);
 	}
 
@@ -152,7 +156,9 @@ const ensureClientBuild = async () => {
 	if (buildResult.exitCode !== 0) {
 		const output = buildResult.text().trim();
 		const details = output ? `\n${output}` : "";
-		throw new Error(`Failed to build stats client (exit ${buildResult.exitCode})${details}`);
+		throw new Error(
+			__ompTranslate("Failed to build stats client (exit {0}){1}", `${buildResult.exitCode}`, `${details}`),
+		);
 	}
 };
 
@@ -210,7 +216,10 @@ export async function handleApi(req: Request): Promise<Response> {
 	if (path === "/api/frustration/judge" || path === "/api/frustration/cancel") {
 		if (req.method !== "POST") return Response.json({ error: "POST required" }, { status: 405 });
 		if (req.headers.get(STATS_ACTION_HEADER) !== "1") {
-			return Response.json({ error: `${STATS_ACTION_HEADER}: 1 header required` }, { status: 403 });
+			return Response.json(
+				{ error: __ompTranslate("{0}: 1 header required", `${STATS_ACTION_HEADER}`) },
+				{ status: 403 },
+			);
 		}
 		if (path === "/api/frustration/cancel") return Response.json(cancelFrustrationRun());
 		const result = await startFrustrationRun(range);
@@ -262,7 +271,7 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	if (path.startsWith("/api/request/")) {
 		const id = path.split("/").pop();
-		if (!id) return new Response("Bad Request", { status: 400 });
+		if (!id) return new Response(__ompTranslate("Bad Request"), { status: 400 });
 		const details = await getRequestDetails(parseInt(id, 10));
 		if (!details) return new Response("Not Found", { status: 404 });
 		return Response.json(details);
@@ -288,7 +297,7 @@ export async function handleApi(req: Request): Promise<Response> {
 
 	if (path === "/api/session/trace") {
 		const file = url.searchParams.get("file");
-		if (!file) return Response.json({ error: "file required" }, { status: 400 });
+		if (!file) return Response.json({ error: __ompTranslate("file required") }, { status: 400 });
 		try {
 			// ETag-first: compare the client's etag against the
 			// root+child fingerprint WITHOUT building the trace. A matching
@@ -312,7 +321,7 @@ export async function handleApi(req: Request): Promise<Response> {
 			return Response.json(trace, { headers: { ETag: etag } });
 		} catch (err) {
 			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
-			if (isEnoent(err)) return Response.json({ error: "session not found" }, { status: 404 });
+			if (isEnoent(err)) return Response.json({ error: __ompTranslate("session not found") }, { status: 404 });
 			throw err;
 		}
 	}
@@ -320,10 +329,10 @@ export async function handleApi(req: Request): Promise<Response> {
 	if (path === "/api/session/entry") {
 		const file = url.searchParams.get("file");
 		const id = url.searchParams.get("id");
-		if (!file || !id) return Response.json({ error: "file and id required" }, { status: 400 });
+		if (!file || !id) return Response.json({ error: __ompTranslate("file and id required") }, { status: 400 });
 		try {
 			const entry = await getTraceEntry(file, id);
-			if (!entry) return Response.json({ error: "entry not found" }, { status: 404 });
+			if (!entry) return Response.json({ error: __ompTranslate("entry not found") }, { status: 404 });
 			return Response.json({ entry });
 		} catch (err) {
 			if (err instanceof TracePathError) return Response.json({ error: err.message }, { status: 400 });
@@ -334,6 +343,11 @@ export async function handleApi(req: Request): Promise<Response> {
 	return new Response("Not Found", { status: 404 });
 }
 
+function browserHtmlResponse(html: string): Response {
+	const localized = localizeBrowserHtml(html).replace(/<head>/i, () => `<head>${browserLanguagePackScript()}`);
+	return new Response(localized, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
 /**
  * Handle static file requests.
  */
@@ -341,7 +355,8 @@ async function handleStatic(requestPath: string): Promise<Response> {
 	if (USE_EMBEDDED_CLIENT) {
 		const files = await getEmbeddedClientFiles();
 		const file = files.get(requestPath.slice(1)) ?? files.get("index.html");
-		return file ? new Response(file) : new Response("Not Found", { status: 404 });
+		if (!file) return new Response("Not Found", { status: 404 });
+		return file.type.startsWith("text/html") ? browserHtmlResponse(await file.text()) : new Response(file);
 	}
 
 	const filePath = requestPath === "/" ? "/index.html" : requestPath;
@@ -349,16 +364,16 @@ async function handleStatic(requestPath: string): Promise<Response> {
 
 	const file = Bun.file(fullPath);
 	if (await file.exists()) {
-		return new Response(file);
+		return file.type.startsWith("text/html") ? browserHtmlResponse(await file.text()) : new Response(file);
 	}
 
 	// SPA fallback
 	const index = Bun.file(path.join(STATIC_DIR, "index.html"));
 	if (await index.exists()) {
-		return new Response(index);
+		return browserHtmlResponse(await index.text());
 	}
 
-	return new Response("Not Found", { status: 404 });
+	return new Response(__ompTranslate("Not Found"), { status: 404 });
 }
 
 /** Format a dashboard origin, including brackets required by IPv6 literals. */
@@ -414,7 +429,7 @@ function createDashboardServer(port: number, hostname: string): Server<undefined
 			} catch (error) {
 				logger.error("Stats dashboard request failed", { path, error: String(error) });
 				return Response.json(
-					{ error: error instanceof Error ? error.message : "Unknown error" },
+					{ error: error instanceof Error ? error.message : __ompTranslate("Unknown error") },
 					{ status: 500, headers: dashboardHeaders },
 				);
 			}
@@ -544,9 +559,12 @@ export async function startServer(
 		try {
 			return register(createDashboardServer(port, hostname));
 		} catch (retryError) {
-			throw new Error(`Failed to start stats dashboard on ${hostname}:${port} after reclaiming it.`, {
-				cause: retryError,
-			});
+			throw new Error(
+				__ompTranslate("Failed to start stats dashboard on {0}:{1} after reclaiming it.", `${hostname}`, `${port}`),
+				{
+					cause: retryError,
+				},
+			);
 		}
 	}
 }

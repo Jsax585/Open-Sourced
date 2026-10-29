@@ -268,7 +268,7 @@ function byRecency(a: Node, b: Node): number {
 function makeAgeFormatter(mode: "relative" | "absolute"): (mtimeMs: number) => string {
 	if (mode === "absolute") return formatMtimeStable;
 	const nowMs = Date.now();
-	return (mtimeMs: number) => formatAge(Math.max(0, Math.floor((nowMs - mtimeMs) / 1000)));
+	return (mtimeMs: number) => formatAge(Math.max(0, Math.floor((nowMs - mtimeMs) / 1000)), "en");
 }
 
 /** Deterministic, render-time-independent timestamp: UTC `YYYY-MM-DD HH:MM`. */

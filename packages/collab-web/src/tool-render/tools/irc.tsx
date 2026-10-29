@@ -1,4 +1,5 @@
 /** `irc` — inter-agent messaging: send/wait/inbox/list ops with delivery receipts. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import type { Tone } from "../parts";
 import { Badge, Badges, Note, ResultText, Row } from "../parts";
@@ -146,10 +147,12 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 		const inbox = d ? parseInbox(d.inbox) : [];
 		return (
 			<>
-				{opBadge} {args.peek === true && <Badge>peek</Badge>}{" "}
+				{opBadge} {args.peek === true && <Badge>{__ompTranslate("peek")}</Badge>}{" "}
 				{d && (
 					<span className="tv-muted">
-						{inbox.length === 0 ? "empty" : `${inbox.length} ${inbox.length === 1 ? "message" : "messages"}`}
+						{inbox.length === 0
+							? __ompTranslate("empty")
+							: __ompTranslate("{0} {1}", `${inbox.length}`, `${inbox.length === 1 ? "message" : "messages"}`)}
 					</span>
 				)}
 			</>
@@ -191,12 +194,12 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 			<Badges
 				items={[
 					op ?? "?",
-					to && `to ${to}`,
-					op === "wait" && from && `from ${from}`,
-					to === "all" && "broadcast",
-					args.await === true && "await reply",
-					str(args.replyTo) && "reply",
-					args.peek === true && "peek",
+					to && __ompTranslate("to {0}", `${to}`),
+					op === "wait" && from && __ompTranslate("from {0}", `${from}`),
+					to === "all" && __ompTranslate("broadcast"),
+					args.await === true && __ompTranslate("await reply"),
+					str(args.replyTo) && __ompTranslate("reply"),
+					args.peek === true && __ompTranslate("peek"),
 				]}
 			/>
 			{message && <Note>{message}</Note>}

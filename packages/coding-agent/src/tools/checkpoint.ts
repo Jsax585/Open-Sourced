@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -53,13 +54,14 @@ export interface RewindToolDetails {
 export class CheckpointTool implements AgentTool<typeof checkpointSchema, CheckpointToolDetails> {
 	readonly name = "checkpoint";
 	readonly approval = "read" as const;
-	readonly label = "Checkpoint";
+	readonly label = __ompTranslate("Checkpoint");
 	readonly summary = "Create a git-based checkpoint to save and restore session state";
 	readonly description: string;
 	readonly parameters = checkpointSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly intent = (args: Partial<CheckpointParams>) => (args.goal ? `checkpointing: ${args.goal}` : "checkpointing");
+	readonly intent = (args: Partial<CheckpointParams>) =>
+		args.goal ? __ompTranslate("checkpointing: {0}", `${args.goal}`) : __ompTranslate("checkpointing");
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(checkpointDescription);
@@ -89,13 +91,13 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 export class RewindTool implements AgentTool<typeof rewindSchema, RewindToolDetails> {
 	readonly name = "rewind";
 	readonly approval = "read" as const;
-	readonly label = "Rewind";
+	readonly label = __ompTranslate("Rewind");
 	readonly summary = "Rewind to a previously created checkpoint";
 	readonly description: string;
 	readonly parameters = rewindSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
-	readonly intent = (): string => "rewinding";
+	readonly intent = (): string => __ompTranslate("rewinding");
 
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(rewindDescription);

@@ -1,4 +1,5 @@
 /** `edit` / `apply_patch` — hashline patch application rendered as colored diffs. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, DiffBlock, InvalidArg, Kv, KvGrid, Note, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -171,7 +172,7 @@ function FileSection({ entry, fallbackPath }: { entry: FileEntry; fallbackPath?:
 						{entry.isError && (
 							<>
 								{" "}
-								<Badge tone="err">failed</Badge>
+								<Badge tone="err">{__ompTranslate("failed")}</Badge>
 							</>
 						)}
 					</span>
@@ -231,7 +232,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					)}
 				</KvGrid>
 			)}
-			{input !== null && input.length > 0 && <Output text={input} variant="code" maxLines={10} title="input" />}
+			{input !== null && input.length > 0 && (
+				<Output text={input} variant="code" maxLines={10} title={__ompTranslate("input")} />
+			)}
 			{input === null && (args.input !== undefined || args._input !== undefined) && <InvalidArg what="input" />}
 		</>
 	);

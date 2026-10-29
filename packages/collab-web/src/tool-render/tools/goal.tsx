@@ -1,4 +1,5 @@
 /** `goal` — goal-mode lifecycle: set/check/complete/resume/drop an objective with an optional token budget. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import type { Tone } from "../parts";
 import { Badge, InvalidArg, Kv, KvGrid, Note, Output, ResultText } from "../parts";
@@ -33,9 +34,9 @@ function goalOf(details: Record<string, unknown> | null): GoalView | null {
 function describeOp(op: string | null): string {
 	switch (op) {
 		case "create":
-			return "set";
+			return __ompTranslate("set");
 		case "get":
-			return "check";
+			return __ompTranslate("check");
 		default:
 			return op ?? "?";
 	}
@@ -70,18 +71,18 @@ function fmtNum(n: number): string {
 /** Coarse duration label from seconds: 45s, 12m, 3h, 2d. */
 function fmtDuration(seconds: number): string {
 	const s = Math.max(0, Math.round(seconds));
-	if (s < 60) return `${s}s`;
+	if (s < 60) return __ompTranslate("{0}s", `${s}`);
 	const m = Math.round(s / 60);
-	if (m < 60) return `${m}m`;
+	if (m < 60) return __ompTranslate("{0}m", `${m}`);
 	const h = Math.round(m / 60);
-	if (h < 48) return `${h}h`;
-	return `${Math.round(h / 24)}d`;
+	if (h < 48) return __ompTranslate("{0}h", `${h}`);
+	return __ompTranslate("{0}d", `${Math.round(h / 24)}`);
 }
 
 /** "12K / 100K tokens (88K left)" or "12K tokens" without a budget. */
 function tokensLine(goal: GoalView): string {
 	const used = fmtNum(goal.tokensUsed ?? 0);
-	if (goal.tokenBudget === null) return `${used} tokens`;
+	if (goal.tokenBudget === null) return __ompTranslate("{0} tokens", `${used}`);
 	const left = Math.max(0, goal.tokenBudget - (goal.tokensUsed ?? 0));
 	return `${used} / ${fmtNum(goal.tokenBudget)} tokens (${fmtNum(left)} left)`;
 }
@@ -115,24 +116,26 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<KvGrid>
-				<Kv k="op">{describeOp(op)}</Kv>
+				<Kv k={__ompTranslate("op")}>{describeOp(op)}</Kv>
 				{goal && (
-					<Kv k="status">
+					<Kv k={__ompTranslate("status")}>
 						<Badge tone={statusTone(goal.status)}>{goal.status}</Badge>
 					</Kv>
 				)}
-				{objective !== null && objective.trim() !== "" && <Kv k="objective">{objective.trim()}</Kv>}
+				{objective !== null && objective.trim() !== "" && (
+					<Kv k={__ompTranslate("objective")}>{objective.trim()}</Kv>
+				)}
 				{hasTokens && goal ? (
-					<Kv k="tokens">{tokensLine(goal)}</Kv>
+					<Kv k={__ompTranslate("tokens")}>{tokensLine(goal)}</Kv>
 				) : (
-					budgetArg !== null && <Kv k="budget">{fmtNum(budgetArg)} tokens</Kv>
+					budgetArg !== null && <Kv k={__ompTranslate("budget")}>{fmtNum(budgetArg)} tokens</Kv>
 				)}
 				{goal !== null && goal.timeUsedSeconds !== null && goal.timeUsedSeconds > 0 && (
-					<Kv k="elapsed">{fmtDuration(goal.timeUsedSeconds)}</Kv>
+					<Kv k={__ompTranslate("elapsed")}>{fmtDuration(goal.timeUsedSeconds)}</Kv>
 				)}
 			</KvGrid>
 			{details !== null && goal === null && !result?.isError && <Note tone="warn">no active goal</Note>}
-			{report !== null && report !== "" && <Output text={report} title="Report" maxLines={12} />}
+			{report !== null && report !== "" && <Output text={report} title={__ompTranslate("Report")} maxLines={12} />}
 			{(goal === null || result?.isError) && <ResultText result={result} maxLines={10} />}
 		</>
 	);

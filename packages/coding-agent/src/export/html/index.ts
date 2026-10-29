@@ -1,3 +1,5 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
+import { browserLanguagePackScript, localizeBrowserHtml } from "@oh-my-pi/pi-utils/browser-i18n";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentState } from "@oh-my-pi/pi-agent-core";
@@ -215,7 +217,8 @@ async function generateHtml(
 
 	// Use function replacements so `$'`, `$&`, `$$`, `$n`, etc. in the
 	// substituted CSS/base64 are not interpreted as substitution patterns.
-	return getTemplate()
+	return localizeBrowserHtml(getTemplate())
+		.replace("<head>", () => `<head>${browserLanguagePackScript()}`)
 		.replace("<theme-vars/>", () => `<style>${themeStyles}</style>`)
 		.replace("{{SESSION_DATA}}", () => sessionDataBase64);
 }
@@ -229,7 +232,7 @@ export async function exportSessionToHtml(
 	const opts: ExportOptions = typeof options === "string" ? { outputPath: options } : options || {};
 
 	const sessionFile = sm.getSessionFile();
-	if (!sessionFile) throw new Error("Cannot export in-memory session to HTML");
+	if (!sessionFile) throw new Error(__ompTranslate("Cannot export in-memory session to HTML"));
 
 	const sessionData = buildSessionData(sm, state);
 	if (opts.includeSubSessions !== false) {
@@ -256,7 +259,7 @@ export async function exportFromFile(inputPath: string, options?: ExportOptions 
 			throwIfMissing: true,
 		});
 	} catch (err) {
-		if (isEnoent(err)) throw new Error(`File not found: ${inputPath}`);
+		if (isEnoent(err)) throw new Error(__ompTranslate("File not found: {0}", `${inputPath}`));
 		throw err;
 	}
 

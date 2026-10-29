@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import {
 	Activity,
 	CircleAlert,
@@ -42,29 +43,29 @@ export interface NavGroup {
 /** Sidebar structure; the order here is the order on screen. */
 export const NAV: readonly NavGroup[] = [
 	{
-		heading: "Usage",
+		heading: __ompTranslate("Usage"),
 		items: [
-			{ id: "overview", label: "Overview", icon: LayoutGrid, hotkey: "o" },
-			{ id: "models", label: "Models", icon: Cpu, hotkey: "m" },
-			{ id: "providers", label: "Providers", icon: PlugZap, hotkey: "p" },
-			{ id: "costs", label: "Costs", icon: Coins, hotkey: "c" },
+			{ id: "overview", label: __ompTranslate("Overview"), icon: LayoutGrid, hotkey: "o" },
+			{ id: "models", label: __ompTranslate("Models"), icon: Cpu, hotkey: "m" },
+			{ id: "providers", label: __ompTranslate("Providers"), icon: PlugZap, hotkey: "p" },
+			{ id: "costs", label: __ompTranslate("Costs"), icon: Coins, hotkey: "c" },
 		],
 	},
 	{
-		heading: "Activity",
+		heading: __ompTranslate("Activity"),
 		items: [
-			{ id: "requests", label: "Requests", icon: Activity, hotkey: "r" },
-			{ id: "errors", label: "Errors", icon: CircleAlert, hotkey: "e" },
-			{ id: "traces", label: "Traces", icon: SquareChartGantt, hotkey: "t" },
+			{ id: "requests", label: __ompTranslate("Requests"), icon: Activity, hotkey: "r" },
+			{ id: "errors", label: __ompTranslate("Errors"), icon: CircleAlert, hotkey: "e" },
+			{ id: "traces", label: __ompTranslate("Traces"), icon: SquareChartGantt, hotkey: "t" },
 		],
 	},
 	{
-		heading: "Insights",
+		heading: __ompTranslate("Insights"),
 		items: [
-			{ id: "tools", label: "Tools", icon: Wrench, hotkey: "l" },
-			{ id: "frustration", label: "Frustration", icon: Frown, hotkey: "f" },
-			{ id: "projects", label: "Projects", icon: FolderGit2, hotkey: "j" },
-			{ id: "gain", label: "Gain", icon: Sparkles, hotkey: "g" },
+			{ id: "tools", label: __ompTranslate("Tools"), icon: Wrench, hotkey: "l" },
+			{ id: "frustration", label: __ompTranslate("Frustration"), icon: Frown, hotkey: "f" },
+			{ id: "projects", label: __ompTranslate("Projects"), icon: FolderGit2, hotkey: "j" },
+			{ id: "gain", label: __ompTranslate("Gain"), icon: Sparkles, hotkey: "g" },
 		],
 	},
 ];

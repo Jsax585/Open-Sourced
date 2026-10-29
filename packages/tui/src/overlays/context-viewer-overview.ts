@@ -3,6 +3,7 @@
  * map rows have an ANSI form (`render`) and a native form (`describe`); keep the twins visually identical.
  */
 import { formatNumber } from "@oh-my-pi/pi-utils";
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { ContextBreakdown } from "../status-line/context-usage";
 import { type ContextMapCell, planContextMap } from "../chrome/context-map";
@@ -130,8 +131,13 @@ export function buildOverviewRows(
 			});
 	}
 	rows.push(
-		{ key: "buffer", id: "buffer", label: "Auto-Compact Buffer", tokens: data.breakdown.autoCompactBufferTokens },
-		{ key: "free", id: "free", label: "Free Space", tokens: data.breakdown.freeTokens },
+		{
+			key: "buffer",
+			id: "buffer",
+			label: __ompTranslate("Auto-Compact Buffer"),
+			tokens: data.breakdown.autoCompactBufferTokens,
+		},
+		{ key: "free", id: "free", label: __ompTranslate("Free Space"), tokens: data.breakdown.freeTokens },
 	);
 	const tokenWidth = Math.max(...rows.map(row => (row.tokens === undefined ? 1 : formatNumber(row.tokens).length)));
 	const shareWidth = Math.max(
@@ -253,37 +259,55 @@ function percentString(part: number, whole: number, fractionDigits = 1): string 
 export function contextSnapcompactLines(breakdown: ContextBreakdown): string[] {
 	const snap = breakdown.snapcompact;
 	if (!snap) return [];
-	if (!snap.visionCapable) return ["Snapcompact: inactive (model has no image input)"];
-	const lines = ["Snapcompact (estimated wire savings)"];
+	if (!snap.visionCapable) return [__ompTranslate("Snapcompact: inactive (model has no image input)")];
+	const lines = [__ompTranslate("Snapcompact (estimated wire savings)")];
 	if (snap.systemPrompt) {
 		const sp = snap.systemPrompt;
-		const scope = sp.scope === "agents-md" ? "AGENTS.md" : "all";
+		const scope = sp.scope === "agents-md" ? "AGENTS.md" : __ompTranslate("all");
 		if (sp.applied) {
-			const frames = `${sp.frames} frame${sp.frames === 1 ? "" : "s"}`;
+			const frames = __ompTranslate("{0} frame{1}", `${sp.frames}`, sp.frames === 1 ? "" : "s");
 			lines.push(
-				`  System prompt (${scope}): saves ~${formatNumber(sp.savedTokens)} (${formatNumber(sp.textTokens)} text → ${frames} ≈ ${formatNumber(sp.imageTokens)})`,
+				__ompTranslate(
+					"  System prompt ({0}): saves ~{1} ({2} text → {3} ≈ {4})",
+					scope,
+					formatNumber(sp.savedTokens),
+					formatNumber(sp.textTokens),
+					frames,
+					formatNumber(sp.imageTokens),
+				),
 			);
 		} else {
 			const reason =
 				sp.reason === "budget"
-					? "image budget exhausted"
+					? __ompTranslate("image budget exhausted")
 					: sp.reason === "empty"
-						? "nothing to image"
-						: "frames would not save tokens";
-			lines.push(`  System prompt (${scope}): stays text (${reason})`);
+						? __ompTranslate("nothing to image")
+						: __ompTranslate("frames would not save tokens");
+			lines.push(__ompTranslate("  System prompt ({0}): stays text ({1})", scope, reason));
 		}
 	}
 	if (snap.toolResults) {
 		const tr = snap.toolResults;
 		lines.push(
 			tr.swapped > 0
-				? `  Tool results: saves ~${formatNumber(tr.savedTokens)} (${tr.swapped}/${tr.total} imaged, ${formatNumber(tr.textTokens)} text → ${tr.frames} frames ≈ ${formatNumber(tr.imageTokens)})`
-				: `  Tool results: none imaged (${tr.total} in history)`,
+				? __ompTranslate(
+						"  Tool results: saves ~{0} ({1}/{2} imaged, {3} text → {4} frames ≈ {5})",
+						formatNumber(tr.savedTokens),
+						`${tr.swapped}`,
+						`${tr.total}`,
+						formatNumber(tr.textTokens),
+						`${tr.frames}`,
+						formatNumber(tr.imageTokens),
+					)
+				: __ompTranslate("  Tool results: none imaged ({0} in history)", `${tr.total}`),
 		);
 	}
 	if (snap.savedTokens > 0) {
 		lines.push(
-			`  Next request: ~${formatNumber(Math.max(0, breakdown.usedTokens - snap.savedTokens))} tokens on the wire`,
+			__ompTranslate(
+				"  Next request: ~{0} tokens on the wire",
+				formatNumber(Math.max(0, breakdown.usedTokens - snap.savedTokens)),
+			),
 		);
 	}
 	return lines;
@@ -306,19 +330,32 @@ function contextMeterParts(
 		.map(category => ({
 			value: category.tokens / window,
 			token: category.color,
-			label: `${category.label} · ${formatNumber(category.tokens)} tokens (${percentString(category.tokens, window)})`,
+			label: __ompTranslate(
+				"{0} · {1} tokens ({2})",
+				category.label,
+				formatNumber(category.tokens),
+				percentString(category.tokens, window),
+			),
 		}));
 	parts.push({
 		value: breakdown.freeTokens / window,
 		token: "track",
-		label: `Free space · ${formatNumber(breakdown.freeTokens)} tokens (${percentString(breakdown.freeTokens, window)})`,
+		label: __ompTranslate(
+			"Free space · {0} tokens ({1})",
+			formatNumber(breakdown.freeTokens),
+			percentString(breakdown.freeTokens, window),
+		),
 	});
 	if (breakdown.autoCompactBufferTokens > 0) {
 		parts.push({
 			value: breakdown.autoCompactBufferTokens / window,
 			token: "warning",
 			hatch: true,
-			label: `Autocompact buffer · ${formatNumber(breakdown.autoCompactBufferTokens)} tokens (${percentString(breakdown.autoCompactBufferTokens, window)})`,
+			label: __ompTranslate(
+				"Autocompact buffer · {0} tokens ({1})",
+				formatNumber(breakdown.autoCompactBufferTokens),
+				percentString(breakdown.autoCompactBufferTokens, window),
+			),
 		});
 	}
 	return parts;
@@ -331,13 +368,17 @@ export function contextUsageSummary(
 	const { contextWindow: window, usedTokens, freeTokens, thresholdTokens } = breakdown;
 	const room =
 		thresholdTokens === undefined
-			? `${formatNumber(freeTokens)} free`
+			? __ompTranslate("{0} free", formatNumber(freeTokens))
 			: usedTokens >= thresholdTokens
-				? `Past auto-compaction at ${percentString(thresholdTokens, window, 0)}`
-				: `${formatNumber(thresholdTokens - usedTokens)} left before auto-compaction at ${percentString(thresholdTokens, window, 0)}`;
+				? __ompTranslate("Past auto-compaction at {0}", percentString(thresholdTokens, window, 0))
+				: __ompTranslate(
+						"{0} left before auto-compaction at {1}",
+						formatNumber(thresholdTokens - usedTokens),
+						percentString(thresholdTokens, window, 0),
+					);
 	return {
 		used: formatNumber(usedTokens),
-		detail: ` of ${formatNumber(window)} tokens · ${percentString(usedTokens, window, 0)}`,
+		detail: __ompTranslate(" of {0} tokens · {1}", formatNumber(window), percentString(usedTokens, window, 0)),
 		room,
 	};
 }
@@ -367,13 +408,24 @@ export function describeContextMeter(breakdown: ContextMeterData): [NativeNode, 
 					{
 						at: thresholdTokens / window,
 						tone: "warning" as const,
-						title: `Auto-compaction at ${percentString(thresholdTokens, window, 0)} · ${formatNumber(thresholdTokens)} tokens`,
+						title: __ompTranslate(
+							"Auto-compaction at {0} · {1} tokens",
+							percentString(thresholdTokens, window, 0),
+							formatNumber(thresholdTokens),
+						),
 					},
 				]
 			: undefined;
 	const bar = node(
 		"meter",
-		{ value: used, style: "bar", size: "lg", parts, ...(marks ? { marks } : {}), aria: "Context usage by category" },
+		{
+			value: used,
+			style: "bar",
+			size: "lg",
+			parts,
+			...(marks ? { marks } : {}),
+			aria: __ompTranslate("Context usage by category"),
+		},
 		undefined,
 		"bar",
 	);

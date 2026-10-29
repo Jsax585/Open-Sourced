@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import "./models.css";
 import { ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -52,8 +53,8 @@ export interface ModelsRouteProps {
 type ShareMode = "share" | "requests";
 
 const SHARE_OPTIONS = [
-	{ value: "share" as const, label: "Share" },
-	{ value: "requests" as const, label: "Requests" },
+	{ value: "share" as const, label: __ompTranslate("Share") },
+	{ value: "requests" as const, label: __ompTranslate("Requests") },
 ];
 
 /** Models plotted individually in the share chart; the rest fold into "Other". */
@@ -75,13 +76,21 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 		[view, expandedKey, bucketWord],
 	);
 	const isEmpty = (data: ModelDashboardStats) => data.byModel.length === 0;
-	const empty = <EmptyState title="No model usage in this range" hint="Pick a wider range in the top bar." />;
+	const empty = (
+		<EmptyState
+			title={__ompTranslate("No model usage in this range")}
+			hint={__ompTranslate("Pick a wider range in the top bar.")}
+		/>
+	);
 
 	return (
 		<div className="page">
 			<PageHeader
-				title="Models"
-				description={`Which models did the work in ${meta.windowLabel}, and how fast they answered.`}
+				title={__ompTranslate("Models")}
+				description={__ompTranslate(
+					"Which models did the work in {0}, and how fast they answered.",
+					`${meta.windowLabel}`,
+				)}
 			/>
 
 			<QueryView
@@ -95,32 +104,45 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 						<div data-stale={query.stale}>
 							<StatGrid min={200}>
 								<Stat
-									label="Models used"
+									label={__ompTranslate("Models used")}
 									value={formatInteger(view.models.length)}
-									hint={`across ${formatInteger(view.providerCount)} provider${view.providerCount === 1 ? "" : "s"}`}
+									hint={__ompTranslate(
+										"across {0} provider{1}",
+										`${formatInteger(view.providerCount)}`,
+										`${view.providerCount === 1 ? "" : "s"}`,
+									)}
 								/>
 								<Stat
-									label="Most used"
+									label={__ompTranslate("Most used")}
 									title={view.top ? `${view.top.model} (${view.top.provider})` : undefined}
 									value={view.top ? view.top.model : "–"}
 									hint={
 										view.top
-											? `${formatPercent(view.top.totalRequests / Math.max(1, view.totalRequests))} of requests · ${view.top.provider}`
+											? __ompTranslate(
+													"{0} of requests · {1}",
+													`${formatPercent(view.top.totalRequests / Math.max(1, view.totalRequests))}`,
+													`${view.top.provider}`,
+												)
 											: undefined
 									}
 								/>
 								<Stat
-									label="Requests"
+									label={__ompTranslate("Requests")}
 									value={formatInteger(view.totalRequests)}
-									hint={`${formatInteger(view.failedRequests)} failed`}
+									hint={__ompTranslate(
+										"{0} failed\u0004stats.model.failed",
+										`${formatInteger(view.failedRequests)}`,
+									)}
 									spark={view.requestTotals}
 								/>
 								<Stat
-									label="API-equivalent cost"
-									title="What this usage would cost at public API rates"
+									label={__ompTranslate("API-equivalent cost")}
+									title={__ompTranslate("What this usage would cost at public API rates")}
 									value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
 									hint={
-										view.unpricedRequests > 0 ? `${formatInteger(view.unpricedRequests)} unpriced` : undefined
+										view.unpricedRequests > 0
+											? __ompTranslate("{0} unpriced", `${formatInteger(view.unpricedRequests)}`)
+											: undefined
 									}
 								/>
 							</StatGrid>
@@ -131,11 +153,11 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 
 			<Card
 				index={1}
-				title="Request share"
+				title={__ompTranslate("Request share")}
 				description={
 					mode === "share"
-						? `Each model's share of requests per ${bucketWord}`
-						: `Requests per ${bucketWord}, stacked by model`
+						? __ompTranslate("Each model's share of requests per {0}", `${bucketWord}`)
+						: __ompTranslate("Requests per {0}, stacked by model", `${bucketWord}`)
 				}
 				actions={
 					<Segmented
@@ -143,7 +165,7 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 						options={SHARE_OPTIONS}
 						value={mode}
 						onChange={setMode}
-						aria-label="Share chart mode"
+						aria-label={__ompTranslate("Share chart mode")}
 					/>
 				}
 				stale={query.stale}
@@ -181,8 +203,8 @@ export function ModelsRoute({ active, range }: ModelsRouteProps) {
 
 			<Card
 				index={2}
-				title="All models"
-				description="Click a row for latency and throughput over time"
+				title={__ompTranslate("All models")}
+				description={__ompTranslate("Click a row for latency and throughput over time")}
 				stale={query.stale}
 				flush
 			>
@@ -330,7 +352,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "model",
-			header: "Model",
+			header: __ompTranslate("Model"),
 			sort: row => row.model,
 			render: row => (
 				<LabelCell
@@ -342,7 +364,7 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: __ompTranslate("Requests"),
 			align: "right",
 			sort: row => row.totalRequests,
 			render: row => (
@@ -356,16 +378,16 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "cost",
-			header: "Cost",
-			title: "API-equivalent estimate at public rates",
+			header: __ompTranslate("Cost"),
+			title: __ompTranslate("API-equivalent estimate at public rates"),
 			align: "right",
 			sort: row => row.totalCost,
 			render: row => <span className="num">{formatEstimatedCost(row.totalCost, row.unpricedRequests)}</span>,
 		},
 		{
 			key: "tokens",
-			header: "Tokens",
-			title: "Uncached input + cache reads + cache writes + output",
+			header: __ompTranslate("Tokens"),
+			title: __ompTranslate("Uncached input + cache reads + cache writes + output"),
 			align: "right",
 			sort: row => sumConversationTokens(row),
 			render: row => {
@@ -379,22 +401,24 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "cache",
-			header: "Cache rate",
-			title: "Cache reads ÷ (uncached input + cache reads)",
+			header: __ompTranslate("Cache rate"),
+			title: __ompTranslate("Cache reads ÷ (uncached input + cache reads)"),
 			align: "right",
 			sort: row => row.cacheRate,
 			render: row => <span className="num">{formatPercent(row.cacheRate)}</span>,
 		},
 		{
 			key: "errors",
-			header: "Errors",
+			header: __ompTranslate("Errors"),
 			align: "right",
 			sort: row => row.errorRate,
 			render: row =>
 				row.failedRequests === 0 ? (
 					<span className="num dim">0%</span>
 				) : (
-					<span title={`${formatInteger(row.failedRequests)} failed`}>
+					<span
+						title={__ompTranslate("{0} failed\u0004stats.model.failed", `${formatInteger(row.failedRequests)}`)}
+					>
 						<Badge tone={errorRateTone(row.errorRate)} mono>
 							{formatErrorRate(row.errorRate)}
 						</Badge>
@@ -403,8 +427,8 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		},
 		{
 			key: "tps",
-			header: "Tokens/s",
-			title: "Average output tokens per second",
+			header: __ompTranslate("Tokens/s"),
+			title: __ompTranslate("Average output tokens per second"),
 			align: "right",
 			sort: row => row.avgTokensPerSecond ?? -1,
 			render: row => <span className="num">{formatTokensPerSecond(row.avgTokensPerSecond)}</span>,
@@ -412,15 +436,15 @@ function buildModelColumns(view: ModelsView, expandedKey: string | null, bucketW
 		{
 			key: "ttft",
 			header: "TTFT",
-			title: "Average time to first token",
+			title: __ompTranslate("Average time to first token"),
 			align: "right",
 			sort: row => row.avgTtft ?? -1,
 			render: row => <span className="num">{formatDurationMs(row.avgTtft)}</span>,
 		},
 		{
 			key: "trend",
-			header: "Trend",
-			title: `Requests per ${bucketWord}`,
+			header: __ompTranslate("Trend"),
+			title: __ompTranslate("Requests per {0}", `${bucketWord}`),
 			width: 112,
 			render: row => {
 				const key = modelKey(row.model, row.provider);
@@ -457,7 +481,7 @@ function ModelDetail({
 	const series: ChartSeries[] = [
 		{
 			key: "tps",
-			label: "Tokens/s",
+			label: __ompTranslate("Tokens/s"),
 			color,
 			kind: points.length > 1 ? "line" : "bars",
 			values: points.map(p => p.avgTokensPerSecond),
@@ -482,7 +506,7 @@ function ModelDetail({
 						items={[
 							{
 								key: "err",
-								label: "Error rate",
+								label: __ompTranslate("Error rate"),
 								value: (
 									<span className={`tone-${errorRateTone(model.errorRate)}`}>
 										{formatErrorRate(model.errorRate)}{" "}
@@ -490,10 +514,10 @@ function ModelDetail({
 									</span>
 								),
 							},
-							{ key: "cache", label: "Cache rate", value: formatPercent(model.cacheRate) },
+							{ key: "cache", label: __ompTranslate("Cache rate"), value: formatPercent(model.cacheRate) },
 							{
 								key: "savings",
-								label: "Cache savings",
+								label: __ompTranslate("Cache savings"),
 								value: (
 									<span className={model.cacheSavings < 0 ? "tone-bad" : undefined}>
 										{formatPercent(model.cacheSavings)}
@@ -502,7 +526,7 @@ function ModelDetail({
 							},
 							{
 								key: "premium",
-								label: "Premium requests",
+								label: __ompTranslate("Premium requests"),
 								value: formatInteger(Math.round(model.totalPremiumRequests * 100) / 100),
 							},
 						]}
@@ -512,9 +536,13 @@ function ModelDetail({
 					<div className="section-label">Latency</div>
 					<KeyValues
 						items={[
-							{ key: "dur", label: "Avg duration", value: formatDurationMs(model.avgDuration) },
-							{ key: "ttft", label: "Avg TTFT", value: formatDurationMs(model.avgTtft) },
-							{ key: "tps", label: "Tokens/s", value: formatTokensPerSecond(model.avgTokensPerSecond) },
+							{ key: "dur", label: __ompTranslate("Avg duration"), value: formatDurationMs(model.avgDuration) },
+							{ key: "ttft", label: __ompTranslate("Avg TTFT"), value: formatDurationMs(model.avgTtft) },
+							{
+								key: "tps",
+								label: __ompTranslate("Tokens/s"),
+								value: formatTokensPerSecond(model.avgTokensPerSecond),
+							},
 						]}
 					/>
 				</div>
@@ -522,10 +550,22 @@ function ModelDetail({
 					<div className="section-label">Tokens</div>
 					<KeyValues
 						items={[
-							{ key: "in", label: "Uncached input", value: formatCompact(model.totalInputTokens) },
-							{ key: "cr", label: "Cache read", value: formatCompact(model.totalCacheReadTokens) },
-							{ key: "cw", label: "Cache write", value: formatCompact(model.totalCacheWriteTokens) },
-							{ key: "out", label: "Output", value: formatCompact(model.totalOutputTokens) },
+							{
+								key: "in",
+								label: __ompTranslate("Uncached input"),
+								value: formatCompact(model.totalInputTokens),
+							},
+							{
+								key: "cr",
+								label: __ompTranslate("Cache read"),
+								value: formatCompact(model.totalCacheReadTokens),
+							},
+							{
+								key: "cw",
+								label: __ompTranslate("Cache write"),
+								value: formatCompact(model.totalCacheWriteTokens),
+							},
+							{ key: "out", label: __ompTranslate("Output"), value: formatCompact(model.totalOutputTokens) },
 						]}
 					/>
 				</div>
@@ -546,7 +586,10 @@ function ModelDetail({
 					/>
 				</div>
 				{points.length === 0 ? (
-					<EmptyState title="No performance samples" hint="Timing is recorded for streamed responses." />
+					<EmptyState
+						title={__ompTranslate("No performance samples")}
+						hint={__ompTranslate("Timing is recorded for streamed responses.")}
+					/>
 				) : (
 					<TimeChart
 						buckets={points.map(p => p.timestamp)}
@@ -556,11 +599,11 @@ function ModelDetail({
 						stacked={false}
 						height={240}
 						format={formatCompact}
-						formatTooltip={v => `${formatTokensPerSecond(v)} tok/s`}
-						formatRight={v => `${Number(v.toFixed(2))}s`}
+						formatTooltip={v => __ompTranslate("{0} tok/s", `${formatTokensPerSecond(v)}`)}
+						formatRight={v => __ompTranslate("{0}s", `${Number(v.toFixed(2))}`)}
 						tooltipExtra={i => (
 							<div className="chart-tooltip-row chart-tooltip-total">
-								<span className="chart-tooltip-label">Requests</span>
+								<span className="chart-tooltip-label">{__ompTranslate("Requests")}</span>
 								<span className="chart-tooltip-value">{formatInteger(points[i].requests)}</span>
 							</div>
 						)}
@@ -572,9 +615,9 @@ function ModelDetail({
 }
 
 function bucketName(bucketMs: number): string {
-	if (bucketMs < 3_600_000) return "5 minutes";
-	if (bucketMs < 86_400_000) return "hour";
-	return "day";
+	if (bucketMs < 3_600_000) return __ompTranslate("5 minutes");
+	if (bucketMs < 86_400_000) return __ompTranslate("hour");
+	return __ompTranslate("day");
 }
 
 function sumValues(values: readonly (number | null)[]): number {

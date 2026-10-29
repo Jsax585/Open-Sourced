@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -205,7 +206,9 @@ async function terminatePortHolder(holder: PortHolder): Promise<void> {
 		process.kill(holder.pid, "SIGTERM");
 	} catch (error) {
 		if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
-		throw new Error(`Failed to stop ${holder.image} (PID ${holder.pid})`, { cause: error });
+		throw new Error(__ompTranslate("Failed to stop {0} (PID {1})", `${holder.image}`, `${holder.pid}`), {
+			cause: error,
+		});
 	}
 
 	for (let attempt = 0; attempt < PROCESS_EXIT_POLLS; attempt++) {
@@ -214,7 +217,9 @@ async function terminatePortHolder(holder: PortHolder): Promise<void> {
 			process.kill(holder.pid, 0);
 		} catch (error) {
 			if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
-			throw new Error(`Failed to inspect ${holder.image} (PID ${holder.pid})`, { cause: error });
+			throw new Error(__ompTranslate("Failed to inspect {0} (PID {1})", `${holder.image}`, `${holder.pid}`), {
+				cause: error,
+			});
 		}
 	}
 
@@ -222,7 +227,9 @@ async function terminatePortHolder(holder: PortHolder): Promise<void> {
 		process.kill(holder.pid, "SIGKILL");
 	} catch (error) {
 		if (error instanceof Error && "code" in error && error.code === "ESRCH") return;
-		throw new Error(`Failed to kill ${holder.image} (PID ${holder.pid})`, { cause: error });
+		throw new Error(__ompTranslate("Failed to kill {0} (PID {1})", `${holder.image}`, `${holder.pid}`), {
+			cause: error,
+		});
 	}
 	await Bun.sleep(PROCESS_EXIT_POLL_MS);
 }
@@ -230,10 +237,20 @@ async function terminatePortHolder(holder: PortHolder): Promise<void> {
 async function reclaimStatsPort(port: number, hasDashboardIdentity = false): Promise<"retry"> {
 	const holder = await findPortHolder(port);
 	if (!holder) {
-		throw new Error(`Port ${port} is in use, but the listening process could not be identified.`);
+		throw new Error(
+			__ompTranslate("Port {0} is in use, but the listening process could not be identified.", `${port}`),
+		);
 	}
 	if (holder.pid === process.pid) {
-		throw new Error(`Port ${port} is held by the current process (${holder.image}, PID ${holder.pid}).`);
+		throw new Error(
+			((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+				__ompTranslate(
+					"Port {2} is held by the current process ({0}, PID {1}).",
+					__ompTranslateValue1,
+					__ompTranslateValue2,
+					__ompTranslateValue0,
+				))(`${port}`, `${holder.image}`, `${holder.pid}`),
+		);
 	}
 
 	const normalizedImage = holder.image
@@ -249,7 +266,13 @@ async function reclaimStatsPort(port: number, hasDashboardIdentity = false): Pro
 		/(?:^|\/)omp(?:\.exe)?["'\s]+stats(?:["'\s]|$)/.test(normalizedCommand);
 	if (!STATS_RUNTIME_IMAGES[normalizedImage] || (!hasStatsIdentity && !hasDashboardIdentity)) {
 		throw new Error(
-			`Port ${port} is in use by ${holder.image} (PID ${holder.pid}), which is not identifiable as an omp stats dashboard; refusing to stop it.`,
+			((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+				__ompTranslate(
+					"Port {2} is in use by {0} (PID {1}), which is not identifiable as an omp stats dashboard; refusing to stop it.",
+					__ompTranslateValue1,
+					__ompTranslateValue2,
+					__ompTranslateValue0,
+				))(`${port}`, `${holder.image}`, `${holder.pid}`),
 		);
 	}
 

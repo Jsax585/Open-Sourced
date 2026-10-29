@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Menu } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { rangeMeta, TIME_RANGES } from "../data/range";
@@ -51,7 +52,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					data-variant="ghost"
 					data-icon="true"
 					onClick={() => setMenuOpen(true)}
-					aria-label="Open navigation"
+					aria-label={__ompTranslate("Open navigation")}
 				>
 					<Menu size={16} />
 				</button>
@@ -75,7 +76,12 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 					<span className="topbar-hide-narrow">
 						<LiveChip />
 					</span>
-					<Segmented options={RANGE_OPTIONS} value={range} onChange={onRangeChange} aria-label="Time range" />
+					<Segmented
+						options={RANGE_OPTIONS}
+						value={range}
+						onChange={onRangeChange}
+						aria-label={__ompTranslate("Time range")}
+					/>
 					<ThemeToggle />
 				</div>
 				{progress !== undefined && (
@@ -90,7 +96,7 @@ export function Shell({ section, onSectionChange, range, onRangeChange, children
 			</header>
 
 			{menuOpen && <div className="drawer-scrim" onClick={() => setMenuOpen(false)} role="presentation" />}
-			<nav className="sidebar" data-open={menuOpen} aria-label="Pages">
+			<nav className="sidebar" data-open={menuOpen} aria-label={__ompTranslate("Pages")}>
 				{NAV.map(group => (
 					<div key={group.heading} className="nav-group">
 						<div className="nav-heading">{group.heading}</div>

@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
@@ -940,7 +941,7 @@ export class InputController {
 		// what the click displayed.
 		const nextId = pickRecentFocusableAgentId(scoped, this.ctx.focusedAgentId);
 		if (nextId === undefined) {
-			this.ctx.showStatus("That subagent is gone — open the hub for live agents");
+			this.ctx.showStatus(__ompTranslate("That subagent is gone — open the hub for live agents"));
 			return;
 		}
 		this.#focusResolvedAgent(nextId);
@@ -1010,7 +1011,9 @@ export class InputController {
 				this.ctx.ui.requestRender();
 			},
 			pasteImage: image =>
-				this.#pasteImageIntoFocus(sink => sink.attach(image, `Unsupported pasted image format: ${image.mimeType}`)),
+				this.#pasteImageIntoFocus(sink =>
+					sink.attach(image, __ompTranslate("Unsupported pasted image format: {0}", `${image.mimeType}`)),
+				),
 			showStatus: message => this.ctx.showStatus(message),
 		});
 		this.ctx.ui.addInputListener(data => (this.#enhancedPaste?.handleInput(data) ? { consume: true } : undefined));
@@ -1160,7 +1163,11 @@ export class InputController {
 				this.#armedBareCommand = { text, sessionId: this.ctx.sessionManager.getSessionId() };
 				this.ctx.editor.setText(text);
 				this.ctx.showStatus(
-					`Press Enter again to run ${bareSlashCommand.command}; add a leading space to send "${text}" as a message`,
+					__ompTranslate(
+						'Press Enter again to run {0}; add a leading space to send "{1}" as a message',
+						`${bareSlashCommand.command}`,
+						`${text}`,
+					),
 				);
 				return;
 			}
@@ -1204,18 +1211,20 @@ export class InputController {
 			// executeBuiltinSlashCommand, which already consumed allowed ones).
 			if (this.ctx.collabGuest) {
 				if (text.startsWith("/")) {
-					this.ctx.showStatus(`${text.split(/\s+/, 1)[0]} is host-only during a collab session`);
+					this.ctx.showStatus(
+						__ompTranslate("{0} is host-only during a collab session", `${text.split(/\s+/, 1)[0]}`),
+					);
 					this.ctx.editor.setText("");
 					return;
 				}
 				if (text.startsWith("!") || parsePythonCommandInput(text)) {
-					this.ctx.showStatus("Local execution is host-only during a collab session");
+					this.ctx.showStatus(__ompTranslate("Local execution is host-only during a collab session"));
 					this.ctx.editor.setText("");
 					return;
 				}
 				if (this.ctx.collabGuest.readOnly) {
 					// Keep the typed text: the prompt was not consumed.
-					this.ctx.showStatus("This collab link is read-only — prompting is disabled");
+					this.ctx.showStatus(__ompTranslate("This collab link is read-only — prompting is disabled"));
 					return;
 				}
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
@@ -1271,7 +1280,10 @@ export class InputController {
 				if (command) {
 					if (this.ctx.session.isBashRunning) {
 						this.ctx.showWarning(
-							`A bash command is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+							__ompTranslate(
+								"A bash command is already running. Press {0} to cancel it first.",
+								`${appKey(this.ctx.keybindings, "app.interrupt")}`,
+							),
 						);
 						this.ctx.editor.setText(text);
 						return;
@@ -1292,7 +1304,10 @@ export class InputController {
 				if (code) {
 					if (this.ctx.session.isEvalRunning) {
 						this.ctx.showWarning(
-							`A Python execution is already running. Press ${appKey(this.ctx.keybindings, "app.interrupt")} to cancel it first.`,
+							__ompTranslate(
+								"A Python execution is already running. Press {0} to cancel it first.",
+								`${appKey(this.ctx.keybindings, "app.interrupt")}`,
+							),
 						);
 						this.ctx.editor.setText(text);
 						return;
@@ -1638,7 +1653,11 @@ export class InputController {
 		}
 		if (text && (text.startsWith("/") || text.startsWith("!") || parsePythonCommandInput(text))) {
 			this.ctx.showStatus(
-				`Only ${FOCUSED_VIEW_COMMAND_LIST} run here; other commands run in the main session — press ${formatDoubleTap("left")} to return first`,
+				__ompTranslate(
+					"Only {0} run here; other commands run in the main session — press {1} to return first",
+					`${FOCUSED_VIEW_COMMAND_LIST}`,
+					`${formatDoubleTap("left")}`,
+				),
 			);
 			return; // editor text not cleared: Editor does not auto-clear on submit
 		}
@@ -1732,7 +1751,10 @@ export class InputController {
 		// shape for SIGSTOP). No-op on platforms that cannot suspend.
 		if (process.platform === "win32") {
 			this.ctx.showStatus(
-				`Suspend (${appKey(this.ctx.keybindings, "app.suspend")}) is not supported on this platform`,
+				__ompTranslate(
+					"Suspend ({0}) is not supported on this platform",
+					`${appKey(this.ctx.keybindings, "app.suspend")}`,
+				),
 			);
 			return;
 		}
@@ -1801,14 +1823,14 @@ export class InputController {
 			this.ctx.ui.start();
 			this.ctx.ui.requestRender(true);
 			const reason = err instanceof Error ? err.message : String(err);
-			this.ctx.showError(`Failed to suspend: ${reason}`);
+			this.ctx.showError(__ompTranslate("Failed to suspend: {0}", `${reason}`));
 		}
 	}
 
 	handleDequeue(): void {
 		const popped = this.#popLastQueuedMessage();
 		if (!popped) {
-			this.ctx.showStatus("No queued messages to restore");
+			this.ctx.showStatus(__ompTranslate("No queued messages to restore"));
 			return;
 		}
 		// Drop only the popped message's local-submission signature; the messages
@@ -1816,7 +1838,7 @@ export class InputController {
 		// as local and does not blank the editor the dequeue just restored to.
 		this.ctx.locallySubmittedUserSignatures.delete(`${popped.text}\u0000${popped.images?.length ?? 0}`);
 		this.#restoreEntriesToEditor([popped]);
-		this.ctx.showStatus("Restored last queued message to editor");
+		this.ctx.showStatus(__ompTranslate("Restored last queued message to editor"));
 	}
 
 	/**
@@ -1894,14 +1916,14 @@ export class InputController {
 
 	async handleRetry(): Promise<void> {
 		if (this.ctx.collabGuest) {
-			this.ctx.showStatus("/retry is host-only during a collab session");
+			this.ctx.showStatus(__ompTranslate("/retry is host-only during a collab session"));
 			return;
 		}
 		const didRetry = await this.ctx.viewSession.retry();
 		if (didRetry) {
 			this.ctx.editor.clearDraft();
 		} else {
-			this.ctx.showStatus("Nothing to retry");
+			this.ctx.showStatus(__ompTranslate("Nothing to retry"));
 		}
 	}
 
@@ -1937,7 +1959,7 @@ export class InputController {
 		// Queue shorthand reaches this helper before the normal guest input gate.
 		// Like /queue, it must not submit to the guest's local session.
 		if (this.ctx.collabGuest) {
-			this.ctx.showStatus("/queue is host-only during a collab session");
+			this.ctx.showStatus(__ompTranslate("/queue is host-only during a collab session"));
 			this.ctx.editor.setText(options.detachedText ?? options.historyText ?? text);
 			return;
 		}
@@ -1945,7 +1967,7 @@ export class InputController {
 		const splitMessages = splitQueuedMessages(text);
 		if (splitMessages.length === 0 && !options.images?.length) {
 			if (options.detachedText === undefined) this.ctx.editor.clearDraft();
-			this.ctx.showWarning("Usage: /queue <message> (or start a prompt with -> / =>)");
+			this.ctx.showWarning(__ompTranslate("Usage: /queue <message> (or start a prompt with -> / =>)"));
 			return;
 		}
 
@@ -1970,8 +1992,8 @@ export class InputController {
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.showStatus(
 				messages.length === 1
-					? "Queued message for after compaction"
-					: `Queued ${messages.length} messages for after compaction`,
+					? __ompTranslate("Queued message for after compaction")
+					: __ompTranslate("Queued {0} messages for after compaction", `${messages.length}`),
 			);
 			this.ctx.ui.requestRender();
 			return;
@@ -2041,11 +2063,11 @@ export class InputController {
 			this.ctx.showStatus(
 				startImmediately
 					? queuedCount === 1
-						? "Sent queued message"
-						: `Sent first message; queued ${queuedCount - 1} for later yields`
+						? __ompTranslate("Sent queued message")
+						: __ompTranslate("Sent first message; queued {0} for later yields", `${queuedCount - 1}`)
 					: queuedCount === 1
-						? "Queued message for when the agent yields"
-						: `Queued ${queuedCount} messages for when the agent yields`,
+						? __ompTranslate("Queued message for when the agent yields")
+						: __ompTranslate("Queued {0} messages for when the agent yields", `${queuedCount}`),
 			);
 		}
 		this.ctx.ui.requestRender();
@@ -2368,7 +2390,7 @@ export class InputController {
 					getSessionId: () => this.ctx.sessionManager.getSessionId(),
 				},
 			});
-			if (filePath === undefined) throw new Error(`No local file backs ${url}`);
+			if (filePath === undefined) throw new Error(__ompTranslate("No local file backs {0}", `${url}`));
 			await Bun.write(filePath, bytes);
 			return url;
 		} catch (error) {
@@ -2405,7 +2427,7 @@ export class InputController {
 			const sheet = await buildVideoContactSheetPng(absolutePath, meta);
 			const preview = await this.#normalizePastedImage(
 				{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
-				"Unsupported pasted video preview format",
+				__ompTranslate("Unsupported pasted video preview format"),
 			);
 			if (preview) await this.#insertPendingImage(preview, { path: absolutePath, kind: "video" });
 		} catch (error) {
@@ -2430,7 +2452,7 @@ export class InputController {
 			return;
 		}
 		if (!focused.acceptsImages) {
-			this.ctx.showStatus("Image paste is not supported in this prompt");
+			this.ctx.showStatus(__ompTranslate("Image paste is not supported in this prompt"));
 			return;
 		}
 		const promptPaste = this.#beginPromptImagePaste(focused);
@@ -2484,7 +2506,7 @@ export class InputController {
 			if (!image) return false;
 			await sink.attach(
 				{ type: "image", data: image.data.toBase64(), mimeType: image.mimeType },
-				`Unsupported clipboard image format: ${image.mimeType}`,
+				__ompTranslate("Unsupported clipboard image format: {0}", `${image.mimeType}`),
 			);
 			return true;
 		} catch {
@@ -2505,7 +2527,7 @@ export class InputController {
 				}
 				// Image-only prompts keep the path as text, like other unattachable pastes.
 				sink.pasteText(path);
-				this.ctx.showStatus("Video paste is not supported in this prompt");
+				this.ctx.showStatus(__ompTranslate("Video paste is not supported in this prompt"));
 				return;
 			}
 			const image = await loadImageInput({
@@ -2518,12 +2540,12 @@ export class InputController {
 				// locked transient screenshot file). Prefer the clipboard bytes.
 				if (await this.#tryPasteClipboardImage(sink)) return;
 				sink.pasteText(path);
-				this.ctx.showStatus("Pasted path is not a supported image");
+				this.ctx.showStatus(__ompTranslate("Pasted path is not a supported image"));
 				return;
 			}
 			await sink.attach(
 				{ type: "image", data: image.data, mimeType: image.mimeType },
-				`Unsupported pasted image format: ${image.mimeType}`,
+				__ompTranslate("Unsupported pasted image format: {0}", `${image.mimeType}`),
 				image.resolvedPath,
 			);
 		} catch (error) {
@@ -2555,14 +2577,17 @@ export class InputController {
 				);
 				this.ctx.showStatus(
 					overSsh
-						? `Image not found at ${displayPath}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.`
-						: `Image not found at ${displayPath}`,
+						? __ompTranslate(
+								"Image not found at {0}. Over SSH this path is local to your terminal — paste the image directly (clipboard image-paste shortcut) to send its bytes.",
+								`${displayPath}`,
+							)
+						: __ompTranslate("Image not found at {0}", `${displayPath}`),
 				);
 				return;
 			}
 			if (await this.#tryPasteClipboardImage(sink)) return;
 			sink.pasteText(path);
-			this.ctx.showStatus("Failed to read pasted image path");
+			this.ctx.showStatus(__ompTranslate("Failed to read pasted image path"));
 		}
 	}
 
@@ -2633,7 +2658,7 @@ export class InputController {
 			const image = await this.clipboard.readImage();
 			if (image) {
 				if (textOnlyPrompt) {
-					this.ctx.showStatus("Image paste is not supported in this prompt");
+					this.ctx.showStatus(__ompTranslate("Image paste is not supported in this prompt"));
 					return false;
 				}
 				return await sink.attach(
@@ -2642,7 +2667,7 @@ export class InputController {
 						data: image.data.toBase64(),
 						mimeType: image.mimeType,
 					},
-					`Unsupported clipboard image format: ${image.mimeType}`,
+					__ompTranslate("Unsupported clipboard image format: {0}", `${image.mimeType}`),
 				);
 			}
 			// Smart paste (#1628): no image on the clipboard — fall back to
@@ -2652,7 +2677,7 @@ export class InputController {
 			// this keypress, so a miss here must not dead-end.
 			const text = await textPromise;
 			if (!text) {
-				this.ctx.showStatus("Clipboard is empty");
+				this.ctx.showStatus(__ompTranslate("Clipboard is empty"));
 				return false;
 			}
 			// #3506: when the clipboard text is an explicit image file path,
@@ -2680,7 +2705,7 @@ export class InputController {
 			this.ctx.ui.requestRender();
 			return true;
 		} catch {
-			this.ctx.showStatus("Failed to read clipboard");
+			this.ctx.showStatus(__ompTranslate("Failed to read clipboard"));
 			return false;
 		} finally {
 			promptPaste?.finish();
@@ -2699,10 +2724,10 @@ export class InputController {
 				this.ctx.editor.insertText(text);
 				this.ctx.ui.requestRender();
 			} else {
-				this.ctx.showStatus("No text in clipboard to paste raw");
+				this.ctx.showStatus(__ompTranslate("No text in clipboard to paste raw"));
 			}
 		} catch {
-			this.ctx.showStatus("Failed to paste raw text from clipboard");
+			this.ctx.showStatus(__ompTranslate("Failed to paste raw text from clipboard"));
 		}
 	}
 
@@ -2733,20 +2758,23 @@ export class InputController {
 	 * inline paste marker, so the pasted content is never lost.
 	 */
 	async presentLargePasteMenu(text: string, lineCount: number): Promise<void> {
-		const WRAPPED_BLOCK = "Attach as a wrapped block";
-		const LOCAL_FILE = "Attach as local file";
-		const INLINE = "Paste inline";
+		const WRAPPED_BLOCK = __ompTranslate("Attach as a wrapped block");
+		const LOCAL_FILE = __ompTranslate("Attach as local file");
+		const INLINE = __ompTranslate("Paste inline");
 
 		let choice: string | undefined;
 		try {
 			choice = await this.ctx.showHookSelector(
-				`Pasted ${lineCount} lines`,
+				__ompTranslate("Pasted {0} lines", `${lineCount}`),
 				[
-					{ label: WRAPPED_BLOCK, description: "Wrap the text in <attachment> tags, collapsed to a marker" },
-					{ label: LOCAL_FILE, description: "Save the text to a local://paste file" },
-					{ label: INLINE, description: "Collapse the text to an inline paste marker" },
+					{
+						label: WRAPPED_BLOCK,
+						description: __ompTranslate("Wrap the text in <attachment> tags, collapsed to a marker"),
+					},
+					{ label: LOCAL_FILE, description: __ompTranslate("Save the text to a local://paste file") },
+					{ label: INLINE, description: __ompTranslate("Collapse the text to an inline paste marker") },
 				],
-				{ helpText: `${editorKey("tui.select.cancel")} to paste inline` },
+				{ helpText: __ompTranslate("{0} to paste inline", `${editorKey("tui.select.cancel")}`) },
 			);
 		} catch (error) {
 			logger.warn("large-paste menu failed", { error: error instanceof Error ? error.message : String(error) });
@@ -2794,13 +2822,13 @@ export class InputController {
 			} while (await Bun.file(filePath).exists());
 			await Bun.write(filePath, text);
 			this.ctx.editor.insertText(`local://${name} `);
-			this.ctx.showStatus(`Saved ${lineCount} pasted lines to local://${name}`);
+			this.ctx.showStatus(__ompTranslate("Saved {0} pasted lines to local://{1}", `${lineCount}`, `${name}`));
 		} catch (error) {
 			logger.warn("failed to save large paste to file", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			this.ctx.editor.insertTextAttachment(text);
-			this.ctx.showError("Failed to save paste to a file — attached as a text chip instead");
+			this.ctx.showError(__ompTranslate("Failed to save paste to a file — attached as a text chip instead"));
 		}
 	}
 
@@ -2860,16 +2888,16 @@ export class InputController {
 		const { line } = this.ctx.editor.getCursor();
 		const text = this.ctx.editor.getLines()[line] || "";
 		if (!text) {
-			this.ctx.showStatus("Nothing to copy");
+			this.ctx.showStatus(__ompTranslate("Nothing to copy"));
 			return;
 		}
 		try {
 			copyToClipboard(text);
 			const sanitized = sanitizeText(text);
 			const preview = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
-			this.ctx.showStatus(`Copied line: ${preview}`);
+			this.ctx.showStatus(__ompTranslate("Copied line: {0}", `${preview}`));
 		} catch {
-			this.ctx.showWarning("Failed to copy to clipboard");
+			this.ctx.showWarning(__ompTranslate("Failed to copy to clipboard"));
 		}
 	}
 
@@ -2877,23 +2905,23 @@ export class InputController {
 	handleCopyPrompt(): void {
 		const text = this.ctx.editor.getText();
 		if (!text) {
-			this.ctx.showStatus("Nothing to copy");
+			this.ctx.showStatus(__ompTranslate("Nothing to copy"));
 			return;
 		}
 		try {
 			copyToClipboard(text);
 			const sanitized = sanitizeText(text);
 			const preview = sanitized.length > 30 ? `${sanitized.slice(0, 30)}...` : sanitized;
-			this.ctx.showStatus(`Copied: ${preview}`);
+			this.ctx.showStatus(__ompTranslate("Copied: {0}", `${preview}`));
 		} catch {
-			this.ctx.showWarning("Failed to copy to clipboard");
+			this.ctx.showWarning(__ompTranslate("Failed to copy to clipboard"));
 		}
 	}
 
 	cycleThinkingLevel(): void {
 		const newLevel = this.ctx.viewSession.cycleThinkingLevel();
 		if (newLevel === undefined) {
-			this.ctx.showStatus("Current model does not support thinking");
+			this.ctx.showStatus(__ompTranslate("Current model does not support thinking"));
 		} else {
 			this.ctx.statusLine.invalidate();
 			this.ctx.updateEditorBorderColor();
@@ -2905,7 +2933,7 @@ export class InputController {
 			const cycleOrder = cfgCycleOrder.get(settings);
 			const result = await this.ctx.viewSession.cycleRoleModels(cycleOrder, direction);
 			if (!result) {
-				this.ctx.showStatus("Only one role model available");
+				this.ctx.showStatus(__ompTranslate("Only one role model available"));
 				return;
 			}
 
@@ -2928,12 +2956,19 @@ export class InputController {
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.hideToolActivity) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
-			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
-			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
+			const visibilityHint = visibilityKey ? __ompTranslate("{0} or /settings", `${visibilityKey}`) : "/settings";
+			this.ctx.showStatus(
+				__ompTranslate("Tool activity is hidden — show it with {0} before expanding", `${visibilityHint}`),
+			);
 			return;
 		}
 		this.setToolsExpanded(!this.ctx.toolOutputExpanded);
-		this.ctx.showStatus(`Tool output expansion: ${this.ctx.toolOutputExpanded ? "enabled" : "disabled"}`);
+		this.ctx.showStatus(
+			__ompTranslate(
+				"Tool output expansion: {0}",
+				`${this.ctx.toolOutputExpanded ? __ompTranslate("enabled") : __ompTranslate("disabled")}`,
+			),
+		);
 	}
 
 	toggleToolActivityVisibility(): void {
@@ -2959,7 +2994,12 @@ export class InputController {
 		if (this.ctx.hideToolActivity) this.ctx.ui.clearInlineImages();
 		// A viewport-only repaint leaves tool rows already retired to terminal history unchanged.
 		this.ctx.ui.resetDisplay();
-		this.ctx.showStatus(`Tool activity: ${this.ctx.hideToolActivity ? "hidden" : "visible"}`);
+		this.ctx.showStatus(
+			__ompTranslate(
+				"Tool activity: {0}",
+				`${this.ctx.hideToolActivity ? __ompTranslate("hidden") : __ompTranslate("visible")}`,
+			),
+		);
 	}
 
 	setToolsExpanded(expanded: boolean): void {
@@ -2983,7 +3023,7 @@ export class InputController {
 		const thinkingOff =
 			((this.ctx.viewSession ?? this.ctx.session)?.thinkingLevel ?? ThinkingLevel.Off) === ThinkingLevel.Off;
 		if (thinkingOff && !this.ctx.hasDisplayableThinkingContent) {
-			this.ctx.showStatus("Thinking is off — enable thinking to show blocks");
+			this.ctx.showStatus(__ompTranslate("Thinking is off — enable thinking to show blocks"));
 			return;
 		}
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
@@ -3009,13 +3049,18 @@ export class InputController {
 		this.ctx.chatContainer.resetStableEmission();
 		this.ctx.ui.resetDisplay();
 
-		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
+		this.ctx.showStatus(
+			__ompTranslate(
+				"Thinking blocks: {0}",
+				`${this.ctx.hideThinkingBlock ? __ompTranslate("hidden") : __ompTranslate("visible")}`,
+			),
+		);
 	}
 
 	async openExternalEditor(): Promise<void> {
 		const editorCmd = getEditorCommand();
 		if (!editorCmd) {
-			this.ctx.showWarning("No editor configured. Set $VISUAL or $EDITOR environment variable.");
+			this.ctx.showWarning(__ompTranslate("No editor configured. Set $VISUAL or $EDITOR environment variable."));
 			return;
 		}
 
@@ -3029,7 +3074,10 @@ export class InputController {
 			}
 		} catch (error) {
 			this.ctx.showWarning(
-				`Failed to open external editor: ${error instanceof Error ? error.message : String(error)}`,
+				__ompTranslate(
+					"Failed to open external editor: {0}",
+					`${error instanceof Error ? error.message : String(error)}`,
+				),
 			);
 		} finally {
 			this.ctx.ui.start();

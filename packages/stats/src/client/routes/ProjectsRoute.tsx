@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { useDeferredValue, useMemo, useState } from "react";
 import { getFolderStats } from "../api";
 import { BarList } from "../charts";
@@ -68,7 +69,11 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 	);
 	const topEmpty = (
 		<EmptyState
-			title={view.rows.length === 0 ? "No project folders in this range" : "Only temporary folders in this range"}
+			title={
+				view.rows.length === 0
+					? __ompTranslate("No project folders in this range")
+					: __ompTranslate("Only temporary folders in this range")
+			}
 		/>
 	);
 	// Meter scales follow the whole range so a bar's length does not change while filtering.
@@ -76,38 +81,50 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 
 	return (
 		<div className="page">
-			<PageHeader title="Projects" description={`Usage by session folder in ${meta.windowLabel}.`} />
+			<PageHeader
+				title={__ompTranslate("Projects")}
+				description={__ompTranslate("Usage by session folder in {0}.", `${meta.windowLabel}`)}
+			/>
 
 			<QueryView query={folders} skeleton={<ChartSkeleton height={96} />}>
 				{() => (
 					<div data-stale={folders.stale}>
 						<StatGrid min={180}>
 							<Stat
-								label="Folders"
+								label={__ompTranslate("Folders")}
 								value={formatInteger(view.rows.length)}
-								hint={view.temporaryCount > 0 ? `${formatInteger(view.temporaryCount)} temporary` : undefined}
-							/>
-							<Stat
-								label="Requests"
-								value={formatInteger(view.totalRequests)}
-								hint={`${formatInteger(view.failedRequests)} failed`}
-							/>
-							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
-								value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
 								hint={
-									view.unpricedRequests > 0 ? `${formatInteger(view.unpricedRequests)} unpriced` : undefined
+									view.temporaryCount > 0
+										? __ompTranslate("{0} temporary", `${formatInteger(view.temporaryCount)}`)
+										: undefined
 								}
 							/>
 							<Stat
-								label="Conversation tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={__ompTranslate("Requests")}
+								value={formatInteger(view.totalRequests)}
+								hint={__ompTranslate(
+									"{0} failed\u0004stats.project.failed",
+									`${formatInteger(view.failedRequests)}`,
+								)}
+							/>
+							<Stat
+								label={__ompTranslate("API-equivalent cost")}
+								title={__ompTranslate("What this usage would cost at public API rates")}
+								value={formatEstimatedCost(view.totalCost, view.unpricedRequests)}
+								hint={
+									view.unpricedRequests > 0
+										? __ompTranslate("{0} unpriced", `${formatInteger(view.unpricedRequests)}`)
+										: undefined
+								}
+							/>
+							<Stat
+								label={__ompTranslate("Conversation tokens")}
+								title={__ompTranslate("Uncached input + cache reads + cache writes + output")}
 								value={formatCompact(view.conversationTokens)}
 							/>
 							<Stat
-								label="Cache rate"
-								title="Cache reads ÷ (uncached input + cache reads), across every folder"
+								label={__ompTranslate("Cache rate")}
+								title={__ompTranslate("Cache reads ÷ (uncached input + cache reads), across every folder")}
 								value={formatPercent(view.cacheRate)}
 							/>
 						</StatGrid>
@@ -116,7 +133,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 			</QueryView>
 
 			<div className="grid grid-2">
-				<Card index={1} title="Top by cost" description="Share of API-equivalent cost" stale={folders.stale}>
+				<Card
+					index={1}
+					title={__ompTranslate("Top by cost")}
+					description={__ompTranslate("Share of API-equivalent cost")}
+					stale={folders.stale}
+				>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -137,7 +159,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 						)}
 					</QueryView>
 				</Card>
-				<Card index={2} title="Top by requests" description="Share of all requests" stale={folders.stale}>
+				<Card
+					index={2}
+					title={__ompTranslate("Top by requests")}
+					description={__ompTranslate("Share of all requests")}
+					stale={folders.stale}
+				>
 					<QueryView
 						query={folders}
 						skeleton={<ChartSkeleton height={236} />}
@@ -161,18 +188,22 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 
 			<Card
 				index={3}
-				title="Folders"
+				title={__ompTranslate("Folders")}
 				description={
 					folders.data
 						? matching.length === view.rows.length
-							? `${formatInteger(view.rows.length)} folders`
-							: `${formatInteger(matching.length)} of ${formatInteger(view.rows.length)} folders`
+							? __ompTranslate("{0} folders", `${formatInteger(view.rows.length)}`)
+							: ((__ompTranslateValue0, __ompTranslateValue1) =>
+									__ompTranslate("{1} of {0} folders", __ompTranslateValue1, __ompTranslateValue0))(
+									`${formatInteger(matching.length)}`,
+									`${formatInteger(view.rows.length)}`,
+								)
 						: undefined
 				}
 				actions={
 					<>
 						{view.temporaryCount > 0 && (
-							<label className="check" title="Session folders under /tmp or /var/folders">
+							<label className="check" title={__ompTranslate("Session folders under /tmp or /var/folders")}>
 								<input
 									type="checkbox"
 									checked={hideTemporary}
@@ -181,7 +212,12 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 								Hide temporary ({formatInteger(view.temporaryCount)})
 							</label>
 						)}
-						<SearchInput value={search} onChange={setSearch} placeholder="Filter folders…" width={240} />
+						<SearchInput
+							value={search}
+							onChange={setSearch}
+							placeholder={__ompTranslate("Filter folders…")}
+							width={240}
+						/>
 					</>
 				}
 				flush
@@ -198,12 +234,16 @@ export function ProjectsRoute({ active, range }: ProjectsRouteProps) {
 							dense
 							empty={
 								<EmptyState
-									title={view.rows.length === 0 ? "No project folders in this range" : "No folders match"}
+									title={
+										view.rows.length === 0
+											? __ompTranslate("No project folders in this range")
+											: __ompTranslate("No folders match")
+									}
 									hint={
 										view.rows.length === 0
-											? "Try a longer range."
+											? __ompTranslate("Try a longer range.")
 											: hideTemporary && view.temporaryCount > 0
-												? "Temporary folders are hidden."
+												? __ompTranslate("Temporary folders are hidden.")
 												: undefined
 									}
 								/>
@@ -220,34 +260,34 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 	return [
 		{
 			key: "folder",
-			header: "Folder",
+			header: __ompTranslate("Folder"),
 			sort: row => row.folder,
 			render: row => (
-				<span className="row projects-folder" title={row.folder || "(root)"}>
+				<span className="row projects-folder" title={row.folder || __ompTranslate("(root)")}>
 					<span className="mono truncate">{formatFolder(row.folder)}</span>
-					{row.temporary && <Badge>temp</Badge>}
+					{row.temporary && <Badge>{__ompTranslate("temp")}</Badge>}
 				</span>
 			),
 		},
 		{
 			key: "requests",
-			header: "Requests",
+			header: __ompTranslate("Requests"),
 			align: "right",
 			sort: row => row.totalRequests,
 			render: row => (
-				<span title={`${formatPercent(row.requestShare)} of all requests`}>
+				<span title={__ompTranslate("{0} of all requests", `${formatPercent(row.requestShare)}`)}>
 					<MeterCell value={row.totalRequests} max={maxRequests} display={formatInteger(row.totalRequests)} />
 				</span>
 			),
 		},
 		{
 			key: "cost",
-			header: "Cost",
-			title: "API-equivalent cost at public API rates",
+			header: __ompTranslate("Cost"),
+			title: __ompTranslate("API-equivalent cost at public API rates"),
 			align: "right",
 			sort: row => row.totalCost,
 			render: row => (
-				<span title={`${formatPercent(row.costShare)} of all cost`}>
+				<span title={__ompTranslate("{0} of all cost", `${formatPercent(row.costShare)}`)}>
 					<MeterCell
 						value={row.totalCost}
 						max={maxCost}
@@ -259,8 +299,8 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "tokens",
-			header: "Tokens",
-			title: "Uncached input + cache reads + cache writes + output",
+			header: __ompTranslate("Tokens"),
+			title: __ompTranslate("Uncached input + cache reads + cache writes + output"),
 			align: "right",
 			sort: row => row.conversationTokens,
 			render: row => (
@@ -271,16 +311,16 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "cacheRate",
-			header: "Cache rate",
-			title: "Cache reads ÷ (uncached input + cache reads)",
+			header: __ompTranslate("Cache rate"),
+			title: __ompTranslate("Cache reads ÷ (uncached input + cache reads)"),
 			align: "right",
 			sort: row => row.cacheRate,
 			render: row => <span className="num">{formatPercent(row.cacheRate)}</span>,
 		},
 		{
 			key: "cacheSavings",
-			header: "Cache savings",
-			title: "Prompt-input cost saved versus billing the same tokens uncached",
+			header: __ompTranslate("Cache savings"),
+			title: __ompTranslate("Prompt-input cost saved versus billing the same tokens uncached"),
 			align: "right",
 			sort: row => row.cacheSavings,
 			render: row => (
@@ -291,11 +331,13 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "errorRate",
-			header: "Errors",
+			header: __ompTranslate("Errors"),
 			align: "right",
 			sort: row => row.errorRate,
 			render: row => (
-				<span title={`${formatInteger(row.failedRequests)} failed`}>
+				<span
+					title={__ompTranslate("{0} failed\u0004stats.project.failed", `${formatInteger(row.failedRequests)}`)}
+				>
 					<Badge tone={row.failedRequests > 0 ? errorRateTone(row.errorRate) : "neutral"} mono>
 						{formatErrorRate(row.errorRate)}
 					</Badge>
@@ -304,14 +346,14 @@ function folderColumns(maxRequests: number, maxCost: number): Column<FolderRowVi
 		},
 		{
 			key: "duration",
-			header: "Avg duration",
+			header: __ompTranslate("Avg duration"),
 			align: "right",
 			sort: row => row.avgDuration ?? -1,
 			render: row => <span className="num">{formatDurationMs(row.avgDuration)}</span>,
 		},
 		{
 			key: "last",
-			header: "Last active",
+			header: __ompTranslate("Last active"),
 			align: "right",
 			sort: row => row.lastTimestamp,
 			render: row => <span className="dim">{formatRelativeTime(row.lastTimestamp)}</span>,
