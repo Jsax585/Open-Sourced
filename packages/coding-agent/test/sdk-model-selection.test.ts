@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effort, type FetchImpl } from "@oh-my-pi/pi-ai";
+import { type Api, Effort, type FetchImpl, type Model } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
@@ -832,7 +833,13 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		};
 	}
 
-	function registryWithKeys(keyedModelIds: readonly string[]) {
+	/**
+	 * `keyedModelIds` key a model; `pooledMissModelIds` make its lookup reject the
+	 * way a session restricted to an OAuth account pool
+	 * (`task.agentAccountPools`) does when no permitted account can serve, which
+	 * is a rejection rather than an `undefined` key.
+	 */
+	function registryWithKeys(keyedModelIds: readonly string[], pooledMissModelIds: readonly string[] = []) {
 		const parentModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!parentModel) {
 			throw new Error("Expected bundled anthropic parent model");
@@ -841,12 +848,18 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		authStoragesToClose.push(authStorage);
 		authStorage.keys.setRuntime(parentModel.provider, "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "unavailable-models.yml"));
+		// A bare id matches that id on any provider; `provider/id` matches one model.
+		const matches = (ids: readonly string[], requested: Model<Api>) =>
+			ids.includes(requested.id) || ids.includes(`${requested.provider}/${requested.id}`);
 		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async requested => {
+			if (matches(pooledMissModelIds, requested)) {
+				throw new AIError.MissingApiKeyError(
+					requested.provider,
+					`No API key for provider: ${requested.provider} (session is restricted to its OAuth account pool and none of those accounts is available)`,
+				);
+			}
 			if (requested.provider === parentModel.provider) return "test-key";
-			// A bare id keys that id on any provider; `provider/id` keys one model.
-			return keyedModelIds.includes(requested.id) || keyedModelIds.includes(`${requested.provider}/${requested.id}`)
-				? "runtime-key"
-				: undefined;
+			return matches(keyedModelIds, requested) ? "runtime-key" : undefined;
 		});
 		return { authStorage, modelRegistry, parentPattern: `${parentModel.provider}/${parentModel.id}` };
 	}
@@ -885,6 +898,64 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			// No retry fallback of the requested model is armed: the parent model is
 			// this session's primary, so a runtime hop away from it restores to it.
 			expect(session.servingModel?.isFallback).toBe(false);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("walks the chain when a pooled subagent model's key lookup is rejected", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys(
+			["runtime-fallback-model"],
+			["runtime-provider/runtime-model"],
+		);
+		const settings = Settings.isolated({
+			"retry.fallbackChains": { "runtime-provider/runtime-model": ["runtime-provider/runtime-fallback-model"] },
+		});
+
+		const { session, modelFallbackMessage } = await createAgentSession(
+			subagentSessionOptions(modelRegistry, authStorage, settings, "runtime-provider/runtime-model", parentPattern),
+		);
+
+		try {
+			expect(session.model?.id).toBe("runtime-fallback-model");
+			expect(modelFallbackMessage).toContain("runtime-provider/runtime-model");
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("refuses a pooled subagent model whose fallback chain is empty", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([], ["runtime-provider/runtime-model"]);
+		const settings = Settings.isolated({ "retry.fallbackChains": { "runtime-provider/runtime-model": [] } });
+
+		const message = await creationError(
+			createAgentSession(
+				subagentSessionOptions(
+					modelRegistry,
+					authStorage,
+					settings,
+					"runtime-provider/runtime-model",
+					parentPattern,
+				),
+			),
+		);
+
+		// The chain decides, so the refusal names it instead of surfacing the raw
+		// pooled key-lookup rejection.
+		expect(message).toContain('retry.fallbackChains["runtime-provider/runtime-model"] is empty');
+	});
+
+	test("keeps the requested subagent model when the parent-model fallback's key lookup is rejected", async () => {
+		const { authStorage, modelRegistry, parentPattern } = registryWithKeys([], ["claude-sonnet-4-5"]);
+		const settings = Settings.isolated();
+
+		const { session, modelFallbackMessage } = await createAgentSession(
+			subagentSessionOptions(modelRegistry, authStorage, settings, "runtime-provider/runtime-model", parentPattern),
+		);
+
+		try {
+			expect(`${session.model?.provider}/${session.model?.id}`).toBe("runtime-provider/runtime-model");
+			expect(modelFallbackMessage).toBeUndefined();
 		} finally {
 			await session.dispose();
 		}

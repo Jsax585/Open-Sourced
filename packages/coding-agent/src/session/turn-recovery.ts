@@ -25,7 +25,7 @@ import { resolveModelPolicy } from "@oh-my-pi/pi-catalog/compat/resolve";
 import { isFireworksFastModelId, toFireworksBaseModelId } from "@oh-my-pi/pi-catalog/fireworks-model-id";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { isUnexpectedSocketCloseMessage, logger, prompt, sleepLong } from "@oh-my-pi/pi-utils";
-import type { ModelRegistry } from "../config/model-registry";
+import { type ModelRegistry, probeModelApiKey } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveModelOverride } from "../config/model-resolver";
 
 import type { Settings } from "../config/settings";
@@ -2342,12 +2342,7 @@ export class TurnRecovery {
 				// A session restricted to an OAuth account pool throws for a provider
 				// none of its pooled accounts can serve; that candidate is unavailable,
 				// exactly like one without a credential.
-				let apiKey: string | undefined;
-				try {
-					apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
-				} catch (error) {
-					if (!(error instanceof AIError.MissingApiKeyError)) throw error;
-				}
+				const apiKey = await probeModelApiKey(this.#host.modelRegistry, candidate, this.#host.sessionId());
 				if (!apiKey) continue;
 				const previousEditMode = this.#host.resolveActiveEditMode();
 				const previousSystemPrompt = [...this.#host.agent.state.systemPrompt];
@@ -2540,7 +2535,9 @@ export class TurnRecovery {
 		// such models, so restoration does too.
 		const ceiling = this.#host.thinkingLevelCeiling();
 		if (ceiling !== undefined && !modelSupportsEffortCeiling(primaryModel, ceiling)) return false;
-		const apiKey = await this.#host.modelRegistry.getApiKey(primaryModel, this.#host.sessionId());
+		// Restoring is optional, so a primary the session's account pool cannot
+		// serve is simply not restorable; its rejection must not fail the prompt.
+		const apiKey = await probeModelApiKey(this.#host.modelRegistry, primaryModel, this.#host.sessionId());
 		if (!apiKey) return false;
 
 		const currentThinkingLevel = this.#host.configuredThinkingLevel();

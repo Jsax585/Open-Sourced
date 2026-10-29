@@ -65,7 +65,7 @@ import type { EffectiveExtensionRoots } from "./capability/types";
 import { type OAuthAccountPools, SessionAccountPoolScope } from "./config/account-pools";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
-import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
+import { isAuthenticated, kNoAuth, ModelRegistry, probeModelApiKey } from "./config/model-registry";
 import {
 	disabledProviderIds,
 	formatModelString,
@@ -3359,8 +3359,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// model to fall back to (a seance passes none), so its own chain still
 				// decides. The session id lets session-sticky OAuth accounts resolve
 				// (#5325): a false "no credentials" here now walks or refuses the chain.
+				// A pool-restricted session rejects instead of resolving nothing, and
+				// that is this model's unavailability, not a startup failure.
 				if (options.modelPatternAuthFallback || chainFallback) {
-					const primaryKey = await modelRegistry.getApiKey(primary.model, providerSessionId);
+					const primaryKey = await probeModelApiKey(modelRegistry, primary.model, providerSessionId);
 					if (primaryKey !== kNoAuth && !isAuthenticated(primaryKey)) {
 						const cause = "has no working credentials";
 						const replacement = chainFallback
@@ -3379,7 +3381,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 								matchPreferences,
 							);
 							if (fallback.model) {
-								const fallbackKey = await modelRegistry.getApiKey(fallback.model, providerSessionId);
+								const fallbackKey = await probeModelApiKey(modelRegistry, fallback.model, providerSessionId);
 								if (isAuthenticated(fallbackKey)) {
 									selectedModel = fallback.model;
 									selectedThinkingLevel = fallback.thinkingLevel;

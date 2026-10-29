@@ -31,6 +31,7 @@ import {
 	resolveConfiguredModelPatterns,
 	resolveExplicitModelRole,
 	resolveModelOverride,
+	type ModelOverrideAuthResolution,
 	resolveModelOverrideWithAuthFallback,
 } from "../config/model-resolver";
 import type { PromptTemplate } from "../config/prompt-templates";
@@ -42,7 +43,7 @@ import {
 	type ServiceTierInheritSettingValue,
 } from "../config/service-tier";
 import type { CompactionThresholdPair } from "../config/compaction-threshold";
-import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
+import { type OAuthAccountPools, SessionAccountPoolScope, validateAgentAccountPools } from "../config/account-pools";
 import { type OverlayLayers, Settings } from "../config/settings";
 
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -4543,15 +4544,35 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							modelRole ?? resolveExplicitModelRole(modelPatterns, subagentSettings),
 						)
 					: undefined;
-			const resolution = await awaitAbortable(
-				resolveModelOverrideWithAuthFallback(
-					modelPatterns,
-					options.parentActiveModelPattern,
-					modelRegistry,
-					settings,
-					id,
-				),
+			// The preflight decides whether the child's requested model can serve, so
+			// it must ask under the accounts the child may use. An exact
+			// `task.agentAccountPools` entry reaches the child's own session only in
+			// createAgentSession; against the parent's registry a pooled provider the
+			// parent happens to hold a key for would look available, dispatch would
+			// hand over a concrete model with no chain fallback, and the child's
+			// first prompt would fail its pooled key lookup instead of letting the
+			// model's `retry.fallbackChains` entry decide. Restricting the spawn's
+			// lookup id costs no extra probe: the same lookups resolve inside the
+			// pool.
+			const preflightPoolScope = options.oauthAccountPools
+				? new SessionAccountPoolScope(authStorage, options.oauthAccountPools, id)
+				: undefined;
+			// The lease lifts when the preflight's own lookups are done, not when
+			// this await returns: an abort resolves `awaitAbortable` while they are
+			// still in flight, and a lookup after `release()` would restrict the
+			// spawn id again under a lease no one holds, leaving it pooled for the
+			// life of the process.
+			const preflight = resolveModelOverrideWithAuthFallback(
+				modelPatterns,
+				options.parentActiveModelPattern,
+				preflightPoolScope?.registry(modelRegistry) ?? modelRegistry,
+				settings,
+				id,
 			);
+			if (preflightPoolScope) {
+				void preflight.catch(() => {}).finally(() => preflightPoolScope.release());
+			}
+			const resolution: ModelOverrideAuthResolution = await awaitAbortable(preflight);
 			// A requested model without working credentials is left to
 			// createAgentSession's deferred resolution, the one place that applies
 			// the model's retry.fallbackChains entry (an empty chain refuses the

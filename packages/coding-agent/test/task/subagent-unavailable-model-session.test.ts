@@ -72,12 +72,18 @@ afterEach(async () => {
  * model and leaves the request to session creation. `parent` is the parent's
  * model: keyed, on a provider keyless by design (a local server, which reports
  * `kNoAuth`), or absent, as for a prepared seance, which passes no parent.
+ *
+ * `declaredKey` says why the declared model cannot serve the child: its key
+ * resolves to nothing (`"none"`), or a working process-wide key exists but the
+ * child's `task.agentAccountPools` entry permits no account on that provider
+ * (`"pooled-out-of-reach"`), which rejects the child's lookup.
  */
 async function spawnWithoutCredentials(
 	fallbackChains: Record<string, string[]>,
 	listed: boolean,
 	parent: "keyed" | "keyless" | "absent" = "keyed",
-): Promise<{ result: SingleResult; parentCalls: number }> {
+	declaredKey: "none" | "pooled-out-of-reach" = "none",
+): Promise<{ result: SingleResult; parentCalls: number; spawnIdStillPooled: boolean }> {
 	// Under the isolated HOME, so project discovery stops at os.homedir().
 	const cwd = path.join(root, "home", "work");
 	const artifactsDir = path.join(root, "artifacts");
@@ -86,6 +92,8 @@ async function spawnWithoutCredentials(
 
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("mock", "test-key");
+	// A process-wide key the parent resolves; only the child's pool shuts it out.
+	if (declaredKey === "pooled-out-of-reach") authStorage.keys.setRuntime("mistral", "mistral-key");
 	const modelRegistry = new ModelRegistry(authStorage);
 	const parentModel = createMockModel({
 		handler: context =>
@@ -105,7 +113,7 @@ async function spawnWithoutCredentials(
 	vi.spyOn(modelRegistry, "getAll").mockImplementation(kind => [parentModel, ...catalogAll(kind)]);
 	const resolveKey = modelRegistry.getApiKey.bind(modelRegistry);
 	vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, ...rest) => {
-		if (model.provider === "mistral") return Promise.resolve(undefined);
+		if (model.provider === "mistral" && declaredKey === "none") return Promise.resolve(undefined);
 		if (parent === "keyless" && model.provider === parentModel.provider) return Promise.resolve(kNoAuth);
 		return resolveKey(model, ...rest);
 	});
@@ -117,6 +125,7 @@ async function spawnWithoutCredentials(
 			task: "report done",
 			index: 0,
 			id: "Unavailable",
+			oauthAccountPools: declaredKey === "pooled-out-of-reach" ? { mistral: [] } : undefined,
 			modelOverride: DECLARED,
 			parentActiveModelPattern: parent === "absent" ? undefined : `${parentModel.provider}/${parentModel.id}`,
 			authStorage,
@@ -133,7 +142,16 @@ async function spawnWithoutCredentials(
 			enableMCP: false,
 			enableIrc: false,
 		});
-		return { result, parentCalls: parentModel.calls.length };
+		return {
+			result,
+			parentCalls: parentModel.calls.length,
+			// A restriction the pre-flight left on the spawn id keeps rejecting that
+			// id's lookups; lifted, the process-wide key resolves again.
+			spawnIdStillPooled: await resolveKey(declared, "Unavailable").then(
+				() => false,
+				() => true,
+			),
+		};
 	} finally {
 		authStorage.close();
 	}
@@ -193,4 +211,36 @@ it("runs on the parent's model and says so when no chain key owns the declared m
 	expect(result.resolvedModel).toBe("mock/mock-model");
 	expect(result.resolvedModelIsFallback).toBe(true);
 	expect(result.resolvedModelFallbackReason).toContain(`Fallback: ${DECLARED} -> mock/mock-model`);
+}, 30_000);
+
+it("refuses the spawn under an empty own chain when only the child's account pool shuts the declared model out", async () => {
+	// The process-wide key works, so dispatch's pre-flight must ask under the
+	// child's pool; otherwise it hands over a concrete model with no chain
+	// fallback and the child's first prompt dies on its pooled key lookup.
+	const { result, parentCalls, spawnIdStillPooled } = await spawnWithoutCredentials(
+		{ [DECLARED]: [] },
+		true,
+		"keyed",
+		"pooled-out-of-reach",
+	);
+
+	expect(result.exitCode).not.toBe(0);
+	expect(result.error).toContain(`retry.fallbackChains["${DECLARED}"] is empty`);
+	expect(parentCalls).toBe(0);
+	// A restriction left on the spawn id would pool the next spawn that reuses it.
+	expect(spawnIdStillPooled).toBe(false);
+}, 30_000);
+
+it("serves from the declared model's own chain when only the child's account pool shuts it out", async () => {
+	const { result } = await spawnWithoutCredentials(
+		{ [DECLARED]: ["mock/mock-model"] },
+		true,
+		"keyed",
+		"pooled-out-of-reach",
+	);
+
+	expect(result.exitCode).toBe(0);
+	expect(result.resolvedModel).toBe("mock/mock-model");
+	expect(result.resolvedModelIsFallback).toBe(true);
+	expect(result.resolvedModelFallbackReason).toContain(`retry.fallbackChains["${DECLARED}"] chose the replacement`);
 }, 30_000);
