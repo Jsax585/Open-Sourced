@@ -153,27 +153,30 @@ export function endsInsideOpenFence(text: string): boolean {
 }
 
 /**
- * Offset of the settled prefix of the still-open fence that `text` ends in, or
- * 0 when it holds none.
- *
- * An open fence's body only ever appends: nothing a later chunk adds can
- * change a line that already ended. Those lines are therefore settled, and a
- * stream may publish them into native scrollback instead of leaving the whole
- * block in the mutable viewport until the closing fence finally arrives — a
- * long streamed code block would otherwise lose every row that left the screen
- * (#9780).
- *
- * The cut lands before the last complete line, not after it: a streamed chunk
- * usually ends on a "\n", and the publisher requires non-blank source past the
- * prefix it publishes, so cutting at the final "\n" would publish nothing on
- * exactly those frames. Once the closing fence has arrived, the retained line
- * is the one in front of it.
+ * A completed-line cut inside a fence, or 0 if none is safe to publish.
+ * Earlier unresolved math must stay live even when the fence body has
+ * finished lines: a later closer can reinterpret the entire prefix.
  */
-function settledFenceBodyEnd(text: string): number {
+function settledFenceBodyEnd(text: string, tokens: readonly Token[]): number {
+	// The cut keeps the last complete line live as well. A streamed chunk
+	// usually ends on a "\n", and the publisher requires non-blank source past
+	// the prefix it publishes — cutting at the final "\n" would leave nothing
+	// there on exactly those frames. When the closing fence has already
+	// arrived, the retained line is the one in front of it.
 	const lastBreak = text.lastIndexOf("\n");
 	if (lastBreak <= 0) return 0;
 	const cut = text.lastIndexOf("\n", lastBreak - 1) + 1;
-	return cut > 0 && fenceOpenAt(text, cut) ? cut : 0;
+	if (cut <= 0 || !fenceOpenAt(text, cut)) return 0;
+	// A later math closer can absorb the fence and everything before it.
+	// Reuse the settled-block guard on the actual lexer tokens, including
+	// openers in the unfrozen tail that #streamPrefixOpeners does not track.
+	let pos = 0;
+	for (const token of tokens) {
+		if (pos >= cut) break;
+		if (token.type !== "math" && mathBlockMayCloseAt(text, pos)) return 0;
+		pos += token.raw.length;
+	}
+	return cut;
 }
 
 /**
@@ -2570,33 +2573,19 @@ export class Markdown implements Component {
 
 	/**
 	 * Width-independent source prefix of the last render that no append can
-	 * change: up to a frozen Markdown block boundary, stopping in front of a
-	 * display-math opener whose block an append could still close, or, while a
-	 * list streams as the last block, up to its newest top-level item. Only
-	 * meaningful while streaming (transient render cache on); grows
+	 * change: a frozen block boundary, completed fence lines, or earlier list
+	 * items, without crossing a display-math opener a later append could close.
+	 * Only meaningful while streaming (transient render cache on); grows
 	 * monotonically under append-only `setText`.
 	 */
 	getLastRenderStableText(): string {
 		if (!this.#transientRenderCache) return "";
-		// An open fence has no "\n\n" boundary, so the block walk above settles
-		// nothing inside it. Its finished lines are settled all the same: no
-		// append can change a line that already ended. Publish them, or a long
-		// streamed code block (SQL, logs) stays unretirable in the mutable
-		// viewport and its top rows are dropped as it outgrows the screen.
 		const source = streamingMarkdownSource(this.#text);
 		let fence = this.#streamFenceSettledText;
 		if (fence !== undefined && !source.startsWith(fence)) {
-			// A non-append edit rewound the text below what was published. Drop
-			// the stored prefix as well: keeping it would fail this check on
-			// every later frame and leave the block unretirable for the rest of
-			// the stream.
+			// Also discard a rewind when no render ran (for example, blank text).
 			fence = undefined;
 			this.#streamFenceSettledText = undefined;
-		}
-		const body = settledFenceBodyEnd(source);
-		if (body > (fence?.length ?? 0)) {
-			fence = source.slice(0, body);
-			this.#streamFenceSettledText = fence;
 		}
 		let text = this.#streamSettledText ?? "";
 		const list = this.#streamListSettledText;
@@ -3214,6 +3203,15 @@ export class Markdown implements Component {
 		// Parse markdown to HTML-like tokens. While streaming, the block still
 		// being written renders its open link or math span as already closed.
 		const lexed = this.#lexTokens(normalizedText);
+		if (this.transientRenderCache) {
+			if (this.#streamFenceSettledText !== undefined && !normalizedText.startsWith(this.#streamFenceSettledText)) {
+				this.#streamFenceSettledText = undefined;
+			}
+			const end = settledFenceBodyEnd(normalizedText, lexed);
+			if (end > (this.#streamFenceSettledText?.length ?? 0)) {
+				this.#streamFenceSettledText = normalizedText.slice(0, end);
+			}
+		}
 		const tail = lexed.at(-1);
 		const speculated = this.transientRenderCache && tail ? speculateStreamingToken(tail) : undefined;
 		const tokens = speculated ? [...lexed.slice(0, -1), speculated] : lexed;
