@@ -3,12 +3,14 @@ import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockResponse, type MockResponseSource } from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { resolveThresholdTokens, shouldCompact } from "@oh-my-pi/pi-agent-core/compaction";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { EffectiveExtensionRoots } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -37,8 +39,12 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
+import { PerCallModelError } from "@oh-my-pi/pi-coding-agent/task/model-approval";
+import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
+import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { buildWakeRelayBody } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
@@ -158,6 +164,10 @@ async function createPersistedSession(
 		isolated?: boolean;
 		retryFallback?: RetryFallbackRole;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
+		perCallModel?: boolean;
+		resolvedModel?: string;
+		perCallModelIdentity?: string;
+		perCallThinkingLevel?: ConfiguredThinkingLevel | null;
 	},
 ): Promise<string> {
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
@@ -169,12 +179,15 @@ async function createPersistedSession(
 		tools: contract?.tools ?? ["read", "yield"],
 		restrictToolNames,
 		modelRole,
-		resolvedModel: modelRole ? "anthropic/claude-sonnet-4-5" : undefined,
+		resolvedModel: contract?.resolvedModel ?? (modelRole ? "anthropic/claude-sonnet-4-5" : undefined),
 		advisor,
 		readOnly: contract?.readOnly,
 		agent: contract?.agent,
 		isolated: contract?.isolated,
 		retryFallback: contract?.retryFallback,
+		perCallModel: contract?.perCallModel,
+		perCallModelIdentity: contract?.perCallModelIdentity,
+		perCallThinkingLevel: contract?.perCallThinkingLevel,
 		...(contract?.compactionThreshold !== undefined
 			? { compactionThreshold: contract.compactionThreshold }
 			: undefined),
@@ -230,6 +243,7 @@ function createFactory(cwd: string, eventBus?: EventBus, owner: ReviveOwnerOptio
 		get preparedExtensions() {
 			return owner.preparedExtensions;
 		},
+		getSessionAgents: () => [],
 	} as unknown as AgentSession;
 	return createPersistedSubagentReviverFactory({
 		session: parentSession,
@@ -591,6 +605,519 @@ describe("persisted subagent revival", () => {
 
 		expect(capturedOptions?.oauthAccountPools).toEqual({ anthropic: ["email:a@example.com|org:org-a"] });
 	});
+
+	it("re-checks a revived per-call worker against current grants and keeps it off fallbacks", async () => {
+		const own = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!own) throw new Error("Expected bundled anthropic/claude-sonnet-4-5");
+		const reviewer: AgentDefinition = {
+			name: "reviewer",
+			description: "reviewer",
+			systemPrompt: "review",
+			source: "user",
+			model: [`${own.provider}/${own.id}`],
+		};
+		const discover = vi
+			.spyOn(discoveryModule, "discoverAgents")
+			.mockResolvedValue({ agents: [reviewer], projectAgentsDir: null });
+		let options: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+			options = created;
+			return {
+				session: Object.assign(createRevivedSession([]).session, { model: own }),
+			} as CreateAgentSessionResult;
+		});
+		const modelRegistry = {
+			authStorage: {},
+			awaitBackgroundRefresh: async () => {},
+			getAvailable: () => [own],
+			getAll: () => [own],
+		} as unknown as ModelRegistry;
+		const revive = async (settings: Settings) => {
+			const cwd = makeTempDir("@pi-revive-per-call-");
+			const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+				agent: "reviewer",
+				perCallModel: true,
+				resolvedModel: `${own.provider}/${own.id}`,
+				perCallModelIdentity: `${own.provider}/${own.id}`,
+				perCallThinkingLevel: Effort.Low,
+			});
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd, undefined, { settings, modelRegistry })(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+			const check = options?.assertDispatchModel;
+			if (!check) throw new Error("Expected a per-call dispatch check");
+			expect(options?.disableModelFallback).toBe(true);
+			expect(options?.disableServerSideFallback).toBe(true);
+			return check;
+		};
+
+		// The spawn approved the model through the agent's frontmatter; revival keeps that grant.
+		expect((await revive(Settings.isolated()))(own)).toBeUndefined();
+		// A disabled, removed or project-sourced agent no longer grants its model.
+		const disabledCheck = await revive(Settings.isolated({ "task.disabledAgents": ["reviewer"] }));
+		expect(() => disabledCheck(own)).toThrow(/not approved/);
+		discover.mockResolvedValue({ agents: [{ ...reviewer, source: "project" }], projectAgentsDir: null });
+		const projectCheck = await revive(Settings.isolated());
+		expect(() => projectCheck(own)).toThrow(/not approved/);
+		discover.mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const removedCheck = await revive(Settings.isolated());
+		expect(() => removedCheck(own)).toThrow(/not approved/);
+	});
+
+	it("refuses to revive or dispatch a per-call worker on a model that cannot run at or below task.maxEffort", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const highOnly = buildModel({
+			id: "mock-high-only",
+			name: "High Only",
+			api: "anthropic-messages",
+			provider: "mock",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.High] },
+			baseUrl: "https://example.invalid",
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+		const disposed: boolean[] = [];
+		let options: CreateAgentSessionOptions | undefined;
+		let sessionModel: typeof highOnly | undefined = highOnly;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+			options = created;
+			const session = Object.assign(createRevivedSession([]).session, {
+				model: sessionModel,
+				dispose: async () => {
+					disposed.push(true);
+				},
+			});
+			return { session } as CreateAgentSessionResult;
+		});
+		const revive = async (perCallModel: boolean) => {
+			const cwd = makeTempDir("@pi-revive-per-call-floor-");
+			const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+				agent: "task",
+				perCallModel,
+				resolvedModel: "mock/mock-high-only",
+				perCallModelIdentity: "mock/mock-high-only",
+				perCallThinkingLevel: Effort.High,
+			});
+			const ref = createRef(sessionFile);
+			const reviver = await createFactory(cwd, undefined, {
+				settings: Settings.isolated({ "task.maxEffort": "low", modelRoles: { review: "mock/mock-high-only" } }),
+				modelRegistry: {
+					authStorage: {},
+					awaitBackgroundRefresh: async () => {},
+					getAvailable: () => [highOnly],
+					getAll: () => [highOnly],
+				} as unknown as ModelRegistry,
+			})(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			return reviver(ref);
+		};
+
+		await expect(revive(true)).rejects.toThrow(
+			"mock/mock-high-only has no supported thinking effort at or below task.maxEffort=low",
+		);
+		expect(disposed).toEqual([true]);
+		await expect(revive(false)).resolves.toBeDefined();
+
+		// A model the worker reaches later (e.g. an extension swap) is held to the same floor at dispatch.
+		sessionModel = undefined;
+		await expect(revive(true)).rejects.toThrow("is no longer available");
+		const check = options?.assertDispatchModel;
+		if (!check) throw new Error("Expected a per-call dispatch check");
+		expect(() => check(highOnly)).toThrow("no supported thinking effort at or below task.maxEffort=low");
+	});
+
+	const perCallModelFixture = (id: string) =>
+		buildModel({
+			id,
+			name: id,
+			api: "anthropic-messages",
+			provider: "mock",
+			reasoning: true,
+			thinking: { mode: "effort", efforts: [Effort.Low, Effort.High] },
+			baseUrl: "https://example.invalid",
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200000,
+			maxTokens: 8192,
+		});
+
+	it("revives a role request from its saved identity and effort rather than the role's current value", async () => {
+		const saved = perCallModelFixture("saved");
+		const replacement = perCallModelFixture("replacement");
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async options =>
+				({
+					session: Object.assign(createRevivedSession([]).session, {
+						model: options?.model,
+						thinkingLevel: options?.thinkingLevel,
+					}),
+				}) as CreateAgentSessionResult,
+		);
+		const cwd = makeTempDir("@pi-revive-per-call-role-");
+		const sessionFile = await createPersistedSession(cwd, undefined, "review", undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/replacement:high",
+			perCallModelIdentity: "mock/saved",
+			perCallThinkingLevel: Effort.Low,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			settings: Settings.isolated({ modelRoles: { review: "mock/replacement", smol: "mock/saved" } }),
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => [saved, replacement],
+				getAll: () => [saved, replacement],
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		const revived = await reviver(ref);
+		expect(revived.model).toBe(saved);
+		expect(revived.thinkingLevel).toBe(Effort.Low);
+		expect(create.mock.calls[0]?.[0]?.modelPattern).toBeUndefined();
+		expect(() => create.mock.calls[0]?.[0]?.assertDispatchModel?.(saved)).not.toThrow();
+	});
+
+	it.each([
+		{ identity: "mock/coding-router:low", level: Effort.High, availableId: "coding-router" },
+		{ identity: "mock/coding-router", level: Effort.Low, availableId: "coding-router:low" },
+	])("refuses to revive $identity onto its level-shaped sibling", async ({ identity, level, availableId }) => {
+		const sibling = perCallModelFixture(availableId);
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: Object.assign(createRevivedSession([]).session, { model: sibling }),
+		} as CreateAgentSessionResult);
+		const cwd = makeTempDir("@pi-revive-per-call-sibling-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/coding-router:low",
+			perCallModelIdentity: identity,
+			perCallThinkingLevel: level,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => [sibling],
+				getAll: () => [sibling],
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		await expect(reviver(ref)).rejects.toBeInstanceOf(PerCallModelError);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ identity: "mock/coding-router", level: Effort.Low },
+		{ identity: "mock/coding-router:low", level: Effort.High },
+	])("restores $identity and its separate $level thinking level exactly", async ({ identity, level }) => {
+		const models = [perCallModelFixture("coding-router"), perCallModelFixture("coding-router:low")];
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const selector = Array.isArray(options?.modelPattern) ? options.modelPattern[0] : options?.modelPattern;
+			const parsed = selector ? parseModelPattern(selector, models) : undefined;
+			return {
+				session: Object.assign(createRevivedSession([]).session, {
+					model: options?.model ?? parsed?.model,
+					thinkingLevel: options?.thinkingLevel ?? parsed?.thinkingLevel ?? Effort.High,
+				}),
+			} as CreateAgentSessionResult;
+		});
+		const cwd = makeTempDir("@pi-revive-per-call-level-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/coding-router:low",
+			perCallModelIdentity: identity,
+			perCallThinkingLevel: level,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => models,
+				getAll: () => models,
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		const revived = await reviver(ref);
+		expect(`${revived.model?.provider}/${revived.model?.id}`).toBe(identity);
+		expect(revived.thinkingLevel).toBe(level);
+	});
+
+	it("revives a per-call worker on its exact model, not on a session-local switch", async () => {
+		const models = [perCallModelFixture("coding-router"), perCallModelFixture("switched")];
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async options =>
+				({
+					session: Object.assign(createRevivedSession([]).session, { model: options?.model }),
+				}) as CreateAgentSessionResult,
+		);
+		const cwd = makeTempDir("@pi-revive-per-call-switched-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/coding-router",
+			perCallModelIdentity: "mock/coding-router",
+			perCallThinkingLevel: Effort.Low,
+		});
+		// A focused worker can still be switched by hand; that persists a session-local model change.
+		const manager = await SessionManager.open(sessionFile);
+		manager.appendModelChange("mock/switched", "temporary");
+		await manager.close();
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => models,
+				getAll: () => models,
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		const revived = await reviver(ref);
+		expect(`${revived.model?.provider}/${revived.model?.id}`).toBe("mock/coding-router");
+		expect(create.mock.calls[0]?.[0]?.modelPattern).toBeUndefined();
+	});
+
+	it.each([
+		{ identity: undefined, level: Effort.Low },
+		{ identity: "mock/coding-router", level: undefined },
+		{ identity: undefined, level: undefined },
+	])("refuses legacy per-call revival without separate identity/level fields (%j)", async ({ identity, level }) => {
+		const model = perCallModelFixture("coding-router");
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
+			session: Object.assign(createRevivedSession([]).session, { model }),
+		} as CreateAgentSessionResult);
+		const cwd = makeTempDir("@pi-revive-per-call-legacy-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/coding-router:low",
+			perCallModelIdentity: identity,
+			perCallThinkingLevel: level,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		await expect(reviver(ref)).rejects.toBeInstanceOf(PerCallModelError);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("waits for pending background discovery before looking up a per-call worker's model", async () => {
+		const model = perCallModelFixture("discovered-model");
+		const refresh = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		let warm = false;
+		const awaitBackgroundRefresh = vi.fn(async () => {
+			started.resolve();
+			await refresh.promise;
+			warm = true;
+		});
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(
+			async options =>
+				({
+					session: Object.assign(createRevivedSession([]).session, { model: options?.model }),
+				}) as CreateAgentSessionResult,
+		);
+		const cwd = makeTempDir("@pi-revive-per-call-discovery-");
+		const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+			perCallModel: true,
+			resolvedModel: "mock/discovered-model:low",
+			perCallModelIdentity: "mock/discovered-model",
+			perCallThinkingLevel: Effort.Low,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh,
+				getDiscoverableProviders: () => [],
+				getAvailable: () => (warm ? [model] : []),
+				getAll: () => (warm ? [model] : []),
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		const pending = reviver(ref);
+		try {
+			const outcome = await Promise.race([
+				started.promise.then(() => "waiting"),
+				pending.then(
+					() => "completed",
+					() => "failed",
+				),
+			]);
+			expect(outcome).toBe("waiting");
+			expect(create).not.toHaveBeenCalled();
+			refresh.resolve();
+			expect((await pending).model).toBe(model);
+			expect(awaitBackgroundRefresh).toHaveBeenCalledTimes(1);
+		} finally {
+			refresh.resolve();
+			await pending.catch(() => {});
+		}
+	});
+
+	it("revives a per-call worker only onto its exact saved model, never a similarly named one", async () => {
+		const neighbour = perCallModelFixture("gone-model-v2");
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [
+				{ name: "reviewer", description: "r", systemPrompt: "r", source: "user", model: ["mock/gone-model-v2"] },
+			],
+			projectAgentsDir: null,
+		});
+		const create = vi.spyOn(sdkModule, "createAgentSession");
+		const cwd = makeTempDir("@pi-revive-per-call-exact-");
+		const sessionFile = await createPersistedSession(cwd, undefined, "review", undefined, {
+			agent: "reviewer",
+			perCallModel: true,
+			resolvedModel: "mock/gone-model:high",
+			perCallModelIdentity: "mock/gone-model",
+			perCallThinkingLevel: Effort.High,
+		});
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd, undefined, {
+			settings: Settings.isolated({ modelRoles: { review: "mock/gone-model-v2" } }),
+			modelRegistry: {
+				authStorage: {},
+				awaitBackgroundRefresh: async () => {},
+				getAvailable: () => [neighbour],
+				getAll: () => [neighbour],
+			} as unknown as ModelRegistry,
+		})(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+
+		await expect(reviver(ref)).rejects.toThrow("per-call model mock/gone-model is no longer available");
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("grants a revived per-call worker its real live parent's model, never the root session's", async () => {
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+		const parentModel = perCallModelFixture("parent-model");
+		const rootModel = perCallModelFixture("root-model");
+		let options: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+			options = created;
+			return {
+				session: Object.assign(createRevivedSession([]).session, { model: parentModel }),
+			} as CreateAgentSessionResult;
+		});
+		const registry = AgentRegistry.global();
+		const parentId = "persisted-per-call-parent";
+		const childOf = async (parent: string) => {
+			const cwd = makeTempDir("@pi-revive-per-call-parent-");
+			const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+				agent: "task",
+				perCallModel: true,
+				resolvedModel: "mock/parent-model",
+				perCallModelIdentity: "mock/parent-model",
+				perCallThinkingLevel: Effort.Low,
+			});
+			const ref = { ...createRef(sessionFile), parentId: parent };
+			const factory = createPersistedSubagentReviverFactory({
+				session: {
+					sessionManager: { getCwd: () => cwd, getArtifactManager: () => undefined },
+					effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
+					getSessionAgents: () => [],
+					model: rootModel,
+				} as unknown as AgentSession,
+				authStorage: {} as never,
+				modelRegistry: {
+					authStorage: {},
+					awaitBackgroundRefresh: async () => {},
+					getAvailable: () => [parentModel, rootModel],
+					getAll: () => [parentModel, rootModel],
+				} as unknown as ModelRegistry,
+				settings: Settings.isolated(),
+				enableLsp: true,
+			});
+			const reviver = await factory(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+			const check = options?.assertDispatchModel;
+			if (!check) throw new Error("Expected a per-call dispatch check");
+			return check;
+		};
+
+		registry.register({
+			id: parentId,
+			displayName: parentId,
+			kind: "sub",
+			parentId: "Main",
+			session: { model: parentModel } as unknown as AgentSession,
+			sessionFile: null,
+			status: "running",
+		});
+		try {
+			const nested = await childOf(parentId);
+			expect(nested(parentModel)).toBeUndefined();
+			expect(() => nested(rootModel)).toThrow(/not approved/);
+
+			// A parked parent grants nothing; the root's model is not substituted.
+			registry.unregister(parentId);
+			const orphaned = await childOf(parentId);
+			expect(() => orphaned(parentModel)).toThrow(`Parent agent "${parentId}"`);
+			expect(() => orphaned(rootModel)).toThrow(/not approved/);
+
+			// The root session is the real parent of its direct children.
+			const direct = await childOf("Main");
+			expect(direct(rootModel)).toBeUndefined();
+			expect(() => direct(parentModel)).toThrow(/not approved/);
+		} finally {
+			registry.unregister(parentId);
+		}
+	});
+
+	it.each([{ only: ["anthropic", "google-vertex"] }, { order: ["anthropic", "google-vertex"] }])(
+		"grants a revived per-call worker nothing from a parent routed by %j",
+		async routing => {
+			vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [], projectAgentsDir: null });
+			const model = perCallModelFixture("routed-model");
+			const parentModel = { ...model, compat: { ...model.compat, openRouterRouting: routing } };
+			let options: CreateAgentSessionOptions | undefined;
+			vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async created => {
+				options = created;
+				return { session: Object.assign(createRevivedSession([]).session, { model }) } as CreateAgentSessionResult;
+			});
+			const cwd = makeTempDir("@pi-revive-per-call-routed-parent-");
+			const sessionFile = await createPersistedSession(cwd, undefined, undefined, undefined, {
+				agent: "task",
+				perCallModel: true,
+				resolvedModel: "mock/routed-model",
+				perCallModelIdentity: "mock/routed-model",
+				perCallThinkingLevel: Effort.Low,
+			});
+			const ref = { ...createRef(sessionFile), parentId: "Main" };
+			const reviver = await createPersistedSubagentReviverFactory({
+				session: {
+					sessionManager: { getCwd: () => cwd, getArtifactManager: () => undefined },
+					effectiveExtensionRoots: { explicit: [], mode: "merge", configured: [], configuredLevel: "user" },
+					getSessionAgents: () => [],
+					model: parentModel,
+				} as unknown as AgentSession,
+				authStorage: {} as never,
+				modelRegistry: {
+					authStorage: {},
+					awaitBackgroundRefresh: async () => {},
+					getAvailable: () => [model],
+					getAll: () => [model],
+				} as unknown as ModelRegistry,
+				settings: Settings.isolated(),
+				enableLsp: true,
+			})(ref);
+			if (!reviver) throw new Error("Expected a persisted reviver");
+			await reviver(ref);
+			const check = options?.assertDispatchModel;
+			if (!check) throw new Error("Expected a per-call dispatch check");
+			expect(() => check(model)).toThrow(/not approved/);
+		},
+	);
 
 	it("falls back to the ref display name reviving a legacy session file without a persisted agent name", async () => {
 		const cwd = makeTempDir("@pi-revive-agent-name-legacy-");

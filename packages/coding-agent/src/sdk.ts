@@ -611,6 +611,19 @@ export interface CreateAgentSessionOptions {
 	modelPatternFallbackRole?: string;
 	/** Validated inherited retry chain for a deferred singleton pattern; empty explicitly disables fallbacks. */
 	modelPatternDefaultFallbackChain?: string[];
+	/**
+	 * Called with the model of every main-loop request before it is sent; throw to
+	 * refuse it. Per-call `model` subagents use it so no switch reaches a model the
+	 * operator did not approve.
+	 */
+	assertDispatchModel?: (model: Model) => void;
+	/**
+	 * Never switch the main-loop model: no retry fallback, context promotion or usage-aware fallback;
+	 * the turn retries on, or fails with, its own model instead. Per-call `model` subagents set it.
+	 */
+	disableModelFallback?: boolean;
+	/** Never opt requests into a provider's optional server-side model fallback. Per-call `model` subagents set it. */
+	disableServerSideFallback?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -4577,6 +4590,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							anthropicSlowModeHasNoSiblingHeadroom(modelRegistry.authStorage, streamModel, session?.sessionId),
 						notify: (level, message) => session?.emitNotice(level, message, "anthropic-slow-mode"),
 						onLane: lane => session?.noteAnthropicSlowModeLane(lane),
+						disableServerSideFallback: options.disableServerSideFallback,
 					}),
 					currentCostGate,
 				),
@@ -4662,6 +4676,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: effectiveGetApiKey,
 			streamFn: (streamModel, context, streamOptions) => {
+				options.assertDispatchModel?.(streamModel);
 				// The loop checks the cap before each request, but a side request can finish
 				// in between: refuse here, as this run's refusal, before announcing a dispatch.
 				const refusal = currentCostGate()?.check();
@@ -4894,6 +4909,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			agent,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
+			disableModelFallback: options.disableModelFallback,
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,
