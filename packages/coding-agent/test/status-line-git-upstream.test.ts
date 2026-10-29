@@ -15,7 +15,6 @@ import {
 	exchangeTheme,
 	getColorBlindMode,
 	getCurrentThemeName,
-	getNativeThemePaletteKey,
 	getSymbolPresetOverride,
 	getThemeEpoch,
 	type SymbolPreset,
@@ -24,12 +23,11 @@ import {
 } from "@oh-my-pi/pi-tui/theme";
 
 // Segments render through the process-global theme object. `exchangeTheme`
-// swaps that object only: theme name, auto-detection, symbol-preset override,
-// color-blind mode, and the watcher stay as this file found them.
+// swaps that object only: theme name, symbol-preset override, color-blind
+// mode, and epoch stay as this file found them.
 let priorTheme: Theme | undefined;
 let unicodeTheme: Theme;
 let asciiTheme: Theme;
-let managerKey = "";
 let themeName: string | undefined;
 let symbolPreset: SymbolPreset | undefined;
 let colorBlind = false;
@@ -38,7 +36,6 @@ let themeEpoch = 0;
 beforeAll(async () => {
 	unicodeTheme = await loadTheme("dark", { symbolPresetOverride: "unicode" });
 	asciiTheme = await loadTheme("dark", { symbolPresetOverride: "ascii" });
-	managerKey = getNativeThemePaletteKey();
 	themeName = getCurrentThemeName();
 	symbolPreset = getSymbolPresetOverride();
 	colorBlind = getColorBlindMode();
@@ -54,7 +51,6 @@ afterAll(() => {
 });
 
 interface ThemeManagerSnapshot {
-	key: string;
 	name: string | undefined;
 	preset: SymbolPreset | undefined;
 	colorBlind: boolean;
@@ -62,12 +58,11 @@ interface ThemeManagerSnapshot {
 }
 
 function savedManager(): ThemeManagerSnapshot {
-	return { key: managerKey, name: themeName, preset: symbolPreset, colorBlind, epoch: themeEpoch };
+	return { name: themeName, preset: symbolPreset, colorBlind, epoch: themeEpoch };
 }
 
 function managerFingerprint(): ThemeManagerSnapshot {
 	return {
-		key: getNativeThemePaletteKey(),
 		name: getCurrentThemeName(),
 		preset: getSymbolPresetOverride(),
 		colorBlind: getColorBlindMode(),
