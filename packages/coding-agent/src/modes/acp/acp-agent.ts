@@ -686,7 +686,9 @@ export function createAcpExtensionUiContext(
 			return typeof value === "boolean" ? value : false;
 		},
 		input: async (title, placeholder, dialogOptions) => {
-			if (!supportsForm) return undefined;
+			// ACP form-mode elicitation has no masked/password field and the ACP spec
+			// forbids falling back to form mode for secrets or credentials.
+			if (!supportsForm || dialogOptions?.secret) return undefined;
 			const value = await elicitFromAcpClient(
 				connection,
 				getSessionId(),
@@ -787,6 +789,8 @@ export function createAcpExtensionUiContext(
 			logger.debug("ACP extension notification", { message, type });
 		},
 		onTerminalInput: () => () => {},
+		rerenderMessage: () => {},
+		getLinkClicksAvailable: () => false,
 		setStatus: () => {},
 		setWorkingMessage: () => {},
 		setWidget: () => {},
