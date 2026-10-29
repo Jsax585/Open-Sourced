@@ -38,7 +38,7 @@ import {
 	isExecutableHeader,
 	isIdaDatabasePath,
 } from "../ida";
-import { normalizeToLF } from "../edit/normalize";
+import { normalizeToLF, stripBom } from "../edit/normalize";
 import { getEditStore, recordFullySeenRows } from "../edit/store";
 import { extractUriScheme, InternalUrlRouter, type SchemeSpec, sessionResolveContext } from "../internal-urls";
 import { isMarkdownPath } from "@oh-my-pi/pi-tui/lang-from-path";
@@ -2993,9 +2993,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			return toolResult(details).text(resource.content).sourceInternal(url).done();
 		}
 
-		return buildInMemorySelectorResult(this.session, resource.content, parsedSel, {
+		const snapshotPath =
+			extractUriScheme(url) === "ssh" && !resource.immutable && !resource.isDirectory ? url : undefined;
+		// The remote backing text retains its BOM for write-back, while the
+		// editable view matches local reads and the native engine's BOM-free text.
+		const text = snapshotPath ? stripBom(resource.content).text : resource.content;
+		return buildInMemorySelectorResult(this.session, text, parsedSel, {
 			details,
 			sourcePath: resource.sourcePath,
+			snapshotPath,
 			sourceStartLine: resource.sourceStartLine,
 			sourceInternal: url,
 			entityLabel: "resource",

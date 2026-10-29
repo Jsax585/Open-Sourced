@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { countNewlines } from "@oh-my-pi/pi-utils";
 import { getEditStore } from "../edit/store";
+import { extractUriScheme } from "../internal-urls/parse";
 import {
 	formatHashlineHeader,
 	formatNumberedLines,
@@ -89,7 +90,7 @@ function recordFullHashlineContext(
 	fullText: string,
 	sourceStartLine?: number,
 ): HashlineHeaderContext | undefined {
-	if (!absolutePath || !path.isAbsolute(absolutePath)) return undefined;
+	if (!absolutePath || (!path.isAbsolute(absolutePath) && extractUriScheme(absolutePath) !== "ssh")) return undefined;
 	// An excerpt must never replace the backing file's full edit snapshot.
 	const normalized = sourceStartLine === undefined ? normalizeToLF(fullText) : undefined;
 	const tag =
@@ -225,7 +226,8 @@ function recordInMemorySeenLines(
 	seenLines: readonly number[] | undefined,
 	sourceStartLine?: number,
 ): void {
-	if (!absolutePath || !path.isAbsolute(absolutePath) || !seenLines || seenLines.length === 0) return;
+	if (!absolutePath || !seenLines || seenLines.length === 0) return;
+	if (!path.isAbsolute(absolutePath) && extractUriScheme(absolutePath) !== "ssh") return;
 	if (sourceStartLine !== undefined) {
 		getEditStore(session).recordSnapshotFile(
 			absolutePath,
@@ -310,6 +312,8 @@ function expandRangeWithContext(
 export interface InMemoryTextOptions {
 	details?: ReadToolDetails;
 	sourcePath?: string;
+	/** Snapshot identity for editable remote text, without claiming a local source file. */
+	snapshotPath?: string;
 	/** Excerpt provenance: input line 1 maps to this backing-file line. */
 	sourceStartLine?: number;
 	sourceUrl?: string;
@@ -349,6 +353,7 @@ export async function buildInMemoryTextResult(
 	limit: number | undefined,
 	options: InMemoryTextOptions,
 ): Promise<AgentToolResult<ReadToolDetails>> {
+	const snapshotPath = options.snapshotPath ?? options.sourcePath;
 	const displayMode = resolveFileDisplayMode(session, { raw: options.raw, immutable: options.immutable });
 	const details = options.details ?? {};
 	const rawDisplay = options.raw === true;
@@ -390,6 +395,10 @@ export async function buildInMemoryTextResult(
 	}
 
 	if (requestedStart >= totalLines) {
+		if (totalLines === 0 && options.snapshotPath && displayMode.hashLines) {
+			const context = recordFullHashlineContext(session, options.snapshotPath, options.snapshotPath, text);
+			return resultBuilder.text(prependHashlineHeader(`The ${options.entityLabel} is empty.`, context)).done();
+		}
 		const suggestion =
 			totalLines === 0
 				? `The ${options.entityLabel} is empty.`
@@ -442,11 +451,11 @@ export async function buildInMemoryTextResult(
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 	details.rowPrefixes = shouldAddHashLines || shouldAddLineNumbers;
 	const hashContext =
-		shouldAddHashLines && options.sourcePath
+		shouldAddHashLines && snapshotPath
 			? recordFullHashlineContext(
 					session,
-					options.sourcePath,
-					formatPathRelativeToCwd(options.sourcePath, session.cwd),
+					snapshotPath,
+					options.snapshotPath ?? formatPathRelativeToCwd(snapshotPath, session.cwd),
 					text,
 					options.sourceStartLine,
 				)
@@ -561,11 +570,11 @@ export async function buildInMemoryTextResult(
 		}
 	}
 
-	if (hashContext?.tag && options.sourcePath && seenLines) {
-		getEditStore(session).recordSeenLines(options.sourcePath, hashContext.tag, seenLines);
+	if (hashContext?.tag && snapshotPath && seenLines) {
+		getEditStore(session).recordSeenLines(snapshotPath, hashContext.tag, seenLines);
 	}
-	if (options.raw === true && options.sourcePath && options.immutable !== true && rawSeenLines) {
-		recordInMemorySeenLines(session, options.sourcePath, text, rawSeenLines, options.sourceStartLine);
+	if (options.raw === true && snapshotPath && options.immutable !== true && rawSeenLines) {
+		recordInMemorySeenLines(session, snapshotPath, text, rawSeenLines, options.sourceStartLine);
 	}
 	resultBuilder.text(outputText);
 	if (truncationInfo) {
@@ -587,6 +596,7 @@ export async function buildInMemoryMultiRangeResult(
 	ranges: readonly LineRange[],
 	options: Omit<InMemoryTextOptions, "ignoreResultLimits">,
 ): Promise<AgentToolResult<ReadToolDetails>> {
+	const snapshotPath = options.snapshotPath ?? options.sourcePath;
 	const displayMode = resolveFileDisplayMode(session, { raw: options.raw, immutable: options.immutable });
 	const details = options.details ?? {};
 	if (options.raw) details.raw = true;
@@ -598,11 +608,11 @@ export async function buildInMemoryMultiRangeResult(
 	const shouldAddLineNumbers = shouldAddHashLines ? false : displayMode.lineNumbers;
 	details.rowPrefixes = shouldAddHashLines || shouldAddLineNumbers;
 	const hashContext =
-		shouldAddHashLines && options.sourcePath
+		shouldAddHashLines && snapshotPath
 			? recordFullHashlineContext(
 					session,
-					options.sourcePath,
-					formatPathRelativeToCwd(options.sourcePath, session.cwd),
+					snapshotPath,
+					options.snapshotPath ?? formatPathRelativeToCwd(snapshotPath, session.cwd),
 					text,
 					options.sourceStartLine,
 				)
@@ -680,17 +690,11 @@ export async function buildInMemoryMultiRangeResult(
 		notices.push(`[Range ${bound} is beyond end of ${options.entityLabel} (${totalLines} lines total); skipped]`);
 	}
 	const finalText = notices.length > 0 ? appendReadNotice(outputText, notices.join("\n"), details) : outputText;
-	if (hashContext?.tag && options.sourcePath && seenLines) {
-		getEditStore(session).recordSeenLines(options.sourcePath, hashContext.tag, seenLines);
+	if (hashContext?.tag && snapshotPath && seenLines) {
+		getEditStore(session).recordSeenLines(snapshotPath, hashContext.tag, seenLines);
 	}
-	if (options.raw === true && options.sourcePath && options.immutable !== true && visibleSpans.length > 0) {
-		recordInMemorySeenLines(
-			session,
-			options.sourcePath,
-			text,
-			lineNumbersFromSpans(visibleSpans),
-			options.sourceStartLine,
-		);
+	if (options.raw === true && snapshotPath && options.immutable !== true && visibleSpans.length > 0) {
+		recordInMemorySeenLines(session, snapshotPath, text, lineNumbersFromSpans(visibleSpans), options.sourceStartLine);
 	}
 	resultBuilder.text(finalText);
 	return resultBuilder.done();
