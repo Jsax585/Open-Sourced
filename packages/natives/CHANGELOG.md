@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added ahead/behind upstream commit counts to `VcsStatusSummary` (`statusSummary`), resolved through the remote's fetch refspecs and cached per HEAD/upstream pair; absent for jj workspaces and branches without an upstream ([#11049](https://github.com/can1357/oh-my-pi/pull/11049) by [@anzhen-tech](https://github.com/anzhen-tech)).
+
 ### Fixed
 
 - Fixed `wrapTextWithAnsi` continuing a wrapped styled underline (`4:3`, `4:4`) as a background colour, `4:0` setting background `40`, and colon-form colours (`38:2::r:g:b`) being dropped ([#16239](https://github.com/can1357/oh-my-pi/pull/16239) by [@materemias](https://github.com/materemias))
