@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in Korean dashboard messages and host-selected language-pack initialization
+- Added opt-in Korean dashboard messages and host-selected language-pack initialization ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 ## [18.13.3] - 2026-10-28
 

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added explicit English-default language initialization, validated external Korean packs, safe fallback, and localized relative-time phrases
+- Added explicit English-default language initialization, validated external Korean packs, safe fallback, and localized relative-time phrases ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 ### Fixed
 

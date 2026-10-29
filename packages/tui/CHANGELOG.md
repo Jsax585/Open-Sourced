@@ -8,7 +8,7 @@
 
 ### Added
 
-- Added opt-in Korean interface messages while preserving default English rendering and existing behavior tests
+- Added opt-in Korean interface messages while preserving default English rendering and existing behavior tests ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 - Added file-backed task previews and optional `taskFile` and `taskFileSha256` provenance on `AgentProgress` and `SingleResult` ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
 - Added `Editor.nativeTypeahead` (published as the TSP `typeahead` prop) and `Composer.releaseHeldInput()`: a deferred-input `Composer.start` asks Tern to keep and draw startup typing until the app releases the held input

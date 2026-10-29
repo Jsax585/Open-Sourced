@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in Korean translations for interactive authentication prompts while retaining English model-facing contracts
+- Added opt-in Korean translations for interactive authentication prompts while retaining English model-facing contracts ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 ### Fixed
 

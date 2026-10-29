@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added explicit host-selected Korean UI initialization with English fallback and no statically bundled Korean catalog
+- Added explicit host-selected Korean UI initialization with English fallback and no statically bundled Korean catalog ([#17344](https://github.com/can1357/oh-my-pi/pull/17344) by [@seojihun618-dotcom](https://github.com/seojihun618-dotcom))
 
 ## [18.13.3] - 2026-10-28
 
