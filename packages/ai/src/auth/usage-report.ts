@@ -164,6 +164,27 @@ export function isUsageLimitExhausted(limit: UsageLimit): boolean {
 	return false;
 }
 
+/** `monthlyWindowClass` value for an account whose monthly quota is still live. */
+export const MONTHLY_WINDOW_LIVE = 0;
+/** `monthlyWindowClass` value for an account that reports no monthly window. */
+export const MONTHLY_WINDOW_UNKNOWN = 1;
+/** `monthlyWindowClass` value for an account whose monthly quota is spent. */
+export const MONTHLY_WINDOW_SPENT = 2;
+
+/**
+ * Ordering class for the monthly (subscription-anniversary) window.
+ *
+ * The monthly window's deaths are sequential and permanent until the
+ * anniversary, so ranking it needs a sequence, not a rate: live accounts take
+ * traffic in reset order, a spent account is served last without ever being
+ * benched, and a report with no monthly window sits in between because it
+ * cannot be ordered against either.
+ */
+export function monthlyWindowClass(limit: UsageLimit | undefined): number {
+	if (!limit) return MONTHLY_WINDOW_UNKNOWN;
+	return isUsageLimitExhausted(limit) ? MONTHLY_WINDOW_SPENT : MONTHLY_WINDOW_LIVE;
+}
+
 /** Return the usage limits that apply to the requested model for this strategy. */
 export function scopedUsageLimits(
 	strategy: CredentialRankingStrategy,

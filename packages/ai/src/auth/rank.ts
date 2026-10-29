@@ -1,5 +1,6 @@
 import type { PlanGate, UsageReport } from "../usage";
 import type { AuthCredential, ApiKeyCredential, OAuthCredential } from "./types";
+import { MONTHLY_WINDOW_LIVE } from "./usage-report";
 
 /** Selected stored credential and its pool index. */
 export type CredentialSelection<T extends AuthCredential> = {
@@ -51,6 +52,10 @@ export type UsageRankedCandidate<T extends AuthCredential> = UsageCandidate<T> &
 	allowanceSpent: boolean;
 	usageMeasured: boolean;
 	planPriority: number;
+	/** Monthly-window ordering class: live quota, unreported, or spent (see {@link monthlyWindowClass}). */
+	monthlyClass: number;
+	/** The account's own monthly reset timestamp; `Infinity` when it has no monthly window. */
+	monthlyResetsAt: number;
 	secondaryUsed: number;
 	secondaryRequiredDrain: number;
 	primaryUsed: number;
@@ -121,6 +126,23 @@ function compareUsageRankedCandidatePriority(
 	const leftMeasured = left.usageMeasured;
 	const rightMeasured = right.usageMeasured;
 	if (leftMeasured !== rightMeasured) return leftMeasured ? -1 : 1;
+	// Monthly windows die once and stay dead until the subscription
+	// anniversary, so this slot is a class plus the account's own reset
+	// timestamp — never a rate. Live accounts lead and take traffic in the
+	// order whose unused monthly quota expires soonest (use-it-or-lose-it),
+	// so the pool drains one account at a time instead of every account
+	// reaching its cap in the same hour; a spent monthly ranks behind an
+	// unreported one and is still served, never benched.
+	if (left.monthlyClass !== right.monthlyClass) return left.monthlyClass - right.monthlyClass;
+	if (left.monthlyClass === MONTHLY_WINDOW_LIVE) {
+		// A nearly exhausted weekly window is a hard block in hours, while a
+		// monthly cliff is weeks out: let the cool week lead inside the class
+		// rather than trade a monthly death for a weekly one.
+		const leftWeekHot = left.secondaryUsed >= PRIMARY_WINDOW_HOT_FRACTION;
+		const rightWeekHot = right.secondaryUsed >= PRIMARY_WINDOW_HOT_FRACTION;
+		if (leftWeekHot !== rightWeekHot) return leftWeekHot ? 1 : -1;
+		if (left.monthlyResetsAt !== right.monthlyResetsAt) return left.monthlyResetsAt - right.monthlyResetsAt;
+	}
 	// Required drain, descending: the account whose remaining quota must
 	// burn fastest to avoid expiring unused at its reset comes first, so
 	// staggered resets land at ~100% utilization instead of stranding

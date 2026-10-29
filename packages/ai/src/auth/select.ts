@@ -41,11 +41,13 @@ import {
 import type { UsageService } from "./usage";
 import {
 	isUsageLimitReached,
+	monthlyWindowClass,
 	normalizeUsageFraction,
 	remainingUsageFraction,
 	scopedUsageLimits,
 	usageResetAtMs,
 	windowRequiredDrain,
+	windowResetAt,
 } from "./usage-report";
 
 /** Temporary block after a transient OAuth refresh failure. */
@@ -274,6 +276,7 @@ export class CredentialSelector {
 			const windows = usage ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
 			const primary = windows?.primary;
 			const secondary = windows?.secondary;
+			const monthly = windows?.monthly;
 			const usageMeasured = primary !== undefined || secondary !== undefined;
 			const primaryUncapped = primary === undefined && secondary !== undefined;
 			ranked.push({
@@ -288,6 +291,8 @@ export class CredentialSelector {
 				usageMeasured,
 				hasPriorityBoost: strategy.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
 				planPriority: 0,
+				monthlyClass: monthlyWindowClass(monthly),
+				monthlyResetsAt: windowResetAt(monthly?.window) ?? Number.POSITIVE_INFINITY,
 				secondaryUsed: normalizeUsageFraction(secondary),
 				secondaryRequiredDrain: windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
 				primaryUsed: normalizeUsageFraction(primary),
@@ -513,6 +518,7 @@ export class CredentialSelector {
 			const windows = usage && strategy ? strategy.findWindowLimits(usage, args.rankingContext) : undefined;
 			const primary = windows?.primary;
 			const secondary = windows?.secondary;
+			const monthly = windows?.monthly;
 			const remainingFraction = remainingUsageFraction(strategy, usage, args.rankingContext, nowMs);
 			const usageMeasured =
 				strategy === undefined ? remainingFraction !== undefined : primary !== undefined || secondary !== undefined;
@@ -544,6 +550,8 @@ export class CredentialSelector {
 				usageMeasured,
 				hasPriorityBoost: strategy?.hasPriorityBoost?.(primary, primaryUncapped, args.rankingContext) ?? false,
 				planPriority: planPriority(args.planGate, usage),
+				monthlyClass: monthlyWindowClass(monthly),
+				monthlyResetsAt: windowResetAt(monthly?.window) ?? Number.POSITIVE_INFINITY,
 				secondaryUsed: strategy ? normalizeUsageFraction(secondary) : 0,
 				secondaryRequiredDrain:
 					strategy === undefined ? 0 : windowRequiredDrain(secondary, nowMs, strategy.windowDefaults.secondaryMs),
