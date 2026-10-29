@@ -11,7 +11,8 @@ const PROSE = "This guide explains how the renderer handles every input it recei
 const DOCS_PAGE = `<!doctype html><html><head>
 <title>Renderer guide</title>
 <meta charset="utf-8">
-<meta name="description" content="How the renderer works">
+<meta content="Setup notes: pass name=viewport to the renderer" name="description">
+<meta content="2026-10-01" property="article:published_time">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="Renderer guide > Example Docs">
 <meta property="og:image" content="https://example.com/images/social-card-renderer-guide.png">
@@ -22,7 +23,7 @@ const DOCS_PAGE = `<!doctype html><html><head>
 <p>---
 warning: BODY_FRONT_MATTER_LOOKALIKE
 ---</p>
-<p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>.</p>
+<p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>, <a href="#/guide/install">Install guide</a>, <a title='See href="#setup"' href="#install">install</a>.</p>
 <p>${PROSE}</p>
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Link to this heading">¶</a></h2>
 <p>Install it, then see <a href="#options">the options</a> below. <a href="#figure"><img src="figure.png" alt="Diagram"></a> <a href="#print" title="Print article"><span>Print</span></a> ${PROSE}</p>
@@ -76,7 +77,8 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		const text = await readPage(DOCS_PAGE);
 
 		expect(text).toContain("title: Renderer guide");
-		expect(text).toContain("meta-description: How the renderer works");
+		expect(text).toContain('meta-description: "Setup notes: pass name=viewport to the renderer"');
+		expect(text).toContain("2026-10-01");
 		expect(text).not.toContain("meta-og");
 		expect(text).not.toContain("meta-twitter");
 		expect(text).not.toContain("meta-viewport");
@@ -91,7 +93,9 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		expect(text).not.toContain("](#setup");
 		expect(text).not.toContain("](#options");
 		expect(text).toContain('[Print](# "Print article")');
-		expect(text).toContain("Contents: [Setup](#), [method](#), [other page](https://example.com/other#part)");
+		expect(text).toContain(
+			'Contents: [Setup](#), [method](#), [other page](https://example.com/other#part), [Install guide](#/guide/install), [install](# "See href=\\"#setup\\"")',
+		);
 		expect(text).toContain("see [the options](#) below");
 		expect(text).toContain("![Diagram](figure.png)");
 		expect(text).toContain("[keep this](#literal-anchor)");

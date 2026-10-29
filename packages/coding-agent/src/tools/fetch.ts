@@ -547,9 +547,12 @@ function stripDataUriImages(markdown: string): string {
 	return markdown.replace(DATA_URI_IMAGE_RE, (_match, alt: string) => (alt.trim() ? `![${alt}]` : ""));
 }
 
-/** Whole `<meta>` and `<a>` start tags; quoted values may hold `>`, and an unclosed quote matches no tag. */
-const META_TAG_RE = /<meta\b(?:[^>"']|"[^"<]*"|'[^'<]*')*>/gi;
-const ANCHOR_TAG_RE = /<a\b(?:[^>"']|"[^"<]*"|'[^'<]*')*>/gi;
+/**
+ * `<meta>` and `<a>` start tags; quoted values may hold `>`. Neither a quoted nor an
+ * unquoted part crosses a `<`, so an unclosed `<a` stops at the next tag and the scan
+ * stays linear.
+ */
+const PRUNED_TAG_RE = /<(?:meta|a)\b(?:[^<>"']|"[^"<]*"|'[^'<]*')*>/gi;
 
 /** Named `<meta>` tags worth their tokens to a reader; Open Graph, Twitter Card, viewport and verification tags are not. */
 const KEPT_META_NAMES: Record<string, true> = {
@@ -559,23 +562,38 @@ const KEPT_META_NAMES: Record<string, true> = {
 	"article:modified_time": true,
 };
 
-/** A link target to an anchor on the same page: `href="#…"`, `href='#…'` or `href=#…`. */
-const FRAGMENT_HREF_RE = /(?<![\w-])href\s*=\s*(?:"#[^"]*"|'#[^']*'|#[^\s>]*)/i;
+/** `"` and `&` escaped, so an attribute value reads back as parsed. */
+function escapeAttributeValue(value: string): string {
+	return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
 
 /**
  * Drop markup the native converter turns into tokens a reader cannot use: every
  * named `<meta>` tag but the description, author and dates (each becomes a
  * front-matter line), and the targets of links to anchors on the same page (API
  * references and docs link every heading, row and citation to one). Such a link
- * still renders as `[text](#)`. Edits tags only, so code and text are untouched.
+ * still renders as `[text](#)`; a hash route (`#/…`, `#!…`) leads elsewhere and is
+ * kept. Each tag's attributes are read with the DOM parser, so text inside another
+ * attribute's value is never taken for `name` or `href`. Edits tags only, so code
+ * and text are untouched.
  */
-function pruneHtmlForReader(html: string): string {
-	return html
-		.replace(META_TAG_RE, tag => {
-			const name = getHtmlAttribute(tag, "name") ?? getHtmlAttribute(tag, "property");
+async function pruneHtmlForReader(html: string): Promise<string> {
+	const { parseHTML } = await import("@oh-my-pi/pi-utils/dom");
+	return html.replace(PRUNED_TAG_RE, tag => {
+		const element = parseHTML(tag).document.querySelector("meta, a");
+		if (!element) return tag;
+		if (element.localName === "meta") {
+			const name = element.getAttribute("name") ?? element.getAttribute("property");
 			return name === null || KEPT_META_NAMES[name.toLowerCase()] === true ? tag : "";
-		})
-		.replace(ANCHOR_TAG_RE, tag => tag.replace(FRAGMENT_HREF_RE, 'href="#"'));
+		}
+		const href = element.getAttribute("href");
+		if (!href?.startsWith("#") || href.startsWith("#/") || href.startsWith("#!")) return tag;
+		let rewritten = "<a";
+		for (const { name, value } of element.attributes) {
+			rewritten += ` ${name}="${escapeAttributeValue(name.toLowerCase() === "href" ? "#" : value)}"`;
+		}
+		return `${rewritten}>`;
+	});
 }
 
 /** Reader output at or under this many characters is no rendering of the page. */
@@ -636,7 +654,7 @@ export async function renderHtmlToText(
 		// even after remote/subprocess attempts are aborted by the budget.
 		native: async () => {
 			const options = { cleanContent: true, hiddenContent: "reachable" };
-			const pruned = await htmlToMarkdown(pruneHtmlForReader(html), options);
+			const pruned = await htmlToMarkdown(await pruneHtmlForReader(html), options);
 			// A page whose only content is its `<head>` can fall under the length check once
 			// pruned; it is converted whole so the check judges it as before.
 			return stripDataUriImages(pruned).trim().length > MIN_RENDERED_CHARS ? pruned : htmlToMarkdown(html, options);
