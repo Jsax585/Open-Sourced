@@ -507,7 +507,7 @@ describe("per-call model grants", () => {
 		const second = createMockModel({ id: "worker-b" });
 		const usageOrder = ["mock/worker-a", "mock/worker-b"];
 		const settings = Settings.isolated(
-			{ modelRoles: { review: "mock/worker" }, "task.perCallModelAllow": ["@review"] },
+			{ modelRoles: { review: "worker" }, "task.perCallModelAllow": ["@review"] },
 			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
 		);
 		const grants: PerCallModelGrants = {
@@ -711,7 +711,7 @@ describe("per-call dispatch with runtime fallbacks", () => {
 		const settings = Settings.isolated(
 			{
 				modelRoles: { review: "mock/other" },
-				"retry.fallbackChains": { review: ["mock/worker"] },
+				"retry.fallbackChains": { review: ["worker"] },
 				"task.perCallModelFallbacks": "runtime",
 				"task.perCallModelAllow": ["mock/*"],
 			},
