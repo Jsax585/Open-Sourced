@@ -1606,6 +1606,9 @@ export class AgentSession implements SettingsScope {
 						this.#sessionGeneration !== sessionGeneration &&
 						(await this.#sessionGenerationChanged(sessionGeneration))
 					) {
+						// Nothing remains to run the turn these records promised, so settle the end the
+						// run that scheduled this wake left open for it — as the yield-wait arm below does.
+						this.#settleCancelledContinuation();
 						return;
 					}
 					if (this.#isDisposed) return;
@@ -1691,6 +1694,10 @@ export class AgentSession implements SettingsScope {
 					this.#sessionGeneration !== sessionGeneration &&
 					(await this.#sessionGenerationChanged(sessionGeneration))
 				) {
+					// The run that scheduled this wake left its end open for the turn these records
+					// promised. They go with the transcript they were sent to, so nothing remains to
+					// publish that end: settle it instead of leaving a subscriber waiting.
+					this.#settleCancelledContinuation();
 					logger.debug("IRC wake turn dropped with its session");
 					return;
 				}
@@ -1704,9 +1711,17 @@ export class AgentSession implements SettingsScope {
 					// The transition owns the queue from here: a commit clears it, and a rollback
 					// restores it and reconnects without draining it. Resume once the transition
 					// settles so a restored record waits for a turn of its own, not for the next
-					// unrelated prompt. After a commit the queue is empty and this is a no-op.
+					// unrelated prompt. A commit leaves no record and no turn, so settle the end
+					// this run held open instead; the generation tells the two apart, because a
+					// rollback restores it and its records still wake.
 					void this.waitForSessionTransition()
-						.then(() => this.#resumeStrandedIrcAsides())
+						.then(async () => {
+							if (await this.#sessionGenerationChanged(sessionGeneration)) {
+								this.#settleCancelledContinuation();
+								return;
+							}
+							this.#resumeStrandedIrcAsides();
+						})
 						.catch(error =>
 							logger.warn("IRC wake resume after a session transition failed", { error: String(error) }),
 						);
@@ -1737,6 +1752,10 @@ export class AgentSession implements SettingsScope {
 				// for its next turn; the drain leaves them queued while ownership is released.
 				if (this.#acpDefersAgentInitiatedTurns()) {
 					this.#irc.queueAside(records);
+					// The records wait for a prompt only the client can send, and the drain refuses
+					// to wake while ACP defers, so no turn of this run's follows: settle the end it
+					// left open. The records still reach the client's next turn as context.
+					this.#settleCancelledContinuation();
 					logger.debug("IRC wake turn deferred to the ACP client's next turn");
 					return;
 				}
@@ -1991,7 +2010,11 @@ export class AgentSession implements SettingsScope {
 		const open = this.#continuationAgentEnd;
 		if (!open) return;
 		// Another record or admitted aside still carries the promise: its own settle ends the run.
-		if (this.#irc.somePending(record => this.#strandedRecordWakes(record))) return;
+		// While an ACP client owns the turn lifecycle the drain leaves records queued for its next
+		// prompt instead of waking them, so a pending record carries nothing — the same condition
+		// #flushPendingAgentEnd weighs when it decides to tag an end non-terminal.
+		if (!this.#acpDefersAgentInitiatedTurns() && this.#irc.somePending(record => this.#strandedRecordWakes(record)))
+			return;
 		if (this.#hasAdmittedAsideTurn()) return;
 		this.#continuationAgentEnd = undefined;
 		this.#emit({ ...open, isTerminal: true });
@@ -10229,7 +10252,14 @@ export class AgentSession implements SettingsScope {
 				this.#sendCustomMessage(message, options, userInterruptCount, admission),
 			);
 		} finally {
-			admission?.settle();
+			if (admission) {
+				admission.settle();
+				// Every exit that returns without queueing, folding or prompting the record — a
+				// session change during the awaits, an ACP downgrade, a throw — leaves the turn this
+				// send promised unrun. The helper publishes the end held open for it only once no
+				// other record or admission still carries that promise.
+				this.#settleCancelledContinuation();
+			}
 		}
 	}
 
@@ -10396,6 +10426,29 @@ export class AgentSession implements SettingsScope {
 		}
 
 		if (options?.deliverAs === "aside") {
+			// A transition (/new, a switch) aborts and disconnects the agent long before it bumps
+			// the generation, so the check below passes while one is still applying and the dispatch
+			// further down would run the turn against the replacement transcript. Waiting the
+			// transition out here would deadlock a send its own hooks make, so hand the record to
+			// the transition the way #wakeForIrc's re-queue arm does: a commit clears it, a rollback
+			// restores it, and the resume below gives a restored record a turn of its own.
+			// A transition past its bump already owns the outgoing records; the check below drops
+			// this one with them, as it did before.
+			if (this.isSessionTransitioning && this.#sessionGeneration === sessionGeneration) {
+				if (options.triggerTurn) this.#turnRequestingAsides.set(normalizedAppMessage, userInterruptCount);
+				this.#irc.queueAside([normalizedAppMessage]);
+				admission?.settle();
+				void this.waitForSessionTransition()
+					.then(async () => {
+						if (await this.#sessionGenerationChanged(sessionGeneration)) {
+							this.#settleCancelledContinuation();
+							return;
+						}
+						this.#resumeStrandedIrcAsides();
+					})
+					.catch(error => logger.warn("Aside resume after a session transition failed", { error: String(error) }));
+				return false;
+			}
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			// Past the awaits above the record lands below, where agent_end can see it (same as the
 			// busy branch): close the admission window.
@@ -11587,6 +11640,9 @@ export class AgentSession implements SettingsScope {
 			// outgoing session also drops its record instead of landing in this new one.
 			this.#irc.clearPending();
 			this.#sessionGeneration++;
+			// A discarded record may have been the turn an earlier run's agent_end was left open
+			// for; with the record and its session gone, nothing else will publish that end.
+			this.#settleCancelledContinuation();
 			this.#scheduledHiddenNextTurnGeneration = undefined;
 			this.#queuedMessageDrainBlocked = false;
 			this.#usagePreflightReadyForNextModelCall = false;
@@ -13524,6 +13580,10 @@ export class AgentSession implements SettingsScope {
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
+			// Past the rollback window: the records this switch cleared are not coming back, so
+			// settle an end an earlier run left open for a turn one of them promised, as newSession
+			// does. Before this point a rollback would restore them and they still wake.
+			this.#settleCancelledContinuation();
 			if (modelFallbackWarning) {
 				if (options?.onModelFallback) options.onModelFallback(modelFallbackWarning);
 				else this.emitNotice("warning", modelFallbackWarning);

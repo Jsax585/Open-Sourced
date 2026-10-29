@@ -12,6 +12,7 @@ import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TurnRecovery } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -536,19 +537,20 @@ describe("AgentSession triggerTurn aside", () => {
 		};
 	}
 
-	it("is dropped when a new session starts while its turn waits for a work-pool yield change", async () => {
+	it("is dropped when a new session starts while its turn waits for a work-pool yield change, and the end it held open settles", async () => {
 		let sent = false;
 		const harness = await createHarness(async () => {
 			if (sent) return;
 			sent = true;
 			await harness.session.sendCustomMessage(card("CARD_BEFORE_NEW"), { deliverAs: "aside", triggerTurn: true });
 		});
-		const { session, mock } = harness;
+		const { session, mock, agentEnds } = harness;
 		await session.abort({ reason: USER_INTERRUPT_LABEL });
 		const yieldWait = holdWorkPoolYieldWait(session);
 		try {
 			const extensionTurn = session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
 			await yieldWait.reached;
+			expect(agentEnds).toEqual([false]);
 
 			// The new session clears the IRC queues and the transcript the aside belonged to.
 			await session.newSession();
@@ -562,9 +564,11 @@ describe("AgentSession triggerTurn aside", () => {
 
 		expect(mock.calls).toHaveLength(1);
 		expect(persisted(session, "CARD_BEFORE_NEW")).toBe(false);
+		// No queue and no run of the outgoing session remain to publish that end.
+		expect(agentEnds).toEqual([false, true]);
 	});
 
-	it("in an ACP session, one whose client prompt ends during the work-pool wait waits for the next client turn", async () => {
+	it("in an ACP session, one whose client prompt ends during the work-pool wait waits for the next client turn, and the end it held open settles", async () => {
 		let sent = false;
 		const harness = await createHarness(async () => {
 			if (sent) return;
@@ -574,7 +578,7 @@ describe("AgentSession triggerTurn aside", () => {
 				triggerTurn: true,
 			});
 		});
-		const { session, mock } = harness;
+		const { session, mock, agentEnds } = harness;
 		session.setClientBridge({ capabilities: {}, deferAgentInitiatedTurns: true });
 		const yieldWait = holdWorkPoolYieldWait(session);
 		try {
@@ -592,6 +596,8 @@ describe("AgentSession triggerTurn aside", () => {
 		}
 
 		expect(mock.calls).toHaveLength(1);
+		// The record waits for a prompt only the client can send, so the completed run's end is final.
+		expect(agentEnds).toEqual([false, true]);
 
 		await session.prompt("NEXT_CLIENT_PROMPT");
 		await settle(session);
@@ -1079,5 +1085,291 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(mock.calls).toHaveLength(1);
 		expect(JSON.stringify(session.agent.state.messages)).toContain("CARD_IN_PREFLIGHT_ESC");
 		expect(agentEnds).toEqual([false, true]);
+	});
+
+	interface HeldSessionTransition {
+		/** Settles once a transition has disconnected the agent and not yet bumped the generation. */
+		reached: Promise<void>;
+		release(): void;
+		restore(): void;
+	}
+
+	/** Holds the next session transition in `SessionManager.flush()`, which `newSession()` awaits
+	 *  after `#disconnectFromAgent()` and before it bumps `#sessionGeneration`. */
+	function holdSessionTransition(target: AgentSession): HeldSessionTransition {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let held = true;
+		const spy = spyOn(target.sessionManager, "flush").mockImplementation(async () => {
+			if (!held) return;
+			held = false;
+			reached.resolve();
+			await release.promise;
+		});
+		return { reached: reached.promise, release: () => release.resolve(), restore: () => spy.mockRestore() };
+	}
+
+	interface HeldIdleCompaction {
+		/** Settles once a wake has parked on the held idle compaction. */
+		reached: Promise<void>;
+		/** Lets the next `waitForIdleCompaction()` caller park; earlier callers see no compaction. */
+		arm(): void;
+		release(): void;
+		restore(): void;
+	}
+
+	/** Holds the first armed `waitForIdleCompaction()` call, the window a wake parks in while an
+	 *  automatic idle compaction runs. Unarmed and after the hold it answers "none running", as the
+	 *  real one does, so only the caller under test parks. */
+	function holdIdleCompaction(): HeldIdleCompaction {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let armed = false;
+		let held = false;
+		const spy = spyOn(SessionMaintenance.prototype, "waitForIdleCompaction").mockImplementation(() => {
+			if (!armed || held) return undefined;
+			held = true;
+			reached.resolve();
+			return release.promise;
+		});
+		return {
+			reached: reached.promise,
+			arm: () => {
+				armed = true;
+			},
+			release: () => release.resolve(),
+			restore: () => spy.mockRestore(),
+		};
+	}
+
+	it("in plan mode, one whose normalization outlasts the start of a new session runs no turn in the replacement transcript", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		const { session, mock } = await createHarness();
+		session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+		// Holds the new session after it has disconnected the agent and before it bumps the session
+		// generation: the window in which a bare generation check still reads "same session".
+		const transition = holdSessionTransition(session);
+		try {
+			// `triggerTurn` keeps plan mode from folding it, so only the transition can stop the turn.
+			const sent = session.sendCustomMessage(imageCard("CARD_MID_TRANSITION"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+			await normalizeStarted.promise;
+			const started = session.newSession();
+			await transition.reached;
+
+			releaseNormalize.resolve();
+			await setImmediate();
+			transition.release();
+			expect(await started).toBe(true);
+			expect(await sent).toBe(false);
+			await settle(session);
+		} finally {
+			releaseNormalize.resolve();
+			transition.release();
+			transition.restore();
+			normalizeSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(0);
+		expect(persisted(session, "CARD_MID_TRANSITION")).toBe(false);
+	});
+
+	it("settles the run's end when a new session drops the aside its admission held open", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			// The extension API returns void: the send outlives the run it was made from.
+			void harness.session.sendCustomMessage(imageCard("CARD_DROPPED_BY_NEW"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+		});
+		const { session, mock, agentEnds } = harness;
+		try {
+			await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await normalizeStarted.promise;
+			await settle(session);
+			// The run ended non-terminal for the turn the admitted aside asked for.
+			expect(agentEnds).toEqual([false]);
+
+			// The new session owns the transcript now, so the send lands nowhere: no record is
+			// queued, folded or prompted, and only its admission closes.
+			expect(await session.newSession()).toBe(true);
+			releaseNormalize.resolve();
+			await settle(session);
+		} finally {
+			releaseNormalize.resolve();
+			normalizeSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_DROPPED_BY_NEW")).toBe(false);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles the end it held open when a new session commits after its wake re-queued the records", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_REQUEUED_BY_NEW"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+		});
+		const { session, mock, agentEnds } = harness;
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		const yieldWait = holdWorkPoolYieldWait(session);
+		const transition = holdSessionTransition(session);
+		try {
+			const extensionTurn = session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await yieldWait.reached;
+			expect(agentEnds).toEqual([false]);
+
+			// The wake leaves its yield wait while the new session has disconnected the agent and
+			// has not yet bumped the generation, so it re-queues its records for the transition.
+			const started = session.newSession();
+			await transition.reached;
+			yieldWait.release();
+			await setImmediate();
+			transition.release();
+			expect(await started).toBe(true);
+			await extensionTurn;
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+			transition.release();
+			transition.restore();
+		}
+
+		// The commit cleared the queue, so no record and no turn remain to publish that end.
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_REQUEUED_BY_NEW")).toBe(false);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles the end it held open when a new session commits while its wake waits out an idle compaction", async () => {
+		const compaction = holdIdleCompaction();
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_BEFORE_COMPACTION"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+			// From here the only waitForIdleCompaction() call left in this settle is the wake's.
+			compaction.arm();
+		});
+		const { session, mock, agentEnds } = harness;
+		try {
+			await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await compaction.reached;
+			expect(agentEnds).toEqual([false]);
+
+			// The new session clears the IRC queues and the transcript the aside belonged to; the
+			// wake's records live only in the parked closure, so the commit leaves nothing to wake.
+			expect(await session.newSession()).toBe(true);
+			compaction.release();
+			await setImmediate();
+			await settle(session);
+		} finally {
+			compaction.release();
+			compaction.restore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_BEFORE_COMPACTION")).toBe(false);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles the end it held open when a new session discards the parked record that promised the turn", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_PARKED_POOL"), { deliverAs: "aside", triggerTurn: true });
+		});
+		const { session, mock, agentEnds } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		try {
+			await parkStrandedAsideBehindPool(session, yieldWait);
+			expect(session.ircWakesPending).toBe(true);
+			expect(agentEnds).toEqual([false]);
+
+			// The record waits for the pool to clear; the new session discards it instead.
+			expect(await session.newSession()).toBe(true);
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_PARKED_POOL")).toBe(false);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles the end it held open when a session switch discards the parked record that promised the turn", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_PARKED_SWITCH"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+		});
+		const { session, mock, agentEnds } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		try {
+			await parkStrandedAsideBehindPool(session, yieldWait);
+			expect(agentEnds).toEqual([false]);
+
+			expect(await session.switchSession(path.join(tempDir.path(), "switch-target.jsonl"))).toBe(true);
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("does not hold a session transition open while it queues an aside the transition's own hook sent", async () => {
+		const { session, mock } = await createHarness();
+		// The reconciler runs inside switchSession()'s transition scope, which awaits it. A send
+		// that waited the transition out instead of queueing would never return here, and the
+		// switch would never finish: this test hangs to its timeout rather than failing an assert.
+		let hookResult: boolean | undefined;
+		session.setSessionSwitchReconciler(async () => {
+			hookResult = await session.sendCustomMessage(card("CARD_FROM_HOOK"), { deliverAs: "aside" });
+		});
+		expect(await session.switchSession(path.join(tempDir.path(), "hook-target.jsonl"))).toBe(true);
+		// The send returns without starting a turn inside the transition scope, and the record it
+		// queued reaches the new session's first turn instead of being lost.
+		expect(hookResult).toBe(false);
+		await settle(session);
+		expect(requestsContaining(mock, "CARD_FROM_HOOK")).toBe(1);
 	});
 });
