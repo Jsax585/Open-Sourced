@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { isEnoent, logger, postmortem, ptree, stableStringifyJson, untilAborted } from "@oh-my-pi/pi-utils";
 import { encodeMessageFrame, MessageFramer } from "../jsonrpc/message-framing";
 import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
-import { getConfig } from "./config";
+import { assertSafeLspRoot, assertSafeLspWorkspaceMessage, getConfig } from "./config";
 import { applyWorkspaceEdit, type ExecutedWorkspaceChange } from "./edits";
 import { getLspmuxCommand, isLspmuxSupported } from "./lspmux";
 import { connectSharedLspTransport } from "./mux/daemon";
@@ -428,13 +428,17 @@ function queueWriteMessage(
 ): Promise<void> {
 	const write = client.writeQueue
 		.catch(() => {})
-		.then(() =>
-			writeMessage(
+		.then(() => {
+			if ("method" in message) {
+				if (message.method === "initialize") assertSafeLspRoot(client.cwd);
+				assertSafeLspWorkspaceMessage(message.method, message.params);
+			}
+			return writeMessage(
 				client.proc.stdin,
 				message,
 				deliverQueued && signal?.aborted ? AbortSignal.timeout(DELIVER_QUEUED_TIMEOUT_MS) : signal,
-			),
-		);
+			);
+		});
 	const result = write.catch((err: unknown) => {
 		if (err instanceof LspDrainAbortError) {
 			// Only an abort that raced this write's in-flight drain leaves
@@ -606,6 +610,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
  * for `initialize` params and `workspace/workspaceFolders` server requests.
  */
 function currentWorkspaceFolders(client: LspClient): Array<{ uri: string; name: string }> {
+	assertSafeLspRoot(client.cwd);
 	return [{ uri: fileToUri(client.cwd), name: path.basename(client.cwd) || "workspace" }];
 }
 
@@ -1137,6 +1142,7 @@ export async function getOrCreateClient(
 	}
 
 	// Create new client with lock
+	assertSafeLspRoot(cwd);
 	const lockToken = Symbol();
 	const clientPromise = (async () => {
 		const baseCommand = config.resolvedCommand ?? config.command;
@@ -1161,11 +1167,13 @@ export async function getOrCreateClient(
 		if (isSharedLspEnabled() && command === baseCommand) {
 			proc = await connectSharedLspTransport({ command, args, cwd, env, initializationOptions, signal });
 		}
-		proc ??= ptree.spawn([command, ...args], {
-			cwd,
-			stdin: "pipe",
-			env: env ? { ...Bun.env, ...env } : undefined,
-		});
+		if (!proc) {
+			proc = ptree.spawn([command, ...args], {
+				cwd,
+				stdin: "pipe",
+				env: env ? { ...Bun.env, ...env } : undefined,
+			});
+		}
 
 		let resolveProjectLoaded!: () => void;
 		const projectLoaded = new Promise<void>(resolve => {
