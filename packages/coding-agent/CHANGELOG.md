@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed ACP clients losing background subagent progress and completion after the parent prompt returns or `/fresh` rotates the provider session ID, retaining native task calls, lifecycle updates, and close cleanup under the original ACP registration while keeping differently named wrappers on their live-session lifecycle and preserving single model/thinking config notifications before and after bootstrap ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
+- Fixed stalled or continuing background task notifications holding ACP prompts and queued commands open, while preserving pending turn notification ordering and preventing cancelled deliveries or completed local commands with nested agent turns from settling successor prompts ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
+- Fixed ACP clients confusing completed background task snapshots with the end of a mixed blocking/background task call, exposing distinct spawning-call lifecycle metadata and foreground blocking activity without changing native tool statuses ([#17172](https://github.com/can1357/oh-my-pi/pull/17172) by [@ness001](https://github.com/ness001)).
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).

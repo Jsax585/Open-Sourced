@@ -52,6 +52,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 			],
 			details: {
 				projectAgentsDir: null,
+				blockingActive: false,
 				totalDurationMs: 48_200,
 				usage: fixtureUsage({ input: 52_600, output: 8_800 }, 0.12),
 				progress: [
@@ -119,6 +120,7 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 			],
 			details: {
 				projectAgentsDir: null,
+				blockingActive: false,
 				totalDurationMs: 9_800,
 				usage: fixtureUsage({ input: 10_900, output: 1_400 }, 0.1),
 				results: [

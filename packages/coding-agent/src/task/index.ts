@@ -223,7 +223,7 @@ function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
 	return {
 		content: [{ type: "text", text }],
 		isError: true,
-		details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+		details: { projectAgentsDir: null, results: [], totalDurationMs: 0, blockingActive: false },
 	};
 }
 
@@ -1055,9 +1055,25 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const launchSession = this.#launchSessions.get(toolCallId);
 		this.#launchSessions.delete(toolCallId);
+		const activity = { blockingActive: false };
 		try {
-			return await this.#dispatch(toolCallId, rawParams, launchSession, signal, onUpdate);
+			const result = await this.#dispatch(
+				toolCallId,
+				rawParams,
+				launchSession,
+				activity,
+				signal,
+				onUpdate
+					? update => {
+							if (update.details) update.details.blockingActive = activity.blockingActive;
+							onUpdate(update);
+						}
+					: undefined,
+			);
+			if (result.details) result.details.blockingActive = false;
+			return result;
 		} finally {
+			activity.blockingActive = false;
 			// No-op once dispatch adopted; otherwise nothing launched early may outlive the call.
 			launchSession?.discard("task call settled without adopting speculative launches");
 		}
@@ -1067,6 +1083,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		toolCallId: string,
 		rawParams: unknown,
 		launchSession: TaskLaunchSession | undefined,
+		activity: { blockingActive: boolean },
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
@@ -1160,6 +1177,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const ircEnabled = isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0);
 
 		if (!manager || asyncItems.length === 0) {
+			activity.blockingActive = true;
 			// Sync fallback: async execution disabled, orphaned host that never
 			// wired a job manager, or every item's agent type declares
 			// `blocking: true`.
@@ -1278,6 +1296,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		}
 		const asyncSpawns = spawns.filter(spawn => !spawn.blocking);
 		const syncSpawns = spawns.filter(spawn => spawn.blocking);
+		activity.blockingActive = syncSpawns.length > 0;
 		const agentLabel = [...new Set(asyncSpawns.map(spawn => spawn.progress.agent))].join(", ");
 
 		// Aggregate state for the one tool call. Async spawns report into the
@@ -1298,6 +1317,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			projectAgentsDir: syncProjectAgentsDir,
 			results: [...syncResults],
 			totalDurationMs: Date.now() - callStartedAt,
+			blockingActive: activity.blockingActive,
 			usage: syncUsage,
 			outputPaths: syncOutputPaths,
 			progress: spawns.map(spawn => ({ ...spawn.progress })),
@@ -1348,7 +1368,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						text: `Failed to start background task job${failedSchedules.length === 1 ? "" : "s"}: ${failedSchedules.join("; ")}`,
 					},
 				],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0, blockingActive: false },
 			};
 		}
 
@@ -1468,6 +1488,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const text = [merged.contentParts.join("\n\n"), spawnedSummary]
 			.filter(section => section.trim().length > 0)
 			.join("\n\n");
+		activity.blockingActive = false;
 		return withAdvisory({
 			content: [{ type: "text", text: text.length > 0 ? text : "No results." }],
 			...(merged.isError ? { isError: true } : {}),
@@ -1739,6 +1760,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					projectAgentsDir: null,
 					results: [],
 					totalDurationMs: Date.now() - startTime,
+					blockingActive: true,
 					progress: Array.from(latestProgress.entries())
 						.sort((a, b) => a[0] - b[0])
 						.map(([, progress]) => progress),
@@ -1768,6 +1790,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				projectAgentsDir: merged.projectAgentsDir,
 				results: merged.results,
 				totalDurationMs: Date.now() - startTime,
+				blockingActive: false,
 				usage: merged.usage,
 				outputPaths: merged.outputPaths,
 			},
@@ -1839,7 +1862,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 						text: `Task ${item.name?.trim() || `#${spawns[position].index + 1}`} failed: ${message}`,
 					},
 				],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				details: { projectAgentsDir: null, results: [], totalDurationMs: 0, blockingActive: false },
 			};
 		});
 	}
@@ -1913,6 +1936,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 							projectAgentsDir: null,
 							results: [],
 							totalDurationMs: Date.now() - startTime,
+							blockingActive: !detached,
 							progress: [latestProgress],
 						},
 					});
@@ -1945,6 +1969,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 					projectAgentsDir: null,
 					results: salvaged ? [salvaged] : [],
 					totalDurationMs: Date.now() - startTime,
+					blockingActive: false,
 					...(salvaged?.usage ? { usage: salvaged.usage } : {}),
 					...(salvaged?.outputPath ? { outputPaths: [salvaged.outputPath] } : {}),
 					...(latestProgress ? { progress: [latestProgress] } : {}),
@@ -1967,6 +1992,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				projectAgentsDir,
 				results: [result],
 				totalDurationMs,
+				blockingActive: false,
 				usage: result.usage,
 				outputPaths: result.outputPath ? [result.outputPath] : undefined,
 			},

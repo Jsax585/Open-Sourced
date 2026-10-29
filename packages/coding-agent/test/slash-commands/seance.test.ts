@@ -42,6 +42,7 @@ function taskResult(details: Partial<TaskToolDetails>, text = ""): AgentToolResu
 		content: text ? [{ type: "text", text }] : [],
 		details: {
 			projectAgentsDir: null,
+			blockingActive: false,
 			results: [],
 			totalDurationMs: 0,
 			...details,
@@ -120,6 +121,7 @@ describe("/seance", () => {
 			) => {
 				onUpdate?.(
 					taskResult({
+						blockingActive: true,
 						progress: [{ id: "progress-id", resolvedModel: "openai/actual-model" } as never],
 					}),
 				);
@@ -190,15 +192,17 @@ describe("/seance", () => {
 			) => {
 				onUpdate?.(
 					taskResult({
+						blockingActive: true,
 						progress: [{ id: "streamed-id", resolvedModel: "anthropic/primary-model" } as never],
 					}),
 				);
 				onUpdate?.(
 					taskResult({
+						blockingActive: true,
 						progress: [{ id: "streamed-id", resolvedModel: "openai/latest-streamed-model" } as never],
 					}),
 				);
-				onUpdate?.(taskResult({ progress: [{ id: "streamed-id" } as never] }));
+				onUpdate?.(taskResult({ blockingActive: true, progress: [{ id: "streamed-id" } as never] }));
 				return taskResult({ results: [{ id: "settled-id", exitCode: 0 } as never] });
 			},
 		);
@@ -227,6 +231,7 @@ describe("/seance", () => {
 			) => {
 				onUpdate?.(
 					taskResult({
+						blockingActive: true,
 						progress: [{ id: "fallback-id", resolvedModel: "anthropic/primary-model" } as never],
 					}),
 				);

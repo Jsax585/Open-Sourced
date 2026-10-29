@@ -111,6 +111,7 @@ function runningProgress(id: string, description: string, overrides: Partial<Age
 
 const nestedProgress: TaskToolDetails = {
 	projectAgentsDir: null,
+	blockingActive: true,
 	results: [],
 	totalDurationMs: 2500,
 	progress: [runningProgress("Parent.Child", "Inspect child layout")],
@@ -125,6 +126,7 @@ const taskProgressUpdate = {
 		content: [{ type: "text", text: "Running 1 agent..." }],
 		details: {
 			projectAgentsDir: null,
+			blockingActive: true,
 			results: [],
 			totalDurationMs: 2500,
 			progress: [
@@ -163,6 +165,7 @@ const backgroundTaskRunningResult = {
 	content: [{ type: "text", text: "Spawned agent `Bg`..." }],
 	details: {
 		projectAgentsDir: null,
+		blockingActive: false,
 		results: [],
 		totalDurationMs: 10,
 		progress: [runningProgress("Bg", "Background work", { currentTool: undefined, currentToolArgs: undefined })],
@@ -185,6 +188,7 @@ function backgroundProgressUpdate(
 			content: [{ type: "text", text: "Running background task Bg..." }],
 			details: {
 				projectAgentsDir: null,
+				blockingActive: false,
 				results: [],
 				totalDurationMs: 20,
 				progress: [runningProgress("Bg", "Background work", { currentTool: "grep", currentToolArgs: marker })],

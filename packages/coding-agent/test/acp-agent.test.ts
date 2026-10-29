@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { AgentBusyError } from "@oh-my-pi/pi-agent-core";
 import { Database } from "bun:sqlite";
 import { AuthStorage, SqliteAuthCredentialStore } from "@oh-my-pi/pi-ai";
@@ -9,7 +10,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
+import type { ExtensionAPI, ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { buildSkillPromptMessage } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
@@ -356,6 +357,14 @@ class FakeAgentSession {
 
 	async reload(): Promise<void> {}
 
+	freshSession(): { previousSessionId: string; sessionId: string; closedProviderSessions: number } | undefined {
+		if (this.isStreaming) return undefined;
+		const previousSessionId = this.sessionId;
+		this.sessionId = "00000000-0000-4000-8000-000000000099";
+		this.agent.sessionId = this.sessionId;
+		return { previousSessionId, sessionId: this.sessionId, closedProviderSessions: 0 };
+	}
+
 	async newSession(): Promise<boolean> {
 		await this.sessionManager.newSession();
 		this.sessionId = this.sessionManager.getSessionId();
@@ -536,6 +545,7 @@ async function createHarness(
 		sessionUpdateHook?: (notification: SessionNotification) => Promise<void> | void;
 		/** Gives each session the factory creates a real extension runner with no extensions. */
 		extensionRunners?: boolean;
+		extensionRuntime?: ExtensionRuntime;
 		/** Exposed to each created session's `modelRegistry` for MCP credential round-trips. */
 		authStorage?: AuthStorage;
 	} = {},
@@ -575,10 +585,10 @@ async function createHarness(
 	const factory = async (cwd: string, factoryOptions?: { interactivePrompts?: boolean }) => {
 		const session = new FakeAgentSession(cwd);
 		if (options.authStorage) session.authStorage = options.authStorage;
-		if (options.extensionRunners) {
+		if (options.extensionRunners || options.extensionRuntime) {
 			session.extensionRunner = new ExtensionRunner(
 				[],
-				new ExtensionRuntime(),
+				options.extensionRuntime ?? new ExtensionRuntime(),
 				cwd,
 				session.sessionManager,
 				{} as ModelRegistry,
@@ -945,6 +955,358 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("delivers task snapshots once across prompt settlement, bootstrap, and session close", async () => {
+		const harness = await createHarness();
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const unrelated = await harness.agent.newSession({ cwd: harness.cwdB, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const args = { tasks: [{ agent: "worker", task: "background work" }] };
+		const emit = (event: AgentSessionEvent) => {
+			for (const listener of session.listeners()) listener(event);
+		};
+		const snapshot = (status: "running" | "completed", text: string) => ({
+			content: [{ type: "text" as const, text }],
+			details: {
+				async: { type: "task", state: status, jobId: "child-1" },
+				progress: [{ id: "child-1", agent: "worker", status, recentOutput: [text], resolvedModel: "model-1" }],
+			},
+		});
+		const update = (result: unknown): AgentSessionEvent => ({
+			type: "tool_execution_update",
+			toolCallId: "parent-task",
+			toolName: "task",
+			args,
+			partialResult: result,
+		});
+		const launch = snapshot("running", "launched");
+		const offturn = snapshot("running", "offturn progress");
+		const nextTurn = snapshot("running", "next prompt progress");
+		const terminal = snapshot("completed", "finished");
+		let turn = 0;
+		session.prompt = async () => {
+			session.isStreaming = true;
+			if (turn++ === 0) {
+				emit({ type: "tool_execution_start", toolCallId: "parent-task", toolName: "task", args });
+				emit(update(launch));
+				// The tool returning only acknowledges launch; its child still runs.
+				emit({ type: "tool_execution_end", toolCallId: "parent-task", toolName: "task", result: launch });
+			} else {
+				emit(update(nextTurn));
+			}
+			emit({ type: "agent_end", messages: [] });
+			session.isStreaming = false;
+			return true;
+		};
+		const prompt = () =>
+			harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "launch or observe background work" }],
+			});
+		try {
+			// A fast first prompt can finish before the bootstrap timer installs
+			// config notifications; neither its updates nor later updates may vanish.
+			await prompt();
+			emit(update(offturn));
+			await advanceBootstrapGuard();
+			await prompt();
+			// Autonomous follow-up activity is not a new ACP prompt owner.
+			session.isStreaming = true;
+			emit(update(terminal));
+			emit({ type: "agent_end", messages: [] });
+			session.isStreaming = false;
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "unrelated",
+				toolName: "bash",
+				args: {},
+				partialResult: { content: [] },
+			});
+			emit({
+				type: "tool_execution_update",
+				toolCallId: "other-job",
+				toolName: "bash",
+				args: {},
+				partialResult: { details: { async: { type: "bash", state: "running" } } },
+			});
+
+			const taskUpdates = harness.updates.filter(
+				notification => notification.update.sessionUpdate === "tool_call_update",
+			);
+			expectAcpNotifications(taskUpdates);
+			expect(
+				taskUpdates.map(notification => ({ sessionId: notification.sessionId, ...notification.update })),
+			).toMatchObject([
+				{ sessionId: created.sessionId, toolCallId: "parent-task", status: "in_progress", rawOutput: launch },
+				{ sessionId: created.sessionId, toolCallId: "parent-task", status: "completed", rawOutput: launch },
+				{ sessionId: created.sessionId, toolCallId: "parent-task", status: "in_progress", rawOutput: offturn },
+				{ sessionId: created.sessionId, toolCallId: "parent-task", status: "in_progress", rawOutput: nextTurn },
+				{ sessionId: created.sessionId, toolCallId: "parent-task", status: "completed", rawOutput: terminal },
+			]);
+			expect(taskUpdates.some(notification => notification.sessionId === unrelated.sessionId)).toBe(false);
+
+			// Even a callback captured before close must not leak a stale session
+			// notification after the record is removed from this connection.
+			const retainedListeners = session.listeners();
+			await harness.agent.closeSession({ sessionId: created.sessionId });
+			const beforeClosedUpdate = harness.updates.length;
+			for (const listener of retainedListeners) listener(update(terminal));
+			expect(harness.updates.length).toBe(beforeClosedUpdate);
+			expect(session.listeners()).toHaveLength(0);
+		} finally {
+			await harness.agent.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	for (const freshBeforeBootstrap of [true, false]) {
+		it(`retains ACP ownership after /fresh ${freshBeforeBootstrap ? "before" : "after"} bootstrap`, async () => {
+			const harness = await createHarness();
+			vi.useFakeTimers();
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId)!;
+			const transcriptId = session.sessionManager.getSessionId();
+			const emit = (event: AgentSessionEvent) => {
+				for (const listener of session.listeners()) listener(event);
+			};
+			const taskUpdate: AgentSessionEvent = {
+				type: "tool_execution_update",
+				toolCallId: "fresh-task",
+				toolName: "task",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "still running" }],
+					details: { async: { type: "task", state: "running", jobId: "fresh-child" } },
+				},
+			};
+			const args = { tasks: [{ agent: "worker", task: "new work after fresh" }] };
+			const progress = {
+				content: [{ type: "text" as const, text: "new task running" }],
+				details: { results: [], async: { type: "task", state: "running", jobId: "new-fresh-child" } },
+			};
+			const completed = {
+				content: [{ type: "text" as const, text: "new task finished" }],
+				details: { results: [], async: { type: "task", state: "completed", jobId: "new-fresh-child" } },
+			};
+			try {
+				if (!freshBeforeBootstrap) await advanceBootstrapGuard();
+				await expect(
+					harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/fresh" }] }),
+				).resolves.toMatchObject({ stopReason: "end_turn" });
+				expect(session.sessionId).not.toBe(created.sessionId);
+				expect(session.agent.sessionId).toBe(session.sessionId);
+				expect(session.sessionManager.getSessionId()).toBe(transcriptId);
+				emit(taskUpdate);
+				session.prompt = async () => {
+					session.isStreaming = true;
+					emit({ type: "tool_execution_start", toolCallId: "new-fresh-task", toolName: "task", args });
+					emit({
+						type: "tool_execution_update",
+						toolCallId: "new-fresh-task",
+						toolName: "task",
+						args,
+						partialResult: progress,
+					});
+					emit({
+						type: "tool_execution_end",
+						toolCallId: "new-fresh-task",
+						toolName: "task",
+						result: completed,
+					});
+					// Task-shaped results do not change a wrapper's live-session ownership.
+					emit({ type: "tool_execution_start", toolCallId: "wrapped-fresh-task", toolName: "wrapped_task", args });
+					emit({
+						type: "tool_execution_update",
+						toolCallId: "wrapped-fresh-task",
+						toolName: "wrapped_task",
+						args,
+						partialResult: progress,
+					});
+					emit({
+						type: "tool_execution_end",
+						toolCallId: "wrapped-fresh-task",
+						toolName: "wrapped_task",
+						result: completed,
+					});
+					emit({ type: "tool_execution_start", toolCallId: "fresh-bash", toolName: "bash", args: {} });
+					emit({
+						type: "tool_execution_update",
+						toolCallId: "fresh-bash",
+						toolName: "bash",
+						args: {},
+						partialResult: { content: [] },
+					});
+					emit({
+						type: "tool_execution_end",
+						toolCallId: "fresh-bash",
+						toolName: "bash",
+						result: { content: [] },
+					});
+					emit({ type: "agent_end", messages: [] });
+					session.isStreaming = false;
+					return true;
+				};
+				await harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: "launch new task" }],
+				});
+				// Task naming alone must not grant off-turn lifetime ownership.
+				emit({
+					type: "tool_execution_update",
+					toolCallId: "new-fresh-task",
+					toolName: "task",
+					args,
+					partialResult: { content: [], details: { results: [] } },
+				});
+				// A wrapper cannot acquire off-turn forwarding from result provenance.
+				emit({
+					type: "tool_execution_update",
+					toolCallId: "wrapped-fresh-task",
+					toolName: "wrapped_task",
+					args,
+					partialResult: progress,
+				});
+				const lifecycle = harness.updates.filter(
+					notification =>
+						"toolCallId" in notification.update && notification.update.toolCallId === "new-fresh-task",
+				);
+				// Retained native task notifications remain visible to the registered client.
+				const accepted = lifecycle.filter(notification => notification.sessionId === created.sessionId);
+				expect(accepted.map(notification => notification.update)).toMatchObject([
+					{ sessionUpdate: "tool_call", toolCallId: "new-fresh-task", status: "pending", rawInput: args },
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "new-fresh-task",
+						status: "in_progress",
+						rawOutput: progress,
+						_meta: { omp: { taskLifecycle: "progress" } },
+					},
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "new-fresh-task",
+						status: "completed",
+						rawOutput: completed,
+						_meta: { omp: { taskLifecycle: "completed" } },
+					},
+				]);
+				const wrappedFrames = harness.updates.filter(
+					notification =>
+						"toolCallId" in notification.update && notification.update.toolCallId === "wrapped-fresh-task",
+				);
+				expect(wrappedFrames.map(notification => notification.sessionId)).toEqual([
+					session.sessionId,
+					session.sessionId,
+					session.sessionId,
+				]);
+				expect(wrappedFrames.map(notification => notification.update)).toMatchObject([
+					{ sessionUpdate: "tool_call", toolCallId: "wrapped-fresh-task", status: "pending", rawInput: args },
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "wrapped-fresh-task",
+						status: "in_progress",
+						rawOutput: progress,
+					},
+					{
+						sessionUpdate: "tool_call_update",
+						toolCallId: "wrapped-fresh-task",
+						status: "completed",
+						rawOutput: completed,
+					},
+				]);
+				expect(wrappedFrames.map(notification => notification.update._meta)).toEqual([
+					undefined,
+					undefined,
+					undefined,
+				]);
+				const nonTaskFrames = harness.updates.filter(
+					notification => "toolCallId" in notification.update && notification.update.toolCallId === "fresh-bash",
+				);
+				expect(nonTaskFrames.map(notification => notification.sessionId)).toEqual([
+					session.sessionId,
+					session.sessionId,
+					session.sessionId,
+				]);
+				expectAcpNotifications([...lifecycle, ...wrappedFrames, ...nonTaskFrames]);
+				// A consumer keys tool calls by session and rejects orphan updates.
+				const introduced = new Map<string, Set<string>>();
+				for (const { sessionId, update } of harness.updates) {
+					if (update.sessionUpdate === "tool_call") {
+						let calls = introduced.get(sessionId);
+						if (!calls) introduced.set(sessionId, (calls = new Set()));
+						calls.add(update.toolCallId);
+					} else if (
+						update.sessionUpdate === "tool_call_update" &&
+						["new-fresh-task", "wrapped-fresh-task", "fresh-bash"].includes(update.toolCallId)
+					) {
+						expect(introduced.get(sessionId)?.has(update.toolCallId)).toBe(true);
+					}
+				}
+				if (freshBeforeBootstrap) await advanceBootstrapGuard();
+				const beforeConfig = harness.updates.length;
+				await harness.agent.setSessionConfigOption({
+					sessionId: created.sessionId,
+					configId: "thinking",
+					value: "high",
+				});
+				await session.setModel(TEST_MODELS[1]!);
+				const configs = harness.updates
+					.slice(beforeConfig)
+					.filter(notification => notification.update.sessionUpdate === "config_option_update");
+				// Preserve non-task notifications' existing emit-time identity contract.
+				expect(configs.map(notification => notification.sessionId)).toEqual([session.sessionId, session.sessionId]);
+				const tasks = harness.updates.filter(
+					notification =>
+						notification.update.sessionUpdate === "tool_call_update" &&
+						notification.update.toolCallId === "fresh-task",
+				);
+				expect(tasks).toHaveLength(1);
+				expect(tasks[0]).toMatchObject({ sessionId: created.sessionId, update: { toolCallId: "fresh-task" } });
+				expectAcpNotifications([...configs, ...tasks]);
+				await expect(harness.agent.cancel({ sessionId: session.sessionId })).rejects.toMatchObject({
+					code: -32002,
+				});
+				const retainedListeners = session.listeners();
+				await harness.agent.closeSession({ sessionId: created.sessionId });
+				expect(session.disposed).toBe(true);
+				expect(session.listeners()).toHaveLength(0);
+				await expect(harness.agent.cancel({ sessionId: created.sessionId })).rejects.toMatchObject({
+					code: -32002,
+				});
+				const beforeClosedUpdate = harness.updates.length;
+				for (const listener of retainedListeners) {
+					listener(taskUpdate);
+					listener({ type: "model_changed" } as AgentSessionEvent);
+				}
+				expect(harness.updates).toHaveLength(beforeClosedUpdate);
+			} finally {
+				await harness.agent.dispose();
+				vi.useRealTimers();
+			}
+		});
+	}
+
+	it("removes the original ACP registration when cancel times out after /fresh", async () => {
+		const harness = await createHarness();
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		try {
+			await harness.agent.prompt({ sessionId: created.sessionId, prompt: [{ type: "text", text: "/fresh" }] });
+			harness.agent.setCancelCleanupTimeoutForTesting(10);
+			session.isStreaming = true;
+			session.abort = () => Promise.withResolvers<void>().promise;
+			const cancel = harness.agent.cancel({ sessionId: created.sessionId });
+			vi.advanceTimersByTime(10);
+			await cancel;
+			expect(session.disposed).toBe(true);
+			expect(session.listeners()).toHaveLength(0);
+			await expect(harness.agent.cancel({ sessionId: created.sessionId })).rejects.toMatchObject({ code: -32002 });
+		} finally {
+			await harness.agent.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("pushes config_option_update when thinking level changes internally", async () => {
 		// Internal callers (slash commands, model auto-adjust, extension UI) call
 		// AgentSession.setThinkingLevel directly without going through the ACP
@@ -1005,7 +1367,7 @@ describe("ACP agent", () => {
 
 		const updatesBefore = harness.updates.length;
 		// Synchronously after `newSession` returns, the bootstrap timer has
-		// not fired yet, so the lifetime subscription is not installed.
+		// not fired yet, so lifetime config delivery is not ready.
 		session.setThinkingLevel("high");
 
 		const beforeBootstrap = harness.updates
@@ -1016,8 +1378,8 @@ describe("ACP agent", () => {
 					notification.update.sessionUpdate === "config_option_update",
 			);
 		expect(beforeBootstrap.length).toBe(0);
-		// After advancing through the 50ms bootstrap timer, the subscription is
-		// installed and subsequent changes do surface.
+		// After advancing through the 50ms bootstrap timer, lifetime config
+		// delivery is ready and subsequent changes do surface.
 		await advanceBootstrapGuard();
 		const baseline = harness.updates.length;
 		session.setThinkingLevel("medium");
@@ -1035,6 +1397,37 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("emits a single config_option_update per model and thinking change before bootstrap", async () => {
+		const harness = await createHarness();
+		vi.useFakeTimers();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		// Task delivery is already subscribed, but config events remain gated.
+		// Each client request must therefore supply its own notification.
+		for (const [configId, value] of [
+			["model", `${TEST_MODELS[1]!.provider}/${TEST_MODELS[1]!.id}`],
+			["thinking", "high"],
+		] as const) {
+			const baseline = harness.updates.length;
+			await harness.agent.setSessionConfigOption({ sessionId: created.sessionId, configId, value });
+			const updates = harness.updates
+				.slice(baseline)
+				.filter(
+					notification =>
+						notification.sessionId === created.sessionId &&
+						notification.update.sessionUpdate === "config_option_update",
+				);
+			expect(updates).toHaveLength(1);
+			expectAcpNotifications(updates);
+			const update = updates[0]!.update;
+			if (update.sessionUpdate !== "config_option_update") throw new Error("Expected config update");
+			expect(update.configOptions.find(option => option.id === configId)?.currentValue).toBe(value);
+		}
+
+		await harness.agent.closeSession({ sessionId: created.sessionId });
+		vi.useRealTimers();
+		harness.abortController.abort();
+	});
+
 	it("emits a single config_option_update per setSessionConfigOption(thinking) call", async () => {
 		// Client-initiated thinking changes flow through #setThinkingLevelById,
 		// which fires `thinking_level_changed` and lets the lifetime subscription
@@ -1043,9 +1436,9 @@ describe("ACP agent", () => {
 		const harness = await createHarness();
 		vi.useFakeTimers();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-		// Wait past the bootstrap guard so the lifetime subscription is
-		// installed and the client-driven setSessionConfigOption produces
-		// exactly one notification through it.
+		// Wait past the bootstrap guard so lifetime config delivery is ready
+		// and the client-driven setSessionConfigOption produces exactly one
+		// notification through it.
 		await advanceBootstrapGuard();
 
 		const updatesBefore = harness.updates.length;
@@ -1159,15 +1552,15 @@ describe("ACP agent", () => {
 		}
 	});
 
-	it("still pushes config_option_update for /effort before the lifetime subscription exists", async () => {
-		// Pre-bootstrap there is no lifetime subscription, so the explicit
+	it("still pushes config_option_update for /effort before lifetime config delivery is ready", async () => {
+		// Pre-bootstrap lifetime config delivery is gated, so the explicit
 		// notifyConfigChanged is the only path that tells the client — same
 		// contract as `setSessionConfigOption`'s pre-bootstrap push.
 		const harness = await createHarness();
 		vi.useFakeTimers();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
-		// Deliberately do not advance the 50ms bootstrap guard: the lifetime
-		// subscription is not installed yet.
+		// Deliberately do not advance the 50ms bootstrap guard: lifetime config
+		// delivery is not ready yet, though task delivery is subscribed.
 
 		const updatesBefore = harness.updates.length;
 		await harness.agent.prompt({
@@ -2908,6 +3301,356 @@ describe("ACP agent", () => {
 			releaseDelivery();
 			harness.abortController.abort();
 			await Bun.sleep(0);
+		}
+	});
+
+	it("orders pending task notifications before the response without chasing continuing progress", async () => {
+		const blocked = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const laterRelease = Promise.withResolvers<void>();
+		const harness = await createHarness({
+			sessionUpdateHook: async notification => {
+				if (notification.update.sessionUpdate !== "tool_call_update") return;
+				if (notification.update.toolCallId === "first-task") {
+					blocked.resolve();
+					await release.promise;
+					emitLater?.();
+				} else if (notification.update.toolCallId === "later-task") {
+					await laterRelease.promise;
+				}
+			},
+		});
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const emitTask = (toolCallId: string) => {
+			for (const listener of session.listeners()) {
+				listener({
+					type: "tool_execution_update",
+					toolCallId,
+					toolName: "task",
+					args: {},
+					partialResult: {
+						content: [{ type: "text", text: toolCallId }],
+						details: { async: { type: "task", state: "running", jobId: toolCallId } },
+					},
+				});
+			}
+		};
+		const emitLater = () => emitTask("later-task");
+		session.prompt = async () => {
+			emitTask("first-task");
+			for (const listener of session.listeners()) listener({ type: "agent_end", messages: [] });
+			return true;
+		};
+		try {
+			const prompt = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "observe task progress" }],
+			});
+			await blocked.promise;
+			expect(await Promise.race([prompt.then(() => true), setImmediate().then(() => false)])).toBe(false);
+			release.resolve();
+			// The replacement progress is still blocked, but cannot extend this drain.
+			expect(await Promise.race([prompt.then(() => true), setImmediate().then(() => false)])).toBe(true);
+			expect((await prompt).stopReason).toBe("end_turn");
+			expect(
+				harness.updates.flatMap(notification =>
+					notification.update.sessionUpdate === "tool_call_update" ? [notification.update.toolCallId] : [],
+				),
+			).toEqual(["first-task"]);
+			laterRelease.resolve();
+			await setImmediate();
+			expect(
+				harness.updates.flatMap(notification =>
+					notification.update.sessionUpdate === "tool_call_update" ? [notification.update.toolCallId] : [],
+				),
+			).toEqual(["first-task", "later-task"]);
+		} finally {
+			release.resolve();
+			laterRelease.resolve();
+			harness.abortController.abort();
+			await setImmediate();
+		}
+	});
+
+	for (const agentInvoked of [true, false]) {
+		it(`releases ${agentInvoked ? "agent" : "local"} prompts and their queue despite stalled background delivery`, async () => {
+			const blocked = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const harness = await createHarness({
+				sessionUpdateHook: async notification => {
+					if (notification.update.sessionUpdate === "tool_call_update") {
+						blocked.resolve();
+						await release.promise;
+					}
+				},
+			});
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId)!;
+			const emitTask = () => {
+				for (const listener of session.listeners()) {
+					listener({
+						type: "tool_execution_update",
+						toolCallId: "stalled-task",
+						toolName: "task",
+						args: {},
+						partialResult: {
+							content: [{ type: "text", text: "background progress" }],
+							details: { async: { type: "task", state: "running", jobId: "child" } },
+						},
+					});
+				}
+			};
+			let turn = 0;
+			session.prompt = async (text: string) => {
+				session.promptCalls.push(text);
+				if (turn++ > 0) return false;
+				emitTask();
+				if (agentInvoked) {
+					for (const listener of session.listeners()) listener({ type: "agent_end", messages: [] });
+				}
+				return agentInvoked;
+			};
+			vi.useFakeTimers();
+			try {
+				const first = harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: "launch task" }],
+				});
+				await blocked.promise;
+				const queued = harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: "queued local command" }],
+				});
+				await setImmediate();
+				expect(session.promptCalls).toEqual(["launch task"]);
+				vi.advanceTimersByTime(250);
+				expect(
+					await Promise.race([Promise.all([first, queued]).then(() => true), setImmediate().then(() => false)]),
+				).toBe(true);
+				expect((await first).stopReason).toBe("end_turn");
+				expect((await queued).stopReason).toBe("end_turn");
+				expect(session.promptCalls).toEqual(["launch task", "queued local command"]);
+				// New off-turn delivery must not enter the local command's handler drain.
+				emitTask();
+				const local = harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: "another local command" }],
+				});
+				expect(await Promise.race([local.then(() => true), setImmediate().then(() => false)])).toBe(true);
+				expect((await local).stopReason).toBe("end_turn");
+				// Closing never waits for the stalled session-lifetime send.
+				await harness.agent.closeSession({ sessionId: created.sessionId });
+				expect(session.disposed).toBe(true);
+				expect(session.listeners()).toHaveLength(0);
+			} finally {
+				release.resolve();
+				harness.abortController.abort();
+				vi.useRealTimers();
+				await setImmediate();
+			}
+		});
+	}
+
+	for (const command of ["/local-command", "/force bash /local-command"]) {
+		it(`keeps a successor open after ${command} launches a nested agent with stalled task delivery`, async () => {
+			const runtime = new ExtensionRuntime();
+			const extensionApi: Pick<ExtensionAPI, "sendUserMessage"> = runtime;
+			const deliveryBlocked = Promise.withResolvers<void>();
+			const deliveryRelease = Promise.withResolvers<void>();
+			const successorStarted = Promise.withResolvers<void>();
+			const successorEnd = Promise.withResolvers<void>();
+			const harness = await createHarness({
+				extensionRuntime: runtime,
+				sessionUpdateHook: async notification => {
+					if (notification.update.sessionUpdate !== "tool_call_update") return;
+					deliveryBlocked.resolve();
+					await deliveryRelease.promise;
+				},
+			});
+			const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+			const session = harness.findSession(created.sessionId)!;
+			const emit = (event: AgentSessionEvent) => {
+				for (const listener of session.listeners()) listener(event);
+			};
+			session.sendUserMessage = async (content: string) => {
+				await session.prompt(content);
+			};
+			session.prompt = async (text: string) => {
+				session.promptCalls.push(text);
+				if (text === "/local-command") {
+					extensionApi.sendUserMessage("nested agent");
+					return false;
+				}
+				session.isStreaming = true;
+				if (text === "nested agent") {
+					emit({
+						type: "tool_execution_update",
+						toolCallId: "nested-task",
+						toolName: "task",
+						args: {},
+						partialResult: {
+							content: [{ type: "text", text: "background progress" }],
+							details: { async: { type: "task", state: "running", jobId: "nested-task" } },
+						},
+					});
+					session.isStreaming = false;
+					emit({ type: "agent_end", messages: [] });
+					return true;
+				}
+				successorStarted.resolve();
+				await successorEnd.promise;
+				const message = makeAssistantMessage("successor answer");
+				session.sessionManager.appendMessage(message);
+				emit({ type: "message_end", message });
+				session.isStreaming = false;
+				emit({ type: "agent_end", messages: [message] });
+				return true;
+			};
+			vi.useFakeTimers();
+			try {
+				const first = harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: command }],
+				});
+				await deliveryBlocked.promise;
+				const successor = harness.agent.prompt({
+					sessionId: created.sessionId,
+					prompt: [{ type: "text", text: "keep successor open" }],
+				});
+				await setImmediate();
+				expect(session.promptCalls).toEqual(["/local-command", "nested agent"]);
+				vi.advanceTimersByTime(250);
+				expect((await first).stopReason).toBe("end_turn");
+				await successorStarted.promise;
+				await setImmediate();
+				// An obsolete outer local-command drain must not finish the successor.
+				vi.advanceTimersByTime(250);
+				expect(await Promise.race([successor.then(() => true), setImmediate().then(() => false)])).toBe(false);
+				deliveryRelease.resolve();
+				expect(await Promise.race([successor.then(() => true), setImmediate().then(() => false)])).toBe(false);
+				successorEnd.resolve();
+				expect((await successor).stopReason).toBe("end_turn");
+				expect(session.promptCalls).toEqual(["/local-command", "nested agent", "keep successor open"]);
+				expect(
+					harness.updates.filter(
+						notification =>
+							notification.update.sessionUpdate === "agent_message_chunk" &&
+							notification.update.content.type === "text" &&
+							notification.update.content.text === "successor answer",
+					),
+				).toHaveLength(1);
+			} finally {
+				deliveryRelease.resolve();
+				successorEnd.resolve();
+				harness.abortController.abort();
+				vi.useRealTimers();
+				await setImmediate();
+			}
+		});
+	}
+
+	it("does not settle a successor prompt when a cancelled turn finishes draining task delivery", async () => {
+		const deliveryBlocked = Promise.withResolvers<void>();
+		const deliveryRelease = Promise.withResolvers<void>();
+		const idleDrained = Promise.withResolvers<void>();
+		const successorStarted = Promise.withResolvers<void>();
+		const successorEnd = Promise.withResolvers<void>();
+		const harness = await createHarness({
+			sessionUpdateHook: async notification => {
+				if (
+					notification.update.sessionUpdate === "tool_call_update" &&
+					notification.update.toolCallId === "delayed-task"
+				) {
+					deliveryBlocked.resolve();
+					await deliveryRelease.promise;
+				}
+			},
+		});
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		const emit = (event: AgentSessionEvent) => {
+			for (const listener of session.listeners()) listener(event);
+		};
+		session.asyncJobDrain = async () => {
+			idleDrained.resolve();
+			return false;
+		};
+		let turn = 0;
+		session.prompt = async () => {
+			session.isStreaming = true;
+			if (turn++ === 0) {
+				emit({
+					type: "tool_execution_update",
+					toolCallId: "delayed-task",
+					toolName: "task",
+					args: { tasks: [{ agent: "worker", task: "background work" }] },
+					partialResult: {
+						content: [{ type: "text", text: "background progress" }],
+						details: {
+							async: { type: "task", state: "running", jobId: "child-1" },
+							progress: [{ id: "child-1", agent: "worker", status: "running", recentOutput: [] }],
+						},
+					},
+				});
+				emit({ type: "agent_end", messages: [] });
+			} else {
+				const message = makeAssistantMessage("successor answer");
+				emit({ type: "message_start", message });
+				emit({
+					type: "message_update",
+					message,
+					assistantMessageEvent: {
+						type: "text_delta",
+						contentIndex: 0,
+						delta: "successor answer",
+						partial: message,
+					},
+				});
+				successorStarted.resolve();
+				await successorEnd.promise;
+				session.sessionManager.appendMessage(message);
+				emit({ type: "message_end", message });
+				emit({ type: "agent_end", messages: [message] });
+			}
+			session.isStreaming = false;
+			return true;
+		};
+		try {
+			const firstPrompt = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "launch background work" }],
+			});
+			await deliveryBlocked.promise;
+			await idleDrained.promise;
+			expect(await Promise.race([firstPrompt.then(() => true), setImmediate().then(() => false)])).toBe(false);
+
+			await harness.agent.cancel({ sessionId: created.sessionId });
+			expect((await firstPrompt).stopReason).toBe("cancelled");
+			const secondPrompt = harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "keep this successor open" }],
+			});
+			await successorStarted.promise;
+			deliveryRelease.resolve();
+			// Drain the released delivery's microtasks before observing the successor.
+			expect(await Promise.race([secondPrompt.then(() => true), setImmediate().then(() => false)])).toBe(false);
+
+			successorEnd.resolve();
+			expect((await secondPrompt).stopReason).toBe("end_turn");
+			expect(
+				harness.updates.filter(
+					notification =>
+						notification.update.sessionUpdate === "agent_message_chunk" &&
+						notification.update.content.type === "text" &&
+						notification.update.content.text === "successor answer",
+				),
+			).toHaveLength(1);
+		} finally {
+			deliveryRelease.resolve();
+			successorEnd.resolve();
+			harness.abortController.abort();
+			await setImmediate();
 		}
 	});
 

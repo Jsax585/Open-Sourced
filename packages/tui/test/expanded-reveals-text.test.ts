@@ -92,6 +92,7 @@ describe("expanded tool results reveal clipped rows", () => {
 						content: [{ type: "text", text: "Ran 1 agent" }],
 						details: {
 							projectAgentsDir: null,
+							blockingActive: false,
 							totalDurationMs: 1,
 							results: [
 								{

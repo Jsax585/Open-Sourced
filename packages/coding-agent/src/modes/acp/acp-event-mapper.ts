@@ -218,6 +218,9 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 				status: toolUpdateStatus(event.partialResult),
 				rawOutput: event.partialResult,
 			};
+			if (hasTaskToolDetails(event.toolName, event.partialResult)) {
+				update._meta = { omp: { taskLifecycle: "progress" } };
+			}
 			if (content.length > 0) {
 				update.content = content;
 			}
@@ -241,6 +244,9 @@ export function mapAgentSessionEventToAcpSessionUpdates(
 				status: event.isError ? "failed" : "completed",
 				rawOutput: event.result,
 			};
+			if (hasTaskToolDetails(event.toolName, event.result)) {
+				update._meta = { omp: { taskLifecycle: "completed" } };
+			}
 			if (content.length > 0) {
 				update.content = content;
 			}
@@ -748,6 +754,19 @@ function extractTerminalId(value: unknown): string | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const details = (value as DetailsContainer).details;
 	return extractStringProperty<TerminalIdContainer>(details, "terminalId");
+}
+
+/** Task execution ownership is separate from the async jobs reported in its snapshots. */
+function hasTaskToolDetails(toolName: string, result: unknown): boolean {
+	if (toolName !== "task" || typeof result !== "object" || result === null || !("details" in result)) return false;
+	const details = result.details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		!Array.isArray(details) &&
+		"results" in details &&
+		Array.isArray(details.results)
+	);
 }
 
 interface AsyncJobContainer {
