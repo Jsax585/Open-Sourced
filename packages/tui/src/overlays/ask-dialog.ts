@@ -692,7 +692,6 @@ export class AskDialogComponent implements Component {
 		if (this.#closed || this.#hidden || this.#isSubmitTab()) return false;
 		const question = this.#questions[this.#currentQuestionIndex()];
 		if (!question) return false;
-		if (this.#expanded) return true;
 		return (
 			wrapQuestionTitle(question, this.#contentWidth).length > MAX_HEADER_ROWS ||
 			questionDescriptionsOverflow(question, this.#contentWidth)
