@@ -508,7 +508,7 @@ describe("per-call model grants", () => {
 		const second = createMockModel({ id: "worker-b" });
 		const usageOrder = ["mock/worker-a", "mock/worker-b"];
 		const settings = Settings.isolated(
-			{ modelRoles: { review: "mock/worker" }, "task.perCallModelAllow": ["@review"] },
+			{ modelRoles: { review: "worker" }, "task.perCallModelAllow": ["@review"] },
 			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
 		);
 		const grants: PerCallModelGrants = {

@@ -276,7 +276,7 @@ describe("model-facing seance model approval", () => {
 		using tempDir = TempDir.createSync("@omp-seance-grant-authority-");
 		const fixture = await modelGateFixture(tempDir.path(), { "task.perCallModel": "off" });
 		const usageOrder = [`mock/${fixture.approved.id}`, `mock/${fixture.unapproved.id}`];
-		const host = fixture.session.settings.overlay({ modelRoles: { review: "mock/seance-model" } });
+		const host = fixture.session.settings.overlay({ modelRoles: { review: "seance-model" } });
 		vi.spyOn(host, "getStorage").mockReturnValue({ getModelUsageOrder: () => usageOrder } as AgentStorage);
 		fixture.session.settings = host.overlay(
 			{ modelRoles: { review: `mock/${fixture.unapproved.id}` } },
