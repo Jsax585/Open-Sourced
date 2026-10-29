@@ -9,9 +9,6 @@
 ### Added
 
 - Added TokenRhythm (`tokenrhythm`) as a provider: `/login tokenrhythm` with an API key, the live `/v1/models` roster, and per-family reasoning controls verified against the host (DeepSeek V4 toggle plus low/high/max; Qwen and Seed toggle; GLM, Kimi, LongCat, MiniMax and MiMo always on with no disable field) ([#16053](https://github.com/can1357/oh-my-pi/pull/16053) by [@openvictory](https://github.com/openvictory))
-- Added `retainModelCacheConnection(dbPath)`, which keeps one connection to a non-default model cache path open until disposed, so batched reads and writes stop reopening the database each time
-- Added `nextBuildPriceChange(cost, now)`, the next instant at which `buildModel` would pick a different dated price card, so callers can safely reuse earlier builds until then
-- Added the `selector-revision-suffix` catalog axis, set to `@default` on Google Vertex, so `google-vertex/claude-opus-4-8` names `claude-opus-4-8@default` exactly ([#16297](https://github.com/can1357/oh-my-pi/pull/16297) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `nextBuildPriceChange(cost, now)` to identify when a model's dated pricing card may change, allowing callers to safely reuse earlier builds until that time.
 - Added the `selector-revision-suffix` catalog axis for Google Vertex, so `google-vertex/claude-opus-4-8` resolves exactly to `claude-opus-4-8@default`.
 
