@@ -7,6 +7,12 @@
 - Added TokenRhythm (`tokenrhythm`) as a provider: `/login tokenrhythm` with an API key, the live `/v1/models` roster, and per-family reasoning controls verified against the host (DeepSeek V4 toggle plus low/high/max; Qwen and Seed toggle; GLM, Kimi, LongCat, MiniMax and MiMo always on with no disable field) ([#16053](https://github.com/can1357/oh-my-pi/pull/16053) by [@openvictory](https://github.com/openvictory))
 - Added `retainModelCacheConnection(dbPath)`, which keeps one connection to a non-default model cache path open until disposed, so batched reads and writes stop reopening the database each time
 - Added `nextBuildPriceChange(cost, now)`, the next instant at which `buildModel` would pick a different dated price card, so callers can safely reuse earlier builds until then
+- Added the `selector-revision-suffix` catalog axis, set to `@default` on Google Vertex, so `google-vertex/claude-opus-4-8` names `claude-opus-4-8@default` exactly ([#16297](https://github.com/can1357/oh-my-pi/pull/16297) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- Made Factory Droid's image models the last `image` role defaults, so `generate_image` works with only a Factory login ([#17351](https://github.com/can1357/oh-my-pi/pull/17351) by [@will-bogusz](https://github.com/will-bogusz))
+- Removed `cerebras/zai-glm` from the `smol` role defaults and `openai-codex/gpt-5.5` from the `slow` ones: no bundled model has either id, and `cerebras/zai-glm-4.6` and `openai-codex/gpt-5.6-sol` already come earlier in those lists ([#12884](https://github.com/can1357/oh-my-pi/issues/12884)) ([#16297](https://github.com/can1357/oh-my-pi/pull/16297) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 

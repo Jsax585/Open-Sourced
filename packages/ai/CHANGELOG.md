@@ -2,13 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `auth.accountPolicies` `priority` now outranks a momentarily missing usage report, so new sessions stay on the preferred account ([#15124](https://github.com/can1357/oh-my-pi/pull/15124) by [@will-bogusz](https://github.com/will-bogusz))
+### Breaking Changes
+
+- Auth-gateway `ModelResolver` now receives `ModelResolveOptions` (`api`: the route's native wire; `accepts`: the scoped client's grants). A scoped client's bare id no longer falls back to scanning `listModels()`; resolvers pick the best candidate `accepts` admits
+
 ### Fixed
 
+- Provider-specific auth-broker usage lookups no longer wait for unrelated providers; scoped caches retain the 15-second freshness window, shared cancellation isolation, and complete aggregate reports. The server-side latency reduction requires upgrading the broker
+- Credential usage can be prefetched during session setup without choosing or pinning an OAuth account or advancing round-robin selection
 - Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 - Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 - Fixed Cursor models losing omp's system prompt (context files, skills, rules) from the second turn on, or whenever earlier messages precede the active one ([#17059](https://github.com/can1357/oh-my-pi/issues/17059), [#17325](https://github.com/can1357/oh-my-pi/pull/17325) by [@robfeldmann](https://github.com/robfeldmann))
 - Fixed short-lived commands that refresh an OAuth login, such as `omp token --force-refresh`, staying open for about 5 seconds after printing their result
 - Fixed TypeSafe login rejecting valid keys when `TYPESAFE_BASE_URL` is set: the key is now checked against `<base>/v1/models` instead of `<base>/models`
+- Fixed the auth gateway's debug log saying it was retrying after a usage-limit error when it returned the error to the client without retrying ([#16579](https://github.com/can1357/oh-my-pi/pull/16579) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.13.3] - 2026-10-28
 
