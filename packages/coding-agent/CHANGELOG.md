@@ -18,6 +18,7 @@
 - Extensions and RPC clients can start live voice sessions using their own WebRTC peer, including phone-browser clients, through ctx.startLive({ sdpOffer }) or live_connect.
 - Extensions can customize assistant-text rendering and rerender individual replies through the opt-in extensionRenderers.assistantText setting, and can register interactive link schemes with extension callbacks and renderer fallbacks.
 - /debug reports now include session-logs.txt containing all log records written by the reporting session and its subagents for the current day.
+- Added `codexResets.restoreBeforeReserve` and `claudeResets.restoreBeforeReserve` (off by default) to spend a blocked account's saved reset before the turn moves to an account inside its usage reserve, such as a `reservePct: 100` backup or a Codex account on paid credits ([#15130](https://github.com/can1357/oh-my-pi/pull/15130) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 

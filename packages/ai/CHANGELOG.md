@@ -10,6 +10,7 @@
 ### Added
 
 - Added mTLS support for Anthropic connections through the `CLAUDE_CODE_CLIENT_CERT` and `CLAUDE_CODE_CLIENT_KEY` environment variables.
+- Added a `preflightSignal` option to `resets.redeem()`: cancelling it stops a saved-reset redeem before the reset request is sent, without cancelling a request already in flight ([#15130](https://github.com/can1357/oh-my-pi/pull/15130) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
