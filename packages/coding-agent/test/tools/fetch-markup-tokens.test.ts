@@ -26,6 +26,8 @@ warning: BODY_FRONT_MATTER_LOOKALIKE
 ---</p>
 <p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>, <a href="#/guide/install">Install guide</a>, <a title='See href="#setup"' href="#install">install</a>, <a href="&#35;encoded">encoded</a>, <a href="#&sol;guide">guide route</a>.</p>
 <style-guide><p>Styled: <a href="#api">the API</a>.</p></style-guide>
+<p><img src="preview.png" alt="Preview <meta name='viewport'> diagram"></p>
+<p><span title=it's>Jump to <a href="#setup">the setup</a>, it's short.</span></p>
 <p>${PROSE}</p>
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Link to this heading">¶</a></h2>
 <p>Install it, then see <a href="#options">the options</a> below. <a href="#figure"><img src="figure.png" alt="Diagram"></a> <a href="#print" title="Print article"><span>Print</span></a> <a href="#done" title="Done &check; &amp;lt;ok&amp;gt;">finished</a> ${PROSE}</p>
@@ -84,6 +86,8 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 
 		// A tag written inside `<title>` is text.
 		expect(text).toContain('title: "Renderer guide: when to write <meta name=\\"viewport\\">"');
+		// So is one written inside another element's quoted attribute.
+		expect(text).toContain("![Preview <meta name='viewport'> diagram](preview.png)");
 		expect(text).toContain(
 			"meta-description: \"Setup notes: pass name=viewport, or write <meta name='viewport'>, to the renderer\"",
 		);
@@ -111,6 +115,8 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		// A custom element whose name starts with `style` holds ordinary markup.
 		expect(text).toContain("Styled: [the API](#).");
 		expect(text).not.toContain("](#api");
+		// An apostrophe in an unquoted value opens no quoted run, so the link after it is read.
+		expect(text).toContain("Jump to [the setup](#), it's short.");
 		expect(text).toContain("see [the options](#) below");
 		expect(text).toContain("![Diagram](figure.png)");
 		expect(text).toContain("[keep this](#literal-anchor)");

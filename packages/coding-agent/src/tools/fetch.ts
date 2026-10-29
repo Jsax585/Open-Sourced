@@ -549,33 +549,51 @@ function stripDataUriImages(markdown: string): string {
 }
 
 /**
- * Where `pruneHtmlForReader` looks: a comment, an element whose content is raw text
- * (a `<meta>` written inside a `<title>` or a script string is text, not a tag), or
- * a start tag it reads (`<meta>`, `<a>`, `<base>`). A tag name ends at whitespace,
- * `/` or `>`, so `<style-guide>` is none of them.
+ * What `pruneHtmlForReader` steps through: comments and every start tag, so text
+ * inside any tag's quoted attribute (`<img alt="<meta …>">`) is never taken for a
+ * tag. A tag name ends at whitespace, `/` or `>`.
  */
-const PRUNE_SCAN_RE = /<(?:!--|(meta|a|base|script|style|title|textarea|xmp|iframe|noembed|noframes)(?=[\s/>]))/gi;
+const PRUNE_SCAN_RE = /<(?:!--|([a-z][^\s/>]*))/gi;
 
-/** End of each region {@link PRUNE_SCAN_RE} skips whole. */
-const RAW_TEXT_END_RE: Record<string, RegExp> = {
-	"!--": /-->/g,
-	script: /<\/script(?=[\s/>])/gi,
-	style: /<\/style(?=[\s/>])/gi,
-	title: /<\/title(?=[\s/>])/gi,
-	textarea: /<\/textarea(?=[\s/>])/gi,
-	xmp: /<\/xmp(?=[\s/>])/gi,
-	iframe: /<\/iframe(?=[\s/>])/gi,
-	noembed: /<\/noembed(?=[\s/>])/gi,
-	noframes: /<\/noframes(?=[\s/>])/gi,
-};
+/** End of a comment, or of an element whose content is raw text (a `<meta>` written in a `<title>` or a script is text). */
+const RAW_TEXT_END_RE = new Map<string, RegExp>([
+	["!--", /-->/g],
+	["script", /<\/script(?=[\s/>])/gi],
+	["style", /<\/style(?=[\s/>])/gi],
+	["title", /<\/title(?=[\s/>])/gi],
+	["textarea", /<\/textarea(?=[\s/>])/gi],
+	["xmp", /<\/xmp(?=[\s/>])/gi],
+	["iframe", /<\/iframe(?=[\s/>])/gi],
+	["noembed", /<\/noembed(?=[\s/>])/gi],
+	["noframes", /<\/noframes(?=[\s/>])/gi],
+]);
+
+/** The next `=` or `>` inside a start tag. */
+const TAG_DELIMITER_RE = /[=>]/g;
+
+/** A quote opening an attribute value: right after `=` and any whitespace. */
+const VALUE_QUOTE_RE = /[\t\n\f\r ]*(["'])/y;
 
 /**
- * A start tag from its `<` to the first `>` outside a quoted value, as HTML reads
- * it. One that never closes runs to the end of the document, so the scan stops
- * there and never restarts inside a tag. The attributes are matched in a lookahead
- * and taken whole (`\1`), so a missing `>` fails without backtracking through them.
+ * Where a start tag ends, just past the first `>` outside a quoted value, as HTML
+ * reads it: a quote opens a value only right after `=`, so the apostrophe in
+ * `title=it's` is text. `from` is just past the tag name. -1 when the tag never
+ * closes: it then runs to the end of the document, so the scan stops there and
+ * never restarts inside a tag.
  */
-const START_TAG_RE = /<[a-z][^\s/>]*(?=((?:[^>"']+|"[^"]*"|'[^']*')*))\1>/iy;
+function startTagEnd(html: string, from: number): number {
+	TAG_DELIMITER_RE.lastIndex = from;
+	for (let delimiter = TAG_DELIMITER_RE.exec(html); delimiter; delimiter = TAG_DELIMITER_RE.exec(html)) {
+		if (delimiter[0] === ">") return TAG_DELIMITER_RE.lastIndex;
+		VALUE_QUOTE_RE.lastIndex = TAG_DELIMITER_RE.lastIndex;
+		const quote = VALUE_QUOTE_RE.exec(html)?.[1];
+		if (quote === undefined) continue;
+		const closing = html.indexOf(quote, VALUE_QUOTE_RE.lastIndex);
+		if (closing === -1) return -1;
+		TAG_DELIMITER_RE.lastIndex = closing + 1;
+	}
+	return -1;
+}
 
 /** Named `<meta>` tags worth their tokens to a reader; Open Graph, Twitter Card, viewport and verification tags are not. */
 const KEPT_META_NAMES: Record<string, true> = {
@@ -641,7 +659,12 @@ function pruneHtmlForReader(html: string, pageUrl: string): string {
 	PRUNE_SCAN_RE.lastIndex = 0;
 	for (let match = PRUNE_SCAN_RE.exec(html); match; match = PRUNE_SCAN_RE.exec(html)) {
 		const element = match[1]?.toLowerCase() ?? "!--";
-		const rawTextEnd = RAW_TEXT_END_RE[element];
+		if (element !== "!--") {
+			const end = startTagEnd(html, PRUNE_SCAN_RE.lastIndex);
+			if (end === -1) break;
+			PRUNE_SCAN_RE.lastIndex = end;
+		}
+		const rawTextEnd = RAW_TEXT_END_RE.get(element);
 		if (rawTextEnd) {
 			rawTextEnd.lastIndex = PRUNE_SCAN_RE.lastIndex;
 			// Unclosed, it runs to the end of the document.
@@ -649,10 +672,8 @@ function pruneHtmlForReader(html: string, pageUrl: string): string {
 			PRUNE_SCAN_RE.lastIndex = rawTextEnd.lastIndex;
 			continue;
 		}
-		START_TAG_RE.lastIndex = match.index;
-		const tag = START_TAG_RE.exec(html)?.[0];
-		if (tag === undefined) break;
-		PRUNE_SCAN_RE.lastIndex = START_TAG_RE.lastIndex;
+		if (element !== "meta" && element !== "a" && element !== "base") continue;
+		const tag = html.slice(match.index, PRUNE_SCAN_RE.lastIndex);
 		let replacement = "";
 		if (element === "base") {
 			const href = findTagAttribute(tag, "href");
