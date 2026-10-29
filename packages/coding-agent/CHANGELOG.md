@@ -20,6 +20,7 @@
 - /debug reports now include session-logs.txt containing all log records written by the reporting session and its subagents for the current day.
 
 ### Changed
+- `omp` starts faster: the browser's accessibility audit now loads its `axe-core` engine on demand, so a launch no longer pays for it ([#16775](https://github.com/can1357/oh-my-pi/pull/16775) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Improved startup responsiveness by deferring nonessential UI, accessibility, browser, provider, slash-command, and interactive-composer loading until needed, and by overlapping independent session preparation work.
 - OpenAI live steering is now disabled by default for GPT models. Typed messages wait for the next tool boundary unless providers.openaiLiveSteering is enabled, avoiding unsupported in-flight message errors.
