@@ -17,6 +17,7 @@
 - Account policy `priority` now takes precedence when usage information is temporarily unavailable, keeping new sessions on the preferred account.
 
 ### Fixed
+- Fixed `.local` LAN hosts being tunnelled through `PI_PROXY`; they now bypass the egress proxy like the other local hosts, and a `NO_PROXY` exemption written with a trailing DNS root label matches the dotted host too ([#13591](https://github.com/can1357/oh-my-pi/issues/13591), [#16457](https://github.com/can1357/oh-my-pi/pull/16457) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed Mistral thinking-message replay requests that could be rejected by LiteLLM with a `422 extra_forbidden` error.
 - Added the `omp/<version>` User-Agent to native Judge API requests so omp usage is correctly identified in upstream statistics.
