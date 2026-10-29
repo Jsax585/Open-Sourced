@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Shake in a `--no-session` run no longer leaves placeholders pointing at an `artifact://` link that cannot be read; they now carry only the token count; in `--no-session` runs the request-body timeout recovery no longer shrinks and retries, since the dropped content would be unrecoverable ([#14593](https://github.com/can1357/oh-my-pi/pull/14593) by [@tahakotil](https://github.com/tahakotil))
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
