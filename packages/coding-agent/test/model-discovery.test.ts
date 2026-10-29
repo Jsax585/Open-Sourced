@@ -4200,8 +4200,14 @@ describe("ModelRegistry runtime discovery", () => {
 			expect(registry.isProviderDiscoveryPending("litellm")).toBe(true);
 
 			const refresh = registry.refreshProvider("litellm", "online");
-			for (let turn = 0; turn < 10; turn++) await Promise.resolve();
-			vi.advanceTimersByTime(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS);
+			// Discoveries start one per real macrotask (see #refreshRuntimeDiscoveries),
+			// and each start schedules its discovery timeout on the fake clock.
+			// Alternate real macrotask turns (let the next staggered start run)
+			// with fake-clock ticks (fire the scheduled discovery timeouts).
+			for (let turn = 0; turn < 200 && registry.isProviderDiscoveryPending("litellm"); turn++) {
+				await new Promise<void>(resolve => setImmediate(resolve));
+				vi.advanceTimersByTime(Math.ceil(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS / 50));
+			}
 			await refresh;
 
 			expect(registry.getProviderDiscoveryState("litellm")).toMatchObject({

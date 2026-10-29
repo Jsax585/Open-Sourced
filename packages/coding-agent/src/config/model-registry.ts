@@ -147,6 +147,13 @@ import {
 } from "../session/context-settings";
 import { matchModelCompactionThreshold } from "./compaction-threshold";
 
+/** One macrotask turn: lets pending input and render work run before continuing. */
+function yieldToEventLoop(): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	setImmediate(resolve);
+	return promise;
+}
+
 // DeviceCheck attestation (`x-oai-attestation`) for ChatGPT-OAuth Codex
 // requests; the pi-ai provider resolves it just-in-time per request.
 setCodexAttestationProvider(generateCodexAttestation);
@@ -2224,9 +2231,22 @@ export class ModelRegistry {
 			return { models: [], authoritativeProviders: new Set(), replaceRuntimeProviders: new Set() };
 		}
 		const writesBefore = getModelCacheWriteStats();
-		const discoveries = await Promise.all(
-			managerOptions.map(options => this.#discoverWithModelManager(options, strategy)),
-		);
+		// Start discoveries one per event-loop turn. Each discovery runs a
+		// sizeable synchronous prefix when it starts (bundled-model
+		// materialization, multi-MB cache payload read/parse, per-provider
+		// merge — all before its first `await`), so starting them all inside
+		// one `.map()` runs those prefixes back-to-back and blocks the
+		// interactive loop for seconds on warm caches (see `LoopWatchdog`
+		// `ui.loop-blocked`). Yielding between starts interleaves the
+		// prefixes with pending input and render work; the network fetches
+		// themselves still overlap because each refresh starts its fetch
+		// before its first awaited continuation.
+		const discoveryPromises: Promise<BuiltInDiscoveryResult>[] = [];
+		for (const options of managerOptions) {
+			await yieldToEventLoop();
+			discoveryPromises.push(this.#discoverWithModelManager(options, strategy));
+		}
+		const discoveries: BuiltInDiscoveryResult[] = await Promise.all(discoveryPromises);
 		const writesAfter = getModelCacheWriteStats();
 		const rewrittenRows = writesAfter.payloadWrites - writesBefore.payloadWrites;
 		if (rewrittenRows > MODEL_CACHE_REWRITE_LOG_THRESHOLD) {
