@@ -1308,12 +1308,13 @@ export class UiHelpers {
 	}
 
 	/** Deliver guest prompts remotely and refuse host-only commands without touching newer drafts. */
-	#deliverQueuedMessageToGuest(message: CompactionQueuedMessage): boolean {
+	#deliverQueuedMessageToGuest(message: CompactionQueuedMessage, onConsumed: () => void): boolean {
 		const guest = this.ctx.collabGuest;
 		if (!guest) return false;
 		if (guestRefusesSlashCommand(message.text)) {
 			this.ctx.showStatus(`${message.text.split(/\s+/, 1)[0]} is host-only during a collab session`);
 			this.#parkLoopOnLocalConsume(message.text, false);
+			onConsumed();
 			return true;
 		}
 		// Allowed read-only builtins still run through the local dispatcher.
@@ -1324,6 +1325,7 @@ export class UiHelpers {
 		} else {
 			guest.sendPrompt(message.text, message.images);
 		}
+		onConsumed();
 		return true;
 	}
 
@@ -1331,8 +1333,9 @@ export class UiHelpers {
 	async #deliverQueuedMessage(
 		message: CompactionQueuedMessage,
 		onQueued: (queued: readonly AgentMessage[]) => void,
+		onGuestConsumed: () => void,
 	): Promise<void> {
-		if (this.#deliverQueuedMessageToGuest(message)) return;
+		if (this.#deliverQueuedMessageToGuest(message, onGuestConsumed)) return;
 		const builtin = await executeBuiltinSlashCommand(message.text, {
 			ctx: this.ctx,
 			input: message.images ? { images: message.images } : undefined,
@@ -1343,7 +1346,7 @@ export class UiHelpers {
 			return;
 		}
 		if (typeof builtin === "string") {
-			if (this.#deliverQueuedMessageToGuest({ ...message, text: builtin })) return;
+			if (this.#deliverQueuedMessageToGuest({ ...message, text: builtin }, onGuestConsumed)) return;
 			const forwarded = await this.ctx.session.prompt(builtin, {
 				streamingBehavior: message.mode,
 				images: message.images,
@@ -1352,10 +1355,10 @@ export class UiHelpers {
 			this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return;
 		}
-		if (this.#deliverQueuedMessageToGuest(message)) return;
+		if (this.#deliverQueuedMessageToGuest(message, onGuestConsumed)) return;
 		const built = await buildSkillCommandPrompt(this.ctx, message.text, message.mode, message.images);
 		// Reading a skill file can overlap /join. Recheck before dispatching its local message.
-		if (this.#deliverQueuedMessageToGuest(message)) return;
+		if (this.#deliverQueuedMessageToGuest(message, onGuestConsumed)) return;
 		if (built) {
 			await this.ctx.session.promptCustomMessage(built.message, {
 				...built.options,
@@ -1428,6 +1431,20 @@ export class UiHelpers {
 		let firstQueued: readonly AgentMessage[] = [];
 		let firstFailed = false;
 		let firstLeftOut = false;
+		// Guest handoffs and refusals cannot be rolled back with local session queues.
+		const consumedByGuest = new Set<CompactionQueuedMessage>();
+		const onGuestConsumed = (message: CompactionQueuedMessage) => {
+			consumedByGuest.add(message);
+			// A first-prompt failure can restore the batch while another delivery awaits /join.
+			if (restored) {
+				this.ctx.compactionQueuedMessages = this.ctx.compactionQueuedMessages.filter(item => item !== message);
+				this.ctx.updatePendingMessagesDisplay();
+			}
+		};
+		const deliverQueuedMessage = (
+			message: CompactionQueuedMessage,
+			onQueued: (queued: readonly AgentMessage[]) => void,
+		) => this.#deliverQueuedMessage(message, onQueued, () => onGuestConsumed(message));
 
 		const reportFailure = (count: number, error: unknown) => {
 			this.ctx.updatePendingMessagesDisplay();
@@ -1444,7 +1461,12 @@ export class UiHelpers {
 			restored = true;
 			firstLeftOut = firstAdmitted !== undefined && !firstFailed;
 			this.ctx.session.dropQueuedMessages(firstLeftOut ? deliveredByFlush : [...deliveredByFlush, ...firstQueued]);
-			const batch = firstLeftOut ? queuedMessages.filter(message => message !== firstPrompt) : queuedMessages;
+			const batch =
+				firstLeftOut || consumedByGuest.size > 0
+					? queuedMessages.filter(
+							message => !consumedByGuest.has(message) && (!firstLeftOut || message !== firstPrompt),
+						)
+					: queuedMessages;
 			this.ctx.compactionQueuedMessages = batch;
 			reportFailure(batch.length, error);
 		};
@@ -1452,7 +1474,7 @@ export class UiHelpers {
 		try {
 			if (options?.willRetry) {
 				for (const message of queuedMessages) {
-					await this.#deliverQueuedMessage(message, onDelivered);
+					await deliverQueuedMessage(message, onDelivered);
 				}
 				this.ctx.updatePendingMessagesDisplay();
 				return;
@@ -1467,7 +1489,7 @@ export class UiHelpers {
 			}
 			if (firstPromptIndex === -1) {
 				for (const message of queuedMessages) {
-					await this.#deliverQueuedMessage(message, onDelivered);
+					await deliverQueuedMessage(message, onDelivered);
 				}
 				return;
 			}
@@ -1481,7 +1503,7 @@ export class UiHelpers {
 				// preCommands are all slash commands; #deliverQueuedMessage handles
 				// that branch (no local-submission marking needed since slash
 				// commands don't generate a matching user message_start).
-				await this.#deliverQueuedMessage(message, onDelivered);
+				await deliverQueuedMessage(message, onDelivered);
 			}
 
 			const onFirstQueued = (queued: readonly AgentMessage[]) => {
@@ -1538,12 +1560,12 @@ export class UiHelpers {
 			let promptPromise: Promise<unknown>;
 			if (this.ctx.collabGuest) {
 				// Forwarded or locally refused guest input is consumed, just like an admitted local prompt.
-				promptPromise = this.#deliverQueuedMessage(firstPrompt, onFirstQueued).then(onFirstAdmitted, onFirstFailed);
+				promptPromise = deliverQueuedMessage(firstPrompt, onFirstQueued).then(onFirstAdmitted, onFirstFailed);
 				await promptPromise;
 				if (restored) return;
 			} else if (isKnownSkillCommand(this.ctx, first.text)) {
 				const built = await buildSkillCommandPrompt(this.ctx, first.text, first.mode, first.images);
-				promptPromise = this.#deliverQueuedMessageToGuest(firstPrompt)
+				promptPromise = this.#deliverQueuedMessageToGuest(firstPrompt, () => onGuestConsumed(first))
 					? Promise.resolve(onFirstAdmitted())
 					: built
 						? this.ctx.session
@@ -1572,7 +1594,7 @@ export class UiHelpers {
 			}
 
 			for (const message of rest) {
-				await this.#deliverQueuedMessage(message, onDelivered);
+				await deliverQueuedMessage(message, onDelivered);
 				// The first prompt failed while the rest was still being delivered: the whole batch is
 				// back in the compaction queue, so take back what was delivered since and stop.
 				if (restored) {

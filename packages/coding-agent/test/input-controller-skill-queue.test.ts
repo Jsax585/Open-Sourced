@@ -786,29 +786,142 @@ describe("compaction skill re-invocation", () => {
 		expect(followUp).not.toHaveBeenCalled();
 	});
 
-	it("does not forward the first guest prompt again when leaving the session fails", async () => {
-		const first: CompactionQueuedMessage = { text: "plain guest prompt", mode: "followUp" };
-		const later: CompactionQueuedMessage = { text: "/leave", mode: "followUp" };
-		const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([first, later]);
-		const sendPrompt = vi.fn();
-		const leave = vi.fn(async (_reason: string) => {});
-		leave.mockImplementationOnce(async () => {
-			throw new Error("Local session restoration was cancelled");
-		});
-		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt, leave } });
-		const helpers = new UiHelpers(ctx);
+	it.each([true, false])(
+		"does not replay guest deliveries before a failed leave, but retries pending input (willRetry=%s)",
+		async willRetry => {
+			const first: CompactionQueuedMessage = { text: "plain guest prompt", mode: "followUp" };
+			const second: CompactionQueuedMessage = { text: "another guest prompt", mode: "steer" };
+			const later: CompactionQueuedMessage = { text: "/leave", mode: "followUp" };
+			const pending: CompactionQueuedMessage = { text: "not sent yet", mode: "followUp" };
+			const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([
+				first,
+				second,
+				later,
+				pending,
+			]);
+			const sendPrompt = vi.fn();
+			const leave = vi.fn(async (_reason: string) => {});
+			leave.mockImplementationOnce(async () => {
+				throw new Error("Local session restoration was cancelled");
+			});
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt, leave } });
+			const helpers = new UiHelpers(ctx);
 
-		await helpers.flushCompactionQueue({ willRetry: false });
+			await helpers.flushCompactionQueue({ willRetry });
+
+			expect(ctx.compactionQueuedMessages).toEqual([later, pending]);
+			expect(sendPrompt.mock.calls).toEqual([
+				[first.text, undefined],
+				[second.text, undefined],
+			]);
+			expect(ctx.showError).toHaveBeenCalledTimes(1);
+			await helpers.flushCompactionQueue({ willRetry });
+			expect(ctx.compactionQueuedMessages).toEqual([]);
+			expect(sendPrompt.mock.calls).toEqual([
+				[first.text, undefined],
+				[second.text, undefined],
+				[pending.text, undefined],
+			]);
+			expect(leave.mock.calls).toEqual([["left"], ["left"]]);
+			expect(promptCustomMessage).not.toHaveBeenCalled();
+			expect(prompt).not.toHaveBeenCalled();
+			expect(steer).not.toHaveBeenCalled();
+			expect(followUp).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
+		{ text: "read-only guest prompt", readOnly: true },
+		{ text: "/goal set mutate", readOnly: false },
+	])("keeps guest-refused retry input consumed after a later failure (%s)", async ({ text, readOnly }) => {
+		const refused: CompactionQueuedMessage = { text, mode: "steer" };
+		const later: CompactionQueuedMessage = { text: "/hotkeys", mode: "followUp" };
+		const { ctx, handleHotkeysCommand, prompt, steer, followUp } = createCompactionDrainContext([refused, later]);
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly, sendPrompt } });
+		handleHotkeysCommand.mockImplementationOnce(() => {
+			throw new Error("local command failed");
+		});
+
+		await new UiHelpers(ctx).flushCompactionQueue({ willRetry: true });
 
 		expect(ctx.compactionQueuedMessages).toEqual([later]);
-		expect(sendPrompt).toHaveBeenCalledTimes(1);
 		expect(ctx.showError).toHaveBeenCalledTimes(1);
-		await helpers.flushCompactionQueue({ willRetry: false });
-		expect(ctx.compactionQueuedMessages).toEqual([]);
-		expect(sendPrompt).toHaveBeenCalledTimes(1);
-		expect(leave.mock.calls).toEqual([["left"], ["left"]]);
-		expect(promptCustomMessage).not.toHaveBeenCalled();
+		expect(sendPrompt).not.toHaveBeenCalled();
 		expect(prompt).not.toHaveBeenCalled();
+		expect(steer).not.toHaveBeenCalled();
+		expect(followUp).not.toHaveBeenCalled();
+	});
+
+	it.each([true, false])(
+		"retains failed guest sends and untouched input for retry (willRetry=%s)",
+		async willRetry => {
+			const first: CompactionQueuedMessage = { text: "forwarded", mode: "followUp" };
+			const failed: CompactionQueuedMessage = { text: "send failed", mode: "steer" };
+			const pending: CompactionQueuedMessage = { text: "not attempted", mode: "followUp" };
+			const { ctx } = createCompactionDrainContext([first, failed, pending]);
+			const sent: string[] = [];
+			let fail = true;
+			const sendPrompt = vi.fn((text: string) => {
+				if (text === failed.text && fail) {
+					fail = false;
+					throw new Error("transport refused the send");
+				}
+				sent.push(text);
+			});
+			Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+			const helpers = new UiHelpers(ctx);
+
+			await helpers.flushCompactionQueue({ willRetry });
+
+			expect(ctx.compactionQueuedMessages).toEqual([failed, pending]);
+			expect(sent).toEqual([first.text]);
+			expect(ctx.showError).toHaveBeenCalledTimes(1);
+			await helpers.flushCompactionQueue({ willRetry });
+			expect(ctx.compactionQueuedMessages).toEqual([]);
+			expect(sent).toEqual([first.text, failed.text, pending.text]);
+		},
+	);
+
+	it("removes a skill refused after joining from an already-restored batch without losing newer input", async () => {
+		const first: CompactionQueuedMessage = { text: "local first", mode: "steer" };
+		const skill: CompactionQueuedMessage = { text: "/skill:test-skill go", mode: "followUp" };
+		const pending: CompactionQueuedMessage = { text: "not attempted", mode: "followUp" };
+		const newer: CompactionQueuedMessage = { text: "queued after restoration", mode: "followUp" };
+		const { ctx, promptCustomMessage, prompt, steer, followUp } = createCompactionDrainContext([
+			first,
+			skill,
+			pending,
+		]);
+		const failFirst = Promise.withResolvers<void>();
+		const building = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const reported = Promise.withResolvers<void>();
+		prompt.mockImplementationOnce(async () => {
+			await failFirst.promise;
+			throw new Error("first delivery failed");
+		});
+		const originalBuild = ctx.session.buildUserSkillPrompt.bind(ctx.session);
+		vi.spyOn(ctx.session, "buildUserSkillPrompt").mockImplementation(async (loaded, input) => {
+			building.resolve();
+			await release.promise;
+			return originalBuild(loaded, input);
+		});
+		vi.spyOn(ctx, "showError").mockImplementation(() => reported.resolve());
+		const flushing = new UiHelpers(ctx).flushCompactionQueue({ willRetry: false });
+		await building.promise;
+		failFirst.resolve();
+		await reported.promise;
+		expect(ctx.compactionQueuedMessages).toEqual([first, skill, pending]);
+		ctx.compactionQueuedMessages.push(newer);
+		const sendPrompt = vi.fn();
+		Object.assign(ctx, { collabGuest: { readOnly: false, sendPrompt } });
+		release.resolve();
+		await flushing;
+
+		expect(ctx.compactionQueuedMessages).toEqual([first, pending, newer]);
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(promptCustomMessage).not.toHaveBeenCalled();
 		expect(steer).not.toHaveBeenCalled();
 		expect(followUp).not.toHaveBeenCalled();
 	});
