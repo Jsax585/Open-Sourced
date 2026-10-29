@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Forced `tool_choice` rejections (HTTP 400) now downgrade to automatic tool selection and retry once instead of failing the turn, on Anthropic, OpenAI Completions and OpenAI Responses ([#13248](https://github.com/can1357/oh-my-pi/pull/13248) by [@jwaldrip](https://github.com/jwaldrip)).
 ### Added
 
 - Added mTLS support for Anthropic connections using `CLAUDE_CODE_CLIENT_CERT` and `CLAUDE_CODE_CLIENT_KEY`
