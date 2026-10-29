@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
-import type { AssistantMessage, AssistantMessageEvent, Context, FetchImpl, Model, Usage } from "@oh-my-pi/pi-ai/types";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
+	FetchImpl,
+	Model,
+	ProviderSessionState,
+	SimpleStreamOptions,
+	Usage,
+} from "@oh-my-pi/pi-ai/types";
 import { streamSimple } from "@oh-my-pi/pi-ai/stream";
 import { encodeBedrockFrame as encodeBedrockTestFrame } from "../../ai/test/helpers/bedrock-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -382,6 +391,68 @@ afterEach(async () => {
 });
 
 describe("cache warmer provider replay behavior", () => {
+	test.each(["system", "tools"] as const)("inherits main diagnostics and commits a warmed %s change", async kind => {
+		const model = buildModel({
+			id: "claude-sonnet-4-5",
+			name: "Claude Sonnet 4.5",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+			contextWindow: 200_000,
+			maxTokens: 8_192,
+		});
+		model.promptCache = { ...model.promptCache, short: ACCELERATED_CACHE_TTL_SECONDS };
+		const states = new Map<string, ProviderSessionState>();
+		const options: SimpleStreamOptions = {
+			apiKey: "sk-ant-api-test",
+			sessionId: "warmer-cache-diagnostics",
+			providerSessionState: states,
+			cacheBreakDiagnostics: true,
+			cacheRetention: "short",
+		};
+		const changed: Context =
+			kind === "system"
+				? { ...CONTEXT, systemPrompt: ["Changed instructions"] }
+				: {
+						...CONTEXT,
+						tools: [{ name: "lookup", description: "Look up a record", parameters: { type: "object" } }],
+					};
+		const capture: WireCapture = { aborted: false, terminalMetadataSent: false };
+		const terminal = Promise.withResolvers<void>();
+		terminal.resolve();
+		const mainOptions = { ...options, fetch: makeMessagesFetch(capture, terminal) };
+		const ended = Promise.withResolvers<CacheWarmingRefreshEnd>();
+		const warmed: AssistantMessage[] = [];
+		const warmer = new CacheWarmer({
+			stream: (requestModel, context, replayOptions) =>
+				streamSimple(requestModel, context, {
+					...replayOptions,
+					fetch: makeMessagesFetch(capture, Promise.withResolvers<void>()),
+				}),
+			getPromptTokens: () => PROMPT_TOKENS,
+			getMode: () => "streaming",
+		});
+		warmers.add(warmer);
+		warmer.onWarmed = message => warmed.push(message);
+		warmer.onRefreshEnd = ended.resolve;
+		try {
+			expect((await streamSimple(model, CONTEXT, mainOptions).result()).stopReason).toBe("stop");
+			warmer.start({ model, context: changed, options }, () => true);
+			await advanceWarmTimer();
+			expect(warmer.status.state).not.toBe("inactive");
+			expect((await ended.promise).outcome).toBe("hit");
+			warmer.cancel();
+			expect(warmed[0]?.cacheBreakReason?.kind).toBe(kind === "system" ? "system_prompt" : "tools");
+			expect((await streamSimple(model, changed, mainOptions).result()).cacheBreakReason).toBeUndefined();
+		} finally {
+			warmer.cancel();
+			for (const state of states.values()) state.close();
+		}
+	});
+
 	test("Converse waits for terminal cache usage with a one-token adaptive request and unchanged prefix/effort", async () => {
 		const h = createConverseHarness(makeUsage(PROMPT_TOKENS, 0));
 		// onPayload is passed through by the warmer option clone, rather than

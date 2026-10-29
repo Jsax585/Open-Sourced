@@ -640,6 +640,10 @@ All providers accept the base `StreamOptions` (in addition to provider-specific 
 - `signal`: Abort in-flight requests
 - `onPayload`: Callback invoked with the provider request payload just before sending. Return a replacement payload object (sync or async) to send it instead of the original; return `undefined` to keep the original. The replacement is applied by every provider that fires the hook — all of them except `devin-agent`, whose payload is a protobuf object and does not fire the hook yet.
 
+The coding-agent opts its main conversation requests into internal `cacheBreakDiagnostics`, and cache warming inherits that option. Anthropic then compares accepted tool definitions and system text after `onPayload`, attaching a local `cacheBreakReason` to the assistant message without changing the request or its cache breakpoints. System deltas count Unicode code points; these observations are not server-reported cache-miss causes. History changes and retention switches are not attributed.
+
+Diagnostics default off for other callers, including auxiliary `completeSimple` requests whose session state is supplied by the native auth gateway. `instrumentedCompleteSimple` explicitly disables them even when it inherits main-request options. A rejected request does not replace the accepted baseline; `message_start` does, including for a subsequently aborted warming stream.
+
 Example:
 
 ```typescript

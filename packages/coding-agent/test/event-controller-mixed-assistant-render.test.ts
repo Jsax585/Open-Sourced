@@ -2,18 +2,24 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
-import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { type Component, TERMINAL } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
-import { cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCacheMissMarker, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 const TOOL_CALL_A_ID = "toolu_mixed_text_order_a";
 const TOOL_CALL_B_ID = "toolu_mixed_text_order_b";
@@ -579,4 +585,54 @@ describe("EventController mixed assistant text/tool rendering", () => {
 			}
 		});
 	}
+
+	it.each(["live", "session", "transcript"] as const)(
+		"renders locally detected cache changes through the %s path",
+		async mode => {
+			cfgDisplayCacheMissMarker.override(settings, true);
+			const previousPreferences = { ...chatTranscriptDisplayPreferences };
+			setChatTranscriptDisplayPreferences({ cacheMissMarker: true });
+			try {
+				const warm = assistantMessage([{ type: "text", text: "Warm response" }]);
+				warm.usage = { ...zeroUsage(), cacheRead: 50_000, totalTokens: 50_000 };
+				const cold = assistantMessage([{ type: "text", text: "Cold response" }]);
+				cold.usage = { ...zeroUsage(), cacheWrite: 51_000, totalTokens: 51_000 };
+				cold.cacheBreakReason = { kind: "system_prompt", charDelta: 40 };
+				const { controller, ctx } = createFixture();
+				let container = ctx.chatContainer;
+				if (mode === "live") {
+					for (const message of [warm, cold]) {
+						await controller.handleEvent({ type: "message_start", message });
+						await controller.handleEvent({ type: "message_end", message });
+					}
+				} else if (mode === "session") {
+					const helpers = new UiHelpers(ctx);
+					ctx.addMessageToChat = helpers.addMessageToChat.bind(helpers);
+					helpers.renderSessionContext({ messages: [warm, cold] } as SessionContext);
+				} else {
+					const builder = new ChatTranscriptBuilder({
+						ui: ctx.ui,
+						cwd: "/synthetic/project",
+						requestRender() {},
+					});
+					builder.rebuild(
+						[warm, cold].map((message, index) => ({
+							type: "message",
+							id: `message-${index}`,
+							parentId: index ? `message-${index - 1}` : null,
+							timestamp: new Date(index).toISOString(),
+							message,
+						})),
+					);
+					container = builder.container;
+				}
+				const rendered = Bun.stripANSI(container.render(160).join("\n"));
+				expect(rendered.match(/cache miss/g)).toHaveLength(1);
+				expect(rendered).toContain("system prompt changed (+40 chars)");
+				expect(rendered.indexOf("system prompt changed")).toBeGreaterThan(rendered.indexOf("Cold response"));
+			} finally {
+				setChatTranscriptDisplayPreferences(previousPreferences);
+			}
+		},
+	);
 });

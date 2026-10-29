@@ -1,7 +1,9 @@
-import type { Usage } from "@oh-my-pi/pi-ai";
+import type { CacheBreakReason, Usage } from "@oh-my-pi/pi-ai";
 import { formatNumber } from "@oh-my-pi/pi-utils";
 import { MessageDividerComponent } from "../chrome/message-divider";
+import { TRUNCATE_LENGTHS } from "../render/render-utils";
 import { theme } from "../theme";
+import { replaceTabs, truncateToWidth } from "../utils";
 
 /**
  * Minimum prefix the previous turn must have READ back from cache before a
@@ -15,17 +17,33 @@ const MIN_CACHE_FOOTPRINT = 2048;
 export interface CacheInvalidation {
 	/** Prompt tokens the cold turn had to (re)process instead of reading from cache. */
 	reprocessedTokens: number;
+	/** Locally detected request change, already formatted for display. */
+	reason?: string;
+}
+
+/**
+ * Render a locally detected request change as a short lowercase phrase.
+ */
+export function formatCacheBreakReason(reason: CacheBreakReason): string {
+	switch (reason.kind) {
+		case "system_prompt": {
+			const sign = reason.charDelta < 0 ? "-" : "+";
+			return `system prompt changed (${sign}${formatNumber(Math.abs(reason.charDelta))} chars)`;
+		}
+		case "tools":
+			return reason.tool
+				? `tool definitions changed (${truncateToWidth(replaceTabs(reason.tool), TRUNCATE_LENGTHS.SHORT)})`
+				: "tool definitions changed";
+	}
 }
 
 /**
  * Decide whether `current` turn lost a *working* prompt cache that `prev` was
  * reusing.
  *
- * The provider reports a warm prefix as `cacheRead`; a model/thinking/tool/
- * system-prompt change (or a history rewrite) breaks the prefix, so the next
- * request reads nothing from cache and re-pays for the whole prompt. We flag
- * only the transition where a demonstrably warm cache goes cold: the previous
- * turn must have actually READ a meaningful prefix back, and this turn's
+ * A request-prefix change or expiry can turn a warm cache cold. We flag only
+ * the transition where a demonstrably warm cache goes cold: the previous turn
+ * must have actually READ a meaningful prefix back, and this turn's
  * `cacheRead` collapsed to zero while it still reprocessed a non-trivial prompt.
  *
  * Requiring a prior warm read is deliberate. A turn that merely WROTE the prefix
@@ -46,7 +64,11 @@ export interface CacheInvalidation {
  * zero intermittently as routine propagation noise that self-heals the next
  * turn, so flagging it would be a false positive.
  */
-export function detectCacheInvalidation(prev: Usage | undefined, current: Usage): CacheInvalidation | undefined {
+export function detectCacheInvalidation(
+	prev: Usage | undefined,
+	current: Usage,
+	reason?: CacheBreakReason,
+): CacheInvalidation | undefined {
 	if (!prev) return undefined;
 	// Only flag a warm→cold transition: the previous turn must have actually read
 	// a meaningful prefix from cache. A write-only predecessor (first request, or
@@ -62,7 +84,7 @@ export function detectCacheInvalidation(prev: Usage | undefined, current: Usage)
 	if (current.cacheWrite <= 0) return undefined;
 	const reprocessedTokens = current.cacheWrite + current.input;
 	if (reprocessedTokens < MIN_CACHE_FOOTPRINT) return undefined;
-	return { reprocessedTokens };
+	return reason ? { reprocessedTokens, reason: formatCacheBreakReason(reason) } : { reprocessedTokens };
 }
 
 /**
@@ -73,7 +95,7 @@ export function detectCacheInvalidation(prev: Usage | undefined, current: Usage)
  * Mirrors the compaction divider's banner styling but spans only a short rule
  * plus label (not the full width) and carries no expandable detail:
  *
- *   ────────── ⊘ cache miss · 50.9k tokens
+ *   ────────── ⊘ cache miss · 50.9k tokens · system prompt changed (+412 chars)
  */
 export class CacheInvalidationMarkerComponent extends MessageDividerComponent {
 	constructor(info: CacheInvalidation) {
@@ -82,7 +104,8 @@ export class CacheInvalidationMarkerComponent extends MessageDividerComponent {
 				const icon = theme.icon.cacheMiss;
 				const head = icon ? `${icon} cache miss` : "cache miss";
 				const tokens = info.reprocessedTokens;
-				return tokens > 0 ? `${head} ${theme.sep.dot.trim()} ${formatNumber(tokens)} tokens` : head;
+				const label = tokens > 0 ? `${head} ${theme.sep.dot.trim()} ${formatNumber(tokens)} tokens` : head;
+				return info.reason ? `${label} ${theme.sep.dot.trim()} ${info.reason}` : label;
 			},
 			labelColor: "muted",
 			ruleColor: "dim",
@@ -90,10 +113,13 @@ export class CacheInvalidationMarkerComponent extends MessageDividerComponent {
 			role: "omp.marker.cache-miss",
 			native: {
 				icon: "database",
-				label: () =>
-					info.reprocessedTokens > 0
-						? `Cache miss · ${formatNumber(info.reprocessedTokens)} tokens`
-						: "Cache miss",
+				label: () => {
+					const label =
+						info.reprocessedTokens > 0
+							? `Cache miss · ${formatNumber(info.reprocessedTokens)} tokens`
+							: "Cache miss";
+					return info.reason ? `${label} · ${info.reason}` : label;
+				},
 			},
 			// Too narrow to frame — preserve the legacy bare label.
 			truncateWhenNarrow: false,

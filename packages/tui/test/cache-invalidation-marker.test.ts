@@ -91,4 +91,25 @@ describe("CacheInvalidationMarkerComponent", () => {
 		expect(dividerWidth).toBeGreaterThan(0);
 		expect(dividerWidth).toBeLessThan(80);
 	});
+
+	const longToolTail = "abcdefghijklmnopqrstuv".repeat(8);
+	it.each([
+		{ kind: "system_prompt", charDelta: -412 },
+		{ kind: "tools", tool: `native_tool\t${longToolTail}` },
+	] as const)("preserves $kind details in native rows without terminal formatting", reason => {
+		const info = detectCacheInvalidation(usage({ cacheRead: 5_000 }), usage({ cacheWrite: 5_000, input: 4 }), reason);
+		if (!info) throw new Error("Expected a warm-to-cold cache transition");
+		const row = new CacheInvalidationMarkerComponent(info).describe();
+		expect(row).toMatchObject({ k: "row", p: { role: "omp.marker.cache-miss" } });
+		const serialized = JSON.stringify(row);
+		expect(serialized).not.toContain("\\u001b");
+		expect(serialized).not.toContain("\\t");
+		if (reason.kind === "system_prompt") {
+			expect(serialized).toContain("-412");
+			expect(serialized).not.toContain("+412");
+		} else {
+			expect(serialized).toMatch(/native_tool +a/);
+			expect(serialized).not.toContain(longToolTail);
+		}
+	});
 });

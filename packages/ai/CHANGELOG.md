@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Main Anthropic requests can opt in to locally detected tool and system-prompt changes in `AssistantMessage.cacheBreakReason`, comparing accepted requests without changing cache breakpoints or letting auxiliary gateway calls replace the baseline ([#11813](https://github.com/can1357/oh-my-pi/pull/11813) by [@camjac251](https://github.com/camjac251)).
+
 ### Fixed
 
 - Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
