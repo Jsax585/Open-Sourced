@@ -1,6 +1,6 @@
 /**
- * AI/ML API base shared by inference and roster discovery. One constant so a
- * host migration touches a single module.
+ * AI/ML API base URL. Its origin is the only destination of the attribution
+ * headers below, so a host migration touches this one constant.
  */
 export const AIMLAPI_API_BASE_URL = "https://api.aimlapi.com/v1";
 
@@ -10,11 +10,10 @@ export const AIMLAPI_API_BASE_URL = "https://api.aimlapi.com/v1";
  * Both halves matter. The host keeps the partner id from travelling to somebody
  * else's gateway when a user repoints the provider's base URL — the id names a
  * revenue-attribution row, so sending it elsewhere hands a third party our
- * client identity. The scheme keeps it, and the Authorization bearer beside it,
- * off a plaintext connection: a name resolving to `http://api.aimlapi.com:1234`
- * inside a container's DNS would otherwise be handed both.
+ * client identity. The scheme keeps it off a plaintext connection, such as a
+ * name resolving to `http://api.aimlapi.com:1234` inside a container's DNS.
  */
-const AIMLAPI_ORIGIN = "https://api.aimlapi.com";
+const AIMLAPI_ORIGIN = new URL(AIMLAPI_API_BASE_URL).origin;
 
 /**
  * Client-identity headers for AI/ML API. The gateway reads them to attribute
