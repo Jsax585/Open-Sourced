@@ -13060,6 +13060,8 @@ export class AgentSession implements SettingsScope {
 		// record on success but stays valid if the switch is rolled back to this same session.
 		const previousIrcPending = this.#irc.clearPending();
 		const previousSessionGeneration = this.#sessionGeneration++;
+		// The target's id sync forgets the pair; a rolled-back switch keeps the still-live session's.
+		const previousPrewalkSelectors = this.#prewalkSelectors;
 		const generationSettled = Promise.withResolvers<void>();
 		const previousSessionGenerationSettled = this.#sessionGenerationSettled;
 		this.#sessionGenerationSettled = generationSettled.promise;
@@ -13301,6 +13303,7 @@ export class AgentSession implements SettingsScope {
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);
 			this.#irc.restorePending(previousIrcPending);
 			this.#sessionGeneration = previousSessionGeneration;
+			this.#prewalkSelectors = previousPrewalkSelectors;
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;
 			this.#pendingNextTurnMessages = previousPendingNextTurnMessages;
