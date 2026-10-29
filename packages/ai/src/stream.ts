@@ -2314,6 +2314,7 @@ function mapOptionsForApi<TApi extends Api>(
 				execHandlers,
 				onToolResult,
 				externalToolExecutor: options?.cursorExternalToolExecutor,
+				contextBudgetTokens: options?.cursorContextBudgetTokens,
 				wireModelId: resolveWireModelId(cursorModel, effort),
 			});
 		}
