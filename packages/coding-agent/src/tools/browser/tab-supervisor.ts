@@ -230,6 +230,10 @@ const tabs = new Map<string, TabSession>();
 // recorded target instead. A shared browser's other targets must never be
 // touched.
 const workerPageTargets = new WeakMap<WorkerHandle, string>();
+// Tags a worker that exited on its own. A tab keeps its exited worker until the reattach publishes a replacement, and
+// a release meanwhile must not wait out a `closed` reply that worker can no longer send.
+const kWorkerExited = Symbol("tabWorker.exited");
+type ExitTrackedWorker = WorkerHandle & { [kWorkerExited]?: true };
 // Per-name acquisition chain: serializes concurrent `acquireTab` calls for the
 // same tab name so the existence check and `tabs.set` (separated by several
 // awaits) cannot interleave and leak a worker + browser refCount.
@@ -1097,8 +1101,8 @@ async function runInTabWithSnapshot(
 					error.when === "during" ? "; input this call sent before the detach may already have landed" : "";
 				// Host tool calls the detached run started would otherwise keep running, and reply to the new worker.
 				for (const ctrl of pending.toolCalls.values()) ctrl.abort(error);
-				// Both paths below kill an inline worker's tab, and its `terminate()` is a no-op: without the close
-				// handshake its core keeps its relay connection and could claim the tab again once it is re-announced.
+				// Both paths below kill an inline worker's tab. Close its core first: the close finalizes an active
+				// recording, which the kill's `terminate()` (it only drops the relay connection) would leave unfinished.
 				if (tab.worker.mode === "inline" && tabs.get(name) === tab && tab.state === "alive") {
 					const closed = waitForClosed(tab).catch(() => undefined);
 					safeSend(tab, { type: "close" });
@@ -1345,7 +1349,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 	}
 	let cleanupError: unknown;
 	let targetCloseFailed = false;
-	if (wasAlive) {
+	if (wasAlive && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
 		try {
 			tab.worker.send({ type: "close" });
 			await waitForClosed(tab);
@@ -1975,6 +1979,7 @@ function attachTabWorker(tab: WorkerTabSession, worker: WorkerHandle): void {
 		if (!(error instanceof WorkerMessageError)) lastError = error;
 	});
 	worker.onExit(exitCode => {
+		(worker as ExitTrackedWorker)[kWorkerExited] = true;
 		// A release or recycle owns a worker it replaced or is tearing down.
 		if (tabs.get(tab.name) !== tab || tab.worker !== worker || tab.state !== "alive" || releaseInflight.has(tab))
 			return;
@@ -2394,9 +2399,12 @@ function wrapBunWorker(worker: Worker): WorkerHandle {
 async function spawnInlineWorker(): Promise<WorkerHandle> {
 	const hostListeners = new Set<(message: WorkerOutbound) => void>();
 	const workerListeners = new Set<(message: WorkerInbound) => void>();
+	let terminated = false;
 	const workerTransport: Transport = {
 		send: msg =>
 			queueMicrotask(() => {
+				// A terminated worker thread reports nothing more; neither does a terminated core.
+				if (terminated) return;
 				for (const listener of hostListeners) listener(msg as WorkerOutbound);
 			}),
 		onMessage: handler => {
@@ -2407,7 +2415,7 @@ async function spawnInlineWorker(): Promise<WorkerHandle> {
 		close: () => {},
 	};
 	const { WorkerCore } = await import("./tab-worker");
-	new WorkerCore(workerTransport, false);
+	const core = new WorkerCore(workerTransport, false);
 	return {
 		mode: "inline",
 		send: msg =>
@@ -2420,7 +2428,10 @@ async function spawnInlineWorker(): Promise<WorkerHandle> {
 		},
 		onError: () => () => {},
 		onExit: () => () => {},
-		async terminate() {},
+		async terminate() {
+			terminated = true;
+			core.terminate();
+		},
 	};
 }
 

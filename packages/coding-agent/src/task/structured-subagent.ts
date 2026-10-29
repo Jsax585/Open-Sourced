@@ -226,7 +226,7 @@ export class StructuredSubagentError extends Error {
 
 const PLAN_MODE_TOOLS = ["read", "grep", "glob", "web_search"] as const;
 
-function renderSubagentPrompt(assignment: string): string {
+export function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, { assignment: assignment.trim() });
 }
 
@@ -596,7 +596,7 @@ function buildExecutorOptions(
 		getApiKey: session.getApiKey,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
-		task: renderSubagentPrompt(request.assignment),
+		task: renderSubagentUserPrompt(request.assignment),
 		assignment: request.assignment.trim(),
 		preparedSession,
 		context: request.context?.trim() || undefined,
@@ -652,7 +652,7 @@ function buildExecutorOptions(
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
-		contextFiles: session.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
+		contextFiles: session.contextFiles,
 		noContextFiles: session.noContextFiles,
 		skills,
 		// Autoload runs after session start, outside the seance isolation options.
@@ -709,7 +709,7 @@ function buildFailureResult(
 			id,
 			agent: policy.agent.name,
 			agentSource: policy.agent.source,
-			task: renderSubagentPrompt(request.assignment),
+			task: renderSubagentUserPrompt(request.assignment),
 			assignment: request.assignment.trim(),
 			description: request.invocationKind === "eval" ? trimToUndefined(request.identity?.label) : undefined,
 			exitCode: 1,

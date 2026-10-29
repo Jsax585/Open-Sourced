@@ -2,10 +2,83 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed `invalidateFsScanCache`: the listing cache no longer needs invalidation. `FS_SCAN_CACHE_TTL_MS`, `FS_SCAN_EMPTY_RECHECK_MS`, `FS_SCAN_CACHE_MAX_ENTRIES`, and `FS_SCAN_CACHE_MAX_BYTES` are no longer read
+
+### Added
+
+- The bash tool's built-in `rsync` behaves like rsync 3.5.1 on Linux, macOS, and Windows without an installed binary: local copies, `-e`/ssh remote shells, and `rsync://` daemons, interoperating with real rsync peers speaking protocol 29–33. Serving as a daemon (`--daemon`) is not supported; `PI_DISABLE_UUTILS_DESTRUCTIVE` falls back to the system `rsync`
+- The bash tool has a built-in `ast-grep` (also `sg`) for structural search and rewrite: `run` with patterns, rewrites, `-U`, context, headings, and `--json` output like ast-grep 0.50
+
+### Changed
+
+- Native `glob` is about 3× faster on large trees; `grep`, `fuzzyFind`, `listWorkspace`, and `astGrep`/`astEdit` run on the same rewritten walker and return identical results from run to run
+- Native `grep` with `maxCount` (the agent's grep tool) searches files while the walk finds them and stops both once the limit is met: 1.3–2.3× faster, and a first page of results about 10× faster
+- The bash tool's built-in `rg` and recursive `grep` search files in parallel (about 2× faster) and print them in path order
+- `cache: true` reuses unchanged directory listings validated against their timestamps, so it never serves stale results
+- Reduced overhead for full-tree native `grep` searches while preserving result ordering and streaming backpressure
+- Aborting or timing out native `grep`, `glob`, `fuzzyFind`, `listWorkspace`, and `astGrep`/`astEdit` stops their filesystem work at once, including searches over JavaScript-provided filesystems; `grep`'s `onMatches` streaming paces the search to the callback
+- Cancelling the bash tool's built-in `rg`, `grep`, `fd`, `find`, and `ast-grep` (abort, `timeout`) stops them immediately, even mid-way through a large file; `find -prune` and `fd` ignore rules no longer list pruned directories
+
+### Fixed
+
+- Fixed cancelled directory searches leaving filesystem-provider requests running during walk startup
+- Fixed the bash tool's built-in commands (`cat`, `grep`, `head`, `wc`, `read`, `mapfile`, …) hanging on macOS at the end of a FIFO's input until the command was aborted; `read -t` now returns at EOF instead of waiting out its timeout
+- Fixed `wrapTextWithAnsi` continuing a wrapped styled underline (`4:3`, `4:4`) as a background colour, `4:0` setting background `40`, and colon-form colours (`38:2::r:g:b`) being dropped ([#16239](https://github.com/can1357/oh-my-pi/pull/16239) by [@materemias](https://github.com/materemias))
+
+## [18.13.3] - 2026-10-28
+
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
+## [18.13.2] - 2026-10-27
+
+### Added
+
+- Added opt-in, cycle-safe descendant-link traversal to native `glob` through `followLinks`, leaving default traversal unchanged ([#17180](https://github.com/can1357/oh-my-pi/pull/17180) by [@alphastorm](https://github.com/alphastorm))
+
+### Changed
+
+- Faster native line, word, and structured patch diffs on large edits ([#17015](https://github.com/can1357/oh-my-pi/pull/17015) by [@GTanger](https://github.com/GTanger))
+
+### Fixed
+
+- Fixed the built-in `sort` using many times its `-S` buffer size, or more memory than its container allows or the machine has available, on inputs of short lines, and ignoring `timeout` or a cancel while it sorts ([#17155](https://github.com/can1357/oh-my-pi/pull/17155) by [@sjawhar](https://github.com/sjawhar))
+- Fixed the built-in `sort -m` and `sort -c` splitting lines longer than their read buffer, and `sort` joining a file's unterminated last line to the next file's first line ([#17155](https://github.com/can1357/oh-my-pi/pull/17155) by [@sjawhar](https://github.com/sjawhar))
+- Fixed the built-in `sort -S N%` using the wrong buffer size: `-S 50%` gave 0 bytes and `-S 100%` a thousand times the machine's memory; it is now N percent of physical memory as in GNU sort ([#17155](https://github.com/can1357/oh-my-pi/pull/17155) by [@sjawhar](https://github.com/sjawhar))
+- Exited bash-tool `&` jobs are reaped without another command; `wait` still reports their status, and `$!` works inside pipelines, subshells, and command substitutions ([#17144](https://github.com/can1357/oh-my-pi/issues/17144)).
+- On macOS, the bash tool's built-in `ps` includes other users' processes and unreaped zombies when selecting a PID ([#17144](https://github.com/can1357/oh-my-pi/issues/17144)).
+- Fixed native `glob` file-type filters discarding target size and modification time for linked files ([#17180](https://github.com/can1357/oh-my-pi/pull/17180) by [@alphastorm](https://github.com/alphastorm))
+- Fixed leading UTF-8 BOMs causing embedded `jq` JSON input parse errors while preserving raw-input bytes ([#17179](https://github.com/can1357/oh-my-pi/pull/17179) by [@alphastorm](https://github.com/alphastorm))
+- Fixed the shell's `timeout` and tool aborts not stopping built-in commands that were still reading (`cat /dev/zero`, huge files, FIFOs with no writer) ([#17141](https://github.com/can1357/oh-my-pi/pull/17141) by [@sjawhar](https://github.com/sjawhar))
+- Fixed a tool abort leaving a background in-process command, such as `cat /dev/zero > /dev/null &`, running and keeping a core busy after its shell session was gone ([#17141](https://github.com/can1357/oh-my-pi/pull/17141) by [@sjawhar](https://github.com/sjawhar))
+- Fixed a shell redirect to or from a FIFO whose other end is a background job, such as `echo hi > f & cat < f`, hanging the command; a tool abort now also stops a write redirect to a FIFO that has no reader ([#17141](https://github.com/can1357/oh-my-pi/pull/17141) by [@sjawhar](https://github.com/sjawhar))
+- Fixed a background external command with a FIFO redirect, such as `/bin/cat < f & echo hi > f`, hanging the shell until the FIFO's other end opened; the command's own process now opens it, as in bash ([#17141](https://github.com/can1357/oh-my-pi/pull/17141) by [@sjawhar](https://github.com/sjawhar))
+- Fixed `timeout` printing `error: interrupted` when its limit stopped a built-in command; like GNU `timeout`, it now prints nothing of its own and exits 124 ([#17141](https://github.com/can1357/oh-my-pi/pull/17141) by [@sjawhar](https://github.com/sjawhar))
+- Fixed crackling in live voice playback: the assistant's speech now absorbs packet jitter without dropping out, short turns play without waiting for the next response, and lost packets no longer insert extra synthesized audio ([#17114](https://github.com/can1357/oh-my-pi/issues/17114))
+- Fixed the bash tool's `rm -r` and `du` crashing the whole session with a stack overflow on a directory tree thousands of levels deep; `rm -r` also removes such a tree without running out of file descriptors, and reports a directory that is its own ancestor instead of descending into it ([#17021](https://github.com/can1357/oh-my-pi/pull/17021) by [@sjawhar](https://github.com/sjawhar))
+- Fixed the bash tool's `find` panicking and writing a native panic report to `~/.omp/logs` when the command reading its output exits early, as in `find . -printf '%p\n' | head -1`, or when its stderr is closed; it now stops quietly, and a failed `-fprintf` write is reported instead of `find: internal error` ([#17079](https://github.com/can1357/oh-my-pi/pull/17079) by [@trukhinyuri](https://github.com/trukhinyuri))
+- Fixed the shell's built-in `grep` and `rg` running the whole agent out of memory on a file with no line breaks, such as a large sparse file: a line over 256 MiB is now reported as `not searched` for that file and the search continues, and a `-f` pattern file over 256 MiB is refused with exit status 2 ([#17108](https://github.com/can1357/oh-my-pi/pull/17108) by [@sjawhar](https://github.com/sjawhar))
+- Fixed the embedded shell's globs keeping matches whose literal tail does not exist: `ls -d DIR/*/` now lists only directories instead of passing every file as `file/`, and `*/name` keeps only matches that contain `name`, as in bash ([#17110](https://github.com/can1357/oh-my-pi/pull/17110) by [@sjawhar](https://github.com/sjawhar))
+- Fixed the embedded shell ignoring `shopt -s globstar`: `**` now matches any number of directory levels as in bash (`**/*.rs` finds files at every depth, also in `compgen -G`), and a timeout or interrupt stops a long `**` expansion ([#17111](https://github.com/can1357/oh-my-pi/pull/17111) by [@sjawhar](https://github.com/sjawhar))
+
+## [18.13.0] - 2026-10-26
+
 ### Added
 
 - A failed `EditStore.apply` outcome carries `errorKind`, a stable class of the refusal (`unseen_lines`, `stale_tag`, `parse`, …), and `editErrorKinds()` lists every class ([#16608](https://github.com/can1357/oh-my-pi/pull/16608) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `exclude` to `grep()` options: glob patterns of files and folders to leave out of a directory search; a matched folder is not walked ([#16920](https://github.com/can1357/oh-my-pi/pull/16920) by [@will-bogusz](https://github.com/will-bogusz))
+- On macOS, `openApplication` also opens a file, folder or URL in its default application or `ApplicationOpenOptions.app`, and `reveal` shows a file or folder selected in Finder; other platforms return `Unsupported` for a URL, `app` or `reveal` ([#16403](https://github.com/can1357/oh-my-pi/pull/16403) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a rerouted parallel Mermaid flowchart edge running over other edges, ports and labels at the same two nodes; the route no longer depends on declaration order, and it can pass outside the first row or column of nodes to reach a free port ([#16773](https://github.com/can1357/oh-my-pi/issues/16773), [#16774](https://github.com/can1357/oh-my-pi/pull/16774) by [@berney](https://github.com/berney))
+- Fixed the built-in `ps` reporting an unsupported long option such as `--forest` as `unsupported option '--'`; it now names the option, and every unsupported-option error says that a system `ps`, if installed, may support more options when run by its full path ([#17018](https://github.com/can1357/oh-my-pi/pull/17018) by [@sjawhar](https://github.com/sjawhar))
+- Fixed `kill %N` on a backgrounded compound command (such as `(while :; do :; done) &`) in a persistent shell session: the job was reported done but the in-process loop kept spinning until the process exited; it now stops at the next interpreter check ([#16937](https://github.com/can1357/oh-my-pi/pull/16937) by [@holny](https://github.com/holny))
+- Fixed `sort -t=` (and clusters such as `-nrt=`) failing with "separator must be exactly one character long"; an attached `=` now selects `=` as the field separator, as in GNU sort, and `-t=X` such as `-t==` is rejected as two characters ([#17017](https://github.com/can1357/oh-my-pi/pull/17017) by [@sjawhar](https://github.com/sjawhar))
+- Fixed macOS `press()` on a control with no press action, such as a button on a Chrome page, failing without saying what to do; the error now tells you to `click()` it instead ([#16916](https://github.com/can1357/oh-my-pi/pull/16916) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed `kill %N` on a backgrounded compound command (such as `(while :; do :; done) &`) in a persistent shell session: the job was reported done but the in-process loop kept spinning until the process exited; it now stops at the next interpreter check ([#16937](https://github.com/can1357/oh-my-pi/pull/16937) by [@holny](https://github.com/holny))
+- Fixed `sort -t=` (and clusters such as `-nrt=`) failing with "separator must be exactly one character long"; an attached `=` now selects `=` as the field separator, as in GNU sort, and `-t=X` such as `-t==` is rejected as two characters ([#17017](https://github.com/can1357/oh-my-pi/pull/17017) by [@sjawhar](https://github.com/sjawhar))
+
 ### Changed
 
 - Faster native grep on minified and long lines ([#17016](https://github.com/can1357/oh-my-pi/pull/17016) by [@GTanger](https://github.com/GTanger))
@@ -35,17 +108,6 @@
 - Fixed a macOS background right or middle double click pressing again after you clicked or typed in its app between its presses; it now stops there with `UserIntervened`, as a left click does ([#16770](https://github.com/can1357/oh-my-pi/pull/16770) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed macOS background `axType`, `axKeyChord` and `axClick` sending input into an app you switched to while it was busy answering the element's window or bounds lookup; they now read your front app first and refuse with `UserIntervened`, as window input does. The refusal for an element that does not take focus now says no keys were sent, since the focus request reached the app ([#16769](https://github.com/can1357/oh-my-pi/pull/16769) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed the shell output minimizer cutting short `git diff`, `git show`, `diff`, `jq` and `ssh` output that fits in 16 KB: it now arrives whole, and the patch summary, the 40-line `jq` cap and the remote head/tail cut apply only to larger output ([#16589](https://github.com/can1357/oh-my-pi/pull/16589) by [@will-bogusz](https://github.com/will-bogusz))
-
-### Added
-
-- On macOS, `openApplication` also opens a file, folder or URL in its default application or `ApplicationOpenOptions.app`, and `reveal` shows a file or folder selected in Finder; other platforms return `Unsupported` for a URL, `app` or `reveal` ([#16403](https://github.com/can1357/oh-my-pi/pull/16403) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed a rerouted parallel Mermaid flowchart edge running over other edges, ports and labels at the same two nodes; the route no longer depends on declaration order, and it can pass outside the first row or column of nodes to reach a free port ([#16773](https://github.com/can1357/oh-my-pi/issues/16773), [#16774](https://github.com/can1357/oh-my-pi/pull/16774) by [@berney](https://github.com/berney))
-- Fixed the built-in `ps` reporting an unsupported long option such as `--forest` as `unsupported option '--'`; it now names the option, and every unsupported-option error says that a system `ps`, if installed, may support more options when run by its full path ([#17018](https://github.com/can1357/oh-my-pi/pull/17018) by [@sjawhar](https://github.com/sjawhar))
-- Fixed `kill %N` on a backgrounded compound command (such as `(while :; do :; done) &`) in a persistent shell session: the job was reported done but the in-process loop kept spinning until the process exited; it now stops at the next interpreter check ([#16937](https://github.com/can1357/oh-my-pi/pull/16937) by [@holny](https://github.com/holny))
-- Fixed `sort -t=` (and clusters such as `-nrt=`) failing with "separator must be exactly one character long"; an attached `=` now selects `=` as the field separator, as in GNU sort, and `-t=X` such as `-t==` is rejected as two characters ([#17017](https://github.com/can1357/oh-my-pi/pull/17017) by [@sjawhar](https://github.com/sjawhar))
-- Fixed macOS `press()` on a control with no press action, such as a button on a Chrome page, failing without saying what to do; the error now tells you to `click()` it instead ([#16916](https://github.com/can1357/oh-my-pi/pull/16916) by [@will-bogusz](https://github.com/will-bogusz))
-- Fixed `kill %N` on a backgrounded compound command (such as `(while :; do :; done) &`) in a persistent shell session: the job was reported done but the in-process loop kept spinning until the process exited; it now stops at the next interpreter check ([#16937](https://github.com/can1357/oh-my-pi/pull/16937) by [@holny](https://github.com/holny))
-- Fixed `sort -t=` (and clusters such as `-nrt=`) failing with "separator must be exactly one character long"; an attached `=` now selects `=` as the field separator, as in GNU sort, and `-t=X` such as `-t==` is rejected as two characters ([#17017](https://github.com/can1357/oh-my-pi/pull/17017) by [@sjawhar](https://github.com/sjawhar))
 
 ## [18.12.5] - 2026-10-21
 
