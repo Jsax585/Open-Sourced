@@ -1648,7 +1648,7 @@ describe("per-call model preflight", () => {
 		const usageOrder = ["mock/worker-a", "mock/worker-b"];
 		const base = perCallSession({ "task.perCallModel": "on" });
 		base.settings = Settings.isolated(
-			{ "task.perCallModel": "on", modelRoles: { review: "mock/worker" } },
+			{ "task.perCallModel": "on", modelRoles: { review: "worker" } },
 			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
 		);
 		Object.assign(base, {
@@ -1672,7 +1672,7 @@ describe("per-call model preflight", () => {
 		let usageOrder: string[] | undefined;
 		const base = perCallSession({ "task.perCallModel": "on" });
 		base.settings = Settings.isolated(
-			{ "task.perCallModel": "on", modelRoles: { review: "mock/worker" } },
+			{ "task.perCallModel": "on", modelRoles: { review: "worker" } },
 			{ storage: { getModelUsageOrder: () => usageOrder } as AgentStorage },
 		);
 		Object.assign(base, {
