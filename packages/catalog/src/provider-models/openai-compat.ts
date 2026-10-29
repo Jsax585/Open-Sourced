@@ -4797,10 +4797,84 @@ export interface TogetherModelManagerConfig {
 	fetch?: FetchImpl;
 }
 
+/** A nonnegative USD rate from a Together `pricing` leg, or `undefined` when unreadable. */
+function togetherRate(value: unknown): number | undefined {
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * Together's `/v1/models` `pricing` block is already USD per million tokens
+ * (`input`, `output`, `cached_input`) — the catalog's unit — unlike the
+ * per-token blocks other hosts publish. Only `chat`/`language`/`code` rows are
+ * token-billed: image, video, audio, and embedding rows price in their own
+ * unit and keep the fallback card. A chat row with an hourly rate and no
+ * token rate is a dedicated-endpoint base, not a free serverless model.
+ */
+function togetherPricing(
+	type: unknown,
+	pricing: unknown,
+	fallback: TokenCost,
+): Pick<ModelSpec<"openai-completions">, "cost" | "pricingStatus"> | undefined {
+	if ((type !== "chat" && type !== "language" && type !== "code") || !isRecord(pricing)) return undefined;
+	const input = togetherRate(pricing.input);
+	const output = togetherRate(pricing.output);
+	if (input === undefined || output === undefined) return undefined;
+	if (input === 0 && output === 0) {
+		if ((togetherRate(pricing.hourly) ?? 0) > 0) {
+			return {
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				pricingStatus: "variable",
+			};
+		}
+		return {
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			pricingStatus: "free",
+		};
+	}
+	// An absent/unreadable cache leg is not a zero rate: keep the row's own
+	// cache card (an explicit `cached_input: 0` still maps to zero).
+	return {
+		cost: { input, output, cacheRead: togetherRate(pricing.cached_input) ?? fallback.cacheRead, cacheWrite: 0 },
+	};
+}
+
+function mapTogetherModel(
+	entry: OpenAICompatibleModelRecord,
+	defaults: ModelSpec<"openai-completions">,
+	reference: ModelSpec<"openai-completions"> | undefined,
+): ModelSpec<"openai-completions"> {
+	const model = mapWithBundledReference(
+		{
+			...entry,
+			name:
+				typeof entry.display_name === "string" && entry.display_name.length > 0 ? entry.display_name : entry.name,
+		},
+		defaults,
+		reference,
+	);
+	return {
+		...model,
+		...togetherPricing(entry.type, entry.pricing, model.cost),
+		contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
+	};
+}
+
+/**
+ * Together's `/v1/models` rows carry their own tariff, limits, and display
+ * name; a key-backed fetch adds every live row to the bundled snapshot.
+ */
 export function togetherModelManagerOptions(
 	config?: TogetherModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {
-	return createSimpleOpenAICompletionsOptions("together", "https://api.together.xyz/v1", config);
+	return createOpenAICompatibleModelManagerOptions({
+		api: "openai-completions",
+		providerId: "together",
+		defaultBaseUrl: "https://api.together.xyz/v1",
+		config,
+		requireApiKey: true,
+		mapModel: mapTogetherModel,
+	});
 }
 
 // ---------------------------------------------------------------------------

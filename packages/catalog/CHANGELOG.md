@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Fixed Together models missing from the bundled catalog showing as free by reading live pricing, context windows, and names from discovery ([#17316](https://github.com/can1357/oh-my-pi/pull/17316) by [@kevcube](https://github.com/kevcube))
 - Fixed DeepSeek V4.1 Flash image attachments being stripped on publisher-namespaced ids such as `ds/deepseek-flash` ([#16470](https://github.com/can1357/oh-my-pi/pull/16470) by [@ZanDev32](https://github.com/ZanDev32))
 
 ## [18.13.3] - 2026-10-28
