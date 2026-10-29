@@ -50,7 +50,7 @@
 - Browser `webmcp*` helpers read Chrome's native WebMCP when called instead of injecting a script and `modelContext` polyfill into every page omp drives, and say why when Chrome offers a page none; Tern tabs no longer support them ([#16756](https://github.com/can1357/oh-my-pi/pull/16756) by [@will-bogusz](https://github.com/will-bogusz))
 - Log records written during a session's turns and compaction now carry its `sessionId`, so a subagent's records are told apart from its parent's in the same process log; records that named another kind of id `sessionId` now call it `titleSessionId`, `debugSessionId`, `kernelSessionId`, `acpSessionId` or `providerSessionId` ([#16587](https://github.com/can1357/oh-my-pi/pull/16587) by [@will-bogusz](https://github.com/will-bogusz))
 - Sessions started with computer use enabled receive the desktop guide before their first call, avoiding a separate documentation read before starting a desktop task ([#16918](https://github.com/can1357/oh-my-pi/pull/16918) by [@will-bogusz](https://github.com/will-bogusz))
-- `read` of a web page keeps only the description, author and dates of the page's `<meta>` tags and drops the targets of links to anchors on the same page, so docs and API references cost about a tenth fewer tokens
+- `read` of a web page keeps only the description, author and dates of the page's `<meta>` tags and drops the targets of links to anchors on the same page, so docs and API references cost about a tenth fewer tokens ([#17350](https://github.com/can1357/oh-my-pi/pull/17350) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
