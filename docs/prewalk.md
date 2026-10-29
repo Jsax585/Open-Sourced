@@ -135,6 +135,8 @@ An automatic handoff belongs to the task that armed it. When the next task start
 
 An automatic retry fallback to a different model or pinned upstream route supersedes the old handoff while that fallback remains active. A matching model, route, and thinking level still restores normally.
 
+Switching to a different saved session discards the outgoing task's automatic handoff without restoring its planning model into the opened session. A cancelled or failed switch keeps the outgoing task's restoration intact.
+
 An explicit model or thinking-level selection while an automatic handoff is armed, switching, or complete takes ownership: a pending automatic handoff is canceled, and a switch already loading metadata yields to the selection. If the model has already been published, a later effort selection is preserved. A manual `/prewalk` arm made during the switch also survives. Handoffs made by `/prewalk`, `--prewalk`, or `prewalk.enabled` are never restored by auto-prewalk.
 
 Trying to cycle thinking on a model without effort selectors makes no selection and does not cancel an automatic handoff.

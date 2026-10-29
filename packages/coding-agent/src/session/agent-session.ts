@@ -13251,6 +13251,7 @@ export class AgentSession implements SettingsScope {
 				if (options?.onModelFallback) options.onModelFallback(modelFallbackWarning);
 				else this.emitNotice("warning", modelFallbackWarning);
 			}
+			if (switchingToDifferentSession) this.#prewalk.releaseHandoff();
 			return true;
 		} catch (error) {
 			this.sessionManager.restoreState(previousSessionState);

@@ -13,6 +13,7 @@
 - Fixed losing pinned upstream routes after initial model selection, explicit session restoration, or parked-subagent revival ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed cycling thinking on models without effort selectors canceling a pending automatic prewalk handoff ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 - Fixed automatic prewalk restoring the planning model after a retry fallback had selected a different upstream route ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
+- Fixed switching sessions after an automatic prewalk handoff overriding the opened session's saved model and thinking level on its first prompt ([#17292](https://github.com/can1357/oh-my-pi/pull/17292) by [@taibenvenuti](https://github.com/taibenvenuti))
 
 ### Added
 

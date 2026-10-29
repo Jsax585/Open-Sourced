@@ -157,6 +157,7 @@ describe("AgentSession auto-prewalk", () => {
 		auto?: "off" | "suggest" | "on";
 		primary?: Model;
 		target?: Model;
+		persist?: boolean;
 		retryFallback?: string;
 		/** Credential the native judge (default true). */
 		judge?: boolean;
@@ -241,7 +242,9 @@ describe("AgentSession auto-prewalk", () => {
 		const startupTarget = options.startupArm === true ? target : options.startupArm || undefined;
 		const created = new AgentSession({
 			agent,
-			sessionManager: SessionManager.inMemory(tempDir.path()),
+			sessionManager: options.persist
+				? SessionManager.create(tempDir.path(), tempDir.path())
+				: SessionManager.inMemory(tempDir.path()),
 			settings,
 			modelRegistry,
 			toolRegistry,
@@ -846,6 +849,84 @@ describe("AgentSession auto-prewalk", () => {
 			expect(f.session.model?.id).toBe(f.primary.id);
 			expect(f.session.configuredThinkingLevel()).toBe(Effort.High);
 		});
+
+		it.each(["off", "suggest"] as const)(
+			"a successful session switch discards the outgoing auto handoff with prewalk.auto %s",
+			async mode => {
+				stubJudge([PREWALK, DIRECT]);
+				const f = createFixture([...cycle(), done("resumed")], { auto: "on", persist: true });
+				await f.session.prompt(TASK);
+				expect(f.session.model?.id).toBe(f.target.id);
+				expect(f.session.configuredThinkingLevel()).toBe(Effort.Low);
+				cfgPrewalkAuto.override(f.settings, mode);
+
+				const resumed = SessionManager.create(tempDir.path(), tempDir.path());
+				resumed.appendModelChange(formatModelStringWithRouting(f.target));
+				resumed.appendThinkingLevelChange(Effort.Low, Effort.Low);
+				resumed.appendMessage({ role: "user", content: "saved task", timestamp: Date.now() });
+				await resumed.ensureOnDisk();
+				await resumed.flush();
+				await resumed.close();
+				const resumedFile = resumed.getSessionFile()!;
+
+				expect(await f.session.switchSession(resumedFile)).toBe(true);
+				expect(f.session.sessionFile).toBe(resumedFile);
+				expect(f.session.model?.id).toBe(f.target.id);
+				expect(f.session.configuredThinkingLevel()).toBe(Effort.Low);
+
+				await f.session.prompt("continue the saved task");
+
+				expect(f.requested.at(-1)).toBe(f.target.id);
+				expect(f.efforts.at(-1)).toBe(Effort.Low);
+			},
+		);
+
+		it.each(["cancelled", "failed"] as const)(
+			"a %s session switch keeps the outgoing auto handoff for the next task",
+			async outcome => {
+				stubJudge([PREWALK, DIRECT]);
+				const f = createFixture([...cycle(), done("original")], { auto: "on", persist: true });
+				await f.session.prompt(TASK);
+				expect(f.session.model?.id).toBe(f.target.id);
+				cfgPrewalkAuto.override(f.settings, "off");
+				const originalFile = f.session.sessionFile;
+				const otherCwd = TempDir.createSync("@pi-prewalk-switch-");
+				try {
+					const resumed = SessionManager.create(
+						outcome === "cancelled" ? otherCwd.path() : tempDir.path(),
+						otherCwd.path(),
+					);
+					resumed.appendModelChange(
+						outcome === "failed" ? "missing-provider/missing-model" : formatModelStringWithRouting(f.target),
+					);
+					resumed.appendThinkingLevelChange(Effort.Low, Effort.Low);
+					resumed.appendMessage({ role: "user", content: "saved task", timestamp: Date.now() });
+					await resumed.ensureOnDisk();
+					await resumed.flush();
+					await resumed.close();
+
+					if (outcome === "cancelled") {
+						const onCwdChange = vi.fn(async () => false);
+						expect(await f.session.switchSession(resumed.getSessionFile()!, { onCwdChange })).toBe(false);
+						expect(onCwdChange).toHaveBeenCalled();
+					} else {
+						await expect(f.session.switchSession(resumed.getSessionFile()!)).rejects.toThrow(
+							"Could not restore model missing-provider/missing-model",
+						);
+					}
+					expect(f.session.sessionFile).toBe(originalFile);
+					expect(f.session.model?.id).toBe(f.target.id);
+					expect(f.session.configuredThinkingLevel()).toBe(Effort.Low);
+
+					await f.session.prompt("continue the original task");
+
+					expect(f.requested.at(-1)).toBe(f.primary.id);
+					expect(f.efforts.at(-1)).toBe(Effort.High);
+				} finally {
+					otherCwd.removeSync();
+				}
+			},
+		);
 
 		it.each(["suggest", "off", "/prewalk off"] as const)(
 			"an earlier auto handoff returns to its planning model when prewalk.auto is %s",
