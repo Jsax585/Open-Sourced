@@ -10,6 +10,7 @@
 
 - Added a built-in `rsync` implementation to the bash tool, compatible with rsync 3.5.1 and protocol versions 29–33 across Linux, macOS, and Windows. It supports local copies, SSH remote shells via `-e`, and `rsync://` daemons without requiring an installed binary; daemon serving is not supported, and `PI_DISABLE_UUTILS_DESTRUCTIVE` continues to use the system `rsync`.
 - Added built-in `ast-grep` (also available as `sg`) support to the bash tool for structural code search and rewriting, including pattern matching, rewrites, context, headings, and JSON output.
+- Added to macOS `ax()` lines what an element can do: `(selected)`, `(settable)` on dates `setValue` can write, `(readonly)` on web text fields the page locks, `actions=` beyond its press, and names for window buttons ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
@@ -17,6 +18,8 @@
 - Native search and the bash tool's built-in `rg`, `grep`, `fd`, `find`, and `ast-grep` now stop filesystem work promptly when cancelled or timed out, including searches over JavaScript-provided filesystems and searches interrupted while reading large files.
 - The bash tool's built-in `rg` and recursive `grep` now search files in parallel while retaining path-ordered output; `grep` can also stop promptly after reaching `maxCount`.
 - Enabled safe reuse of unchanged directory listings when `cache: true`, with timestamp validation to prevent stale results.
+- `ax()` lines show 200 characters of a long label or value instead of 80, keep newlines as `\n`, and end a cut value with the `value()` call that reads it whole ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
+- macOS `ax()` dates read in local time with their offset, the form `setValue` takes back, and `axPerform` runs a listed action in any case, with or without its `AX` prefix ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
@@ -24,6 +27,8 @@
 - Fixed built-in bash commands such as `cat`, `grep`, `head`, `wc`, `read`, and `mapfile` hanging at the end of FIFO input on macOS; `read -t` now returns at EOF.
 - Fixed ANSI text wrapping for styled underlines, background colours, and colon-form RGB colours.
 - Fixed clicking in native audio playback when the queue runs dry mid-waveform by smoothly fading output to silence and back.
+- Fixed macOS `ax()` marking every cell of a focused table or sidebar `(focused)`; only the element holding the app's keyboard focus is marked ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed macOS `axPerform` reporting a followed Preview PDF link or an opened Finder item as failed; the outcome is now reported unconfirmed ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.13.3] - 2026-10-28
 

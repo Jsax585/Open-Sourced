@@ -36,6 +36,7 @@
 - Sessions with computer use enabled receive the desktop guide before the first computer call.
 - The Tern interface now presents warnings, errors, update notices, file reads, and completed background work consistently with chat messages.
 - Muted live voice sessions remain visibly muted while the voice model starts work.
+- The `computer` tool's `el.perform()` takes an action by any spelling `ax()` lists (`perform("open")`), and `computer.backgroundFallback: refuse` refuses every spelling of a raise, open, context menu or popup press ([#15282](https://github.com/can1357/oh-my-pi/pull/15282) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Fixed
 
