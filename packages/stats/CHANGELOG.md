@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Stats sync now keeps a warm pool of parse workers across runs instead of starting a fresh worker for every run, and keys each pooled worker on the resolved sessions directory and working directory so a worker is never reused after either moves ([#15331](https://github.com/can1357/oh-my-pi/pull/15331) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Improved `omp stats` session synchronization performance by approximately 2–5× on large histories. The first sync after upgrading may take up to a minute while the stats database is optimized.
 
