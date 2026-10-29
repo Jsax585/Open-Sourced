@@ -23,6 +23,10 @@
 - Adjusted view placement to align with column‑capped output, fixing view offsets after line truncation
 - In Tern, warnings, errors, the update notice, `@file` reads and finished background jobs, tangents and supervised processes read like the rest of the chat: an icon and the message instead of a raw terminal line
 
+### Changed
+
+- Clarified hashline edit instructions for current-session tags, raw reads, and re-reading reformatted writes ([#16000](https://github.com/can1357/oh-my-pi/issues/16000), [#16253](https://github.com/can1357/oh-my-pi/pull/16253) by [@apoc](https://github.com/apoc))
+
 ### Fixed
 
 - Fixed Bash services failing to start with `ready.port must be an integer from 1 to 65535` when the model sent `port: 0` beside a `log` condition; a zero port now counts as unset
