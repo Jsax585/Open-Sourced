@@ -85,6 +85,10 @@
 - Fixed Cursor X Subscription usage treating the weekly Grok/Composer pool as third-party budget; third-party models are now metered by prepaid credit ([#17048](https://github.com/can1357/oh-my-pi/pull/17048) by [@trukhinyuri](https://github.com/trukhinyuri))
 - Fixed Google models (`google-generative-ai`, `google-vertex`, `google-gemini-cli`/Antigravity) running out of output on small `maxTokens` requests with reasoning on, ending with thinking only and no answer; the requested `maxTokens` now leaves room for thinking on top, as on other providers ([#16943](https://github.com/can1357/oh-my-pi/pull/16943) by [@Mouriya-Emma](https://github.com/Mouriya-Emma))
 
+### Fixed
+
+- Fixed Cursor reporting tools as unavailable before external clients execute them, and losing tool schemas and results between calls ([#16719](https://github.com/can1357/oh-my-pi/pull/16719) by [@gustavosmendes](https://github.com/gustavosmendes))
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

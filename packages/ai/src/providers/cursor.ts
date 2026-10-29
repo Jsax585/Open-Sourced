@@ -108,6 +108,7 @@ import {
 	McpToolNotFoundSchema,
 	McpToolResultContentItemSchema,
 	McpToolResultSchema,
+	McpToolsSchema,
 	ModelDetailsSchema,
 	ReadErrorSchema,
 	ReadFileNotFoundSchema,
@@ -227,10 +228,11 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { connectProxiedSocket, getProxyForUrl, wrapFetchForProxy } from "../utils/proxy";
 import { createRequestDebugSession, isRequestDebugEnabled, type RequestDebugResponseLog } from "../utils/request-debug";
 import { waitForRetry } from "../utils/retry-wait";
-import { sanitizeSchemaForCursor, toolWireSchema } from "../utils/schema";
+import { isJsonSchemaValueValid, sanitizeSchemaForCursor, toolWireSchema } from "../utils/schema";
 import { formatConnectEndStreamError, hasRetryableCursorErrorDetail } from "./connect-error-detail";
 import { CONNECT_END_STREAM_FLAG, ConnectFrameDecoder, frameConnectMessage } from "./connect-frame";
-import mcpExternalHandoffMessage from "./cursor-external-tool-handoff.md" with { type: "text" };
+import externalToolExecutionPrompt from "./cursor-external-tool-execution.md" with { type: "text" };
+import nativeEditRejectionMessage from "./cursor-native-edit-rejection.md" with { type: "text" };
 import {
 	buildMcpStateResult,
 	buildNeutralHookResult,
@@ -395,13 +397,15 @@ export interface CursorOptions extends StreamOptions {
 	conversationId?: string;
 	execHandlers?: CursorExecHandlers;
 	onToolResult?: CursorToolResultHandler;
-	/** Treat unhandled MCP calls as accepted handoffs to an external executor. */
+	/** Hand native and MCP calls to the external client before continuing the turn. */
 	externalToolExecutor?: boolean;
 	/** Wire model id selected after thinking-effort routing (`resolveWireModelId`). */
 	wireModelId?: string;
 	/** Run transport. `auto` starts with HTTP/2 and falls back on failed ALPN negotiation. */
 	transport?: "auto" | "http2" | "http1";
 }
+
+type CursorToolOptions = Pick<CursorOptions, "externalToolExecutor">;
 
 type CursorWireMode = "normalized" | "discovered";
 
@@ -457,6 +461,7 @@ interface CursorGrpcRequest {
 }
 
 interface CursorTransportRequest extends CursorGrpcRequest {
+	requestContextTools: McpToolDefinition[];
 	/** Exact discovery id eligible for a retry because the normalized effort payload was serialized unchanged. */
 	fallbackWireModelId?: string;
 	/** The wire route this request selected; server records replay only on it. */
@@ -1120,6 +1125,7 @@ function streamCursorWithWireMode(
 		const h2Completion = Promise.withResolvers<void>();
 		let h2Settled = false;
 		let sawTurnEnded = false;
+		let externalToolHandoff = false;
 		// After the final step's `stepCompleted`, only a repeat checkpoint and the
 		// `turnEnded` usage frame follow.
 		let stepCompletedIsLatest = false;
@@ -1144,6 +1150,11 @@ function streamCursorWithWireMode(
 		const settleH2 = (error?: unknown): void => {
 			if (h2Settled) return;
 			h2Settled = true;
+			if (externalToolHandoff) {
+				if (options?.signal?.aborted) h2Completion.reject(new AIError.AbortError());
+				else h2Completion.resolve();
+				return;
+			}
 			if (error !== undefined || endStreamError) {
 				if (sawTurnEnded && latestCheckpointTerminal) {
 					h2Completion.resolve();
@@ -1192,8 +1203,8 @@ function streamCursorWithWireMode(
 		// listener left on it would retain this request's scope (request bytes,
 		// output, blob store) until the caller's whole prompt ends.
 		let onTransportAbort: (() => void) | undefined;
-		// A call without conversation/session id mints a one-off conversation that
-		// no later request can address; its cache entries are released at the end.
+		// Calls without a session mint one-off conversations;
+		// no later request addresses them, so release their cache entries at the end.
 		const ephemeralConversation =
 			!retryContext && options?.conversationId === undefined && options?.sessionId === undefined;
 		// The turn's server records stand for the opening user message and tool
@@ -1235,6 +1246,20 @@ function streamCursorWithWireMode(
 
 			baseConversationId =
 				retryContext?.baseConversationId ?? options?.conversationId ?? options?.sessionId ?? crypto.randomUUID();
+			// After a gateway restart the rotation map is gone, but the client's
+			// trailing results still identify a handoff whose server exec is pending.
+			if (
+				!retryContext &&
+				options?.externalToolExecutor &&
+				!rotatedConversationIds.has(baseConversationId) &&
+				context.messages.at(-1)?.role === "toolResult" &&
+				context.messages.findLast(message => message.role === "assistant")?.stopReason === "toolUse"
+			) {
+				const rotated = crypto.randomUUID();
+				rotatedConversationIds.set(baseConversationId, rotated);
+				freshRotatedConversationIds.add(rotated);
+			}
+
 			conversationId =
 				retryContext?.conversationId ?? rotatedConversationIds.get(baseConversationId) ?? baseConversationId;
 			// A freshly rotated id rebuilds from `context` alone: a mid-turn
@@ -1268,11 +1293,8 @@ function streamCursorWithWireMode(
 			turnRecords.wireRoute ??= builtRequest.wireRoute;
 			if (builtRequest.wireRoute !== turnRecords.wireRoute) turnRecords.mixedRoutes = true;
 			conversationEntry.state = conversationState;
-			const requestContextTools = buildMcpToolDefinitions(
-				context.tools,
-				model.requiresCursorToolSchemaProjection === true,
-			);
-			const requestContextRules = buildCursorRequestContextRules(context.systemPrompt);
+			const requestContextTools = builtRequest.requestContextTools;
+			const requestContextRules = buildCursorRequestContextRules(context.systemPrompt, options);
 
 			const baseUrl = model.baseUrl || CURSOR_API_URL;
 			const requestPath = transportMode === "http2" ? CURSOR_RUN_PATH : CURSOR_RUN_SSE_PATH;
@@ -1377,6 +1399,22 @@ function streamCursorWithWireMode(
 				},
 				onTodoSnapshot: options?.execHandlers?.todoSync?.bind(options.execHandlers),
 				onToolResult,
+				onExternalToolHandoff: () => {
+					if (externalToolHandoff) return;
+					externalToolHandoff = true;
+					output.stopReason = "toolUse";
+					checkpointCoversTurn = false;
+					cursorConversations.delete(conversationId!);
+					// The server is waiting for this exec result. Rebuild the next turn
+					// from the client's result under a fresh id, retaining ordinary reuse.
+					const rotated = crypto.randomUUID();
+					rotatedConversationIds.set(baseConversationId!, rotated);
+					freshRotatedConversationIds.delete(conversationId!);
+					successfulRotatedConversationIds.delete(conversationId!);
+					freshRotatedConversationIds.add(rotated);
+					settleH2();
+					runTransport?.close();
+				},
 			};
 			openBlockState = state;
 
@@ -1409,12 +1447,17 @@ function streamCursorWithWireMode(
 			});
 
 			runTransport.onData((chunk: Buffer) => {
+				if (externalToolHandoff) return;
 				if (debugResponseLogPromise) {
 					void debugResponseLogPromise.then(log => {
 						log?.write(chunk);
 					});
 				}
 				for (const { flags, payload: messageBytes } of frameDecoder.decode(chunk)) {
+					// A handoff ends this remote turn at the first executable call.
+					// Later frames (including parallel calls) are not accepted; the next
+					// turn replans from the completed client result, with no pending execs.
+					if (externalToolHandoff) break;
 					if (flags & CONNECT_END_STREAM_FLAG) {
 						const endError = parseConnectEndStream(messageBytes);
 						if (endError) {
@@ -1488,7 +1531,7 @@ function streamCursorWithWireMode(
 							requestContextTools,
 							requestContextRules,
 							onConversationCheckpoint,
-							options?.externalToolExecutor,
+							{ externalToolExecutor: options?.externalToolExecutor },
 						).catch(error => {
 							log("error", "handleServerMessage", { error: String(error) });
 						});
@@ -1560,7 +1603,7 @@ function streamCursorWithWireMode(
 			runTransport.write(frameConnectMessage(requestBytes));
 			heartbeatTimer = setInterval(sendHeartbeat, 5000);
 			await h2Completion.promise;
-			if (conversationId && baseConversationId && conversationId !== baseConversationId) {
+			if (!externalToolHandoff && conversationId && baseConversationId && conversationId !== baseConversationId) {
 				successfulRotatedConversationIds.add(conversationId);
 				freshRotatedConversationIds.delete(conversationId);
 			}
@@ -1963,6 +2006,8 @@ export interface BlockState {
 	 * matching result and every transcript rebuild strips it as dangling.
 	 */
 	onToolResult?: CursorToolResultHandler;
+	/** Return an unresolved tool call to the external client before replying to Cursor. */
+	onExternalToolHandoff?: () => void;
 }
 
 function markCursorExecResolved(block: CursorExecResolvedCarrier): void {
@@ -1987,14 +2032,17 @@ export async function handleServerMessage(
 	requestContextTools: McpToolDefinition[],
 	requestContextRules: CursorRule[] = [],
 	onConversationCheckpoint?: (checkpoint: ConversationStateStructure) => void,
-	externalToolExecutor = false,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
 ): Promise<void> {
 	const msgCase = msg.message.case;
 
 	log("serverMessage", msgCase, msg.message.value);
 
 	if (msgCase === "interactionUpdate") {
-		processInteractionUpdate(msg.message.value, output, stream, state, usageState);
+		processInteractionUpdate(msg.message.value, output, stream, state, usageState, {
+			externalToolExecutor,
+			execHandlers,
+		});
 	} else if (msgCase === "kvServerMessage") {
 		handleKvServerMessage(msg.message.value as KvServerMessage, blobStore, runTransport);
 	} else if (msgCase === "execServerMessage") {
@@ -2013,7 +2061,7 @@ export async function handleServerMessage(
 				output,
 				stream,
 				state,
-				externalToolExecutor,
+				{ externalToolExecutor },
 			),
 		);
 	} else if (msgCase === "interactionQuery") {
@@ -2415,6 +2463,43 @@ function sendShellStreamExitFromResult(
 	}
 }
 
+/** Native translations must fit the client's declared fields, even for open schemas. */
+function canHandoffCursorTool(
+	tools: readonly McpToolDefinition[],
+	name: string,
+	args: Record<string, unknown>,
+): boolean {
+	const definition = tools.find(tool => tool.toolName === name);
+	if (!definition) return false;
+	const schema = decodeJsonValue(definition.inputSchema);
+	if (!isRecord(schema) || !isRecord(schema.properties)) return false;
+	const properties = schema.properties;
+	const input = omitUndefinedArgs(args);
+	return Object.keys(input).every(key => Object.hasOwn(properties, key)) && isJsonSchemaValueValid(schema, input);
+}
+
+function cursorExternalReadArgs(
+	args: { path: string; offset?: number; limit?: number },
+	tools: readonly McpToolDefinition[],
+): Record<string, unknown> {
+	const definition = tools.find(tool => tool.toolName === "read");
+	const schema = definition && decodeJsonValue(definition.inputSchema);
+	const properties = isRecord(schema) && isRecord(schema.properties) ? schema.properties : {};
+	// Readers with separate range fields receive them verbatim. Path-only OMP
+	// readers encode the same window in the path. Negative offsets and empty
+	// windows have no lossless path selector, so retain the fields and reject
+	// that native translation if the client does not declare them.
+	if (
+		Object.hasOwn(properties, "offset") ||
+		Object.hasOwn(properties, "limit") ||
+		(args.offset !== undefined && args.offset < 0) ||
+		args.limit === 0
+	) {
+		return { path: args.path, offset: args.offset, limit: args.limit };
+	}
+	return { path: piReadDisplayPath(args.path, args.offset, args.limit) };
+}
+
 async function handleExecServerMessage(
 	execMsg: ExecServerMessage,
 	runTransport: CursorMessageWriter,
@@ -2425,7 +2510,7 @@ async function handleExecServerMessage(
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	state: BlockState,
-	externalToolExecutor: boolean,
+	{ externalToolExecutor }: CursorToolOptions,
 ): Promise<void> {
 	const execCase = execMsg.message.case;
 	log("exec", "dispatch", { execCase, execId: execMsg.execId, hasHandlers: !!execHandlers });
@@ -2470,6 +2555,16 @@ async function handleExecServerMessage(
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const editOwned = isEditOwnedToolCallId(state, output, args.toolCallId);
+			const handoff = externalToolExecutor && !execHandlers?.read ? state.onExternalToolHandoff : undefined;
+			if (editOwned && externalToolExecutor && !execHandlers?.read) {
+				sendExecClientMessage(
+					runTransport,
+					execMsg,
+					"readResult",
+					buildReadRejectedResult(args.path, nativeEditRejectionMessage.trim()),
+				);
+				return;
+			}
 			// Cursor numbers raw content itself; StrReplace also writes it back.
 			// Neither frame may receive hashline gutters or summarized bodies.
 			// Edit-owned reads omit the extra transcript block owned by the edit card.
@@ -2489,16 +2584,22 @@ async function handleExecServerMessage(
 							limit: negativeOffset ? args.limit : undefined,
 						};
 			if (!editOwned) {
-				synthesizeCursorExecToolCall(
-					output,
-					stream,
-					state,
-					args.toolCallId,
-					"read",
-					negativeOffset
-						? { path: composed, offset: args.offset, limit: args.limit }
-						: { path: piReadDisplayPath(args.path, args.offset, args.limit) },
-				);
+				if (
+					synthesizeCursorExecToolCall(
+						output,
+						stream,
+						state,
+						args.toolCallId,
+						"read",
+						handoff
+							? cursorExternalReadArgs(args, requestContextTools)
+							: negativeOffset
+								? { path: composed, offset: args.offset, limit: args.limit }
+								: { path: piReadDisplayPath(args.path, args.offset, args.limit) },
+						{ handoff, tools: requestContextTools },
+					)
+				)
+					return;
 			}
 			const { execResult: readResult, toolResult } = await resolveExecHandler(
 				handlerArgs,
@@ -2563,10 +2664,24 @@ async function handleExecServerMessage(
 		case "lsArgs": {
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
-			// Bridge maps `ls` onto the coding-agent `read` tool (see
-			// `CursorExecHandlers.ls` in `pi-coding-agent/src/cursor.ts`); mirror
-			// that here so the synthesized block matches the toolResult's `toolName`.
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "read", { path: args.path });
+			const toolName = externalToolExecutor && !execHandlers?.ls ? "ls" : "read";
+			// Only the local bridge guarantees directory support through `read`.
+			// External clients must advertise an actual `ls` tool for this frame.
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					toolName,
+					{ path: args.path },
+					{
+						handoff: externalToolExecutor && !execHandlers?.ls ? state.onExternalToolHandoff : undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			const { execResult } = await resolveExecHandler(
 				args,
 				execHandlers?.ls?.bind(execHandlers),
@@ -2574,7 +2689,7 @@ async function handleExecServerMessage(
 				toolResult => buildLsResultFromToolResult(args.path, toolResult),
 				reason => buildLsRejectedResult(args.path, reason),
 				error => buildLsErrorResult(args.path, error),
-				{ toolCallId: args.toolCallId, toolName: "read" },
+				{ toolCallId: args.toolCallId, toolName },
 			);
 			sendExecClientMessage(runTransport, execMsg, "lsResult", execResult);
 			return;
@@ -2597,12 +2712,26 @@ async function handleExecServerMessage(
 			// `tool_execution_start`) and rebuilt transcript (from this block)
 			// display identical args.
 			const searchPath = args.glob ? `${args.path || "."}/${args.glob}` : args.path || ".";
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "grep", {
-				pattern: args.pattern,
-				path: searchPath,
-				case: args.caseInsensitive === true ? false : undefined,
-				skip: piGrepSkip(args.offset),
-			});
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					"grep",
+					{
+						pattern: args.pattern,
+						path: searchPath,
+						case: args.caseInsensitive === true ? false : undefined,
+						skip: piGrepSkip(args.offset),
+					},
+					{
+						handoff: externalToolExecutor && !execHandlers?.grep ? state.onExternalToolHandoff : undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			const { execResult } = await resolveExecHandler(
 				args,
 				execHandlers?.grep?.bind(execHandlers),
@@ -2619,13 +2748,28 @@ async function handleExecServerMessage(
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			const editOwned = isEditOwnedToolCallId(state, output, args.toolCallId);
+			const handoff =
+				externalToolExecutor && !execHandlers?.write && args.fileBytes.length === 0
+					? state.onExternalToolHandoff
+					: undefined;
 			// Match the bridge: prefer `fileText`, fall back to decoded `fileBytes`.
 			const content = args.fileText ?? new TextDecoder().decode(args.fileBytes ?? new Uint8Array());
-			if (!editOwned) {
-				synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "write", {
-					path: args.path,
-					content,
-				});
+			if (!editOwned || handoff) {
+				if (
+					synthesizeCursorExecToolCall(
+						output,
+						stream,
+						state,
+						args.toolCallId,
+						"write",
+						{
+							path: args.path,
+							content,
+						},
+						{ handoff, tools: requestContextTools },
+					)
+				)
+					return;
 			}
 			const write = execHandlers?.write?.bind(execHandlers);
 			const writeHandler = write
@@ -2659,7 +2803,21 @@ async function handleExecServerMessage(
 		case "deleteArgs": {
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "delete", { path: args.path });
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					"delete",
+					{ path: args.path },
+					{
+						handoff: externalToolExecutor && !execHandlers?.delete ? state.onExternalToolHandoff : undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			const { execResult } = await resolveExecHandler(
 				args,
 				execHandlers?.delete?.bind(execHandlers),
@@ -2678,11 +2836,25 @@ async function handleExecServerMessage(
 			const normalizedArgs: ShellArgs = { ...args, workingDirectory: args.workingDirectory || process.cwd() };
 			// Match the bridge (`CursorExecHandlers.shell`): map `workingDirectory`
 			// → `cwd`, convert the millisecond budget to bash-tool seconds.
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
-				command: args.command,
-				cwd: args.workingDirectory || undefined,
-				timeout: shellDeadlineSeconds(args),
-			});
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					"bash",
+					{
+						command: args.command,
+						cwd: args.workingDirectory || undefined,
+						timeout: shellDeadlineSeconds(args),
+					},
+					{
+						handoff: externalToolExecutor && !execHandlers?.shell ? state.onExternalToolHandoff : undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			const { execResult } = await resolveExecHandler(
 				args,
 				execHandlers?.shell?.bind(execHandlers),
@@ -2699,11 +2871,28 @@ async function handleExecServerMessage(
 		case "shellStreamArgs": {
 			const args = execMsg.message.value;
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "bash", {
-				command: args.command,
-				cwd: args.workingDirectory || undefined,
-				timeout: shellDeadlineSeconds(args),
-			});
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					"bash",
+					{
+						command: args.command,
+						cwd: args.workingDirectory || undefined,
+						timeout: shellDeadlineSeconds(args),
+					},
+					{
+						handoff:
+							externalToolExecutor && !execHandlers?.shellStream && !execHandlers?.shell
+								? state.onExternalToolHandoff
+								: undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			await handleShellStreamArgs(args, execMsg, runTransport, execHandlers, onToolResult);
 			return;
 		}
@@ -2754,10 +2943,24 @@ async function handleExecServerMessage(
 			if (!args.toolCallId) args.toolCallId = crypto.randomUUID();
 			// Bridge maps `diagnostics` onto the coding-agent `lsp` tool with
 			// `action: "diagnostics"` and `file: path`.
-			synthesizeCursorExecToolCall(output, stream, state, args.toolCallId, "lsp", {
-				action: "diagnostics",
-				file: args.path,
-			});
+			if (
+				synthesizeCursorExecToolCall(
+					output,
+					stream,
+					state,
+					args.toolCallId,
+					"lsp",
+					{
+						action: "diagnostics",
+						file: args.path,
+					},
+					{
+						handoff: externalToolExecutor && !execHandlers?.diagnostics ? state.onExternalToolHandoff : undefined,
+						tools: requestContextTools,
+					},
+				)
+			)
+				return;
 			const { execResult } = await resolveExecHandler(
 				args,
 				execHandlers?.diagnostics?.bind(execHandlers),
@@ -2773,6 +2976,10 @@ async function handleExecServerMessage(
 		case "mcpArgs": {
 			const args = execMsg.message.value;
 			const mcpCall = decodeMcpCall(args);
+			if (externalToolExecutor) {
+				const definition = requestContextTools.find(tool => tool.name === mcpCall.name);
+				if (definition) mcpCall.toolName = definition.toolName;
+			}
 			// An approval probe, not an invocation: the frame asks whether the
 			// call would be permitted. Running the tool to find out fires a side
 			// effect the user has not been asked about, and fires it again when
@@ -2811,13 +3018,24 @@ async function handleExecServerMessage(
 			// carries no `kCursorExecResolved` marker. Answering the frame while
 			// emitting nothing made the turn look like plain text that ended on
 			// `stop`, so the client never saw the call it was meant to execute.
-			const externalHandoff = externalToolExecutor && !execHandlers?.mcp;
-			if (execHandlers?.mcp || externalHandoff) {
+			const externalHandoff =
+				externalToolExecutor &&
+				!execHandlers?.mcp &&
+				requestContextTools.some(tool => tool.name === mcpCall.name && tool.toolName === mcpCall.toolName);
+			if (
+				externalHandoff &&
+				state.onExternalToolHandoff &&
+				synthesizeCursorExecToolCall(output, stream, state, mcpCall.toolCallId, mcpCall.toolName, mcpCall.args, {
+					handoff: state.onExternalToolHandoff,
+				})
+			)
+				return;
+			if (execHandlers?.mcp) {
 				const existingBlock = output.content.find(
 					block => block.type === "toolCall" && block.id === mcpCall.toolCallId,
 				);
 				if (existingBlock) {
-					if (!externalHandoff) markCursorExecResolved(existingBlock);
+					markCursorExecResolved(existingBlock);
 				} else {
 					synthesizeCursorExecToolCall(
 						output,
@@ -2826,9 +3044,8 @@ async function handleExecServerMessage(
 						mcpCall.toolCallId,
 						mcpCall.toolName || mcpCall.name,
 						mcpCall.args,
-						{ executed: !externalHandoff },
 					);
-					if (!externalHandoff) state.resolvedMcpToolCallIds.add(mcpCall.toolCallId);
+					state.resolvedMcpToolCallIds.add(mcpCall.toolCallId);
 				}
 			}
 			const { execResult } = await resolveExecHandler(
@@ -2836,7 +3053,7 @@ async function handleExecServerMessage(
 				execHandlers?.mcp?.bind(execHandlers),
 				onToolResult,
 				toolResult => buildMcpResultFromToolResult(mcpCall, toolResult),
-				_reason => (externalHandoff ? buildMcpExternalHandoffResult() : buildMcpToolNotFoundResult(mcpCall)),
+				_reason => buildMcpToolNotFoundResult(mcpCall),
 				error => buildMcpErrorResult(error),
 				execHandlers?.mcp ? { toolCallId: mcpCall.toolCallId, toolName: mcpCall.toolName } : null,
 			);
@@ -4522,10 +4739,14 @@ function openOrUpdateEditBlock(
 	state: BlockState,
 	toolCall: CursorEditToolCallCarrier | undefined,
 	envelopeId?: string,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
 ): ToolCallState | undefined {
 	const edit = selectEditCall(toolCall);
 	if (!edit && toolCall?.tool?.case !== "editToolCall") return undefined;
 	rememberEditOwnedToolCall(state, toolCall, envelopeId);
+	// Native edit previews contain replacement fragments, not executable JSON
+	// or complete file content. Only the exec channel can materialize a write.
+	if (externalToolExecutor) return undefined;
 	const id = toolCall?.toolCallId || envelopeId;
 	if (!id) return undefined;
 
@@ -4969,27 +5190,6 @@ function buildMcpResultFromToolResult(_mcpCall: CursorMcpCall, toolResult: ToolR
 	});
 }
 
-const MCP_EXTERNAL_HANDOFF_MESSAGE = mcpExternalHandoffMessage.trim();
-
-function buildMcpExternalHandoffResult() {
-	return create(McpResultSchema, {
-		result: {
-			case: "success",
-			value: create(McpSuccessSchema, {
-				content: [
-					create(McpToolResultContentItemSchema, {
-						content: {
-							case: "text",
-							value: create(McpTextContentSchema, { text: MCP_EXTERNAL_HANDOFF_MESSAGE }),
-						},
-					}),
-				],
-				isError: false,
-			}),
-		},
-	});
-}
-
 function buildMcpToolNotFoundResult(mcpCall: CursorMcpCall) {
 	return create(McpResultSchema, {
 		result: {
@@ -5085,9 +5285,10 @@ function endCurrentThinkingBlock(
  * `agent-loop.ts` execution pass skips it — Cursor's server-driven exec
  * channel already ran the tool via the bridge and buffered the result, so
  * treating this block as runnable would re-execute the same side-effecting
- * tool a second time. Pass `{ executed: false }` for a frame nothing ran: a
- * call handed to an external executor is only a handoff while the marker is
- * absent, and the consumer that runs it needs a runnable block.
+ * tool a second time. A call handed to an external executor instead leaves
+ * the marker absent so the consumer can run it.
+ * A `handoff` callback leaves the call unresolved and returns true so the
+ * caller stops before sending a result to Cursor.
  *
  * A frame whose `toolCallId` already has a block in `output` is the server
  * re-dispatching that call (a new `execId`, e.g. a `read` re-sent once a
@@ -5105,9 +5306,21 @@ export function synthesizeCursorExecToolCall(
 	toolCallId: string,
 	toolName: string,
 	args: Record<string, unknown>,
-	{ executed = true }: { executed?: boolean } = {},
-): void {
-	if (output.content.some(block => block.type === "toolCall" && block.id === toolCallId)) return;
+	{ handoff, tools }: { handoff?: () => void; tools?: readonly McpToolDefinition[] } = {},
+): boolean {
+	if (handoff && tools && !canHandoffCursorTool(tools, toolName, args)) handoff = undefined;
+	const existing = output.content.find(
+		(block): block is ToolCallState => block.type === "toolCall" && block.id === toolCallId,
+	);
+	if (existing) {
+		// A duplicate unresolved exec must still close the turn, without emitting
+		// a second call or falling back to a false local error.
+		if (handoff && !existing[kCursorExecResolved]) {
+			handoff();
+			return true;
+		}
+		return false;
+	}
 	endCurrentTextBlock(output, stream, state);
 	endCurrentThinkingBlock(output, stream, state);
 	// Exec-frame translators often write `optional: value || undefined`. A
@@ -5120,12 +5333,23 @@ export function synthesizeCursorExecToolCall(
 		arguments: omitUndefinedArgs(args),
 		[kStreamingBlockIndex]: output.content.length,
 		[kStreamingBlockKind]: "cursor-exec",
-		...(executed ? { [kCursorExecResolved]: true as const } : {}),
+		...(!handoff ? { [kCursorExecResolved]: true as const } : {}),
 	};
 	output.content.push(block);
 	const idx = output.content.length - 1;
 	stream.push({ type: "toolcall_start", contentIndex: idx, partial: output });
+	if (handoff) {
+		stream.push({
+			type: "toolcall_delta",
+			contentIndex: idx,
+			delta: JSON.stringify(block.arguments),
+			partial: output,
+		});
+	}
 	stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: block, partial: output });
+	if (!handoff) return false;
+	handoff();
+	return true;
 }
 
 /**
@@ -5171,6 +5395,7 @@ export function processInteractionUpdate(
 	stream: AssistantMessageEventStream,
 	state: BlockState,
 	usageState: UsageState,
+	{ externalToolExecutor = false, execHandlers }: Pick<CursorOptions, "externalToolExecutor" | "execHandlers"> = {},
 ): void {
 	const updateCase = update.message?.case;
 
@@ -5254,6 +5479,9 @@ export function processInteractionUpdate(
 		if (toolCall) {
 			const mcpCall = selectMcpCall(toolCall);
 			if (mcpCall) {
+				// The exec frame owns external calls: its complete args can be handed
+				// off once, without exposing partial or duplicate argument JSON.
+				if (externalToolExecutor && !execHandlers?.mcp) return;
 				const args = mcpCall.args || {};
 				const id = args.toolCallId || crypto.randomUUID();
 				state.resolvedMcpToolCallIds.delete(id);
@@ -5331,12 +5559,16 @@ export function processInteractionUpdate(
 				return;
 			}
 
-			openOrUpdateEditBlock(output, stream, state, toolCall, update.message.value.callId);
+			openOrUpdateEditBlock(output, stream, state, toolCall, update.message.value.callId, {
+				externalToolExecutor: externalToolExecutor && !execHandlers?.write,
+			});
 		}
 	} else if (updateCase === "toolCallDelta" || updateCase === "partialToolCall") {
 		const value = update.message.value;
 		if (updateCase === "partialToolCall" && value.toolCall) {
-			openOrUpdateEditBlock(output, stream, state, value.toolCall, value.callId);
+			openOrUpdateEditBlock(output, stream, state, value.toolCall, value.callId, {
+				externalToolExecutor: externalToolExecutor && !execHandlers?.write,
+			});
 		}
 		const editDelta = selectEditStreamDelta(value);
 		if (editDelta) {
@@ -5768,8 +6000,22 @@ function resolveCursorRecordReplays(
  * that reconstruction. The server only does this while the root carries no
  * history; later turns rely on {@link buildCursorRulesEntryJson}.
  */
-export function buildCursorRequestContextRules(systemPrompt: readonly string[] | undefined): CursorRule[] {
-	return normalizeSystemPrompts(systemPrompt).map((content, index) =>
+function cursorSystemPrompts(
+	systemPrompt: readonly string[] | undefined,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
+): string[] {
+	const prompts = normalizeSystemPrompts(systemPrompt);
+	if (externalToolExecutor) {
+		prompts.push(externalToolExecutionPrompt.trim());
+	}
+	return prompts;
+}
+
+export function buildCursorRequestContextRules(
+	systemPrompt: readonly string[] | undefined,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
+): CursorRule[] {
+	return cursorSystemPrompts(systemPrompt, { externalToolExecutor }).map((content, index) =>
 		create(CursorRuleSchema, {
 			fullPath: `/omp/system-prompt/${index}.mdc`,
 			content,
@@ -5797,6 +6043,10 @@ export function buildCursorRequestContextRules(systemPrompt: readonly string[] |
  */
 const CURSOR_NATIVE_TOOL_NAMES = new Set(["bash", "read", "write", "delete", "ls", "grep", "todo"]);
 
+function cursorMcpToolWireName(name: string, { externalToolExecutor }: CursorToolOptions): string {
+	return externalToolExecutor ? `pi-agent-${name}` : name;
+}
+
 function isJsonValue(value: unknown): value is JsonValue {
 	if (value === null || typeof value === "string" || typeof value === "boolean") return true;
 	if (typeof value === "number") return Number.isFinite(value);
@@ -5810,13 +6060,20 @@ function isJsonValue(value: unknown): value is JsonValue {
 
 export function buildMcpToolDefinitions(
 	tools: Tool[] | undefined,
-	requiresCursorToolSchemaProjection = false,
+	{
+		requiresCursorToolSchemaProjection = false,
+		externalToolExecutor = false,
+	}: CursorToolOptions & {
+		requiresCursorToolSchemaProjection?: boolean;
+	} = {},
 ): McpToolDefinition[] {
 	if (!tools || tools.length === 0) {
 		return [];
 	}
 
-	const advertisedTools = tools.filter(tool => !CURSOR_NATIVE_TOOL_NAMES.has(tool.name));
+	const advertisedTools = externalToolExecutor
+		? tools
+		: tools.filter(tool => !CURSOR_NATIVE_TOOL_NAMES.has(tool.name));
 	if (advertisedTools.length === 0) {
 		return [];
 	}
@@ -5827,7 +6084,7 @@ export function buildMcpToolDefinitions(
 	// re-include the built-in `write` (dropped as native above) whenever pi-agent
 	// devices are advertised — otherwise a staged preview can never be resolved
 	// and the SoftToolRequirement('write') escalation aborts the turn.
-	const writeTool = tools.find(tool => tool.name === "write");
+	const writeTool = !externalToolExecutor && tools.find(tool => tool.name === "write");
 	const forwarded = writeTool ? [...advertisedTools, writeTool] : advertisedTools;
 
 	return forwarded.map(tool => {
@@ -5839,7 +6096,7 @@ export function buildMcpToolDefinitions(
 				: { type: "object", properties: {}, required: [] };
 		const inputSchema = encodeJsonValue(schemaValue);
 		return create(McpToolDefinitionSchema, {
-			name: tool.name,
+			name: cursorMcpToolWireName(tool.name, { externalToolExecutor }),
 			description: tool.description || "",
 			providerIdentifier: "pi-agent",
 			toolName: tool.name,
@@ -5945,7 +6202,11 @@ interface CursorAssistantStep {
  * before issue #15749 was fixed — is issued once; Cursor rejects a history that
  * repeats it.
  */
-function buildCursorAssistantSteps(msg: AssistantMessage, targetModelId: string | undefined): CursorAssistantStep[] {
+function buildCursorAssistantSteps(
+	msg: AssistantMessage,
+	targetModelId: string | undefined,
+	{ externalToolExecutor }: CursorToolOptions,
+): CursorAssistantStep[] {
 	const steps: CursorAssistantStep[] = [];
 	let step: CursorAssistantStep = { content: [], callIds: [] };
 	const replayThinking = canReplayCursorThinking(msg, targetModelId);
@@ -5977,11 +6238,14 @@ function buildCursorAssistantSteps(msg: AssistantMessage, targetModelId: string 
 			// gets the whole Run rejected as opaque resource_exhausted. Sanitize the
 			// id everywhere it reaches the wire; the tool-result side normalizes the
 			// same id identically, so the call/result pairing stays intact.
+			// MCP identifiers are not model function names. Cursor records both
+			// the call and its result under the CallDynamicTool dispatcher.
+			const args = normalizeCursorMcpArguments(item.arguments);
 			step.content.push({
 				type: "tool-call",
 				toolCallId: normalizeToolCallId(item.id),
-				toolName: item.name,
-				args: normalizeCursorMcpArguments(item.arguments),
+				toolName: externalToolExecutor ? "CallDynamicTool" : item.name,
+				args: externalToolExecutor ? { namespace: "pi-agent", toolName: item.name, arguments: args } : args,
 			});
 			step.callIds.push(item.id);
 		}
@@ -6063,8 +6327,11 @@ function findLastUserMessageIndex(messages: Message[]): number {
  * When no system prompts are provided, returns a single default greeting so we never emit
  * an empty `rootPromptMessagesJson` head.
  */
-export function buildCursorSystemPromptJsons(systemPrompt: readonly string[] | undefined): string[] {
-	const systemPrompts = normalizeSystemPrompts(systemPrompt);
+export function buildCursorSystemPromptJsons(
+	systemPrompt: readonly string[] | undefined,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
+): string[] {
+	const systemPrompts = cursorSystemPrompts(systemPrompt, { externalToolExecutor });
 	if (systemPrompts.length === 0) {
 		return [JSON.stringify({ role: "system", content: "You are a helpful assistant." })];
 	}
@@ -6120,6 +6387,7 @@ function buildRootPromptMessagesJson(
 	targetModelId: string | undefined,
 	replays: ReadonlyMap<number, CursorRecordReplay>,
 	{ toolResults, pairedToolCallIds }: CursorToolHistory,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
 ): Uint8Array[] {
 	assertCursorKimiK3HistoryReplayable(messages, activeUserMessageIndex, targetModelId, replays);
 	const historyEnd = activeUserMessageIndex >= 0 ? activeUserMessageIndex : messages.length;
@@ -6141,7 +6409,7 @@ function buildRootPromptMessagesJson(
 			content: [
 				{
 					type: "tool-result",
-					toolName: result.toolName,
+					toolName: externalToolExecutor ? "CallDynamicTool" : result.toolName,
 					toolCallId,
 					result: toolResultToText(result),
 					...(result.isError ? { isError: true } : {}),
@@ -6164,7 +6432,7 @@ function buildRootPromptMessagesJson(
 				for (const toolCallId of replay.toolCallIds) emittedResults.add(toolCallId);
 				continue;
 			}
-			const steps = buildCursorAssistantSteps(msg, targetModelId);
+			const steps = buildCursorAssistantSteps(msg, targetModelId, { externalToolExecutor });
 			for (const [stepIndex, step] of steps.entries()) {
 				pushJson({ role: "assistant", content: step.content });
 				// The final step's results stay in message order below: they are
@@ -6281,11 +6549,15 @@ function createCursorMcpResult(result: ToolResultMessage) {
 	});
 }
 
-function createCursorToolCallStep(toolCall: ToolCall, result: ToolResultMessage | undefined) {
+function createCursorToolCallStep(
+	toolCall: ToolCall,
+	result: ToolResultMessage | undefined,
+	{ externalToolExecutor }: CursorToolOptions,
+) {
 	const toolCallId = normalizeToolCallId(toolCall.id);
 	const mcpCall = create(McpToolCallSchema, {
 		args: create(McpArgsSchema, {
-			name: toolCall.name,
+			name: cursorMcpToolWireName(toolCall.name, { externalToolExecutor }),
 			args: encodeCursorMcpArguments(toolCall),
 			toolCallId,
 			providerIdentifier: "pi-agent",
@@ -6319,6 +6591,7 @@ function buildConversationTurns(
 	targetModelId: string | undefined,
 	replays: ReadonlyMap<number, CursorRecordReplay>,
 	{ toolResults, pairedToolCallIds }: CursorToolHistory,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
 ): Uint8Array[] {
 	const turns: Uint8Array[] = [];
 
@@ -6376,7 +6649,7 @@ function buildConversationTurns(
 					} else if (item.type === "toolCall") {
 						if (issuedCallIds.has(item.id)) continue;
 						issuedCallIds.add(item.id);
-						step = createCursorToolCallStep(item, toolResults.get(item.id));
+						step = createCursorToolCallStep(item, toolResults.get(item.id), { externalToolExecutor });
 					} else {
 						continue;
 					}
@@ -6635,10 +6908,14 @@ async function buildGrpcRequestForWireMode(
 	wireMode: CursorWireMode,
 ): Promise<CursorTransportRequest> {
 	const blobStore = state.blobStore;
+	const requestContextTools = buildMcpToolDefinitions(context.tools, {
+		requiresCursorToolSchemaProjection: model.requiresCursorToolSchemaProjection === true,
+		externalToolExecutor: options?.externalToolExecutor,
+	});
 
-	const systemPromptIds = buildCursorSystemPromptJsons(context.systemPrompt).map(json =>
-		storeCursorBlob(blobStore, new TextEncoder().encode(json)),
-	);
+	const systemPromptIds = buildCursorSystemPromptJsons(context.systemPrompt, {
+		externalToolExecutor: options?.externalToolExecutor,
+	}).map(json => storeCursorBlob(blobStore, new TextEncoder().encode(json)));
 
 	// The trailing user/developer message rides in the action; anything else
 	// (trailing tool results, a checkpoint resume) is a resumeAction over the
@@ -6701,7 +6978,16 @@ async function buildGrpcRequestForWireMode(
 				// its turns hold the partial turn the server resumes from, which
 				// `context.messages` cannot rebuild.
 				{ conversationState: state.conversationState, replayed: false }
-			: buildCursorConversationState(model, context, state, blobStore, systemPromptIds, historyEndIndex, builtRoute);
+			: buildCursorConversationState(
+					model,
+					context,
+					state,
+					blobStore,
+					systemPromptIds,
+					historyEndIndex,
+					builtRoute,
+					{ externalToolExecutor: options?.externalToolExecutor },
+				);
 	const { conversationState } = built;
 	// Fingerprints of the history as built, to tell which field the hook below edited.
 	const builtRootHash = built.replayed ? hashCursorBlobIds(conversationState.rootPromptMessagesJson) : undefined;
@@ -6713,6 +6999,11 @@ async function buildGrpcRequestForWireMode(
 		modelDetails,
 		requestedModel,
 		conversationId: state.conversationId,
+		...(options?.externalToolExecutor
+			? {
+					mcpTools: create(McpToolsSchema, { mcpTools: requestContextTools }),
+				}
+			: {}),
 	});
 
 	// Apply customSystemPrompt BEFORE the hook so the onPayload replacement is the
@@ -6723,7 +7014,7 @@ async function buildGrpcRequestForWireMode(
 		runRequest.customSystemPrompt = options.customSystemPrompt;
 	}
 
-	// Tools are sent later via requestContext (exec handshake)
+	// The request-context handshake also sends tools for native/local execution.
 	const replacementRequest = await options?.onPayload?.(runRequest, model);
 	if (replacementRequest !== undefined) runRequest = replacementRequest as typeof runRequest;
 
@@ -6744,6 +7035,7 @@ async function buildGrpcRequestForWireMode(
 				systemPromptIds,
 				historyEndIndex,
 				wireRoute,
+				{ externalToolExecutor: options?.externalToolExecutor },
 			).conversationState;
 			if (rootAsBuilt) sentState.rootPromptMessagesJson = rebuilt.rootPromptMessagesJson;
 			if (turnsAsBuilt) sentState.turns = rebuilt.turns;
@@ -6786,7 +7078,7 @@ async function buildGrpcRequestForWireMode(
 		detail: detail || undefined,
 	});
 
-	return { requestBytes, blobStore, conversationState, fallbackWireModelId, wireRoute };
+	return { requestBytes, blobStore, conversationState, fallbackWireModelId, wireRoute, requestContextTools };
 }
 
 /**
@@ -6802,6 +7094,7 @@ function buildCursorConversationState(
 	systemPromptIds: Uint8Array[],
 	historyEndIndex: number,
 	wireRoute: string,
+	{ externalToolExecutor = false }: CursorToolOptions = {},
 ): { conversationState: ConversationStateStructure; replayed: boolean } {
 	const toolHistory = collectCursorToolHistory(context.messages, historyEndIndex);
 	const replays = resolveCursorRecordReplays(
@@ -6820,7 +7113,9 @@ function buildCursorConversationState(
 	}
 	// Build conversation turns from prior messages, excluding only the active user message
 	// when the request is sending one. Resume actions must preserve trailing tool results.
-	const turns = buildConversationTurns(context.messages, blobStore, historyEndIndex, model.id, replays, toolHistory);
+	const turns = buildConversationTurns(context.messages, blobStore, historyEndIndex, model.id, replays, toolHistory, {
+		externalToolExecutor,
+	});
 
 	// Build `rootPromptMessagesJson` from prior messages. Cursor's server uses this
 	// field (not `turns[]`) to construct the actual model prompt; if we only send the
@@ -6834,6 +7129,7 @@ function buildCursorConversationState(
 		model.id,
 		replays,
 		toolHistory,
+		{ externalToolExecutor },
 	);
 	// The server builds its `<rules>` entry from `requestContext.rules` only for a
 	// history-less root; with history it would drop the system prompt entirely.
