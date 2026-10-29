@@ -975,7 +975,7 @@ async fn render_git_diff(
 			}
 		}
 	}
-	Ok(String::from_utf8_lossy(&output).into_owned())
+	Ok(String::from_utf8_lossy_owned(output))
 }
 
 fn line_number(range: &std::ops::Range<usize>) -> usize {
