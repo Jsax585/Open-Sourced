@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- Fixed the `/usage` report's aggregate percentage reading `N% free` beside bars filled by quota used; it now reads `N% used`, matching the bars and the `omp usage` CLI ([#13971](https://github.com/can1357/oh-my-pi/issues/13971), [#16415](https://github.com/can1357/oh-my-pi/pull/16415) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
 ### Breaking Changes
 
 - Custom tool loaders now resolve the injected host SDK themselves; constructors take cwd as their first argument instead of a pi namespace.
