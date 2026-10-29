@@ -68,6 +68,11 @@ export class IrcBridge {
 		return this.#interrupts.length > 0 || this.#asides.length > 0 || this.#deferredWakes.length > 0;
 	}
 
+	/** Whether any undelivered IRC record (interrupt, aside or parked wake) satisfies `predicate`. */
+	somePending(predicate: (record: AgentMessage) => boolean): boolean {
+		return this.#interrupts.some(predicate) || this.#asides.some(predicate) || this.#deferredWakes.some(predicate);
+	}
+
 	/** Whether an IRC message from `from` is still queued for a turn yet to run. */
 	hasQueuedFrom(from: string): boolean {
 		return [this.#interrupts, this.#asides, this.#deferredWakes].some(queue =>

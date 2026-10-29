@@ -39,6 +39,8 @@
 
 ### Fixed
 
+- Fixed an extension message sent with `deliverAs: "aside"` and `triggerTurn: true` being folded into the conversation with no turn in plan mode or after an earlier interrupt, when it was sent to an idle session or no run picked it up (a prompt refused before its run, or the message arriving after the run's last check); it now starts a turn unless you interrupt after it was sent ([#17166](https://github.com/can1357/oh-my-pi/pull/17166) by [@sjawhar](https://github.com/sjawhar))
+- Fixed `agent_end` reporting `isTerminal: false` after an interrupt when the messages left over were only folded into the conversation and no turn followed ([#17166](https://github.com/can1357/oh-my-pi/pull/17166) by [@sjawhar](https://github.com/sjawhar))
 - Fixed live configuration reloads missing edits immediately after a symlink switches to another file in the same directory.
 - Fixed auth-gateway model routing after catalog refreshes so bare model IDs select the highest-priority credentialed provider, with wire-format compatibility used as a tie-breaker.
 - Fixed chart recommendations that incorrectly inferred whether higher or lower values were better from row or column names; smart charting now uses the judge and avoids charting unsuitable numeric text such as page or step numbers.
