@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `@path` mentions inside HTML comments (`<!-- @protected: name -->`) in AGENTS.md and other context files are no longer treated as file imports ([#12953](https://github.com/can1357/oh-my-pi/issues/12953), [#14594](https://github.com/can1357/oh-my-pi/pull/14594) by [@tahakotil](https://github.com/tahakotil))
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
