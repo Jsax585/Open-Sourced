@@ -18,6 +18,8 @@
 - Extensions and RPC clients can start live voice sessions using their own WebRTC peer, including phone-browser clients, through ctx.startLive({ sdpOffer }) or live_connect.
 - Extensions can customize assistant-text rendering and rerender individual replies through the opt-in extensionRenderers.assistantText setting, and can register interactive link schemes with extension callbacks and renderer fallbacks.
 - /debug reports now include session-logs.txt containing all log records written by the reporting session and its subagents for the current day.
+- `omp poke <session> <message>` delivers a message into a session exactly once: an idle omp that has it open starts a turn, a busy one takes it at its next step, after Esc it waits for your next message (`--force` delivers at once), and a closed session holds it until opened or runs one headless turn with `--resume` ([#16801](https://github.com/can1357/oh-my-pi/pull/16801) by [@will-bogusz](https://github.com/will-bogusz))
+- SDK: `createAgentSession({ mailbox: { deliver: true } })` delivers `omp poke` messages as turns; by default an embedded session only marks itself open, so a poke for it is held instead of resuming it in another process ([#16801](https://github.com/can1357/oh-my-pi/pull/16801) by [@will-bogusz](https://github.com/will-bogusz))
 
 ### Changed
 
