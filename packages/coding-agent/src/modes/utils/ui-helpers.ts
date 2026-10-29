@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { type AgentMessage, isSyntheticToolResultMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, Text } from "@oh-my-pi/pi-tui";
@@ -517,6 +517,8 @@ export class UiHelpers {
 		let readGroup: ReadToolGroupComponent | null = null;
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
+		// Tool calls of an error or abort turn; Cursor runs them inside the stream, so a real result may still follow.
+		const erroredTools = new Map<string, ToolExecutionHandle>();
 		// Defer per-turn metrics until the turn's tool results have materialized.
 		// Read-only invisible turns attach the metrics to their shared compact
 		// group; every other turn keeps the standalone row below its tool blocks.
@@ -685,6 +687,10 @@ export class UiHelpers {
 								false,
 								content.id,
 							);
+							erroredTools.set(content.id, readGroup);
+							if (assistantComponent) {
+								readToolCallAssistantComponents.set(content.id, assistantComponent);
+							}
 						} else if (afterToolSegment) {
 							if (!readGroup) {
 								readGroup = new ReadToolGroupComponent({
@@ -746,6 +752,7 @@ export class UiHelpers {
 							false,
 							content.id,
 						);
+						erroredTools.set(content.id, component);
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
 					}
@@ -775,6 +782,13 @@ export class UiHelpers {
 					: undefined;
 			} else if (message.role === "toolResult") {
 				if (options.preservedLiveToolCallIds?.has(message.toolCallId)) continue;
+				// A real result replaces an error row; the agent loop's synthetic placeholder for a call that never ran keeps it.
+				const errored = erroredTools.get(message.toolCallId);
+				erroredTools.delete(message.toolCallId);
+				if (errored && !this.ctx.pendingTools.has(message.toolCallId)) {
+					if (isSyntheticToolResultMessage(message)) continue;
+					this.ctx.pendingTools.set(message.toolCallId, errored);
+				}
 				const pendingReadComponent = this.ctx.pendingTools.get(message.toolCallId);
 				const isReadGroupResult =
 					message.toolName === "read" &&

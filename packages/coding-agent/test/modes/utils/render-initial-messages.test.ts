@@ -715,7 +715,7 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 });
 
 describe("UiHelpers.renderSessionContext — error-stop tool calls", () => {
-	it("keeps the synthetic assistant error result instead of replaying a later tool result", async () => {
+	it("keeps the assistant stop error instead of replaying the synthetic placeholder result", async () => {
 		await Settings.init({ inMemory: true });
 		const transcript = transcriptWith([
 			{
@@ -741,7 +741,8 @@ describe("UiHelpers.renderSessionContext — error-stop tool calls", () => {
 				toolCallId: "error-tool",
 				toolName: "eval",
 				content: [{ type: "text", text: "late tool result must not replace the assistant stop error" }],
-				isError: false,
+				details: { __synthetic: true, source: "assistant_stop_error" },
+				isError: true,
 				timestamp: 2,
 			},
 		]);
@@ -752,6 +753,51 @@ describe("UiHelpers.renderSessionContext — error-stop tool calls", () => {
 		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
 		expect(rendered).toContain("synthetic assistant stop error");
 		expect(rendered).not.toContain("late tool result must not replace the assistant stop error");
+	});
+
+	it("shows the real results of an aborted Cursor turn instead of its abort row", async () => {
+		await Settings.init({ inMemory: true });
+		const transcript = transcriptWith([
+			{
+				role: "assistant",
+				content: [
+					{ type: "toolCall", id: "read", name: "read", arguments: { path: "/tmp/file.txt" } },
+					{ type: "toolCall", id: "ran", name: "grep", arguments: { pattern: "foo" } },
+				],
+				api: "cursor-agent",
+				provider: "cursor",
+				model: "claude-haiku",
+				usage: emptyUsage,
+				stopReason: "aborted",
+				errorMessage: "cursor turn aborted after its tools ran",
+				timestamp: 1,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "read",
+				toolName: "read",
+				content: [{ type: "text", text: "contents of the file read before the abort" }],
+				isError: false,
+				timestamp: 2,
+			},
+			{
+				role: "toolResult",
+				toolCallId: "ran",
+				toolName: "grep",
+				content: [{ type: "text", text: "output of the tool that ran inside the Cursor stream" }],
+				isError: false,
+				timestamp: 3,
+			},
+		]);
+		const { ctx, chatContainer } = makeRenderCtx(transcript);
+		ctx.settings = Settings.isolated({ "read.toolResultPreview": true });
+
+		await new UiHelpers(ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(rendered).toContain("contents of the file read before the abort");
+		expect(rendered).toContain("output of the tool that ran inside the Cursor stream");
+		expect(rendered).not.toContain("cursor turn aborted after its tools ran");
 	});
 });
 

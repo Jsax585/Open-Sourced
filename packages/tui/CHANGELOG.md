@@ -33,6 +33,7 @@
 
 - Fixed table charts marking the worse value "best" from header keywords: without a judge, a measure is better higher or lower only when its unit says so (rates per second, durations, scores, and sizes or money beside a baseline); `shouldJudge` now also sends single-measure tables the local guess would chart to the judge
 - Fixed the LSP diagnostics view showing "No issues" for files whose language server had not reported yet; they now show as unverified ([#17293](https://github.com/can1357/oh-my-pi/pull/17293) by [@JustasMasiulis](https://github.com/JustasMasiulis))
+- Fixed the agent transcript viewer, `/copy` and rewind showing "Operation aborted" instead of the real output of tools that had already run in an aborted Cursor turn ([#17302](https://github.com/can1357/oh-my-pi/pull/17302) by [@morali](https://github.com/morali))
 - Fixed Esc-Esc rewind in Tern opening on, and stepping onto, a turn that shows nothing (one interrupted before any output) instead of the last turn shown
 
 ## [18.13.3] - 2026-10-28
