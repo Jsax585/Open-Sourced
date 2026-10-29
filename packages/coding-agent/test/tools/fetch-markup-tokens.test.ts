@@ -9,10 +9,11 @@ import { mockFetch } from "../helpers/fetch-mock";
 const PROSE = "This guide explains how the renderer handles every input it receives in one pass. ".repeat(3);
 
 const DOCS_PAGE = `<!doctype html><html><head>
-<title>Renderer guide</title>
+<title>Renderer guide: when to write <meta name="viewport"></title>
 <meta charset="utf-8">
 <meta content="Setup notes: pass name=viewport to the renderer" name="description">
 <meta content="2026-10-01" property="article:published_time">
+<meta name="auth&#111;r" content="Jane Doe">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta property="og:title" content="Renderer guide > Example Docs">
 <meta property="og:image" content="https://example.com/images/social-card-renderer-guide.png">
@@ -23,7 +24,7 @@ const DOCS_PAGE = `<!doctype html><html><head>
 <p>---
 warning: BODY_FRONT_MATTER_LOOKALIKE
 ---</p>
-<p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>, <a href="#/guide/install">Install guide</a>, <a title='See href="#setup"' href="#install">install</a>.</p>
+<p>Contents: <a href="#setup">Setup</a>, <a href=#method(int)>method</a>, <a href="https://example.com/other#part">other page</a>, <a href="#/guide/install">Install guide</a>, <a title='See href="#setup"' href="#install">install</a>, <a href="&#35;encoded">encoded</a>.</p>
 <p>${PROSE}</p>
 <h2 id="setup">Setup<a class="headerlink" href="#setup" title="Link to this heading">¶</a></h2>
 <p>Install it, then see <a href="#options">the options</a> below. <a href="#figure"><img src="figure.png" alt="Diagram"></a> <a href="#print" title="Print article"><span>Print</span></a> <a href="#done" title="Done &check; &amp;lt;ok&amp;gt;">finished</a> ${PROSE}</p>
@@ -37,6 +38,10 @@ const HEAD_ONLY_PAGE = `<!doctype html><html><head><title>Account</title>
 <meta property="og:title" content="Account settings for your workspace">
 <meta property="og:description" content="Manage members, billing and security for the workspace">
 </head><body><div id="root"></div></body></html>`;
+
+const BASED_PAGE = `<!doctype html><html><head><title>Help</title><base href="/app/"></head><body>
+<p>See <a href="#help">the help section</a>. ${PROSE}</p>
+</body></html>`;
 
 describe("read URL: native rendering without markup the reader cannot use", () => {
 	const servers: Bun.Server<undefined>[] = [];
@@ -76,9 +81,11 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 	it("keeps the title and description of the page's head and drops social-card and viewport tags", async () => {
 		const text = await readPage(DOCS_PAGE);
 
-		expect(text).toContain("title: Renderer guide");
+		// A tag written inside `<title>` is text.
+		expect(text).toContain('title: "Renderer guide: when to write <meta name=\\"viewport\\">"');
 		expect(text).toContain('meta-description: "Setup notes: pass name=viewport to the renderer"');
 		expect(text).toContain("2026-10-01");
+		expect(text).toContain("Jane Doe");
 		expect(text).not.toContain("meta-og");
 		expect(text).not.toContain("meta-twitter");
 		expect(text).not.toContain("meta-viewport");
@@ -96,7 +103,7 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		// Only the target changes: the title reads as the converter renders it on any link.
 		expect(text).toContain('[finished](# "Done ✓ &amp;lt;ok&amp;gt;")');
 		expect(text).toContain(
-			'Contents: [Setup](#), [method](#), [other page](https://example.com/other#part), [Install guide](#/guide/install), [install](# "See href=\\"#setup\\"")',
+			'Contents: [Setup](#), [method](#), [other page](https://example.com/other#part), [Install guide](#/guide/install), [install](# "See href=\\"#setup\\""), [encoded](#).',
 		);
 		expect(text).toContain("see [the options](#) below");
 		expect(text).toContain("![Diagram](figure.png)");
@@ -109,6 +116,12 @@ describe("read URL: native rendering without markup the reader cannot use", () =
 		const text = await readPage(HEAD_ONLY_PAGE);
 
 		expect(text).toContain("Manage members, billing and security");
+	});
+
+	it("keeps same-page link targets when <base href> sends them to another page", async () => {
+		const text = await readPage(BASED_PAGE);
+
+		expect(text).toContain("[the help section](#help)");
 	});
 
 	it("leaves another reader's output as it came", async () => {

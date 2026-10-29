@@ -10,6 +10,7 @@ import { htmlToMarkdown, notebookToEditableText } from "@oh-my-pi/pi-natives";
 import { $which, ptree } from "@oh-my-pi/pi-utils";
 import { type ArchiveFormat, listArchiveRoot, sniffArchiveFormat } from "@oh-my-pi/pi-utils/ar";
 import type { Element } from "@oh-my-pi/pi-utils/dom";
+import { decodeEntities } from "@oh-my-pi/pi-utils/dom/parser";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import type { ToolSession } from "../sdk";
@@ -548,11 +549,31 @@ function stripDataUriImages(markdown: string): string {
 }
 
 /**
- * `<meta>` and `<a>` start tags; quoted values may hold `>`. Neither a quoted nor an
+ * Where `pruneHtmlForReader` looks: a comment, an element whose content is raw text
+ * (a `<meta>` written inside a `<title>` or a script string is text, not a tag), or
+ * a start tag it reads (`<meta>`, `<a>`, `<base>`).
+ */
+const PRUNE_SCAN_RE = /<(?:!--|(meta|a|base|script|style|title|textarea|xmp|iframe|noembed|noframes)\b)/gi;
+
+/** End of each region {@link PRUNE_SCAN_RE} skips whole. */
+const RAW_TEXT_END_RE: Record<string, RegExp> = {
+	"!--": /-->/g,
+	script: /<\/script\b/gi,
+	style: /<\/style\b/gi,
+	title: /<\/title\b/gi,
+	textarea: /<\/textarea\b/gi,
+	xmp: /<\/xmp\b/gi,
+	iframe: /<\/iframe\b/gi,
+	noembed: /<\/noembed\b/gi,
+	noframes: /<\/noframes\b/gi,
+};
+
+/**
+ * A start tag from its `<`; quoted values may hold `>`. Neither a quoted nor an
  * unquoted part crosses a `<`, so an unclosed `<a` stops at the next tag and the scan
  * stays linear.
  */
-const PRUNED_TAG_RE = /<(?:meta|a)\b(?:[^<>"']|"[^"<]*"|'[^'<]*')*>/gi;
+const START_TAG_RE = /<[a-z]+(?:[^<>"']|"[^"<]*"|'[^'<]*')*>/iy;
 
 /** Named `<meta>` tags worth their tokens to a reader; Open Graph, Twitter Card, viewport and verification tags are not. */
 const KEPT_META_NAMES: Record<string, true> = {
@@ -569,7 +590,10 @@ const KEPT_META_NAMES: Record<string, true> = {
  */
 const TAG_ATTRIBUTE_RE = /([^\s"'=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g;
 
-/** The first `name` attribute of a start tag (later duplicates are ignored, as in HTML), with where its value sits. */
+/**
+ * The first `name` attribute of a start tag (later duplicates are ignored, as in
+ * HTML): its value with character references decoded, and where it is written.
+ */
 function findTagAttribute(tag: string, name: string): { value: string; start: number; end: number } | null {
 	TAG_ATTRIBUTE_RE.lastIndex = tag.search(/[\s/>]/);
 	for (let match = TAG_ATTRIBUTE_RE.exec(tag); match; match = TAG_ATTRIBUTE_RE.exec(tag)) {
@@ -578,9 +602,18 @@ function findTagAttribute(tag: string, name: string): { value: string; start: nu
 		if (raw === undefined) return null;
 		const end = match.index + match[0].length;
 		const quoted = raw.startsWith('"') || raw.startsWith("'");
-		return { value: quoted ? raw.slice(1, -1) : raw, start: end - raw.length, end };
+		return { value: decodeEntities(quoted ? raw.slice(1, -1) : raw), start: end - raw.length, end };
 	}
 	return null;
+}
+
+/** Whether `<base href>` sends `#…` links off the page they are on. */
+function baseMovesFragments(base: string, pageUrl: string): boolean {
+	try {
+		return new URL("#", new URL(base, pageUrl)).href !== new URL("#", pageUrl).href;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -588,20 +621,54 @@ function findTagAttribute(tag: string, name: string): { value: string; start: nu
  * named `<meta>` tag but the description, author and dates (each becomes a
  * front-matter line), and the targets of links to anchors on the same page (API
  * references and docs link every heading, row and citation to one). Such a link
- * still renders as `[text](#)`; a hash route (`#/…`, `#!…`) leads elsewhere and is
- * kept. Only the `href` value is rewritten, so every other attribute reaches the
- * converter as written. Edits tags only, so code and text are untouched.
+ * still renders as `[text](#)`. Kept: hash routes (`#/…`, `#!…`), which lead to
+ * another view, and every `#…` link when `<base href>` points them at another page.
+ * Only the `href` value is rewritten, so every other attribute reaches the converter
+ * as written; comments and raw-text elements are skipped, so code and text are
+ * untouched.
  */
-function pruneHtmlForReader(html: string): string {
-	return html.replace(PRUNED_TAG_RE, tag => {
-		if (tag[1] === "m" || tag[1] === "M") {
-			const name = findTagAttribute(tag, "name") ?? findTagAttribute(tag, "property");
-			return name === null || KEPT_META_NAMES[name.value.toLowerCase()] === true ? tag : "";
+function pruneHtmlForReader(html: string, pageUrl: string): string {
+	const parts: string[] = [];
+	const anchors: Array<{ part: number; tag: string }> = [];
+	let base: string | undefined;
+	let copied = 0;
+	PRUNE_SCAN_RE.lastIndex = 0;
+	for (let match = PRUNE_SCAN_RE.exec(html); match; match = PRUNE_SCAN_RE.exec(html)) {
+		const element = match[1]?.toLowerCase() ?? "!--";
+		const rawTextEnd = RAW_TEXT_END_RE[element];
+		if (rawTextEnd) {
+			rawTextEnd.lastIndex = PRUNE_SCAN_RE.lastIndex;
+			// Unclosed, it runs to the end of the document.
+			if (!rawTextEnd.exec(html)) break;
+			PRUNE_SCAN_RE.lastIndex = rawTextEnd.lastIndex;
+			continue;
 		}
-		const href = findTagAttribute(tag, "href");
-		if (!href?.value.startsWith("#") || href.value.startsWith("#/") || href.value.startsWith("#!")) return tag;
-		return `${tag.slice(0, href.start)}"#"${tag.slice(href.end)}`;
-	});
+		START_TAG_RE.lastIndex = match.index;
+		const tag = START_TAG_RE.exec(html)?.[0];
+		if (tag === undefined) continue;
+		PRUNE_SCAN_RE.lastIndex = START_TAG_RE.lastIndex;
+		let replacement = "";
+		if (element === "base") {
+			base ??= findTagAttribute(tag, "href")?.value;
+			continue;
+		}
+		if (element === "meta") {
+			const name = findTagAttribute(tag, "name") ?? findTagAttribute(tag, "property");
+			if (name === null || KEPT_META_NAMES[name.value.toLowerCase()] === true) continue;
+		} else {
+			const href = findTagAttribute(tag, "href");
+			if (!href?.value.startsWith("#") || href.value.startsWith("#/") || href.value.startsWith("#!")) continue;
+			replacement = `${tag.slice(0, href.start)}"#"${tag.slice(href.end)}`;
+			anchors.push({ part: parts.length + 1, tag });
+		}
+		parts.push(html.slice(copied, match.index), replacement);
+		copied = PRUNE_SCAN_RE.lastIndex;
+	}
+	parts.push(html.slice(copied));
+	if (base !== undefined && baseMovesFragments(base, pageUrl)) {
+		for (const { part, tag } of anchors) parts[part] = tag;
+	}
+	return parts.join("");
 }
 
 /** Reader output at or under this many characters is no rendering of the page. */
@@ -662,7 +729,7 @@ export async function renderHtmlToText(
 		// even after remote/subprocess attempts are aborted by the budget.
 		native: async () => {
 			const options = { cleanContent: true, hiddenContent: "reachable" };
-			const pruned = await htmlToMarkdown(pruneHtmlForReader(html), options);
+			const pruned = await htmlToMarkdown(pruneHtmlForReader(html, url), options);
 			// A page whose only content is its `<head>` can fall under the length check once
 			// pruned; it is converted whole so the check judges it as before.
 			return stripDataUriImages(pruned).trim().length > MIN_RENDERED_CHARS ? pruned : htmlToMarkdown(html, options);
