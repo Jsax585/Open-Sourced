@@ -917,4 +917,167 @@ describe("AgentSession triggerTurn aside", () => {
 		expect(requestsContaining(mock, "CARD_AFTER_LOAD")).toBe(1);
 		expect(agentEnds).toEqual([false, true]);
 	});
+
+	/** Strands a `triggerTurn` aside, then parks its wake as a deferred wake behind a pooled contract. */
+	async function parkStrandedAsideBehindPool(target: AgentSession, yieldWait: HeldWorkPoolYieldWait): Promise<void> {
+		const extensionTurn = target.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+		await yieldWait.reached;
+		void target.setWorkPoolYieldItems([{ id: "pool#1", index: 1 }]);
+		yieldWait.release();
+		await extensionTurn;
+		await settle(target);
+	}
+
+	it("folds a parked aside an idle Esc overtook, and settles the end that was held open for it", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_PARKED"), { deliverAs: "aside", triggerTurn: true });
+		});
+		const { session, mock, agentEnds } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		try {
+			await parkStrandedAsideBehindPool(session, yieldWait);
+			expect(session.ircWakesPending).toBe(true);
+			expect(agentEnds).toEqual([false]);
+
+			// The Esc stops no run and no queued work, so it latches no suppression: the interrupt
+			// count it bumps is the only thing that can fold the parked aside.
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			await session.setWorkPoolYieldItems([]);
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_PARKED")).toBe(true);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles that end when plan mode folds every parked record as the pool clears", async () => {
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_PARKED_PLAN"), { deliverAs: "aside" });
+		});
+		const { session, mock, agentEnds } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		try {
+			await parkStrandedAsideBehindPool(session, yieldWait);
+			expect(agentEnds).toEqual([false]);
+
+			session.setPlanModeState({ enabled: true, planFilePath: "local://PLAN.md" });
+			await session.setWorkPoolYieldItems([]);
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(persisted(session, "CARD_PARKED_PLAN")).toBe(true);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles the replacement session's end while an aside of the session it replaced is still admitted", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			await harness.session.sendCustomMessage(card("CARD_PARKED_NEW"), { deliverAs: "aside", triggerTurn: true });
+		});
+		const { session, mock, agentEnds } = harness;
+		const yieldWait = holdWorkPoolYieldWait(session);
+		try {
+			// The image-bearing send belongs to the transcript the new session replaces, and stays
+			// admitted across it: it promises the replacement nothing.
+			void session.sendCustomMessage(imageCard("CARD_OLD_SESSION"), { deliverAs: "aside", triggerTurn: true });
+			await normalizeStarted.promise;
+			expect(await session.newSession()).toBe(true);
+
+			await parkStrandedAsideBehindPool(session, yieldWait);
+			expect(agentEnds).toEqual([false]);
+
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			await session.setWorkPoolYieldItems([]);
+			await settle(session);
+		} finally {
+			yieldWait.release();
+			yieldWait.restore();
+			releaseNormalize.resolve();
+			normalizeSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(agentEnds).toEqual([false, true]);
+	});
+
+	it("settles that end when an Esc in the usage preflight folds the aside its run waited for", async () => {
+		const normalizeStarted = Promise.withResolvers<void>();
+		const releaseNormalize = Promise.withResolvers<void>();
+		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+			if (!images?.length) return images;
+			normalizeStarted.resolve();
+			await releaseNormalize.promise;
+			return images;
+		});
+		const preflightReached = Promise.withResolvers<void>();
+		const releasePreflight = Promise.withResolvers<void>();
+		// Held only for the aside's own turn: the extension turn below runs the same preflight.
+		let holdPreflight = false;
+		const preflightSpy = spyOn(TurnRecovery.prototype, "maybeApplyUsageAwareFallback").mockImplementation(
+			async () => {
+				if (!holdPreflight) return false;
+				preflightReached.resolve();
+				await releasePreflight.promise;
+				return false;
+			},
+		);
+		let sent = false;
+		const harness = await createHarness(async () => {
+			if (sent) return;
+			sent = true;
+			// The extension API returns void: the send outlives the run it was made from.
+			void harness.session.sendCustomMessage(imageCard("CARD_IN_PREFLIGHT_ESC"), {
+				deliverAs: "aside",
+				triggerTurn: true,
+			});
+		});
+		const { session, mock, agentEnds } = harness;
+		try {
+			await session.sendCustomMessage(card("EXTENSION_TURN"), { triggerTurn: true });
+			await normalizeStarted.promise;
+			await settle(session);
+			expect(agentEnds).toEqual([false]);
+
+			// The aside leaves normalization and reaches the preflight of the turn it was promised.
+			holdPreflight = true;
+			releaseNormalize.resolve();
+			await preflightReached.promise;
+			await session.abort({ reason: USER_INTERRUPT_LABEL });
+			releasePreflight.resolve();
+			await settle(session);
+		} finally {
+			releaseNormalize.resolve();
+			releasePreflight.resolve();
+			normalizeSpy.mockRestore();
+			preflightSpy.mockRestore();
+		}
+
+		expect(mock.calls).toHaveLength(1);
+		expect(JSON.stringify(session.agent.state.messages)).toContain("CARD_IN_PREFLIGHT_ESC");
+		expect(agentEnds).toEqual([false, true]);
+	});
 });

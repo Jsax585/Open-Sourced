@@ -1505,6 +1505,8 @@ export class AgentSession implements SettingsScope {
 		const records = [...this.#irc.drainDeferredWakes(), ...this.#irc.drainPending()];
 		const wake = this.#foldStrandedIrcAsidesBeforeWake(records);
 		if (wake.length > 0) this.#wakeForIrc(wake);
+		// Every record folded, so no wake can settle the end a promised turn kept open.
+		else this.#settleCancelledContinuation();
 	}
 
 	/** Folds the records ahead of the first one that starts a turn (#strandedRecordWakes) into
@@ -1522,7 +1524,13 @@ export class AgentSession implements SettingsScope {
 		// An extension aside sent with `triggerTurn` asked for a turn, the way a steer or follow-up
 		// with `triggerTurn` does. It gets one unless a user interrupt happened after it was sent;
 		// an earlier interrupt still in effect, or plan mode, does not fold it.
-		if (this.#turnRequestingAsides.get(record) === this.#userInterruptCount) return true;
+		const requestedAtInterruptCount = this.#turnRequestingAsides.get(record);
+		if (requestedAtInterruptCount !== undefined) {
+			// A user interrupt since the send folds it, whether or not that interrupt latched
+			// suppression: since #17243 an Esc on an idle session latches none, and the gates below
+			// would then start the very turn the user stopped.
+			return requestedAtInterruptCount === this.#userInterruptCount;
+		}
 		// Plan mode: fold stranded IRC asides into context without waking an
 		// autonomous turn. Convergence to ask/resolve stays user-driven.
 		if (this.#planModeState?.enabled) return false;
@@ -1956,18 +1964,9 @@ export class AgentSession implements SettingsScope {
 		// In an ACP session that defers agent-initiated turns, an admitted aside lands in the
 		// client's run or its next turn (the aside branches of #dispatchCustomMessage), never in a
 		// turn of its own, so it holds no agent_end open there.
-		let admittedAsideTurn = false;
-		if (!(this.#clientBridge?.deferAgentInitiatedTurns === true && !this.#allowAcpAgentInitiatedTurns)) {
-			for (const aside of this.#admittedTurnRequestingAsides) {
-				if (
-					aside.userInterruptCount === this.#userInterruptCount &&
-					aside.sessionGeneration === this.#sessionGeneration
-				) {
-					admittedAsideTurn = true;
-					break;
-				}
-			}
-		}
+		const admittedAsideTurn =
+			!(this.#clientBridge?.deferAgentInitiatedTurns === true && !this.#allowAcpAgentInitiatedTurns) &&
+			this.#hasAdmittedAsideTurn();
 		const ircContinuation =
 			canDrain &&
 			!this.#abortInProgress &&
@@ -1991,9 +1990,26 @@ export class AgentSession implements SettingsScope {
 		if (!open) return;
 		// Another record or admitted aside still carries the promise: its own settle ends the run.
 		if (this.#irc.somePending(record => this.#strandedRecordWakes(record))) return;
-		if (this.#admittedTurnRequestingAsides.size > 0) return;
+		if (this.#hasAdmittedAsideTurn()) return;
 		this.#continuationAgentEnd = undefined;
 		this.#emit({ ...open, isTerminal: true });
+	}
+
+	/**
+	 * Whether a `triggerTurn` aside admitted in this session still owes it a turn. An admission of
+	 * a session the transcript replaced, or one a later user interrupt overtook, promises nothing
+	 * here: its own send folds or drops it.
+	 */
+	#hasAdmittedAsideTurn(): boolean {
+		for (const aside of this.#admittedTurnRequestingAsides) {
+			if (
+				aside.userInterruptCount === this.#userInterruptCount &&
+				aside.sessionGeneration === this.#sessionGeneration
+			) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -10416,6 +10432,9 @@ export class AgentSession implements SettingsScope {
 			if (!outcome.sessionClaimed && !(await this.#sessionGenerationChanged(sessionGeneration))) {
 				if (this.#unsubscribeAgent === undefined) this.#irc.queueAside([normalizedAppMessage]);
 				else this.#recordWithoutTurn([normalizedAppMessage]);
+				// No turn remains to publish the end the promise kept open; the queued branch above
+				// leaves a record that still wakes, which the helper checks before publishing.
+				this.#settleCancelledContinuation();
 			}
 			return outcome.sessionClaimed;
 		}
