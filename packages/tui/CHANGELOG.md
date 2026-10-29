@@ -25,6 +25,7 @@
 - Typing `B)` or `8)` no longer turns into 😎 (so "option B)" and "step 8)" stay as typed); `B-)` and `8-)` still do
 ### Fixed
 
+- Fixed Markdown task lists dropping their checkboxes, so done (`- [x]`) and open (`- [ ]`) items looked the same in the transcript ([#16557](https://github.com/can1357/oh-my-pi/pull/16557) by [@mottopanikeiku](https://github.com/mottopanikeiku))
 - Fixed the LSP diagnostics view showing "No issues" for files whose language server had not reported yet; they now show as unverified ([#17293](https://github.com/can1357/oh-my-pi/pull/17293) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 
 ## [18.13.3] - 2026-10-28
