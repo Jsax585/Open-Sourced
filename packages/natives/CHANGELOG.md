@@ -6,6 +6,7 @@
 
 - Fixed `wrapTextWithAnsi` continuing a wrapped styled underline (`4:3`, `4:4`) as a background colour, `4:0` setting background `40`, and colon-form colours (`38:2::r:g:b`) being dropped ([#16239](https://github.com/can1357/oh-my-pi/pull/16239) by [@materemias](https://github.com/materemias))
 - Fixed Git worktree operations to honor relative links and preserve valid worktrees during cleanup ([#17335](https://github.com/can1357/oh-my-pi/pull/17335) by [@camjac251](https://github.com/camjac251)).
+- Fixed smart Git worktree creation ignoring valueless or invalid `worktree.guessRemote` settings ([#17335](https://github.com/can1357/oh-my-pi/pull/17335) by [@camjac251](https://github.com/camjac251)).
 
 ## [18.13.3] - 2026-10-28
 
