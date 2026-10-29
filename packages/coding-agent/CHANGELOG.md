@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added `/advisor on`/`off` and the bare toggle to the focused-subagent view: they now flip the advisor of the agent you are looking at instead of the main session's ([#15055](https://github.com/can1357/oh-my-pi/issues/15055), [#15171](https://github.com/can1357/oh-my-pi/pull/15171) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
 - Pin and unpin sessions from the resume picker with `Alt+K` / `Alt+Shift+K` (remappable as `app.session.pin` / `app.session.unpin`); pinned sessions move to the top at once and also lead search results ([#9837](https://github.com/can1357/oh-my-pi/pull/9837) by [@zhang17-24](https://github.com/zhang17-24))
