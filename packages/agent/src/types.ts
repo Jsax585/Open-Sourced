@@ -1183,6 +1183,13 @@ export interface AgentTool<
 	/** If true, schema validation errors are non-fatal: raw args are passed to execute() instead of returning an error to the LLM, and unknown root keys a closed schema would drop stay on the args. Malformed argument JSON still returns the parse error. */
 	lenientArgValidation?: boolean;
 	/**
+	 * Notified when a real dispatch (agent loop, eval bridge, `xd://` device)
+	 * rejects this tool's arguments before `execute()` runs, so tools whose
+	 * execution lives elsewhere (RPC host tools) can surface the rejection.
+	 * Speculative pre-checks do not notify.
+	 */
+	onArgumentsRejected?(toolCallId: string, error: unknown): void;
+	/**
 	 * Whether the agent loop may abort this tool mid-execution — or skip it
 	 * before it starts — to deliver a queued steering message. A function
 	 * resolves this per call from the raw, pre-validation arguments.

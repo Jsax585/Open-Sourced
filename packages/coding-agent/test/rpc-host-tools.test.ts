@@ -2,14 +2,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { callSessionTool } from "@oh-my-pi/pi-coding-agent/eval/js/tool-bridge";
 import { defineRpcClientTool, RpcClient } from "@oh-my-pi/pi-coding-agent/modes";
-import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
-import type {
-	RpcHostToolCallRequest,
-	RpcHostToolCancelRequest,
-	RpcHostToolUpdate,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import { RpcHostToolBridge, type RpcHostToolFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
+import type { RpcHostToolCallRequest, RpcHostToolUpdate } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { toolReadsSkillUris } from "@oh-my-pi/pi-coding-agent/system-prompt";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const tempPaths: string[] = [];
@@ -26,7 +25,7 @@ afterEach(async () => {
 
 describe("RpcHostToolBridge", () => {
 	it("forwards host tool updates and results to the pending execution", async () => {
-		const frames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const frames: RpcHostToolFrame[] = [];
 		const bridge = new RpcHostToolBridge(frame => {
 			frames.push(frame);
 		});
@@ -82,7 +81,7 @@ describe("RpcHostToolBridge", () => {
 	});
 
 	it("emits a cancel frame when the host tool execution is aborted", async () => {
-		const frames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const frames: RpcHostToolFrame[] = [];
 		const bridge = new RpcHostToolBridge(frame => {
 			frames.push(frame);
 		});
@@ -127,6 +126,55 @@ describe("RpcHostToolBridge", () => {
 		]);
 
 		expect(toolReadsSkillUris(tool)).toBe(true);
+	});
+
+	it("reports an eval-bridge call rejected by validation, which never reaches the host", async () => {
+		const frames: RpcHostToolFrame[] = [];
+		const dispatched = Promise.withResolvers<RpcHostToolCallRequest>();
+		const bridge = new RpcHostToolBridge(frame => {
+			frames.push(frame);
+			if (frame.type === "host_tool_call") dispatched.resolve(frame);
+		});
+		const [tool] = bridge.setTools([
+			{
+				name: "classify_pr",
+				description: "Classifies a PR in the host process",
+				parameters: {
+					type: "object",
+					properties: { rank: { type: "string" } },
+					required: ["rank"],
+					additionalProperties: false,
+				},
+			},
+		]);
+		const session: ToolSession = {
+			cwd: "/tmp/test",
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => null,
+			settings: Settings.isolated(),
+			getToolByName: name => (name === tool.name ? tool : undefined),
+		};
+
+		await expect(callSessionTool("classify_pr", {}, { session })).rejects.toThrow("Validation failed");
+		const rejected = frames[0];
+		if (frames.length !== 1 || rejected?.type !== "host_tool_rejected") {
+			throw new Error("Expected exactly one host_tool_rejected frame");
+		}
+		expect(rejected.toolName).toBe("classify_pr");
+		expect(rejected.toolCallId).toStartWith("js-classify_pr-");
+		expect(rejected.error).toContain("rank");
+
+		// A valid call dispatches normally and is not reported as rejected.
+		const accepted = callSessionTool("classify_pr", { rank: "review:p2" }, { session });
+		const request = await dispatched.promise;
+		expect(frames.map(frame => frame.type)).toEqual(["host_tool_rejected", "host_tool_call"]);
+		bridge.handleResult({
+			type: "host_tool_result",
+			id: request.id,
+			result: { content: [{ type: "text", text: "ok" }] },
+		});
+		await accepted;
 	});
 });
 

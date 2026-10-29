@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { validateAgentToolArguments } from "./tool-arguments";
+import { checkAgentToolArguments } from "./tool-arguments";
 import type {
 	AgentContext,
 	AgentLoopConfig,
@@ -719,7 +719,7 @@ export class SpeculativeOperationCoordinator {
 		}
 		let validatedArgs: Record<string, unknown>;
 		try {
-			validatedArgs = validateAgentToolArguments(tool, toolCall);
+			validatedArgs = checkAgentToolArguments(tool, toolCall);
 		} catch {
 			this.ineligible(toolCall, "tool arguments are not valid", source, parentToolCallId);
 			return undefined;

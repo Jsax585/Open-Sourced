@@ -19,6 +19,7 @@ import pytest
 
 from robomp import worker
 from robomp.config import Settings
+from robomp.db import Database
 from robomp.git_ops import DirtyState
 
 
@@ -36,6 +37,7 @@ class _FakeRpcClient:
         self.on_prompt = on_prompt
         self.prompts: list[str] = []
         self.tool_end_listeners: list[Callable[[Any], None]] = []
+        self.host_tool_rejected_listeners: list[Callable[[Any], None]] = []
         self.host_tool_completed_listeners: list[Callable[[Any], None]] = []
         self.set_todos_calls: list[list[dict]] = []
         self.get_todos_calls = 0
@@ -54,6 +56,9 @@ class _FakeRpcClient:
 
     def on_tool_execution_end(self, cb) -> None:
         self.tool_end_listeners.append(cb)
+
+    def on_host_tool_rejected(self, cb) -> None:
+        self.host_tool_rejected_listeners.append(cb)
 
     def on_host_tool_completed(self, cb) -> None:
         self.host_tool_completed_listeners.append(cb)
@@ -74,9 +79,26 @@ class _FakeRpcClient:
         self.get_todos_calls += 1
         return ()
 
-    def emit_tool_end(self, tool_name: str, *, result: Any = None, is_error: bool | None = None) -> None:
-        event = SimpleNamespace(tool_name=tool_name, result={} if result is None else result, is_error=is_error)
+    def emit_tool_end(
+        self,
+        tool_name: str,
+        *,
+        tool_call_id: str = "call-1",
+        result: Any = None,
+        is_error: bool | None = None,
+    ) -> None:
+        event = SimpleNamespace(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            result={} if result is None else result,
+            is_error=is_error,
+        )
         for cb in self.tool_end_listeners:
+            cb(event)
+
+    def emit_host_tool_rejected(self, tool_name: str, error: str) -> None:
+        event = SimpleNamespace(tool_name=tool_name, tool_call_id=f"js-{tool_name}-1", error=error)
+        for cb in self.host_tool_rejected_listeners:
             cb(event)
 
     def emit_host_tool_completed(self, tool_name: str) -> None:
@@ -785,10 +807,9 @@ async def test_run_rpc_review_pr_still_reminds_when_submit_fails(
 ) -> None:
     """An errored terminal-tool end event does not count as the terminal action.
 
-    omp_rpc normalizes xd:// device dispatches to the host-tool name, so a
-    rejected `submit_pr_review` surfaces as an end event with `is_error=True`
-    under its real name. Counting it would end the review task silently with
-    no review submitted — the completion reminder must still fire.
+    A rejected `submit_pr_review` end event with `is_error=True` must not
+    count as submission, whether the host name came from omp_rpc's dispatched
+    tool normalization or the worker's pre-dispatch xd:// correlation.
     """
     inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
 
@@ -815,6 +836,49 @@ async def test_run_rpc_review_pr_still_reminds_when_submit_fails(
     fake = _FakeRpcClient.instances[0]
     assert len(fake.prompts) == 1 + settings.task_completion_max_reminders
     assert all("submit_pr_review" in p for p in fake.prompts[1:])
+
+
+def test_run_rpc_audits_host_tool_rejected_before_dispatch(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch, db: Database
+) -> None:
+    """An eval-bridged call rejected by validation reaches the ledger once, credential-redacted; failed tool ends add nothing."""
+    inputs, bindings = _make_inputs(tmp_path, settings, session_has_jsonl=False)
+    bindings.db = db
+
+    def _on_prompt(client: _FakeRpcClient, prompt: str) -> None:
+        if prompt != "kickoff":
+            return
+        client.emit_host_tool_rejected(
+            "classify_pr",
+            'Validation failed for tool "classify_pr": rank required\nReceived: {"url": "https://bot:ghp_secret@github.com/x"}',
+        )
+        client.emit_tool_end("eval", is_error=True)
+        client.emit_tool_end("classify_pr", is_error=True)
+
+    _install_prompt_hook(monkeypatch, _on_prompt)
+    loop = asyncio.new_event_loop()
+    try:
+        worker._run_rpc_blocking(
+            inputs,
+            task_kind="triage_issue",
+            prompt="kickoff",
+            loop=loop,
+            bindings=bindings,  # type: ignore[arg-type]
+        )
+    finally:
+        loop.close()
+
+    rows = db._conn.execute(  # noqa: SLF001
+        "SELECT tool, args_json, error FROM tool_calls WHERE issue_key=? ORDER BY id",
+        (bindings.issue_key,),
+    ).fetchall()
+    assert [(row["tool"], row["args_json"], row["error"]) for row in rows] == [
+        (
+            "classify_pr",
+            "{}",
+            'Validation failed for tool "classify_pr": rank required\nReceived: {"url": "https://***@github.com/x"}',
+        ),
+    ]
 
 
 @pytest.mark.asyncio

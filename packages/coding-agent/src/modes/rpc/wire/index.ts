@@ -84,6 +84,7 @@ const notificationDefs = {
 			"SessionInfoUpdateEvent",
 			"ConfigUpdateEvent",
 			"RpcFrameErrorEvent",
+			"HostToolRejectedEvent",
 			"RpcAgentEvent",
 		].join(" | "),
 		"Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`.",

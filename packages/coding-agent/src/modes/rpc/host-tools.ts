@@ -8,11 +8,15 @@ import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
+	RpcHostToolRejectedFrame,
 	RpcHostToolResult,
 	RpcHostToolUpdate,
 } from "./rpc-types";
 
-type RpcHostToolOutput = (frame: RpcHostToolCallRequest | RpcHostToolCancelRequest) => void;
+/** Frames {@link RpcHostToolBridge} writes to the host. */
+export type RpcHostToolFrame = RpcHostToolCallRequest | RpcHostToolCancelRequest | RpcHostToolRejectedFrame;
+
+type RpcHostToolOutput = (frame: RpcHostToolFrame) => void;
 
 type PendingHostToolCall = {
 	resolve: (result: AgentToolResult<unknown>) => void;
@@ -74,6 +78,10 @@ class RpcHostToolAdapter<TParams extends TSchema = TSchema, TTheme extends Theme
 			onUpdate,
 		);
 	}
+
+	onArgumentsRejected(toolCallId: string, error: unknown): void {
+		this.#bridge.reportRejection(this.#definition, toolCallId, error);
+	}
 }
 
 export class RpcHostToolBridge {
@@ -119,6 +127,17 @@ export class RpcHostToolBridge {
 		if (!pending) return false;
 		pending.onUpdate?.(frame.partialResult);
 		return true;
+	}
+
+	/** Tells the host a call never reached it: validation rejected the arguments before dispatch. */
+	reportRejection(definition: RpcHostToolDefinition, toolCallId: string, error: unknown): void {
+		if (this.#closedError) return;
+		this.#output({
+			type: "host_tool_rejected",
+			toolCallId,
+			toolName: definition.name,
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 
 	requestExecution(

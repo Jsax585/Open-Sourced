@@ -15,11 +15,31 @@ export type ToolArgumentSource = "parsed" | "payload";
  * {@link AgentTool.lenientArgValidation}: a lenient tool keeps unknown root
  * keys its closed schema would heal away, and on a schema mismatch receives its
  * raw arguments minus the internal `__parseError`/`__rawJson` sentinels.
- * Malformed JSON from a provider stream is never lenient.
+ * Malformed JSON from a provider stream is never lenient. A rejection is
+ * reported to {@link AgentTool.onArgumentsRejected} before it is rethrown.
  *
  * @throws the validation error when the tool is strict or the arguments failed to parse.
  */
 export function validateAgentToolArguments(
+	tool: AgentTool,
+	toolCall: ToolCall,
+	source: ToolArgumentSource = "parsed",
+): ToolCall["arguments"] {
+	try {
+		return checkAgentToolArguments(tool, toolCall, source);
+	} catch (error) {
+		tool.onArgumentsRejected?.(toolCall.id, error);
+		throw error;
+	}
+}
+
+/**
+ * {@link validateAgentToolArguments} without the rejection notice, for
+ * speculative pre-checks whose call the real dispatch validates again.
+ *
+ * @throws the validation error when the tool is strict or the arguments failed to parse.
+ */
+export function checkAgentToolArguments(
 	tool: AgentTool,
 	toolCall: ToolCall,
 	source: ToolArgumentSource = "parsed",

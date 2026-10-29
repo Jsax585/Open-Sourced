@@ -2206,6 +2206,15 @@ def _filter_anchorable_comments(staged: list[Any], files: list[PullRequestFileIn
 def _build_submit_pr_review(bindings: ToolBindings) -> HostTool[Any, Any]:
     def execute(args: dict[str, Any], _ctx: HostToolContext[Any]) -> str:
         _require_review_mode(bindings, "submit_pr_review", args)
+        issue_row = bindings.db.get_issue(bindings.issue_key)
+        if (
+            issue_row is None
+            or issue_row.pr_number != bindings.default_comment_number
+            or issue_row.classification not in _PR_RANKS
+        ):
+            msg = "submit_pr_review requires a persisted classify_pr for this PR; call classify_pr before submitting."
+            _audit(bindings, "submit_pr_review", args, error=msg)
+            _raise_command(msg)
         body = args.get("body")
         if not isinstance(body, str) or not body.strip():
             msg = "submit_pr_review requires a non-empty 'body'."

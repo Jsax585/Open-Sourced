@@ -266,6 +266,10 @@ export const frameDefs = {
 		arguments: JSON_OBJECT,
 	},
 	HostToolCancelRequest: { type: "'host_tool_cancel'", id: "string", targetId: "string" },
+	HostToolRejectedEvent: doc(
+		{ type: "'host_tool_rejected'", toolCallId: "string", toolName: "string", error: "string" },
+		"A host tool call was rejected before dispatch (argument validation), so no `host_tool_call` follows; `error` is the rejection message.",
+	),
 	HostToolResultPayload: doc(
 		{
 			content: "UserContent[]",

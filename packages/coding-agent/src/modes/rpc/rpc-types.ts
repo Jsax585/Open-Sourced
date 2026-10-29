@@ -891,6 +891,14 @@ export interface RpcHostToolCancelRequest {
 	targetId: string;
 }
 
+/** Emitted by the RPC server when a host tool call fails argument validation before dispatch. */
+export interface RpcHostToolRejectedFrame {
+	type: "host_tool_rejected";
+	toolCallId: string;
+	toolName: string;
+	error: string;
+}
+
 /** Sent by the host to stream partial tool updates back to the RPC server. */
 export interface RpcHostToolUpdate {
 	type: "host_tool_update";

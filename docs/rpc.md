@@ -85,7 +85,7 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 2. `RpcResponse` (`{ type: "response", ... }`)
 3. `AgentSessionEvent` objects (`agent_start`, `message_update`, etc.)
 4. `RpcExtensionUIRequest` (`{ type: "extension_ui_request", ... }`)
-5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`)
+5. Host tool requests/cancellations (`host_tool_call`, `host_tool_cancel`) and pre-dispatch rejections (`host_tool_rejected`)
 6. Host URI requests/cancellations (`host_uri_request`, `host_uri_cancel`)
 7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
@@ -1402,6 +1402,19 @@ If the tool execution is later aborted, RPC mode emits:
   "type": "host_tool_cancel",
   "id": "host_cancel_1",
   "targetId": "host_1"
+}
+```
+
+If argument validation rejects a call before dispatch (a direct tool call, an
+`xd://` device write, or an eval-bridge call), no `host_tool_call` is sent;
+RPC mode emits a notification instead so the host can still observe it:
+
+```json
+{
+  "type": "host_tool_rejected",
+  "toolCallId": "js-echo_host-6f1c…",
+  "toolName": "echo_host",
+  "error": "Validation failed for tool \"echo_host\": …"
 }
 ```
 

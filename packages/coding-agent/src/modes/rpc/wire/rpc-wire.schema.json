@@ -5650,6 +5650,30 @@
 				"targetId"
 			]
 		},
+		"HostToolRejectedEvent": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"const": "host_tool_rejected"
+				},
+				"toolCallId": {
+					"type": "string"
+				},
+				"toolName": {
+					"type": "string"
+				},
+				"error": {
+					"type": "string"
+				}
+			},
+			"required": [
+				"type",
+				"toolCallId",
+				"toolName",
+				"error"
+			],
+			"description": "A host tool call was rejected before dispatch (argument validation), so no `host_tool_call` follows; `error` is the rejection message."
+		},
 		"HostToolResultPayload": {
 			"type": "object",
 			"properties": {
@@ -6012,6 +6036,9 @@
 				},
 				{
 					"$ref": "#/$defs/RpcFrameErrorEvent"
+				},
+				{
+					"$ref": "#/$defs/HostToolRejectedEvent"
 				},
 				{
 					"$ref": "#/$defs/RpcAgentEvent"

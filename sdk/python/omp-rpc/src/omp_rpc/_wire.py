@@ -1625,6 +1625,15 @@ class AskAnswer:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class HostToolRejectedEvent:
+    """A host tool call was rejected before dispatch (argument validation), so no `host_tool_call` follows; `error` is the rejection message."""
+    type: Literal["host_tool_rejected"] = "host_tool_rejected"
+    tool_call_id: str
+    tool_name: str
+    error: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class HostToolDefinition:
     name: str
     description: str
@@ -1681,7 +1690,7 @@ RpcAgentEvent: TypeAlias = AgentStartEvent | AgentEndEvent | TurnStartEvent | Tu
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
-RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
+RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | HostToolRejectedEvent | RpcAgentEvent | UnknownNotification
 """Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`."""
 
 
@@ -3098,6 +3107,16 @@ def parse_ask_answer(value: object, path: str = "AskAnswer") -> AskAnswer:
     )
 
 
+def parse_host_tool_rejected_event(value: object, path: str = "HostToolRejectedEvent") -> HostToolRejectedEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["host_tool_rejected"]]', literal(frozenset({"host_tool_rejected"}))), path)
+    return HostToolRejectedEvent(
+        tool_call_id=required(payload, "toolCallId", decode_str, path),
+        tool_name=required(payload, "toolName", decode_str, path),
+        error=required(payload, "error", decode_str, path),
+    )
+
+
 def parse_host_tool_definition(value: object, path: str = "HostToolDefinition") -> HostToolDefinition:
     payload = expect_object(value, path)
     return HostToolDefinition(
@@ -3226,6 +3245,7 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "session_info_update": parse_session_info_update_event,
         "config_update": parse_config_update_event,
         "rpc_frame_error": parse_rpc_frame_error_event,
+        "host_tool_rejected": parse_host_tool_rejected_event,
         "agent_start": parse_rpc_agent_event,
         "agent_end": parse_rpc_agent_event,
         "turn_start": parse_rpc_agent_event,
@@ -3795,6 +3815,10 @@ class WireClient:
         """Subscribe to `rpc_frame_error`: An event could not fit within the transport limits and was dropped."""
         return self._listen("rpc_frame_error", listener)
 
+    def on_host_tool_rejected(self, listener: Callable[[HostToolRejectedEvent], None]) -> Callable[[], None]:
+        """Subscribe to `host_tool_rejected`: A host tool call was rejected before dispatch (argument validation), so no `host_tool_call` follows; `error` is the rejection message."""
+        return self._listen("host_tool_rejected", listener)
+
     def on_agent_start(self, listener: Callable[[AgentStartEvent], None]) -> Callable[[], None]:
         """Subscribe to `agent_start` frames."""
         return self._listen("agent_start", listener)
@@ -4014,6 +4038,7 @@ __all__ = [
     "HandoffResult",
     "HookMessage",
     "HostToolDefinition",
+    "HostToolRejectedEvent",
     "HostUriSchemeDefinition",
     "ImageContent",
     "InputUiRequest",
@@ -4200,6 +4225,7 @@ __all__ = [
     "parse_handoff_result",
     "parse_hook_message",
     "parse_host_tool_definition",
+    "parse_host_tool_rejected_event",
     "parse_host_uri_scheme_definition",
     "parse_image_content",
     "parse_input_ui_request",

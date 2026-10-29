@@ -6248,6 +6248,36 @@ func (v HostToolCancelRequest) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"host_tool_cancel"`, nil)
 }
 
+// A host tool call was rejected before dispatch (argument validation), so no `host_tool_call` follows; `error` is the rejection message.
+type HostToolRejectedEvent struct {
+	ToolCallID string `json:"toolCallId"`
+	ToolName   string `json:"toolName"`
+	Error      string `json:"error"`
+}
+
+func (v *HostToolRejectedEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "HostToolRejectedEvent", v.decodeFrom)
+}
+
+func (v *HostToolRejectedEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out HostToolRejectedEvent
+	d := fieldDecoder{raw: raw, owner: "HostToolRejectedEvent"}
+	d.constant("type", "host_tool_rejected")
+	d.required("toolCallId", &out.ToolCallID)
+	d.required("toolName", &out.ToolName)
+	d.required("error", &out.Error)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v HostToolRejectedEvent) MarshalJSON() ([]byte, error) {
+	type plain HostToolRejectedEvent
+	return encodeObject(plain(v), `"type":"host_tool_rejected"`, nil)
+}
+
 // Tool output: content blocks plus optional details.
 type HostToolResultPayload struct {
 	Content          []UserContent              `json:"content"`
@@ -6694,6 +6724,7 @@ func (CommandOutputEvent) isRpcNotification()           {}
 func (SessionInfoUpdateEvent) isRpcNotification()       {}
 func (ConfigUpdateEvent) isRpcNotification()            {}
 func (RpcFrameErrorEvent) isRpcNotification()           {}
+func (HostToolRejectedEvent) isRpcNotification()        {}
 func (AgentStartEvent) isRpcNotification()              {}
 func (AgentEndEvent) isRpcNotification()                {}
 func (TurnStartEvent) isRpcNotification()               {}
@@ -6785,6 +6816,8 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ConfigUpdateEvent](raw)
 	case "rpc_frame_error":
 		value, err = decodeVariant[RpcFrameErrorEvent](raw)
+	case "host_tool_rejected":
+		value, err = decodeVariant[HostToolRejectedEvent](raw)
 	case "agent_start":
 		value, err = decodeVariant[AgentStartEvent](raw)
 	case "agent_end":
@@ -6899,6 +6932,7 @@ func (CommandOutputEvent) isRpcServerFrame()           {}
 func (SessionInfoUpdateEvent) isRpcServerFrame()       {}
 func (ConfigUpdateEvent) isRpcServerFrame()            {}
 func (RpcFrameErrorEvent) isRpcServerFrame()           {}
+func (HostToolRejectedEvent) isRpcServerFrame()        {}
 func (AgentStartEvent) isRpcServerFrame()              {}
 func (AgentEndEvent) isRpcServerFrame()                {}
 func (TurnStartEvent) isRpcServerFrame()               {}
@@ -7000,6 +7034,8 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ConfigUpdateEvent](raw)
 	case "rpc_frame_error":
 		value, err = decodeVariant[RpcFrameErrorEvent](raw)
+	case "host_tool_rejected":
+		value, err = decodeVariant[HostToolRejectedEvent](raw)
 	case "agent_start":
 		value, err = decodeVariant[AgentStartEvent](raw)
 	case "agent_end":

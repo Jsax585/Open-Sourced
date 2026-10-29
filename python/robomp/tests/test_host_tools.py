@@ -1133,6 +1133,7 @@ def _review_bindings(
     transport: httpx.MockTransport,
     *,
     platform: str = "github",
+    classified: bool = True,
 ) -> tuple[ToolBindings, asyncio.AbstractEventLoop, threading.Thread]:
     github = GitHubClient("token", transport=transport, platform=platform)
     loop, thread = _make_loop_in_background()
@@ -1171,6 +1172,8 @@ def _review_bindings(
         session_dir=str(bindings.workspace.session_dir),
         pr_number=99,
     )
+    if classified:
+        db.set_issue_classification(bindings.issue_key, "review:p2")
     return bindings, loop, thread
 
 
@@ -1311,6 +1314,52 @@ def test_pr_review_comment_stages_and_submit_flushes_one_comment_review(db: Data
             }
         ],
     }
+    assert db.list_staged_review_comments(bindings.issue_key) == []
+
+
+def test_submit_pr_review_requires_classification_without_discarding_staging(db: Database, tmp_path: Path) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/labels"):
+            return httpx.Response(200, json=[{"name": "review:p1"}])
+        if request.url.path.endswith("/reviews"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": 46,
+                    "user": {"login": "robomp-bot"},
+                    "body": "ok",
+                    "state": "COMMENTED",
+                    "submitted_at": "t",
+                },
+            )
+        return httpx.Response(404, json={"message": "unrouted"})
+
+    bindings, loop, t = _review_bindings(db, tmp_path, httpx.MockTransport(handler), classified=False)
+    try:
+        tools = {tool.name: tool for tool in build(bindings)}
+        tools["pr_review_comment"].execute({"path": "src/app.py", "line": 12, "body": "finding"}, _ctx())
+        with pytest.raises(RpcCommandError, match="classify_pr"):
+            tools["submit_pr_review"].execute({"body": "summary"}, _ctx())
+        assert requests == []
+        assert [(row.path, row.line) for row in db.list_staged_review_comments(bindings.issue_key)] == [
+            ("src/app.py", 12)
+        ]
+        audit = db._conn.execute(
+            "SELECT error FROM tool_calls WHERE tool = 'submit_pr_review' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert audit is not None and "classify_pr" in audit[0]
+        tools["classify_pr"].execute(
+            {"rank": "review:p1", "type": "fix", "rationale": "Scoped fix for the reported problem."}, _ctx()
+        )
+        result = tools["submit_pr_review"].execute({"body": "summary"}, _ctx())
+    finally:
+        _stop_loop(loop, t)
+
+    assert "submitted PR review" in result
+    assert any(request.url.path.endswith("/reviews") for request in requests)
     assert db.list_staged_review_comments(bindings.issue_key) == []
 
 

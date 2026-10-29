@@ -4,7 +4,7 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { RpcHostToolBridge } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
+import { RpcHostToolBridge, type RpcHostToolFrame } from "@oh-my-pi/pi-coding-agent/modes/rpc/host-tools";
 import {
 	dispatchRpcInputFrame,
 	type PendingExtensionRequest,
@@ -13,13 +13,7 @@ import {
 	RpcPendingExtensionRequests,
 	RpcShutdownCoordinator,
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
-import type {
-	RpcCommand,
-	RpcExtensionUIResponse,
-	RpcHostToolCallRequest,
-	RpcHostToolCancelRequest,
-	RpcResponse,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { RpcCommand, RpcExtensionUIResponse, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -471,7 +465,7 @@ describe("RpcInputDispatcher", () => {
 
 	test("drain after EOF rejects active and queued host tool requests without emitting new calls", async () => {
 		const disconnectMessage = "RPC client disconnected before host tool execution completed";
-		const hostToolFrames: Array<RpcHostToolCallRequest | RpcHostToolCancelRequest> = [];
+		const hostToolFrames: RpcHostToolFrame[] = [];
 		const bridge = new RpcHostToolBridge(frame => {
 			hostToolFrames.push(frame);
 		});

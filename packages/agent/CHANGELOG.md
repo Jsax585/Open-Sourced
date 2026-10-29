@@ -4,6 +4,7 @@
 
 ### Added
 
+- `AgentTool.onArgumentsRejected` is notified when a dispatch rejects the tool's arguments before `execute()`; speculative pre-checks use the new non-notifying `checkAgentToolArguments` ([#17358](https://github.com/can1357/oh-my-pi/issues/17358))
 - `PI_INTENT_DESC` replaces the schema description of the injected `i` intent field
 - `AgentTool.approvalRestrictionPaths` reports paths a call reads, so restricted folders cover them without the approval being remembered per path ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal))
 

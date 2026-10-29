@@ -36,6 +36,7 @@ import type {
 	RpcHostToolCallRequest,
 	RpcHostToolCancelRequest,
 	RpcHostToolDefinition,
+	RpcHostToolRejectedFrame,
 	RpcHostToolResult,
 	RpcHostToolUpdate,
 	RpcHostUriCancelRequest,
@@ -221,6 +222,7 @@ export type Frames = Assert<
 		btwRecord: Outbound<RpcBtwRecordFrame, Wire.BtwRecordEvent>;
 		hostToolCall: Outbound<RpcHostToolCallRequest, Wire.HostToolCallRequest>;
 		hostToolCancel: Outbound<RpcHostToolCancelRequest, Wire.HostToolCancelRequest>;
+		hostToolRejected: Outbound<RpcHostToolRejectedFrame, Wire.HostToolRejectedEvent>;
 		hostUriRequest: Outbound<RpcHostUriRequest, Wire.HostUriRequest>;
 		hostUriCancel: Outbound<RpcHostUriCancelRequest, Wire.HostUriCancelRequest>;
 		askQuestion: Outbound<RpcAskDialogQuestion, Wire.AskQuestion>;
