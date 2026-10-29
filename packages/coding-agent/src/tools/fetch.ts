@@ -551,29 +551,31 @@ function stripDataUriImages(markdown: string): string {
 /**
  * Where `pruneHtmlForReader` looks: a comment, an element whose content is raw text
  * (a `<meta>` written inside a `<title>` or a script string is text, not a tag), or
- * a start tag it reads (`<meta>`, `<a>`, `<base>`).
+ * a start tag it reads (`<meta>`, `<a>`, `<base>`). A tag name ends at whitespace,
+ * `/` or `>`, so `<style-guide>` is none of them.
  */
-const PRUNE_SCAN_RE = /<(?:!--|(meta|a|base|script|style|title|textarea|xmp|iframe|noembed|noframes)\b)/gi;
+const PRUNE_SCAN_RE = /<(?:!--|(meta|a|base|script|style|title|textarea|xmp|iframe|noembed|noframes)(?=[\s/>]))/gi;
 
 /** End of each region {@link PRUNE_SCAN_RE} skips whole. */
 const RAW_TEXT_END_RE: Record<string, RegExp> = {
 	"!--": /-->/g,
-	script: /<\/script\b/gi,
-	style: /<\/style\b/gi,
-	title: /<\/title\b/gi,
-	textarea: /<\/textarea\b/gi,
-	xmp: /<\/xmp\b/gi,
-	iframe: /<\/iframe\b/gi,
-	noembed: /<\/noembed\b/gi,
-	noframes: /<\/noframes\b/gi,
+	script: /<\/script(?=[\s/>])/gi,
+	style: /<\/style(?=[\s/>])/gi,
+	title: /<\/title(?=[\s/>])/gi,
+	textarea: /<\/textarea(?=[\s/>])/gi,
+	xmp: /<\/xmp(?=[\s/>])/gi,
+	iframe: /<\/iframe(?=[\s/>])/gi,
+	noembed: /<\/noembed(?=[\s/>])/gi,
+	noframes: /<\/noframes(?=[\s/>])/gi,
 };
 
 /**
- * A start tag from its `<`; quoted values may hold `>`. Neither a quoted nor an
- * unquoted part crosses a `<`, so an unclosed `<a` stops at the next tag and the scan
- * stays linear.
+ * A start tag from its `<` to the first `>` outside a quoted value, as HTML reads
+ * it. One that never closes runs to the end of the document, so the scan stops
+ * there and never restarts inside a tag. The attributes are matched in a lookahead
+ * and taken whole (`\1`), so a missing `>` fails without backtracking through them.
  */
-const START_TAG_RE = /<[a-z]+(?:[^<>"']|"[^"<]*"|'[^'<]*')*>/iy;
+const START_TAG_RE = /<[a-z][^\s/>]*(?=((?:[^>"']+|"[^"]*"|'[^']*')*))\1>/iy;
 
 /** Named `<meta>` tags worth their tokens to a reader; Open Graph, Twitter Card, viewport and verification tags are not. */
 const KEPT_META_NAMES: Record<string, true> = {
@@ -593,8 +595,10 @@ const TAG_ATTRIBUTE_RE = /([^\s"'=/>]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]*))?/g;
 /**
  * The first `name` attribute of a start tag (later duplicates are ignored, as in
  * HTML): its value with character references decoded, and where it is written.
+ * `value` is null when the value holds a named reference the decoder does not know,
+ * so the tag can't be judged and is left alone.
  */
-function findTagAttribute(tag: string, name: string): { value: string; start: number; end: number } | null {
+function findTagAttribute(tag: string, name: string): { value: string | null; start: number; end: number } | null {
 	TAG_ATTRIBUTE_RE.lastIndex = tag.search(/[\s/>]/);
 	for (let match = TAG_ATTRIBUTE_RE.exec(tag); match; match = TAG_ATTRIBUTE_RE.exec(tag)) {
 		if (match[1].toLowerCase() !== name) continue;
@@ -602,7 +606,8 @@ function findTagAttribute(tag: string, name: string): { value: string; start: nu
 		if (raw === undefined) return null;
 		const end = match.index + match[0].length;
 		const quoted = raw.startsWith('"') || raw.startsWith("'");
-		return { value: decodeEntities(quoted ? raw.slice(1, -1) : raw), start: end - raw.length, end };
+		const value = decodeEntities(quoted ? raw.slice(1, -1) : raw);
+		return { value: /&[a-z][a-z0-9]*;/i.test(value) ? null : value, start: end - raw.length, end };
 	}
 	return null;
 }
@@ -630,7 +635,8 @@ function baseMovesFragments(base: string, pageUrl: string): boolean {
 function pruneHtmlForReader(html: string, pageUrl: string): string {
 	const parts: string[] = [];
 	const anchors: Array<{ part: number; tag: string }> = [];
-	let base: string | undefined;
+	// `null`: a `<base href>` whose target can't be read, so no `#…` link is judged.
+	let base: string | null | undefined;
 	let copied = 0;
 	PRUNE_SCAN_RE.lastIndex = 0;
 	for (let match = PRUNE_SCAN_RE.exec(html); match; match = PRUNE_SCAN_RE.exec(html)) {
@@ -645,27 +651,29 @@ function pruneHtmlForReader(html: string, pageUrl: string): string {
 		}
 		START_TAG_RE.lastIndex = match.index;
 		const tag = START_TAG_RE.exec(html)?.[0];
-		if (tag === undefined) continue;
+		if (tag === undefined) break;
 		PRUNE_SCAN_RE.lastIndex = START_TAG_RE.lastIndex;
 		let replacement = "";
 		if (element === "base") {
-			base ??= findTagAttribute(tag, "href")?.value;
+			const href = findTagAttribute(tag, "href");
+			if (href && base === undefined) base = href.value;
 			continue;
 		}
 		if (element === "meta") {
 			const name = findTagAttribute(tag, "name") ?? findTagAttribute(tag, "property");
-			if (name === null || KEPT_META_NAMES[name.value.toLowerCase()] === true) continue;
+			if (!name || name.value === null || KEPT_META_NAMES[name.value.toLowerCase()] === true) continue;
 		} else {
-			const href = findTagAttribute(tag, "href");
-			if (!href?.value.startsWith("#") || href.value.startsWith("#/") || href.value.startsWith("#!")) continue;
-			replacement = `${tag.slice(0, href.start)}"#"${tag.slice(href.end)}`;
+			const target = findTagAttribute(tag, "href");
+			const value = target?.value;
+			if (!target || !value?.startsWith("#") || value.startsWith("#/") || value.startsWith("#!")) continue;
+			replacement = `${tag.slice(0, target.start)}"#"${tag.slice(target.end)}`;
 			anchors.push({ part: parts.length + 1, tag });
 		}
 		parts.push(html.slice(copied, match.index), replacement);
 		copied = PRUNE_SCAN_RE.lastIndex;
 	}
 	parts.push(html.slice(copied));
-	if (base !== undefined && baseMovesFragments(base, pageUrl)) {
+	if (base !== undefined && (base === null || baseMovesFragments(base, pageUrl))) {
 		for (const { part, tag } of anchors) parts[part] = tag;
 	}
 	return parts.join("");
