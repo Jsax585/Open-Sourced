@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Unreachable default loopback model servers (Ollama, LM Studio, llama.cpp) you never configured no longer print a `model discovery failed` warning at startup ([#14592](https://github.com/can1357/oh-my-pi/pull/14592) by [@tahakotil](https://github.com/tahakotil), fixes [#12156](https://github.com/can1357/oh-my-pi/issues/12156)).
 ### Added
 
 - Added opt-in `taskFile` input (`task.file=true`) to dispatch subagent instructions from a UTF-8 file via an absolute path or `local://` URL, recording the submitted path and SHA-256 ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).
