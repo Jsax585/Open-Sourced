@@ -15,6 +15,7 @@ function aimlapiModel(baseUrl: string): Model<"openai-completions"> {
 		api: "openai-completions",
 		provider: "aimlapi",
 		baseUrl,
+		reasoning: false,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 128_000,
@@ -30,8 +31,20 @@ const context: Context = {
 
 function completionResponse(model: string): Response {
 	const events = [
-		{ id: "aimlapi-test", object: "chat.completion.chunk", created: 0, model, choices: [{ index: 0, delta: { content: "ok" } }] },
-		{ id: "aimlapi-test", object: "chat.completion.chunk", created: 0, model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+		{
+			id: "aimlapi-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model,
+			choices: [{ index: 0, delta: { content: "ok" } }],
+		},
+		{
+			id: "aimlapi-test",
+			object: "chat.completion.chunk",
+			created: 0,
+			model,
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+		},
 		"[DONE]",
 	];
 	return new Response(
@@ -67,7 +80,11 @@ describe("AI/ML API OpenAI transport", () => {
 	it("sends no client identity when the base URL points somewhere else", async () => {
 		// The gateway serves an unattributed request identically, so absence never
 		// surfaces at runtime — this assertion is the only thing that catches it.
-		for (const baseUrl of ["https://api.openai.com/v1", "https://api.aimlapi.com.example.net/v1", "http://api.aimlapi.com/v1"]) {
+		for (const baseUrl of [
+			"https://api.openai.com/v1",
+			"https://api.aimlapi.com.example.net/v1",
+			"http://api.aimlapi.com/v1",
+		]) {
 			const headers = await captureHeaders(baseUrl);
 			expect(headers["x-aimlapi-partner-id"]).toBeUndefined();
 			expect(headers["x-aimlapi-source"]).toBeUndefined();
