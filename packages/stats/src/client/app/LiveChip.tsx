@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { RefreshCw } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { formatInteger } from "../data/formatters";
@@ -15,15 +16,15 @@ export function LiveChip() {
 		body = (
 			<>
 				<Dot tone="warn" />
-				<span>Reconnecting</span>
+				<span>{__ompTranslate("Reconnecting")}</span>
 			</>
 		);
-		title = "Lost the live connection to the stats server; retrying";
+		title = __ompTranslate("Lost the live connection to the stats server; retrying");
 	} else if (sync.phase === "syncing") {
 		body = (
 			<>
 				<RefreshCw size={13} className="spin" />
-				<span>Syncing</span>
+				<span>{__ompTranslate("Syncing")}</span>
 				{sync.total > 0 && (
 					<span className="live-chip-count">
 						{formatInteger(sync.current)}/{formatInteger(sync.total)}
@@ -31,15 +32,15 @@ export function LiveChip() {
 				)}
 			</>
 		);
-		title = "Ingesting session files";
+		title = __ompTranslate("Ingesting session files");
 	} else if (sync.phase === "error") {
 		body = (
 			<>
 				<Dot tone="bad" />
-				<span>Sync failed</span>
+				<span>{__ompTranslate("Sync failed")}</span>
 			</>
 		);
-		title = `${sync.error ?? "Sync failed"} — click to retry`;
+		title = __ompTranslate("{0} — click to retry", `${sync.error ?? __ompTranslate("Sync failed")}`);
 	} else if (indexingHours > INDEXING_VISIBLE_HOURS) {
 		body = (
 			<>
@@ -48,16 +49,16 @@ export function LiveChip() {
 				<span className="live-chip-count">{formatInteger(indexingHours)}h left</span>
 			</>
 		);
-		title = "Building hourly rollups; older ranges fill in as it goes";
+		title = __ompTranslate("Building hourly rollups; older ranges fill in as it goes");
 	} else {
 		body = (
 			<>
 				<Dot tone="live" pulse />
-				<span>Live</span>
+				<span>{__ompTranslate("Live")}</span>
 				{sync.lastSyncedAt !== null && <span className="live-chip-count">{ago(now - sync.lastSyncedAt)}</span>}
 			</>
 		);
-		title = "Click to sync session files now";
+		title = __ompTranslate("Click to sync session files now");
 	}
 
 	return (
@@ -89,9 +90,9 @@ function useNow(intervalMs: number | null): number {
 
 function ago(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
-	if (s < 45) return "just now";
+	if (s < 45) return __ompTranslate("just now");
 	const m = Math.round(s / 60);
-	if (m < 60) return `${m}m ago`;
+	if (m < 60) return __ompTranslate("{0}m ago", `${m}`);
 	const h = Math.round(m / 60);
-	return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+	return h < 24 ? __ompTranslate("{0}h ago", `${h}`) : __ompTranslate("{0}d ago", `${Math.round(h / 24)}`);
 }

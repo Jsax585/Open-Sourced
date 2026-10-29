@@ -4,6 +4,7 @@
  * + text blocks, tool args/result, user text, subagent task text.
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Check, Copy } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { getSessionEntryDetail } from "../api";
@@ -112,7 +113,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 	const metrics: Array<{ key: string; label: ReactNode; value: ReactNode }> = [
 		{
 			key: "duration",
-			label: "Duration",
+			label: __ompTranslate("Duration"),
 			value: (
 				<span className="num">
 					{formatDurationMs(span.end - span.start)}
@@ -120,24 +121,36 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 				</span>
 			),
 		},
-		{ key: "start", label: "Start", value: <span className="num">{new Date(span.start).toLocaleTimeString()}</span> },
-		{ key: "track", label: "Track", value: <span className="mono">{track?.label ?? "-"}</span> },
+		{
+			key: "start",
+			label: __ompTranslate("Start"),
+			value: <span className="num">{new Date(span.start).toLocaleTimeString()}</span>,
+		},
+		{ key: "track", label: __ompTranslate("Track"), value: <span className="mono">{track?.label ?? "-"}</span> },
 	];
 	if (span.kind === "model") {
 		metrics.push(
 			{
 				key: "tokens",
-				label: "Tokens",
+				label: __ompTranslate("Tokens"),
 				value: <span className="num">{formatInteger(span.tokens ?? 0)}</span>,
 			},
-			{ key: "cost", label: "Cost", value: <span className="num">${(span.cost ?? 0).toFixed(4)}</span> },
+			{
+				key: "cost",
+				label: __ompTranslate("Cost"),
+				value: <span className="num">${(span.cost ?? 0).toFixed(4)}</span>,
+			},
 			{ key: "ttft", label: "TTFT", value: <span className="num">{formatDurationMs(span.ttft ?? null)}</span> },
-			{ key: "model", label: "Model", value: <span className="mono">{msg?.model ?? span.model ?? "-"}</span> },
+			{
+				key: "model",
+				label: __ompTranslate("Model"),
+				value: <span className="mono">{msg?.model ?? span.model ?? "-"}</span>,
+			},
 		);
 		if (usage)
 			metrics.push({
 				key: "split",
-				label: "Input / output / cached",
+				label: __ompTranslate("Input / output / cached"),
 				value: (
 					<span className="num">
 						{formatInteger(usage.input ?? 0)} / {formatInteger(usage.output ?? 0)} /{" "}
@@ -146,9 +159,17 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 				),
 			});
 		if (msg?.provider)
-			metrics.push({ key: "provider", label: "Provider", value: <span className="mono">{msg.provider}</span> });
+			metrics.push({
+				key: "provider",
+				label: __ompTranslate("Provider"),
+				value: <span className="mono">{msg.provider}</span>,
+			});
 		if (msg?.stopReason)
-			metrics.push({ key: "stop", label: "Stop reason", value: <span className="mono">{msg.stopReason}</span> });
+			metrics.push({
+				key: "stop",
+				label: __ompTranslate("Stop reason"),
+				value: <span className="mono">{msg.stopReason}</span>,
+			});
 	}
 
 	return (
@@ -170,8 +191,8 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 					data-variant="ghost"
 					data-icon="true"
 					onClick={handleCopy}
-					aria-label="Copy raw JSON"
-					title="Copy raw JSON"
+					aria-label={__ompTranslate("Copy raw JSON")}
+					title={__ompTranslate("Copy raw JSON")}
 				>
 					{copied ? <Check size={15} /> : <Copy size={15} />}
 				</button>
@@ -223,7 +244,7 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 						<Skeleton height={160} />
 					</div>
 				)}
-				{error && <ErrorState error={`Failed to load entry: ${error.message}`} />}
+				{error && <ErrorState error={__ompTranslate("Failed to load entry: {0}", `${error.message}`)} />}
 
 				{!loading &&
 					entry !== null &&
@@ -236,7 +257,9 @@ export function SpanDrawer({ span, track, onClose, onOpenChildTrack }: SpanDrawe
 						</div>
 					))}
 
-				{!loading && entry !== null && <JsonBlock data={entry} title="Raw entry" initialCollapsed={true} />}
+				{!loading && entry !== null && (
+					<JsonBlock data={entry} title={__ompTranslate("Raw entry")} initialCollapsed={true} />
+				)}
 			</div>
 		</Drawer>
 	);

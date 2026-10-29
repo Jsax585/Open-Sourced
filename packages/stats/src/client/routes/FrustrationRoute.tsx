@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -73,8 +74,11 @@ export function FrustrationRoute({ active, range }: FrustrationRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Frustration"
-				description={`How often your messages sound annoyed, per model version, in ${meta.windowLabel}.`}
+				title={__ompTranslate("Frustration")}
+				description={__ompTranslate(
+					"How often your messages sound annoyed, per model version, in {0}.",
+					`${meta.windowLabel}`,
+				)}
 			/>
 
 			<QueryView query={stats} skeleton={<ChartSkeleton height={96} />}>
@@ -101,7 +105,7 @@ export function FrustrationRoute({ active, range }: FrustrationRouteProps) {
 			<QueryView
 				query={stats}
 				skeleton={
-					<Card index={2} title="Frustration by model version">
+					<Card index={2} title={__ompTranslate("Frustration by model version")}>
 						<ChartSkeleton height={340} />
 						<TableSkeleton rows={6} />
 					</Card>
@@ -138,33 +142,37 @@ function FrustrationSummary({ overall }: { overall: FrustrationCounts }) {
 	return (
 		<StatGrid min={170}>
 			<Stat
-				label="User messages"
-				title="User messages with prose in range"
+				label={__ompTranslate("User messages")}
+				title={__ompTranslate("User messages with prose in range")}
 				value={formatInteger(overall.messages)}
 			/>
 			<Stat
-				label="Judge coverage"
-				title="Messages with a cached judge verdict; the rest use regex signals"
+				label={__ompTranslate("Judge coverage")}
+				title={__ompTranslate("Messages with a cached judge verdict; the rest use regex signals")}
 				value={rate(overall.judged, overall.messages)}
-				hint={`${formatInteger(overall.judged)} judged · ${formatInteger(regex)} regex`}
+				hint={__ompTranslate(
+					"{0} judged · {1} regex",
+					`${formatInteger(overall.judged)}`,
+					`${formatInteger(regex)}`,
+				)}
 			/>
 			<Stat
-				label="Annoyed"
-				title="Messages annoyed at any target"
+				label={__ompTranslate("Annoyed")}
+				title={__ompTranslate("Messages annoyed at any target")}
 				value={rate(overall.annoyed, overall.messages)}
-				hint={`${formatInteger(overall.annoyed)} messages`}
+				hint={__ompTranslate("{0} messages", `${formatInteger(overall.annoyed)}`)}
 			/>
 			<Stat
-				label="At assistant"
-				title="Messages annoyed at the assistant"
+				label={__ompTranslate("At assistant")}
+				title={__ompTranslate("Messages annoyed at the assistant")}
 				value={rate(overall.atAssistant, overall.messages)}
-				hint={`${formatInteger(overall.atAssistant)} messages`}
+				hint={__ompTranslate("{0} messages", `${formatInteger(overall.atAssistant)}`)}
 			/>
 			<Stat
-				label="Angry"
-				title="Messages angry or hostile toward the assistant"
+				label={__ompTranslate("Angry")}
+				title={__ompTranslate("Messages angry or hostile toward the assistant")}
 				value={rate(overall.angry, overall.messages)}
-				hint={`${formatInteger(overall.angry)} messages`}
+				hint={__ompTranslate("{0} messages", `${formatInteger(overall.angry)}`)}
 			/>
 		</StatGrid>
 	);
@@ -188,8 +196,9 @@ interface JudgePanelProps {
 	onRunChanged: () => void;
 }
 
-const UNAVAILABLE_HINT =
-	"Judging needs the omp host process: open the dashboard with omp stats and configure a judge model. Until then messages are classified by regex signals.";
+const UNAVAILABLE_HINT = __ompTranslate(
+	"Judging needs the omp host process: open the dashboard with omp stats and configure a judge model. Until then messages are classified by regex signals.",
+);
 
 function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunChanged }: JudgePanelProps) {
 	const [modalOpen, setModalOpen] = useState(false);
@@ -265,10 +274,10 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 	const quote = estimate.status === "ready" ? estimate.estimate : null;
 	const primaryAction =
 		estimate.status === "loading"
-			? { label: "Proceed", onClick: proceed, disabled: true }
+			? { label: __ompTranslate("Proceed"), onClick: proceed, disabled: true }
 			: quote?.available
 				? {
-						label: starting ? "Starting…" : "Proceed",
+						label: starting ? __ompTranslate("Starting…") : __ompTranslate("Proceed"),
 						onClick: proceed,
 						disabled: starting || quote.messages === 0,
 					}
@@ -282,7 +291,9 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 					Judge classification <JobBadge job={job} judgeAvailable={judgeAvailable} />
 				</>
 			}
-			description="Cached LLM verdicts replace the regex heuristics; unjudged messages fall back to regex signals."
+			description={__ompTranslate(
+				"Cached LLM verdicts replace the regex heuristics; unjudged messages fall back to regex signals.",
+			)}
 			actions={
 				<button
 					type="button"
@@ -295,8 +306,8 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 						!judgeAvailable
 							? UNAVAILABLE_HINT
 							: running
-								? "A judge run is in progress"
-								: "Quote the cost of judging every unjudged message in range"
+								? __ompTranslate("A judge run is in progress")
+								: __ompTranslate("Quote the cost of judging every unjudged message in range")
 					}
 				>
 					<Sparkles size={13} /> Classify with judge
@@ -317,7 +328,12 @@ function JudgePanel({ active, range, judgeAvailable, job, onRunStarted, onRunCha
 				)}
 			</div>
 
-			<Modal open={modalOpen} title="Classify with judge" onClose={closeModal} primaryAction={primaryAction}>
+			<Modal
+				open={modalOpen}
+				title={__ompTranslate("Classify with judge")}
+				onClose={closeModal}
+				primaryAction={primaryAction}
+			>
 				<EstimateBody estimate={estimate} />
 				{startError && (
 					<p className="micro tone-bad" role="alert">
@@ -338,23 +354,23 @@ function JobBadge({ job, judgeAvailable }: { job: FrustrationJobStatus; judgeAva
 				</Badge>
 			);
 		case "done":
-			return <Badge tone="ok">Last run done</Badge>;
+			return <Badge tone="ok">{__ompTranslate("Last run done")}</Badge>;
 		case "cancelled":
-			return <Badge tone="warn">Last run cancelled</Badge>;
+			return <Badge tone="warn">{__ompTranslate("Last run cancelled")}</Badge>;
 		case "failed":
-			return <Badge tone="bad">Last run failed</Badge>;
+			return <Badge tone="bad">{__ompTranslate("Last run failed")}</Badge>;
 		case "idle":
-			return <Badge>{judgeAvailable ? "Not run yet" : "Regex only"}</Badge>;
+			return <Badge>{judgeAvailable ? __ompTranslate("Not run yet") : __ompTranslate("Regex only")}</Badge>;
 	}
 }
 
 function EstimateBody({ estimate }: { estimate: EstimateState }) {
-	if (estimate.status === "loading") return <p className="muted">Estimating cost…</p>;
+	if (estimate.status === "loading") return <p className="muted">{__ompTranslate("Estimating cost…")}</p>;
 	if (estimate.status === "error") return <p className="tone-bad">{estimate.message}</p>;
 	const quote = estimate.estimate;
 	if (!quote.available) return <p>{quote.reason}</p>;
 	if (quote.messages === 0) {
-		return <p>Everything in this range is already judged. There is nothing left to classify.</p>;
+		return <p>{__ompTranslate("Everything in this range is already judged. There is nothing left to classify.")}</p>;
 	}
 	return (
 		<>
@@ -364,10 +380,18 @@ function EstimateBody({ estimate }: { estimate: EstimateState }) {
 			</div>
 			<KeyValues
 				items={[
-					{ key: "messages", label: "Unjudged unique messages", value: formatInteger(quote.messages) },
-					{ key: "chars", label: "Prose characters", value: formatInteger(quote.chars) },
-					{ key: "tokens", label: "Estimated input tokens", value: formatInteger(quote.inputTokens) },
-					{ key: "judge", label: "Judge", value: quote.judge },
+					{
+						key: "messages",
+						label: __ompTranslate("Unjudged unique messages"),
+						value: formatInteger(quote.messages),
+					},
+					{ key: "chars", label: __ompTranslate("Prose characters"), value: formatInteger(quote.chars) },
+					{
+						key: "tokens",
+						label: __ompTranslate("Estimated input tokens"),
+						value: formatInteger(quote.inputTokens),
+					},
+					{ key: "judge", label: __ompTranslate("Judge"), value: quote.judge },
 				]}
 			/>
 			<p className="micro dim">
@@ -434,11 +458,13 @@ function JudgeProgress({
 }
 
 function JudgeResultLine({ job }: { job: FrustrationJobStatus }) {
-	const progress = `${formatInteger(job.done)}/${formatInteger(job.total)} messages`;
-	const failed = job.failed > 0 ? `, ${formatInteger(job.failed)} failed` : "";
-	const judge = job.judge ? ` with ${job.judge}` : "";
+	const progress = __ompTranslate("{0}/{1} messages", `${formatInteger(job.done)}`, `${formatInteger(job.total)}`);
+	const failed = job.failed > 0 ? __ompTranslate(", {0} failed", `${formatInteger(job.failed)}`) : "";
+	const judge = job.judge ? __ompTranslate(" with {0}", `${job.judge}`) : "";
 	const elapsed =
-		job.startedAt !== null && job.finishedAt !== null ? ` in ${formatElapsed(job.finishedAt - job.startedAt)}` : "";
+		job.startedAt !== null && job.finishedAt !== null
+			? __ompTranslate(" in {0}", `${formatElapsed(job.finishedAt - job.startedAt)}`)
+			: "";
 	switch (job.state) {
 		case "idle":
 			return (
@@ -533,9 +559,9 @@ function layerColor(hue: string, layer: Layer): string {
  * differences draws each bar to the `annoyed` height with the subsets inside.
  */
 const LAYERS = [
-	{ key: "angry", label: "Angry at assistant" },
-	{ key: "assistant", label: "At assistant, not angry" },
-	{ key: "other", label: "Annoyed at other targets" },
+	{ key: "angry", label: __ompTranslate("Angry at assistant") },
+	{ key: "assistant", label: __ompTranslate("At assistant, not angry") },
+	{ key: "other", label: __ompTranslate("Annoyed at other targets") },
 ] as const;
 type Layer = (typeof LAYERS)[number]["key"];
 
@@ -588,11 +614,11 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 
 	const classOptions = useMemo(
 		() => [
-			{ value: ALL_CLASSES, label: "All", title: "Every model class" },
+			{ value: ALL_CLASSES, label: __ompTranslate("All"), title: __ompTranslate("Every model class") },
 			...[...classes].map(([modelClass, messages]) => ({
 				value: modelClass,
 				label: modelClass,
-				title: `${formatInteger(messages)} messages`,
+				title: __ompTranslate("{0} messages", `${formatInteger(messages)}`),
 			})),
 		],
 		[classes],
@@ -639,7 +665,10 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 	if (models.length === 0) {
 		return (
 			<Card index={2} title="Frustration by model version" stale={stale}>
-				<EmptyState title="No user messages in this range" hint="Try a longer range." />
+				<EmptyState
+					title={__ompTranslate("No user messages in this range")}
+					hint={__ompTranslate("Try a longer range.")}
+				/>
 			</Card>
 		);
 	}
@@ -651,14 +680,16 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 			<Card
 				index={2}
 				title="Frustration by model version"
-				description="Share of user messages per model version. Each bar reaches the annoyed rate; the subsets aimed at the assistant stack inside it."
+				description={__ompTranslate(
+					"Share of user messages per model version. Each bar reaches the annoyed rate; the subsets aimed at the assistant stack inside it.",
+				)}
 				stale={stale}
 			>
 				<div className="stack frustration-chart-body">
 					<div className="frustration-classes">
 						<Segmented
 							size="sm"
-							aria-label="Model class"
+							aria-label={__ompTranslate("Model class")}
 							options={classOptions}
 							value={activeClass}
 							onChange={setSelectedClass}
@@ -676,13 +707,19 @@ function FrustrationModelsSection({ models, stale }: { models: FrustrationModelS
 							onToggle={toggleFamily}
 						/>
 						<span className="frustration-spacer" />
-						<label className="check" title={`Models with fewer than ${MIN_MESSAGES} messages have noisy rates`}>
+						<label
+							className="check"
+							title={__ompTranslate("Models with fewer than {0} messages have noisy rates", `${MIN_MESSAGES}`)}
+						>
 							<input type="checkbox" checked={showSmall} onChange={e => setShowSmall(e.target.checked)} />
 							Include &lt; {MIN_MESSAGES} messages{smallCount > 0 ? ` (${smallCount})` : ""}
 						</label>
 						<label
 							className="check"
-							title={`Hide models with under ${MIN_JUDGED_SHARE * 100}% judged messages (rates from regex signals)`}
+							title={__ompTranslate(
+								"Hide models with under {0}% judged messages (rates from regex signals)",
+								`${MIN_JUDGED_SHARE * 100}`,
+							)}
 						>
 							<input type="checkbox" checked={hideRegex} onChange={e => setHideRegex(e.target.checked)} />
 							Hide mostly regex{regexCount > 0 ? ` (${regexCount})` : ""}
@@ -719,7 +756,10 @@ function EncodingKey({ hasRegexRows }: { hasRegexRows: boolean }) {
 			</span>
 			<span
 				className="legend-item frustration-key-wide"
-				title={`Under ${MIN_JUDGED_SHARE * 100}% of these messages are judged; their rates come from regex signals`}
+				title={__ompTranslate(
+					"Under {0}% of these messages are judged; their rates come from regex signals",
+					`${MIN_JUDGED_SHARE * 100}`,
+				)}
 			>
 				<span className="swatch frustration-key-swatch" data-variant="hatch" />
 				Hatched: mostly regex fallback{hasRegexRows ? " (run the judge)" : ""}
@@ -764,7 +804,7 @@ function FrustrationChart({
 		}
 		out.push({
 			key: "trend",
-			label: "At assistant (total)",
+			label: __ompTranslate("At assistant (total)"),
 			color: "var(--ink-1)",
 			values: rows.map(row => percent(row.atAssistant, row.messages)),
 			kind: "line",
@@ -777,7 +817,7 @@ function FrustrationChart({
 	if (rows.length === 0) {
 		return (
 			<div className="frustration-chart-empty">
-				<EmptyState title="No model versions match the filters" />
+				<EmptyState title={__ompTranslate("No model versions match the filters")} />
 			</div>
 		);
 	}
@@ -791,7 +831,7 @@ function FrustrationChart({
 			format={v => `${v}%`}
 			formatTooltip={v => `${v.toFixed(1)}%`}
 			showTotal={false}
-			emptyLabel="No frustrated messages for these models"
+			emptyLabel={__ompTranslate("No frustrated messages for these models")}
 			tooltipExtra={i => {
 				const row = rows[i];
 				return (
@@ -824,7 +864,7 @@ function FrustrationTable({
 		(): Column<FrustrationModelStats>[] => [
 			{
 				key: "model",
-				header: "Model",
+				header: __ompTranslate("Model"),
 				sort: row => row.label,
 				render: row => (
 					<span className="row" title={row.key}>
@@ -838,29 +878,29 @@ function FrustrationTable({
 			},
 			{
 				key: "ids",
-				header: "Model IDs",
+				header: __ompTranslate("Model IDs"),
 				wrap: true,
 				render: row => <span className="mono micro dim">{row.models.join(", ")}</span>,
 			},
 			{
 				key: "messages",
-				header: "Messages",
+				header: __ompTranslate("Messages"),
 				align: "right",
 				sort: row => row.messages,
 				render: row => <span className="num">{formatInteger(row.messages)}</span>,
 			},
 			{
 				key: "judged",
-				header: "Judged",
+				header: __ompTranslate("Judged"),
 				align: "right",
 				sort: row => (row.messages > 0 ? row.judged / row.messages : 0),
 				render: row =>
 					isMostlyRegex(row) ? (
 						<span
 							className="row frustration-judged"
-							title="Mostly regex fallback: run the judge for accurate rates"
+							title={__ompTranslate("Mostly regex fallback: run the judge for accurate rates")}
 						>
-							<Badge tone="warn">regex</Badge>
+							<Badge tone="warn">{__ompTranslate("regex")}</Badge>
 							<span className="num dim">{rate(row.judged, row.messages)}</span>
 						</span>
 					) : (
@@ -869,33 +909,36 @@ function FrustrationTable({
 			},
 			{
 				key: "annoyed",
-				header: "Annoyed",
+				header: __ompTranslate("Annoyed"),
 				align: "right",
 				sort: row => percent(row.annoyed, row.messages),
 				render: row => (
-					<span className="num" title={`${formatInteger(row.annoyed)} messages`}>
+					<span className="num" title={__ompTranslate("{0} messages", `${formatInteger(row.annoyed)}`)}>
 						{rate(row.annoyed, row.messages)}
 					</span>
 				),
 			},
 			{
 				key: "atAssistant",
-				header: "At assistant",
+				header: __ompTranslate("At assistant"),
 				align: "right",
 				sort: row => percent(row.atAssistant, row.messages),
 				render: row => (
-					<span className="num" title={`${formatInteger(row.atAssistant)} messages`}>
+					<span className="num" title={__ompTranslate("{0} messages", `${formatInteger(row.atAssistant)}`)}>
 						{rate(row.atAssistant, row.messages)}
 					</span>
 				),
 			},
 			{
 				key: "angry",
-				header: "Angry",
+				header: __ompTranslate("Angry"),
 				align: "right",
 				sort: row => percent(row.angry, row.messages),
 				render: row => (
-					<span className={row.angry > 0 ? "num tone-bad" : "num"} title={`${formatInteger(row.angry)} messages`}>
+					<span
+						className={row.angry > 0 ? "num tone-bad" : "num"}
+						title={__ompTranslate("{0} messages", `${formatInteger(row.angry)}`)}
+					>
 						{rate(row.angry, row.messages)}
 					</span>
 				),
@@ -907,8 +950,8 @@ function FrustrationTable({
 	return (
 		<Card
 			index={3}
-			title="Model versions"
-			description="Rates are shares of user messages; rows follow the chart filters."
+			title={__ompTranslate("Model versions")}
+			description={__ompTranslate("Rates are shares of user messages; rows follow the chart filters.")}
 			flush
 			stale={stale}
 		>
@@ -917,7 +960,7 @@ function FrustrationTable({
 				rowKey={row => row.key}
 				columns={columns}
 				dense
-				empty={<EmptyState title="No model versions match the filters" />}
+				empty={<EmptyState title={__ompTranslate("No model versions match the filters")} />}
 			/>
 		</Card>
 	);

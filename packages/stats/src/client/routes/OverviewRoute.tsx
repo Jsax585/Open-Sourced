@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getOverviewStats, getRecentRequests } from "../api";
@@ -42,12 +43,16 @@ export interface OverviewRouteProps {
 type ActivityMetric = "requests" | "tokens" | "cost";
 
 const ACTIVITY_OPTIONS = [
-	{ value: "requests" as const, label: "Requests" },
-	{ value: "tokens" as const, label: "Tokens" },
-	{ value: "cost" as const, label: "Cost" },
+	{ value: "requests" as const, label: __ompTranslate("Requests") },
+	{ value: "tokens" as const, label: __ompTranslate("Tokens") },
+	{ value: "cost" as const, label: __ompTranslate("Cost") },
 ];
 
-const AGENT_LABEL: Record<AgentType, string> = { main: "Main agent", subagent: "Subagents", advisor: "Advisor" };
+const AGENT_LABEL: Record<AgentType, string> = {
+	main: __ompTranslate("Main agent"),
+	subagent: __ompTranslate("Subagents"),
+	advisor: __ompTranslate("Advisor"),
+};
 const AGENT_COLOR: Record<AgentType, string> = {
 	main: "var(--chart-primary)",
 	subagent: "var(--chart-secondary)",
@@ -55,10 +60,10 @@ const AGENT_COLOR: Record<AgentType, string> = {
 };
 
 const TOKEN_MIX = [
-	{ key: "input", label: "Uncached input", color: "#5b8cff" },
-	{ key: "cacheRead", label: "Cache read", color: "var(--chart-primary)" },
-	{ key: "cacheWrite", label: "Cache write", color: "#f5b54a" },
-	{ key: "output", label: "Output", color: "var(--chart-secondary)" },
+	{ key: "input", label: __ompTranslate("Uncached input"), color: "#5b8cff" },
+	{ key: "cacheRead", label: __ompTranslate("Cache read"), color: "var(--chart-primary)" },
+	{ key: "cacheWrite", label: __ompTranslate("Cache write"), color: "#f5b54a" },
+	{ key: "output", label: __ompTranslate("Output"), color: "var(--chart-secondary)" },
 ] as const;
 
 export function OverviewRoute({ active, range, onRequestClick }: OverviewRouteProps) {
@@ -86,73 +91,118 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 	const chartSeries =
 		metric === "requests"
 			? [
-					{ key: "ok", label: "Succeeded", color: "var(--chart-primary)", values: series.requests },
-					{ key: "err", label: "Failed", color: "var(--bad)", values: series.errors },
+					{
+						key: "ok",
+						label: __ompTranslate("Succeeded"),
+						color: "var(--chart-primary)",
+						values: series.requests,
+					},
+					{ key: "err", label: __ompTranslate("Failed"), color: "var(--bad)", values: series.errors },
 				]
 			: metric === "tokens"
-				? [{ key: "tokens", label: "Tokens", color: "var(--chart-primary)", values: series.tokens }]
-				: [{ key: "cost", label: "API-equivalent", color: "var(--chart-secondary)", values: series.cost }];
+				? [{ key: "tokens", label: __ompTranslate("Tokens"), color: "var(--chart-primary)", values: series.tokens }]
+				: [
+						{
+							key: "cost",
+							label: __ompTranslate("API-equivalent"),
+							color: "var(--chart-secondary)",
+							values: series.cost,
+						},
+					];
 
 	return (
 		<div className="page">
-			<PageHeader title="Overview" description={`Everything omp did across your sessions in ${meta.windowLabel}.`} />
+			<PageHeader
+				title={__ompTranslate("Overview")}
+				description={__ompTranslate("Everything omp did across your sessions in {0}.", `${meta.windowLabel}`)}
+			/>
 
 			<QueryView query={overview} skeleton={<ChartSkeleton height={112} />}>
 				{({ overall }) => (
 					<div data-stale={overview.stale} className="stack" style={{ gap: 16 }}>
 						<StatGrid min={190}>
 							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
+								label={__ompTranslate("API-equivalent cost")}
+								title={__ompTranslate("What this usage would cost at public API rates")}
 								value={formatEstimatedCost(overall.totalCost, overall.unpricedRequests)}
 								hint={
 									overall.unpricedRequests > 0
-										? `${formatInteger(overall.unpricedRequests)} unpriced`
+										? __ompTranslate("{0} unpriced", `${formatInteger(overall.unpricedRequests)}`)
 										: undefined
 								}
 								spark={series.cost}
 								sparkColor="var(--chart-secondary)"
 							/>
 							<Stat
-								label="Requests"
+								label={__ompTranslate("Requests")}
 								value={formatInteger(overall.totalRequests)}
-								hint={`${formatInteger(overall.failedRequests)} failed`}
+								hint={__ompTranslate(
+									"{0} failed\u0004stats.overview.count",
+									`${formatInteger(overall.failedRequests)}`,
+								)}
 								spark={series.all}
 							/>
 							<Stat
-								label="Conversation tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={__ompTranslate("Conversation tokens")}
+								title={__ompTranslate("Uncached input + cache reads + cache writes + output")}
 								value={formatCompact(sumConversationTokens(overall))}
-								hint={`${formatCompact(overall.totalOutputTokens)} output`}
+								hint={__ompTranslate("{0} output", `${formatCompact(overall.totalOutputTokens)}`)}
 								spark={series.tokens}
 							/>
 							<Stat
-								label="Cache rate"
-								title="Cache reads ÷ (uncached input + cache reads)"
+								label={__ompTranslate("Cache rate")}
+								title={__ompTranslate("Cache reads ÷ (uncached input + cache reads)")}
 								value={formatPercent(overall.cacheRate)}
-								hint={`${formatPercent(overall.cacheSavings)} saved`}
+								hint={__ompTranslate("{0} saved", `${formatPercent(overall.cacheSavings)}`)}
 							/>
 							<Stat
-								label="Error rate"
+								label={__ompTranslate("Error rate")}
 								value={formatErrorRate(overall.errorRate)}
-								hint={`${formatInteger(overall.successfulRequests)} succeeded`}
+								hint={__ompTranslate(
+									"{0} succeeded\u0004stats.overview.count",
+									`${formatInteger(overall.successfulRequests)}`,
+								)}
 								spark={series.errors}
 								sparkColor="var(--bad)"
 							/>
 						</StatGrid>
 						<StatGrid min={140}>
-							<Stat size="sm" label="Uncached input" value={formatCompact(overall.totalInputTokens)} />
-							<Stat size="sm" label="Cache read" value={formatCompact(overall.totalCacheReadTokens)} />
-							<Stat size="sm" label="Cache write" value={formatCompact(overall.totalCacheWriteTokens)} />
-							<Stat size="sm" label="Output" value={formatCompact(overall.totalOutputTokens)} />
 							<Stat
 								size="sm"
-								label="Premium requests"
+								label={__ompTranslate("Uncached input")}
+								value={formatCompact(overall.totalInputTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={__ompTranslate("Cache read")}
+								value={formatCompact(overall.totalCacheReadTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={__ompTranslate("Cache write")}
+								value={formatCompact(overall.totalCacheWriteTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={__ompTranslate("Output")}
+								value={formatCompact(overall.totalOutputTokens)}
+							/>
+							<Stat
+								size="sm"
+								label={__ompTranslate("Premium requests")}
 								value={formatInteger(Math.round(overall.totalPremiumRequests * 100) / 100)}
 							/>
-							<Stat size="sm" label="Tokens/s" value={formatTokensPerSecond(overall.avgTokensPerSecond)} />
-							<Stat size="sm" label="Avg latency" value={formatDurationMs(overall.avgDuration)} />
-							<Stat size="sm" label="Avg TTFT" value={formatDurationMs(overall.avgTtft)} />
+							<Stat
+								size="sm"
+								label={__ompTranslate("Tokens/s")}
+								value={formatTokensPerSecond(overall.avgTokensPerSecond)}
+							/>
+							<Stat
+								size="sm"
+								label={__ompTranslate("Avg latency")}
+								value={formatDurationMs(overall.avgDuration)}
+							/>
+							<Stat size="sm" label={__ompTranslate("Avg TTFT")} value={formatDurationMs(overall.avgTtft)} />
 						</StatGrid>
 					</div>
 				)}
@@ -161,8 +211,11 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title="Activity"
-					description={`Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}`}
+					title={__ompTranslate("Activity")}
+					description={__ompTranslate(
+						"Per {0}",
+						`${meta.bucketMs < 3_600_000 ? __ompTranslate("5 minutes") : meta.bucketMs < 86_400_000 ? __ompTranslate("hour") : __ompTranslate("day")}`,
+					)}
 					actions={<Segmented size="sm" options={ACTIVITY_OPTIONS} value={metric} onChange={setMetric} />}
 					stale={overview.stale}
 				>
@@ -179,7 +232,12 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 					</QueryView>
 				</Card>
 
-				<Card index={2} title="Token mix" description="Where conversation tokens went" stale={overview.stale}>
+				<Card
+					index={2}
+					title={__ompTranslate("Token mix")}
+					description={__ompTranslate("Where conversation tokens went")}
+					stale={overview.stale}
+				>
 					<QueryView query={overview} skeleton={<ChartSkeleton height={260} />}>
 						{({ overall, byAgentType }) => {
 							const mix = {
@@ -252,7 +310,7 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 						<Dot tone="live" pulse /> Latest requests
 					</>
 				}
-				description="Most recent model calls across every session"
+				description={__ompTranslate("Most recent model calls across every session")}
 				actions={
 					<a className="btn" data-size="sm" data-variant="ghost" href={`#/requests?range=${range}`}>
 						All requests <ArrowRight size={13} />
@@ -279,37 +337,41 @@ export function OverviewRoute({ active, range, onRequestClick }: OverviewRoutePr
 const REQUEST_COLUMNS = [
 	{
 		key: "model",
-		header: "Model",
+		header: __ompTranslate("Model"),
 		render: (row: MessageStats) => <LabelCell primary={row.model} secondary={row.provider} />,
 	},
 	{
 		key: "time",
-		header: "When",
+		header: __ompTranslate("When"),
 		render: (row: MessageStats) => <span className="muted">{formatRelativeTime(row.timestamp)}</span>,
 	},
 	{
 		key: "tokens",
-		header: "Tokens",
+		header: __ompTranslate("Tokens"),
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
 	},
 	{
 		key: "cost",
-		header: "Cost",
+		header: __ompTranslate("Cost"),
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatMessageCost(row, 4)}</span>,
 	},
 	{
 		key: "duration",
-		header: "Duration",
+		header: __ompTranslate("Duration"),
 		align: "right" as const,
 		render: (row: MessageStats) => <span className="num">{formatDurationMs(row.duration)}</span>,
 	},
 	{
 		key: "status",
-		header: "Status",
+		header: __ompTranslate("Status"),
 		align: "right" as const,
 		render: (row: MessageStats) =>
-			row.errorMessage ? <Badge tone="bad">Failed</Badge> : <Badge tone="ok">OK</Badge>,
+			row.errorMessage ? (
+				<Badge tone="bad">{__ompTranslate("Failed")}</Badge>
+			) : (
+				<Badge tone="ok">{__ompTranslate("OK")}</Badge>
+			),
 	},
 ];

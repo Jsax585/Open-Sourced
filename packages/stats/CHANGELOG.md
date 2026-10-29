@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added opt-in Korean dashboard messages and host-selected language-pack initialization
+
 ## [18.13.3] - 2026-10-28
 
 ### Changed

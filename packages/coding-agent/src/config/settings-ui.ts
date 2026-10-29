@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { SETTING_TABS, type SettingsDisplayEntry, type SettingsHost } from "@oh-my-pi/pi-tui/overlays/settings-defs";
@@ -46,8 +47,8 @@ const CONDITIONS: Record<string, () => boolean> = {
 function envNote(setting: AnySetting): string {
 	if (!setting.envName || setting.envValue() === undefined) return "";
 	return setting.envFallback
-		? ` Unset, it falls back to $${setting.envName}.`
-		: ` $${setting.envName} overrides this setting while it is set.`;
+		? __ompTranslate(" Unset, it falls back to ${0}.", `${setting.envName}`)
+		: __ompTranslate(" ${0} overrides this setting while it is set.", `${setting.envName}`);
 }
 
 /**
@@ -62,11 +63,12 @@ export function createSettingsHost(): SettingsHost {
 			const ui = setting.ui;
 			if (ui?.tab !== tab) continue;
 			const note = envNote(setting);
+			const description = __ompTranslate(ui.description);
 			entries.push({
 				path: setting.id,
 				type: setting.type,
 				defaultValue: setting.default,
-				ui: note ? { ...ui, description: `${ui.description}${note}` } : ui,
+				ui: note || description !== ui.description ? { ...ui, description: description + note } : ui,
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
 				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
@@ -75,7 +77,7 @@ export function createSettingsHost(): SettingsHost {
 	}
 	const resolve = (path: string): AnySetting => {
 		const setting = lookup(path);
-		if (!setting) throw new Error(`Unknown setting: ${path}`);
+		if (!setting) throw new Error(__ompTranslate("Unknown setting: {0}", `${path}`));
 		return setting;
 	};
 	return {

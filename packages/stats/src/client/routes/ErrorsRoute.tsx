@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ArrowUpRight, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { getRecentErrors } from "../api";
@@ -123,8 +124,11 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 	return (
 		<div className="page">
 			<PageHeader
-				title="Errors"
-				description={`Failed model requests in ${meta.windowLabel}, grouped by error signature. Open a failure for its full payload.`}
+				title={__ompTranslate("Errors")}
+				description={__ompTranslate(
+					"Failed model requests in {0}, grouped by error signature. Open a failure for its full payload.",
+					`${meta.windowLabel}`,
+				)}
 			/>
 
 			<QueryView query={errors} skeleton={<Skeleton height={96} style={{ borderRadius: 12 }} />}>
@@ -132,25 +136,37 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 					<div data-stale={errors.stale}>
 						<StatGrid min={170}>
 							<Stat
-								label="Failures"
+								label={__ompTranslate("Failures")}
 								value={formatInteger(loaded)}
-								hint={complete ? `in ${meta.windowLabel}` : `latest ${formatInteger(loaded)} loaded`}
+								hint={
+									complete
+										? __ompTranslate("in {0}\u0004stats.errors.time-range", `${meta.windowLabel}`)
+										: __ompTranslate("latest {0} loaded", `${formatInteger(loaded)}`)
+								}
 							/>
 							<Stat
-								label="Signatures"
-								title="Distinct error messages after normalizing ids and numbers"
+								label={__ompTranslate("Signatures")}
+								title={__ompTranslate("Distinct error messages after normalizing ids and numbers")}
 								value={formatInteger(view.groups.length)}
-								hint={view.groups[0] ? `top: ${formatInteger(view.groups[0].count)} failures` : undefined}
+								hint={
+									view.groups[0]
+										? __ompTranslate("top: {0} failures", `${formatInteger(view.groups[0].count)}`)
+										: undefined
+								}
 							/>
 							<Stat
-								label="Affected models"
+								label={__ompTranslate("Affected models")}
 								value={formatInteger(view.models.length)}
 								hint={view.models[0]?.model}
 							/>
 							<Stat
-								label="Last failure"
+								label={__ompTranslate("Last failure")}
 								value={view.newest ? formatRelativeTime(view.newest.timestamp) : "–"}
-								hint={view.newest ? formatTimestamp(view.newest.timestamp) : `none in ${meta.windowLabel}`}
+								hint={
+									view.newest
+										? formatTimestamp(view.newest.timestamp)
+										: __ompTranslate("none in {0}", `${meta.windowLabel}`)
+								}
 							/>
 						</StatGrid>
 					</div>
@@ -160,8 +176,10 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 			<div className="grid grid-main-side">
 				<Card
 					index={1}
-					title="Error signatures"
-					description="Same message with ids and counters normalized. Select one to filter the failures below."
+					title={__ompTranslate("Error signatures")}
+					description={__ompTranslate(
+						"Same message with ids and counters normalized. Select one to filter the failures below.",
+					)}
 					flush
 					stale={errors.stale}
 				>
@@ -172,7 +190,7 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 						empty={
 							<EmptyState
 								title={`No failures in ${meta.windowLabel}`}
-								hint="Every request succeeded or was aborted."
+								hint={__ompTranslate("Every request succeeded or was aborted.")}
 							/>
 						}
 					>
@@ -198,15 +216,15 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 
 				<Card
 					index={2}
-					title="By model"
-					description="Failures per model. Select one to filter."
+					title={__ompTranslate("By model")}
+					description={__ompTranslate("Failures per model. Select one to filter.")}
 					stale={errors.stale}
 				>
 					<QueryView
 						query={errors}
 						skeleton={<Skeleton height={180} />}
 						isEmpty={rows => rows.length === 0}
-						empty={<EmptyState title="No affected models" />}
+						empty={<EmptyState title={__ompTranslate("No affected models")} />}
 					>
 						{() => (
 							<BarList
@@ -230,11 +248,16 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 
 			<Card
 				index={3}
-				title="Failures"
+				title={__ompTranslate("Failures")}
 				description={
 					errors.data === null
-						? "Loading failures…"
-						: `${formatInteger(filtered.length)} of ${formatInteger(loaded)} failures, newest first`
+						? __ompTranslate("Loading failures…")
+						: ((__ompTranslateValue0, __ompTranslateValue1) =>
+								__ompTranslate(
+									"{1} of {0} failures, newest first",
+									__ompTranslateValue1,
+									__ompTranslateValue0,
+								))(`${formatInteger(filtered.length)}`, `${formatInteger(loaded)}`)
 				}
 				actions={
 					<>
@@ -261,7 +284,11 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 								<X size={12} />
 							</button>
 						)}
-						<SearchInput value={search} onChange={setSearch} placeholder="Message, model or project" />
+						<SearchInput
+							value={search}
+							onChange={setSearch}
+							placeholder={__ompTranslate("Message, model or project")}
+						/>
 					</>
 				}
 				flush
@@ -283,7 +310,12 @@ export function ErrorsRoute({ active, range, onRequestClick }: ErrorsRouteProps)
 							initialSort={{ key: "time", dir: "desc" }}
 							limit={50}
 							dense
-							empty={<EmptyState title="No failures match" hint="Clear the search or the selected filters." />}
+							empty={
+								<EmptyState
+									title={__ompTranslate("No failures match")}
+									hint={__ompTranslate("Clear the search or the selected filters.")}
+								/>
+							}
 						/>
 					)}
 				</QueryView>
@@ -296,7 +328,7 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 	return [
 		{
 			key: "signature",
-			header: "Signature",
+			header: __ompTranslate("Signature"),
 			wrap: true,
 			sort: group => group.signature,
 			render: group => (
@@ -307,18 +339,22 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 		},
 		{
 			key: "models",
-			header: "Models",
+			header: __ompTranslate("Models"),
 			sort: group => group.models.length,
 			render: group => (
 				<LabelCell
 					primary={<span className="mono">{group.models[0]?.model}</span>}
-					secondary={group.models.length > 1 ? `+${group.models.length - 1} more` : group.models[0]?.provider}
+					secondary={
+						group.models.length > 1
+							? __ompTranslate("+{0} more", `${group.models.length - 1}`)
+							: group.models[0]?.provider
+					}
 				/>
 			),
 		},
 		{
 			key: "last",
-			header: "Last seen",
+			header: __ompTranslate("Last seen"),
 			sort: group => group.lastSeen,
 			render: group => (
 				<span className="muted" title={formatTimestamp(group.lastSeen)}>
@@ -328,7 +364,7 @@ function buildGroupColumns(maxCount: number): Column<ErrorGroupView>[] {
 		},
 		{
 			key: "count",
-			header: "Failures",
+			header: __ompTranslate("Failures"),
 			align: "right",
 			width: 120,
 			sort: group => group.count,
@@ -370,7 +406,7 @@ function SignatureDetail({ group, onRequestClick }: { group: ErrorGroupView; onR
 const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	{
 		key: "time",
-		header: "When",
+		header: __ompTranslate("When"),
 		width: 120,
 		sort: row => row.timestamp,
 		render: row => (
@@ -381,23 +417,23 @@ const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "model",
-		header: "Model",
+		header: __ompTranslate("Model"),
 		sort: row => row.model,
 		render: row => <LabelCell primary={<span className="mono">{row.model}</span>} secondary={row.provider} />,
 	},
 	{
 		key: "error",
-		header: "Error",
+		header: __ompTranslate("Error"),
 		sort: row => row.errorMessage ?? "",
 		render: row => (
 			<span className="errors-message" title={row.errorMessage ?? undefined}>
-				{row.errorMessage ?? "Unknown error"}
+				{row.errorMessage ?? __ompTranslate("Unknown error")}
 			</span>
 		),
 	},
 	{
 		key: "project",
-		header: "Project",
+		header: __ompTranslate("Project"),
 		sort: row => row.folder,
 		render: row => (
 			<span className="mono muted" title={row.folder}>
@@ -407,15 +443,15 @@ const FAILURE_COLUMNS: readonly Column<MessageStats>[] = [
 	},
 	{
 		key: "tokens",
-		header: "Tokens",
+		header: __ompTranslate("Tokens"),
 		align: "right",
 		sort: row => row.usage.totalTokens,
 		render: row => <span className="num">{formatInteger(row.usage.totalTokens)}</span>,
 	},
 	{
 		key: "cost",
-		header: "Cost",
-		title: "API-equivalent estimate",
+		header: __ompTranslate("Cost"),
+		title: __ompTranslate("API-equivalent estimate"),
 		align: "right",
 		sort: row => row.usage.cost.total,
 		render: row => <span className="num">{formatMessageCost(row, 4)}</span>,

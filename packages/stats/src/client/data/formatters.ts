@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { format, formatDistanceToNow } from "@oh-my-pi/pi-utils/dates";
 import type { MessageStats } from "../types";
 
@@ -27,7 +28,7 @@ export function formatCost(value: number, digits?: number): string {
 
 /** Format an API-equivalent estimate, using N/A when all usage is unpriced. */
 export function formatEstimatedCost(value: number, unpricedRequests: number, digits?: number): string {
-	return value === 0 && unpricedRequests > 0 ? "N/A" : formatCost(value, digits);
+	return value === 0 && unpricedRequests > 0 ? __ompTranslate("N/A") : formatCost(value, digits);
 }
 
 /**
@@ -67,15 +68,16 @@ export function formatDurationMs(value: number | null, digits?: number): string 
 	if (value === null) return "-";
 	const sec = value / 1000;
 	const d = digits !== undefined ? digits : sec < 1 ? 2 : 1;
-	return `${sec.toFixed(d)}s`;
+	return __ompTranslate("{0}s", `${sec.toFixed(d)}`);
 }
 
 /** Wall-clock length: seconds below a minute, then `17m 41s` / `2h 05m`. */
 export function formatElapsed(ms: number): string {
 	if (ms < 60_000) return formatDurationMs(ms);
 	const totalMin = Math.floor(ms / 60_000);
-	if (totalMin < 60) return `${totalMin}m ${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}s`;
-	return `${Math.floor(totalMin / 60)}h ${String(totalMin % 60).padStart(2, "0")}m`;
+	if (totalMin < 60)
+		return __ompTranslate("{0}m {1}s", `${totalMin}`, `${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`);
+	return __ompTranslate("{0}h {1}m", `${Math.floor(totalMin / 60)}`, `${String(totalMin % 60).padStart(2, "0")}`);
 }
 
 export function formatTokensPerSecond(value: number | null): string {
@@ -89,12 +91,12 @@ export function formatRelativeTime(timestamp: number): string {
 
 /** Absolute local date and time to the second ("Sep 28, 14:03:22"). */
 export function formatTimestamp(timestamp: number): string {
-	return format(new Date(timestamp), "MMM d, HH:mm:ss");
+	return format(new Date(timestamp), __ompTranslate("MMM d, HH:mm:ss"));
 }
 
 /** Project folder as stored by ingest (`/work-pi/`), without the slashes. */
 export function formatFolder(folder: string): string {
-	return folder.replace(/^\/+|\/+$/g, "") || "(root)";
+	return folder.replace(/^\/+|\/+$/g, "") || __ompTranslate("(root)");
 }
 
 export function formatBytes(value: number): string {

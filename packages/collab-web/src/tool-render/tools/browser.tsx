@@ -1,4 +1,5 @@
 /** `browser` — drive a Chromium tab: open/close named tabs, run puppeteer scripts. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, CodeBlock, ResultImages, ResultText, type Tone } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -47,8 +48,8 @@ function actionTone(action: string): Tone | undefined {
 
 /** Mirrors the TUI's `describeBrowser`: explicit app args win over reported mode. */
 function describeBrowser(app: AppArg | null, details: BrowserDetails): string | null {
-	if (app?.cdpUrl) return `connected ${app.cdpUrl}`;
-	if (app?.path) return `spawned ${shortenPath(app.path)}`;
+	if (app?.cdpUrl) return __ompTranslate("connected {0}", `${app.cdpUrl}`);
+	if (app?.path) return __ompTranslate("spawned {0}", `${shortenPath(app.path)}`);
 	return details.browser;
 }
 
@@ -61,8 +62,8 @@ function Summary({ args, result }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			<Badge tone={actionTone(action)}>{action}</Badge>
-			<span>{closeAll ? "all tabs" : tab}</span>
-			{args.kill === true && <Badge tone="err">kill</Badge>}
+			<span>{closeAll ? __ompTranslate("all tabs") : tab}</span>
+			{args.kill === true && <Badge tone="err">{__ompTranslate("kill")}</Badge>}
 			{url && <span className="tv-faint">{truncate(shortenPath(url), 72)}</span>}
 		</>
 	);

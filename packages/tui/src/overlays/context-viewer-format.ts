@@ -3,6 +3,7 @@
  * and a span form (`describe`); keep the twins visually identical.
  */
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { CONTEXT_PRESENTATION } from "../chrome/context-presentation";
 import type { ContextCategoryId, ContextThinkingGroup, ContextViewEntry } from "../chrome/context-view-model";
@@ -39,8 +40,8 @@ export function safeLine(value: string): string {
 export function tokenEstimate(item: ContextViewEntry | ContextThinkingGroup): string {
 	// A grouped entry shares its group's estimate, which the group heading shows.
 	if ("thinkingGroup" in item && item.thinkingGroup) return "—";
-	if (item.interrupted) return "N/A · Interrupted";
-	return `${item.tokens.toLocaleString("en-US")} ${item.tokens === 1 ? "token" : "tokens"}`;
+	if (item.interrupted) return __ompTranslate("N/A · Interrupted");
+	return __ompTranslate("{0} token{1}", item.tokens.toLocaleString("en-US"), item.tokens === 1 ? "" : "s");
 }
 
 /** `[label] N tokens` as ANSI. */
@@ -69,8 +70,8 @@ export function groupHeaderLine(group: ContextThinkingGroup, category: ContextCa
 export function previewHint(selected: boolean): string {
 	const confirm = selected ? editorKey("tui.select.confirm") : "";
 	return (
-		theme.fg("dim", "  … more") +
-		(confirm ? theme.fg("dim", " · ") + theme.fg("accent", `${confirm} View Content`) : "")
+		theme.fg("dim", __ompTranslate("  … more")) +
+		(confirm ? theme.fg("dim", " · ") + theme.fg("accent", __ompTranslate("{0} View Content", confirm)) : "")
 	);
 }
 

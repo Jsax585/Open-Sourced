@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { AgentSnapshot, SessionEntry, SubagentLifecyclePayload, SubagentProgressPayload } from "@oh-my-pi/pi-wire";
 import { OctagonX, RotateCcw, SendHorizontal, X } from "lucide-react";
 import type { ReactNode } from "react";
@@ -162,7 +163,7 @@ export function AgentDrawer(props: {
 							revive
 						</button>
 					) : null}
-					<button type="button" className="ag-iconbtn" aria-label="close" onClick={onClose}>
+					<button type="button" className="ag-iconbtn" aria-label={__ompTranslate("close")} onClick={onClose}>
 						<X size={15} aria-hidden />
 					</button>
 				</div>
@@ -174,7 +175,7 @@ export function AgentDrawer(props: {
 						<span className="ag-stat-value">{fmtTokens(p.tokens)}</span>
 					</span>
 					{ctxPct !== null ? (
-						<span className="ag-stat" title={`context ${fmtTokens(p.contextTokens ?? 0)}`}>
+						<span className="ag-stat" title={__ompTranslate("context {0}", `${fmtTokens(p.contextTokens ?? 0)}`)}>
 							<span className="ag-stat-label">ctx</span>
 							<span className="ag-gauge">
 								<span
@@ -230,10 +231,15 @@ export function AgentDrawer(props: {
 					<input
 						className="ag-chat-input"
 						value={draft}
-						placeholder={`message ${agent.displayName}…`}
+						placeholder={__ompTranslate("message {0}…", `${agent.displayName}`)}
 						onChange={e => setDraft(e.target.value)}
 					/>
-					<button type="submit" className="ag-iconbtn" aria-label="send" disabled={draft.trim().length === 0}>
+					<button
+						type="submit"
+						className="ag-iconbtn"
+						aria-label={__ompTranslate("send")}
+						disabled={draft.trim().length === 0}
+					>
 						<SendHorizontal size={15} aria-hidden />
 					</button>
 				</form>

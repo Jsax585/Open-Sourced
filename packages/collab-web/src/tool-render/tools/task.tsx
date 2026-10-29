@@ -1,4 +1,5 @@
 /** `task` — spawn subagents: batch shape, streamed progress, per-agent results. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { AgentLink, Badge, Note, Output, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderHost, ToolRenderProps } from "../types";
@@ -46,8 +47,8 @@ function taskIdLabel(id: string): string {
 function fmtDuration(ms: number): string {
 	if (ms < 1000) return `${Math.round(ms)}ms`;
 	const s = ms / 1000;
-	if (s < 60) return `${s < 10 ? s.toFixed(1) : Math.round(s)}s`;
-	return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+	if (s < 60) return __ompTranslate("{0}s", `${s < 10 ? s.toFixed(1) : Math.round(s)}`);
+	return __ompTranslate("{0}m {1}s", `${Math.floor(s / 60)}`, `${Math.round(s % 60)}`);
 }
 
 function fmtCount(n: number): string {
@@ -88,7 +89,7 @@ function AgentResult({ res, host }: { res: Record<string, unknown>; host?: ToolR
 	const tokens = num(res.tokens);
 	if (tokens) stats.push(`${fmtCount(tokens)} tok`);
 	const requests = num(res.requests);
-	if (requests) stats.push(`${requests} req`);
+	if (requests) stats.push(__ompTranslate("{0} req", `${requests}`));
 	const durationMs = num(res.durationMs);
 	if (durationMs != null) stats.push(fmtDuration(durationMs));
 	const model = str(res.resolvedModel);
@@ -148,7 +149,7 @@ function AgentProgressRow({ p, host }: { p: Record<string, unknown>; host?: Tool
 	const intent = str(p.lastIntent) ?? str(p.currentTool);
 	const bits: string[] = [];
 	const toolCount = num(p.toolCount);
-	if (toolCount) bits.push(`${toolCount} tools`);
+	if (toolCount) bits.push(__ompTranslate("{0} tools", `${toolCount}`));
 	const tokens = num(p.tokens);
 	if (tokens) bits.push(`${fmtCount(tokens)} tok`);
 	const durationMs = num(p.durationMs);
@@ -211,7 +212,7 @@ function Body({ args, result, host }: ToolRenderProps): ReactNode {
 	return (
 		<>
 			{resume && <Badge>resume {resume}</Badge>}
-			{context && <Output text={context} maxLines={4} title="context" />}
+			{context && <Output text={context} maxLines={4} title={__ompTranslate("context")} />}
 			{tasks.length > 0 && (
 				<div className="tv-list">
 					{tasks.map((t, i) => (
@@ -230,7 +231,7 @@ function Body({ args, result, host }: ToolRenderProps): ReactNode {
 								{t.isolated && <Badge>isolated</Badge>}{" "}
 								{t.description && <span>{truncate(normalizeWs(t.description), 120)}</span>}
 							</Row>
-							{t.assignment && <Output text={t.assignment} maxLines={6} title="assignment" />}
+							{t.assignment && <Output text={t.assignment} maxLines={6} title={__ompTranslate("assignment")} />}
 						</div>
 					))}
 				</div>

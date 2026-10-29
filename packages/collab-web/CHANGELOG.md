@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit host-selected Korean UI initialization with English fallback and no statically bundled Korean catalog
+
 ## [18.13.3] - 2026-10-28
 
 ### Changed

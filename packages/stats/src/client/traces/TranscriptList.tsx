@@ -4,6 +4,7 @@
  * selection. Hand-rolled fixed-row virtualization (32px rows, spacer divs).
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { formatDurationMs } from "../data/formatters";
 import { EmptyState } from "../ui";
@@ -140,7 +141,7 @@ export const TranscriptList = memo(function TranscriptList({
 					})}
 				</div>
 			</div>
-			{rows.length === 0 && <EmptyState title="No matching events" />}
+			{rows.length === 0 && <EmptyState title={__ompTranslate("No matching events")} />}
 		</div>
 	);
 });

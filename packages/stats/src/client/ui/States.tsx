@@ -1,7 +1,14 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { Inbox, RotateCw, TriangleAlert } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 
-export function EmptyState({ title = "Nothing here yet", hint }: { title?: ReactNode; hint?: ReactNode }) {
+export function EmptyState({
+	title = __ompTranslate("Nothing here yet"),
+	hint,
+}: {
+	title?: ReactNode;
+	hint?: ReactNode;
+}) {
 	return (
 		<div className="empty">
 			<Inbox size={20} />

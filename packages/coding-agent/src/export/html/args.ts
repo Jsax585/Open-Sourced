@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 /**
  * `/export` argument parsing, split from `./index.ts` so slash-command
  * registries can parse arguments without eagerly loading the export module's
@@ -15,6 +16,6 @@ export function parseExportArgs(args: string): { outputPath?: string; useUserThe
 	const parts = args.trim().split(/\s+/).filter(Boolean);
 	const useUserThemes = parts.includes("--themes");
 	const paths = parts.filter(part => part !== "--themes");
-	if (paths.length > 1) throw new Error("Usage: /export [--themes] [path]");
+	if (paths.length > 1) throw new Error(__ompTranslate("Usage: /export [--themes] [path]"));
 	return { outputPath: paths[0], useUserThemes };
 }

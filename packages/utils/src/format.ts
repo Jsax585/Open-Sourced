@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 const SEC = 1_000;
 const MIN = 60 * SEC;
 const HOUR = 60 * MIN;
@@ -101,9 +102,9 @@ export function formatCount(label: string, count: number): string {
 }
 
 /**
- * Format age from seconds to human-readable string.
+ * Format age from seconds; model-facing callers select English independently of the UI.
  */
-export function formatAge(ageSeconds: number | null | undefined): string {
+export function formatAge(ageSeconds: number | null | undefined, language: "en" | "ui" = "ui"): string {
 	if (!ageSeconds) return "";
 	const mins = Math.floor(ageSeconds / 60);
 	const hours = Math.floor(mins / 60);
@@ -111,12 +112,12 @@ export function formatAge(ageSeconds: number | null | undefined): string {
 	const weeks = Math.floor(days / 7);
 	const months = Math.floor(days / 30);
 
-	if (months > 0) return `${months}mo ago`;
-	if (weeks > 0) return `${weeks}w ago`;
-	if (days > 0) return `${days}d ago`;
-	if (hours > 0) return `${hours}h ago`;
-	if (mins > 0) return `${mins}m ago`;
-	return "just now";
+	if (months > 0) return language === "en" ? `${months}mo ago` : __ompTranslate("{0}mo ago", `${months}`);
+	if (weeks > 0) return language === "en" ? `${weeks}w ago` : __ompTranslate("{0}w ago", `${weeks}`);
+	if (days > 0) return language === "en" ? `${days}d ago` : __ompTranslate("{0}d ago", `${days}`);
+	if (hours > 0) return language === "en" ? `${hours}h ago` : __ompTranslate("{0}h ago", `${hours}`);
+	if (mins > 0) return language === "en" ? `${mins}m ago` : __ompTranslate("{0}m ago", `${mins}`);
+	return language === "en" ? "just now" : __ompTranslate("just now");
 }
 
 /**

@@ -4,6 +4,7 @@
  * formatting, and the contiguous bucket axis charts plot against.
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { format } from "@oh-my-pi/pi-utils/dates";
 import type { TimeRange } from "../types";
 
@@ -23,12 +24,37 @@ export interface RangeMeta {
 }
 
 const RANGE_META: Record<TimeRange, RangeMeta> = {
-	"1h": { label: "1h", windowLabel: "the last hour", spanMs: HOUR_MS, bucketMs: 5 * MINUTE_MS },
-	"24h": { label: "24h", windowLabel: "the last 24 hours", spanMs: DAY_MS, bucketMs: HOUR_MS },
-	"7d": { label: "7d", windowLabel: "the last 7 days", spanMs: 7 * DAY_MS, bucketMs: DAY_MS },
-	"30d": { label: "30d", windowLabel: "the last 30 days", spanMs: 30 * DAY_MS, bucketMs: DAY_MS },
-	"90d": { label: "90d", windowLabel: "the last 90 days", spanMs: 90 * DAY_MS, bucketMs: DAY_MS },
-	all: { label: "All", windowLabel: "all time", spanMs: null, bucketMs: DAY_MS },
+	"1h": {
+		label: __ompTranslate("1h"),
+		windowLabel: __ompTranslate("the last hour"),
+		spanMs: HOUR_MS,
+		bucketMs: 5 * MINUTE_MS,
+	},
+	"24h": {
+		label: __ompTranslate("24h"),
+		windowLabel: __ompTranslate("the last 24 hours"),
+		spanMs: DAY_MS,
+		bucketMs: HOUR_MS,
+	},
+	"7d": {
+		label: __ompTranslate("7d"),
+		windowLabel: __ompTranslate("the last 7 days"),
+		spanMs: 7 * DAY_MS,
+		bucketMs: DAY_MS,
+	},
+	"30d": {
+		label: __ompTranslate("30d"),
+		windowLabel: __ompTranslate("the last 30 days"),
+		spanMs: 30 * DAY_MS,
+		bucketMs: DAY_MS,
+	},
+	"90d": {
+		label: __ompTranslate("90d"),
+		windowLabel: __ompTranslate("the last 90 days"),
+		spanMs: 90 * DAY_MS,
+		bucketMs: DAY_MS,
+	},
+	all: { label: __ompTranslate("All"), windowLabel: __ompTranslate("all time"), spanMs: null, bucketMs: DAY_MS },
 };
 
 const MAX_BUCKETS = 1500;
@@ -42,14 +68,15 @@ export function rangeMeta(range: TimeRange): RangeMeta {
 
 /** Tick/tooltip label for a bucket start, precise enough for the bucket size. */
 export function formatBucket(timestamp: number, bucketMs: number): string {
-	if (bucketMs < DAY_MS) return format(new Date(timestamp), bucketMs < HOUR_MS ? "HH:mm" : "MMM d HH:mm");
-	return format(new Date(timestamp), "MMM d");
+	if (bucketMs < DAY_MS)
+		return format(new Date(timestamp), bucketMs < HOUR_MS ? "HH:mm" : __ompTranslate("MMM d HH:mm"));
+	return format(new Date(timestamp), __ompTranslate("MMM d"));
 }
 
 /** Compact axis tick for a bucket start. */
 export function formatTick(timestamp: number, bucketMs: number): string {
 	if (bucketMs < DAY_MS) return format(new Date(timestamp), "HH:mm");
-	return format(new Date(timestamp), "MMM d");
+	return format(new Date(timestamp), __ompTranslate("MMM d"));
 }
 
 /**

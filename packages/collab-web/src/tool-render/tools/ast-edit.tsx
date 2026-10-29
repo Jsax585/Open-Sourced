@@ -1,4 +1,5 @@
 /** `ast_edit` — structural AST rewrites: per-op pattern/replacement pairs, replacement counts, diffs. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, CodeBlock, DiffBlock, InvalidArg, Note, Output, PathText, ResultText, Row } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -99,14 +100,14 @@ function OpCell({ op, lang }: { op: AstEditOp; lang: string | null }): ReactNode
 	return (
 		<div className="tv-cell">
 			{op.pat ? (
-				<CodeBlock code={op.pat} lang={lang} title="pattern" maxLines={10} />
+				<CodeBlock code={op.pat} lang={lang} title={__ompTranslate("pattern")} maxLines={10} />
 			) : (
 				<InvalidArg what="pattern" />
 			)}
 			{op.out ? (
-				<CodeBlock code={op.out} lang={lang} title="replacement" maxLines={10} />
+				<CodeBlock code={op.out} lang={lang} title={__ompTranslate("replacement")} maxLines={10} />
 			) : (
-				<div className="tv-muted">deletion — matched code is removed</div>
+				<div className="tv-muted">{__ompTranslate("deletion — matched code is removed")}</div>
 			)}
 		</div>
 	);
@@ -168,7 +169,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 				<Output
 					text={details.parseErrors.join("\n")}
 					maxLines={6}
-					title={`parse issues (${parseErrorsTotal})`}
+					title={__ompTranslate("parse issues ({0})", `${parseErrorsTotal}`)}
 					variant="plain"
 				/>
 			)}

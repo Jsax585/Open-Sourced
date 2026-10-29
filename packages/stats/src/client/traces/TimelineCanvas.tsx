@@ -6,6 +6,7 @@
  * click-to-select, double-click-to-zoom.
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -49,11 +50,11 @@ const SPAN_RADIUS = 3;
 const DIM_ALPHA = 0.3;
 
 const LANE_ORDER: Array<{ kind: TraceSpanKind; label: string }> = [
-	{ kind: "turn", label: "Input" },
-	{ kind: "model", label: "Model" },
-	{ kind: "tool", label: "Tools" },
-	{ kind: "subagent", label: "Agents" },
-	{ kind: "background", label: "Bg" },
+	{ kind: "turn", label: __ompTranslate("Input") },
+	{ kind: "model", label: __ompTranslate("Model") },
+	{ kind: "tool", label: __ompTranslate("Tools") },
+	{ kind: "subagent", label: __ompTranslate("Agents") },
+	{ kind: "background", label: __ompTranslate("Bg") },
 ];
 
 interface LaneRow {
@@ -520,8 +521,8 @@ export function TimelineCanvas({
 									onClick={() => onToggleCollapse(block.track.id)}
 									aria-label={
 										collapsed.has(block.track.id)
-											? `Expand ${block.track.label}`
-											: `Collapse ${block.track.label}`
+											? __ompTranslate("Expand {0}", `${block.track.label}`)
+											: __ompTranslate("Collapse {0}", `${block.track.label}`)
 									}
 									className="traces-chevron"
 								>
@@ -561,7 +562,9 @@ export function TimelineCanvas({
 					style={cssSize}
 					tabIndex={0}
 					role="application"
-					aria-label="Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection."
+					aria-label={__ompTranslate(
+						"Trace timeline. W and S zoom, A and D pan, 0 fits all, F focuses the selection.",
+					)}
 					onPointerDown={handlePointerDown}
 					onPointerMove={handlePointerMove}
 					onPointerUp={handlePointerUp}

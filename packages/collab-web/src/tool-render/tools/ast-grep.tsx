@@ -1,4 +1,5 @@
 /** `ast_grep` — structural AST pattern search across files. */
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import type { ReactNode } from "react";
 import { Badge, Badges, CodeBlock, InvalidArg, Kv, KvGrid, Output, PathText, ResultText } from "../parts";
 import type { ToolRenderer, ToolRenderProps } from "../types";
@@ -88,7 +89,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						key={i}
 						code={pat}
 						lang={lang ?? undefined}
-						title={patterns.length > 1 ? `pattern ${i + 1}` : "pattern"}
+						title={patterns.length > 1 ? __ompTranslate("pattern {0}", `${i + 1}`) : __ompTranslate("pattern")}
 						maxLines={12}
 					/>
 				))
@@ -106,7 +107,7 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 						</Kv>
 					)}
 					{scopePath && (
-						<Kv k="scope">
+						<Kv k={__ompTranslate("scope")}>
 							<PathText path={scopePath} />
 						</Kv>
 					)}
@@ -117,7 +118,9 @@ function Body({ args, result }: ToolRenderProps): ReactNode {
 					text={parseErrors.join("\n")}
 					maxLines={6}
 					title={
-						parseErrorsTotal > parseErrors.length ? `parse issues (${parseErrorsTotal} total)` : "parse issues"
+						parseErrorsTotal > parseErrors.length
+							? __ompTranslate("parse issues ({0} total)", `${parseErrorsTotal}`)
+							: __ompTranslate("parse issues")
 					}
 				/>
 			)}

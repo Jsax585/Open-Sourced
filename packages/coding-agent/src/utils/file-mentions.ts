@@ -133,7 +133,7 @@ async function buildDirectoryListing(absolutePath: string): Promise<{ output: st
 				suffix = "/";
 			}
 			const ageSeconds = Math.floor((Date.now() - stat.mtimeMs) / 1000);
-			age = formatAge(ageSeconds);
+			age = formatAge(ageSeconds, "en");
 		} catch {
 			continue;
 		}

@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -546,9 +547,24 @@ export class CodexSessionStore implements ForeignSessionStore {
 		try {
 			records = await readJsonLines(info.path);
 		} catch (error) {
-			throw new Error(`Unable to read Codex session ${info.id} at ${info.path}`, { cause: error });
+			throw new Error(
+				((__ompTranslateValue0, __ompTranslateValue1) =>
+					__ompTranslate("Unable to read Codex session {1} at {0}", __ompTranslateValue1, __ompTranslateValue0))(
+					`${info.id}`,
+					`${info.path}`,
+				),
+				{ cause: error },
+			);
 		}
-		if (records.length === 0) throw new Error(`Codex session ${info.id} at ${info.path} is empty or malformed`);
+		if (records.length === 0)
+			throw new Error(
+				((__ompTranslateValue0, __ompTranslateValue1) =>
+					__ompTranslate(
+						"Codex session {1} at {0} is empty or malformed",
+						__ompTranslateValue1,
+						__ompTranslateValue0,
+					))(`${info.id}`, `${info.path}`),
+			);
 
 		const metadata = records.find(record => record.type === "session_meta" && isRecord(record.payload));
 		const cwd =

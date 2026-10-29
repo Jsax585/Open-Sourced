@@ -4,6 +4,7 @@
  * Handles `omp stats` subcommand for viewing AI usage statistics.
  */
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -83,12 +84,20 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 	// One-shot reports need fully ingested, fully rolled-up data before printing.
 	if (cmd.json || cmd.summary) {
 		const progress = createSyncProgressReporter();
-		process.stderr.write("Syncing session files...\n");
+		process.stderr.write(__ompTranslate("Syncing session files...\n"));
 		const { processed, files } = await syncAllSessions({ onProgress: progress.onProgress });
 		progress.finish();
 		await refreshRollups();
 		const total = await getTotalMessageCount();
-		process.stderr.write(`Synced ${processed} new entries from ${files} files (${total} total)\n\n`);
+		process.stderr.write(
+			((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+				__ompTranslate(
+					"Synced {1} new entries from {0} files ({2} total)\n\n",
+					__ompTranslateValue1,
+					__ompTranslateValue0,
+					__ompTranslateValue2,
+				))(`${processed}`, `${files}`, `${total}`),
+		);
 		if (cmd.json) {
 			console.log(JSON.stringify(await getDashboardStats(), null, 2));
 		} else {
@@ -105,16 +114,16 @@ export async function runStatsCommand(cmd: StatsCommandArgs): Promise<void> {
 		judge: async () => (await openStandaloneJudge(cwd, "stats_frustration")).judge,
 	});
 	const url = formatStatsDashboardUrl(hostname, port);
-	console.log(chalk.green(`Dashboard available at: ${url}`));
+	console.log(chalk.green(__ompTranslate("Dashboard available at: {0}", `${url}`)));
 
 	// Open browser
 	openPath(url);
 
-	console.log(`Press ${formatKeyHint("ctrl+c")} to stop\n`);
+	console.log(__ompTranslate("Press {0} to stop\n", `${formatKeyHint("ctrl+c")}`));
 
 	// Keep process running
 	process.on("SIGINT", () => {
-		console.log("\nShutting down...");
+		console.log(__ompTranslate("\nShutting down..."));
 		closeDb();
 		process.exit(0);
 	});

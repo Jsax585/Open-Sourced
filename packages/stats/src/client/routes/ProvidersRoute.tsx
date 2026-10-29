@@ -1,3 +1,4 @@
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n-browser";
 import { format } from "@oh-my-pi/pi-utils/dates";
 import { type ReactNode, useMemo, useState } from "react";
 import { getProviderDashboardStats, getProviderWindowStats } from "../api";
@@ -52,22 +53,24 @@ export interface ProvidersRouteProps {
 type BurnMetric = "tokens" | "cost" | "requests";
 
 const BURN_OPTIONS = [
-	{ value: "tokens" as const, label: "Tokens" },
-	{ value: "cost" as const, label: "Cost", title: "API-equivalent estimate" },
-	{ value: "requests" as const, label: "Requests" },
+	{ value: "tokens" as const, label: __ompTranslate("Tokens") },
+	{ value: "cost" as const, label: __ompTranslate("Cost"), title: __ompTranslate("API-equivalent estimate") },
+	{ value: "requests" as const, label: __ompTranslate("Requests") },
 ];
 
 /** Providers stacked individually in the burn chart; the rest fold into "Other". */
 const TOP_PROVIDERS = 6;
 
 const TOKEN_MIX = [
-	{ key: "input", label: "Uncached input", color: "#5b8cff" },
-	{ key: "cacheRead", label: "Cache read", color: "var(--chart-primary)" },
-	{ key: "cacheWrite", label: "Cache write", color: "#f5b54a" },
-	{ key: "output", label: "Output", color: "var(--chart-secondary)" },
+	{ key: "input", label: __ompTranslate("Uncached input"), color: "#5b8cff" },
+	{ key: "cacheRead", label: __ompTranslate("Cache read"), color: "var(--chart-primary)" },
+	{ key: "cacheWrite", label: __ompTranslate("Cache write"), color: "#f5b54a" },
+	{ key: "output", label: __ompTranslate("Output"), color: "var(--chart-secondary)" },
 ] as const;
 
-const SNAPSHOT_HINT = "Usage snapshots accumulate whenever usage limits are fetched (TUI footer, /usage, omp usage).";
+const SNAPSHOT_HINT = __ompTranslate(
+	"Usage snapshots accumulate whenever usage limits are fetched (TUI footer, /usage, omp usage).",
+);
 
 interface WindowRef {
 	provider: string;
@@ -146,8 +149,11 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 	return (
 		<div className="page">
 			<PageHeader
-				title="Providers"
-				description={`Burn, reliability and subscription headroom per provider over ${meta.windowLabel}.`}
+				title={__ompTranslate("Providers")}
+				description={__ompTranslate(
+					"Burn, reliability and subscription headroom per provider over {0}.",
+					`${meta.windowLabel}`,
+				)}
 			/>
 
 			<QueryView query={stats} skeleton={<ChartSkeleton height={112} />}>
@@ -155,34 +161,43 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 					<div data-stale={stats.stale}>
 						<StatGrid min={190}>
 							<Stat
-								label="Providers"
+								label={__ompTranslate("Providers")}
 								value={formatInteger(providers.length)}
-								hint={view.topProvider ? `Most tokens: ${view.topProvider.provider}` : undefined}
+								hint={
+									view.topProvider
+										? __ompTranslate("Most tokens: {0}", `${view.topProvider.provider}`)
+										: undefined
+								}
 							/>
 							<Stat
-								label="Requests"
+								label={__ompTranslate("Requests")}
 								value={formatInteger(t.requests)}
-								hint={`${formatInteger(t.failed)} failed`}
+								hint={__ompTranslate("{0} failed\u0004stats.provider.count", `${formatInteger(t.failed)}`)}
 								spark={view.spark.requests}
 							/>
 							<Stat
-								label="Tokens"
-								title="Uncached input + cache reads + cache writes + output"
+								label={__ompTranslate("Tokens")}
+								title={__ompTranslate("Uncached input + cache reads + cache writes + output")}
 								value={formatCompact(t.tokens)}
 								spark={view.spark.tokens}
 							/>
 							<Stat
-								label="API-equivalent cost"
-								title="What this usage would cost at public API rates"
+								label={__ompTranslate("API-equivalent cost")}
+								title={__ompTranslate("What this usage would cost at public API rates")}
 								value={formatEstimatedCost(t.cost, t.unpriced)}
-								hint={t.unpriced > 0 ? `${formatInteger(t.unpriced)} unpriced` : undefined}
+								hint={
+									t.unpriced > 0 ? __ompTranslate("{0} unpriced", `${formatInteger(t.unpriced)}`) : undefined
+								}
 								spark={view.spark.cost}
 								sparkColor="var(--chart-secondary)"
 							/>
 							<Stat
-								label="Error rate"
+								label={__ompTranslate("Error rate")}
 								value={formatErrorRate(t.requests > 0 ? t.failed / t.requests : 0)}
-								hint={`${formatInteger(t.requests - t.failed)} succeeded`}
+								hint={__ompTranslate(
+									"{0} succeeded\u0004stats.provider.count",
+									`${formatInteger(t.requests - t.failed)}`,
+								)}
 							/>
 						</StatGrid>
 					</div>
@@ -191,11 +206,15 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 
 			<Card
 				index={1}
-				title="Provider totals"
+				title={__ompTranslate("Provider totals")}
 				description={
 					t.unpriced > 0
-						? `Cost is an API-equivalent estimate and excludes ${formatInteger(t.unpriced)} unpriced subscription request${t.unpriced === 1 ? "" : "s"}. Select a row for its token mix.`
-						: "Cost is an API-equivalent estimate. Select a row for its token mix."
+						? __ompTranslate(
+								"Cost is an API-equivalent estimate and excludes {0} unpriced subscription request{1}. Select a row for its token mix.",
+								`${formatInteger(t.unpriced)}`,
+								`${t.unpriced === 1 ? "" : "s"}`,
+							)
+						: __ompTranslate("Cost is an API-equivalent estimate. Select a row for its token mix.")
 				}
 				flush
 				stale={stats.stale}
@@ -208,11 +227,18 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 			<div className="grid grid-main-side">
 				<Card
 					index={2}
-					title="Burn by provider"
+					title={__ompTranslate("Burn by provider")}
 					description={
 						metric === "cost" && t.unpriced > 0
-							? `API-equivalent estimate per ${meta.bucketMs < 86_400_000 ? "hour" : "day"}; excludes unpriced subscription requests`
-							: `Per ${meta.bucketMs < 3_600_000 ? "5 minutes" : meta.bucketMs < 86_400_000 ? "hour" : "day"}, top ${TOP_PROVIDERS} providers stacked`
+							? __ompTranslate(
+									"API-equivalent estimate per {0}; excludes unpriced subscription requests",
+									`${meta.bucketMs < 86_400_000 ? __ompTranslate("hour") : __ompTranslate("day")}`,
+								)
+							: __ompTranslate(
+									"Per {0}, top {1} providers stacked",
+									`${meta.bucketMs < 3_600_000 ? __ompTranslate("5 minutes") : meta.bucketMs < 86_400_000 ? __ompTranslate("hour") : __ompTranslate("day")}`,
+									`${TOP_PROVIDERS}`,
+								)
 					}
 					actions={<Segmented size="sm" options={BURN_OPTIONS} value={metric} onChange={setMetric} />}
 					stale={stats.stale}
@@ -228,7 +254,7 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 									height={260}
 									format={burnFormat}
 									formatTooltip={metric === "cost" ? v => formatCost(v) : formatInteger}
-									emptyLabel="No provider activity in this range"
+									emptyLabel={__ompTranslate("No provider activity in this range")}
 								/>
 								<Legend
 									items={burnSeries.map(s => ({
@@ -252,8 +278,10 @@ export function ProvidersRoute({ active, range }: ProvidersRouteProps) {
 
 			<Card
 				index={4}
-				title="Subscription windows"
-				description="What one usage window buys you and how many accounts peak demand needs. Select a row to chart it."
+				title={__ompTranslate("Subscription windows")}
+				description={__ompTranslate(
+					"What one usage window buys you and how many accounts peak demand needs. Select a row to chart it.",
+				)}
 				flush
 				stale={windows.stale}
 			>
@@ -312,7 +340,7 @@ function ProviderTotalsTable({
 		return [
 			{
 				key: "provider",
-				header: "Provider",
+				header: __ompTranslate("Provider"),
 				sort: p => p.provider,
 				render: p => (
 					<span className="row" style={{ gap: 8 }}>
@@ -323,7 +351,7 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "requests",
-				header: "Requests",
+				header: __ompTranslate("Requests"),
 				align: "right",
 				sort: p => p.totalRequests,
 				render: p => (
@@ -332,7 +360,7 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "errors",
-				header: "Error rate",
+				header: __ompTranslate("Error rate"),
 				align: "right",
 				sort: p => (p.totalRequests > 0 ? p.failedRequests / p.totalRequests : 0),
 				render: p => {
@@ -349,16 +377,16 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "models",
-				header: "Models",
-				title: "Distinct models used through this provider",
+				header: __ompTranslate("Models"),
+				title: __ompTranslate("Distinct models used through this provider"),
 				align: "right",
 				sort: p => p.models,
 				render: p => <span className="num">{formatInteger(p.models)}</span>,
 			},
 			{
 				key: "tokens",
-				header: "Tokens",
-				title: "Uncached input + cache reads + cache writes + output",
+				header: __ompTranslate("Tokens"),
+				title: __ompTranslate("Uncached input + cache reads + cache writes + output"),
 				align: "right",
 				sort: p => p.totalTokens,
 				render: p => (
@@ -372,8 +400,8 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "share",
-				header: "Share",
-				title: "Fraction of all tokens in range",
+				header: __ompTranslate("Share"),
+				title: __ompTranslate("Fraction of all tokens in range"),
 				align: "right",
 				sort: p => p.totalTokens,
 				render: p => (
@@ -382,14 +410,18 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "cost",
-				header: "Cost",
-				title: "API-equivalent estimate",
+				header: __ompTranslate("Cost"),
+				title: __ompTranslate("API-equivalent estimate"),
 				align: "right",
 				sort: p => p.totalCost,
 				render: p => (
 					<span
 						className="num"
-						title={p.unpricedRequests > 0 ? `${formatInteger(p.unpricedRequests)} unpriced` : undefined}
+						title={
+							p.unpricedRequests > 0
+								? __ompTranslate("{0} unpriced", `${formatInteger(p.unpricedRequests)}`)
+								: undefined
+						}
 					>
 						{formatEstimatedCost(p.totalCost, p.unpricedRequests)}
 					</span>
@@ -397,16 +429,16 @@ function ProviderTotalsTable({
 			},
 			{
 				key: "tps",
-				header: "Tokens/s",
-				title: "Average output throughput",
+				header: __ompTranslate("Tokens/s"),
+				title: __ompTranslate("Average output throughput"),
 				align: "right",
 				sort: p => p.avgTokensPerSecond ?? -1,
 				render: p => <span className="num">{formatTokensPerSecond(p.avgTokensPerSecond)}</span>,
 			},
 			{
 				key: "premium",
-				header: "Premium",
-				title: "Premium requests (subscription multiplier units)",
+				header: __ompTranslate("Premium"),
+				title: __ompTranslate("Premium requests (subscription multiplier units)"),
 				align: "right",
 				sort: p => p.totalPremiumRequests,
 				render: p => (
@@ -428,7 +460,7 @@ function ProviderTotalsTable({
 			selectedKey={open}
 			onRowClick={p => setOpen(prev => (prev === p.provider ? null : p.provider))}
 			expanded={p => (p.provider === open ? <TokenMix provider={p} /> : null)}
-			empty={<EmptyState title="No requests in this range" />}
+			empty={<EmptyState title={__ompTranslate("No requests in this range")} />}
 		/>
 	);
 }
@@ -490,13 +522,13 @@ function PeakHoursCard({
 		const series: ChartSeries[] = [
 			{
 				key: "tokens",
-				label: "Tokens",
+				label: __ompTranslate("Tokens"),
 				color: "var(--chart-primary)",
 				values: tokens.map((v, hour) => (hasData && hour === peak ? null : v)),
 			},
 			{
 				key: "peak",
-				label: "Tokens (peak hour)",
+				label: __ompTranslate("Tokens (peak hour)"),
 				color: "var(--chart-secondary)",
 				values: tokens.map((v, hour) => (hasData && hour === peak ? v : null)),
 			},
@@ -509,20 +541,20 @@ function PeakHoursCard({
 	return (
 		<Card
 			index={3}
-			title="Peak burn hours"
+			title={__ompTranslate("Peak burn hours")}
 			description={
 				hours.hasData
-					? `Tokens by local hour of day; peak at ${hourLabel(hours.peak)}`
-					: "Tokens by local hour of day"
+					? __ompTranslate("Tokens by local hour of day; peak at {0}", `${hourLabel(hours.peak)}`)
+					: __ompTranslate("Tokens by local hour of day")
 			}
 			actions={
 				<select
 					className="input providers-select"
 					value={current}
 					onChange={e => setProvider(e.target.value)}
-					aria-label="Provider"
+					aria-label={__ompTranslate("Provider")}
 				>
-					<option value={ALL_PROVIDERS}>All providers</option>
+					<option value={ALL_PROVIDERS}>{__ompTranslate("All providers")}</option>
 					{providers.map(p => (
 						<option key={p.provider} value={p.provider}>
 							{p.provider}
@@ -540,15 +572,15 @@ function PeakHoursCard({
 				height={260}
 				showTotal={false}
 				formatTooltip={formatInteger}
-				emptyLabel="No activity in this range"
+				emptyLabel={__ompTranslate("No activity in this range")}
 				tooltipExtra={hour => (
 					<>
 						<div className="chart-tooltip-row">
-							<span className="chart-tooltip-label">Output</span>
+							<span className="chart-tooltip-label">{__ompTranslate("Output")}</span>
 							<span className="chart-tooltip-value">{formatInteger(hours.output[hour])}</span>
 						</div>
 						<div className="chart-tooltip-row">
-							<span className="chart-tooltip-label">Requests</span>
+							<span className="chart-tooltip-label">{__ompTranslate("Requests")}</span>
 							<span className="chart-tooltip-value">{formatInteger(hours.requests[hour])}</span>
 						</div>
 					</>
@@ -580,7 +612,7 @@ function WindowInsightsTable({
 			limit={12}
 			selectedKey={selected ? `${selected.provider}::${selected.windowKey}` : null}
 			onRowClick={i => onSelect({ provider: i.provider, windowKey: i.windowKey })}
-			empty={<EmptyState title="No usage snapshots in this range" hint={SNAPSHOT_HINT} />}
+			empty={<EmptyState title={__ompTranslate("No usage snapshots in this range")} hint={SNAPSHOT_HINT} />}
 		/>
 	);
 }
@@ -588,53 +620,57 @@ function WindowInsightsTable({
 const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	{
 		key: "window",
-		header: "Window",
+		header: __ompTranslate("Window"),
 		sort: i => `${i.provider} ${i.windowLabel}`,
 		render: i => <LabelCell primary={i.windowLabel} secondary={<span className="mono">{i.provider}</span>} />,
 	},
 	{
 		key: "accounts",
-		header: "Accounts",
-		title: "Accounts with at least one snapshot for this window in range",
+		header: __ompTranslate("Accounts"),
+		title: __ompTranslate("Accounts with at least one snapshot for this window in range"),
 		align: "right",
 		sort: i => i.accounts,
 		render: i => <span className="num">{formatInteger(i.accounts)}</span>,
 	},
 	{
 		key: "cycles",
-		header: "Resets",
-		title: "Window resets observed (drops in used fraction)",
+		header: __ompTranslate("Resets"),
+		title: __ompTranslate("Window resets observed (drops in used fraction)"),
 		align: "right",
 		sort: i => i.cycles,
 		render: i => <span className="num muted">{formatInteger(i.cycles)}</span>,
 	},
 	{
 		key: "consumed",
-		header: "Windows burned",
-		title: "Subscription-window equivalents consumed in range (sum of used-fraction increases across accounts)",
+		header: __ompTranslate("Windows burned"),
+		title: __ompTranslate(
+			"Subscription-window equivalents consumed in range (sum of used-fraction increases across accounts)",
+		),
 		align: "right",
 		sort: i => i.fractionConsumed,
 		render: i => <span className="num">{i.fractionConsumed.toFixed(2)}</span>,
 	},
 	{
 		key: "capacity",
-		header: "Tokens / window",
-		title: "Provider tokens burned in range ÷ windows burned — what one full window is worth",
+		header: __ompTranslate("Tokens / window"),
+		title: __ompTranslate("Provider tokens burned in range ÷ windows burned — what one full window is worth"),
 		align: "right",
 		sort: i => i.estTokensPerWindow ?? -1,
 		render: i =>
 			i.estTokensPerWindow !== null ? (
 				<span className="num">{formatCompact(i.estTokensPerWindow)}</span>
 			) : (
-				<span className="dim" title="Too little of the window was consumed to extrapolate">
+				<span className="dim" title={__ompTranslate("Too little of the window was consumed to extrapolate")}>
 					–
 				</span>
 			),
 	},
 	{
 		key: "peak",
-		header: "Peak utilization",
-		title: "Peak of summed used fraction across accounts at any sampled instant; the bar is relative to fleet capacity",
+		header: __ompTranslate("Peak utilization"),
+		title: __ompTranslate(
+			"Peak of summed used fraction across accounts at any sampled instant; the bar is relative to fleet capacity",
+		),
 		align: "right",
 		sort: i => i.peakConcurrentFraction,
 		render: i => {
@@ -651,8 +687,8 @@ const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	},
 	{
 		key: "ideal",
-		header: "Accounts needed",
-		title: "Accounts needed to keep peak demand under 90% of fleet capacity",
+		header: __ompTranslate("Accounts needed"),
+		title: __ompTranslate("Accounts needed to keep peak demand under 90% of fleet capacity"),
 		align: "right",
 		sort: i => i.idealAccounts - i.accounts,
 		render: i =>
@@ -666,8 +702,8 @@ const INSIGHT_COLUMNS: Column<ProviderWindowInsight>[] = [
 	},
 	{
 		key: "exhausted",
-		header: "Exhaustions",
-		title: "Transitions into an exhausted state observed in range",
+		header: __ompTranslate("Exhaustions"),
+		title: __ompTranslate("Transitions into an exhausted state observed in range"),
 		align: "right",
 		sort: i => i.exhaustedEvents,
 		render: i =>
@@ -802,11 +838,16 @@ function WindowUtilizationCard({
 	return (
 		<Card
 			index={5}
-			title="Window utilization"
+			title={__ompTranslate("Window utilization")}
 			description={
 				chart.buckets.length > 0
-					? `${windowLabel ?? "Window"} used fraction per account, ${format(new Date(chart.first), "MMM d HH:mm")} – ${format(new Date(chart.last), "MMM d HH:mm")}`
-					: "Recorded limit utilization per account"
+					? __ompTranslate(
+							"{0} used fraction per account, {1} – {2}",
+							`${windowLabel ?? __ompTranslate("Window")}`,
+							`${format(new Date(chart.first), __ompTranslate("MMM d HH:mm"))}`,
+							`${format(new Date(chart.last), __ompTranslate("MMM d HH:mm"))}`,
+						)
+					: __ompTranslate("Recorded limit utilization per account")
 			}
 			actions={
 				selected && (
@@ -819,7 +860,7 @@ function WindowUtilizationCard({
 								const first = insights?.find(i => i.provider === next);
 								if (first) onSelect({ provider: next, windowKey: first.windowKey });
 							}}
-							aria-label="Provider"
+							aria-label={__ompTranslate("Provider")}
 						>
 							{providers.map(p => (
 								<option key={p} value={p}>
@@ -831,7 +872,7 @@ function WindowUtilizationCard({
 							className="input providers-select"
 							value={selected.windowKey}
 							onChange={e => onSelect({ provider: selected.provider, windowKey: e.target.value })}
-							aria-label="Window"
+							aria-label={__ompTranslate("Window")}
 						>
 							{windows.map(w => (
 								<option key={w.key} value={w.key}>
@@ -847,7 +888,7 @@ function WindowUtilizationCard({
 			{insights === null ? (
 				<ChartSkeleton height={260} />
 			) : selected === null ? (
-				<EmptyState title="No usage snapshots in this range" hint={SNAPSHOT_HINT} />
+				<EmptyState title={__ompTranslate("No usage snapshots in this range")} hint={SNAPSHOT_HINT} />
 			) : (
 				<QueryView query={accounts} skeleton={<ChartSkeleton height={260} />}>
 					{() =>
@@ -874,12 +915,14 @@ function WindowUtilizationCard({
 										format={v => formatPercent(v, 0)}
 										formatTooltip={v => formatPercent(v, 1)}
 										references={[{ value: 1, label: "100%" }]}
-										emptyLabel="No utilization readings for this window"
+										emptyLabel={__ompTranslate("No utilization readings for this window")}
 										tooltipExtra={i => {
 											const exhausted = chart.exhausted[i];
 											return exhausted.length > 0 ? (
 												<div className="chart-tooltip-row">
-													<span className="chart-tooltip-label tone-bad">Exhausted</span>
+													<span className="chart-tooltip-label tone-bad">
+														{__ompTranslate("Exhausted")}
+													</span>
 													<span className="chart-tooltip-value">{exhausted.join(", ")}</span>
 												</div>
 											) : null;
@@ -980,16 +1023,16 @@ function buildUtilization(accounts: UsageWindowSeries[], names: ReadonlyMap<stri
 }
 
 function statusBadge(latest: AccountRow["latest"]): ReactNode {
-	if (!latest) return <span className="dim">No reading</span>;
-	if (latest.exhausted) return <Badge tone="bad">Exhausted</Badge>;
-	if (latest.fraction >= 0.8) return <Badge tone="warn">High</Badge>;
-	return <Badge tone="ok">OK</Badge>;
+	if (!latest) return <span className="dim">{__ompTranslate("No reading")}</span>;
+	if (latest.exhausted) return <Badge tone="bad">{__ompTranslate("Exhausted")}</Badge>;
+	if (latest.fraction >= 0.8) return <Badge tone="warn">{__ompTranslate("High")}</Badge>;
+	return <Badge tone="ok">{__ompTranslate("OK")}</Badge>;
 }
 
 const ACCOUNT_COLUMNS: Column<AccountRow>[] = [
 	{
 		key: "account",
-		header: "Account",
+		header: __ompTranslate("Account"),
 		sort: r => r.name,
 		render: r => (
 			<span className="row" style={{ gap: 8 }}>
@@ -1002,13 +1045,13 @@ const ACCOUNT_COLUMNS: Column<AccountRow>[] = [
 	},
 	{
 		key: "window",
-		header: "Window",
+		header: __ompTranslate("Window"),
 		sort: r => r.series.windowLabel,
 		render: r => <span className={r.color ? undefined : "muted"}>{r.series.windowLabel}</span>,
 	},
 	{
 		key: "latest",
-		header: "Latest used",
+		header: __ompTranslate("Latest used"),
 		align: "right",
 		sort: r => r.latest?.fraction ?? -1,
 		render: r =>
@@ -1025,27 +1068,27 @@ const ACCOUNT_COLUMNS: Column<AccountRow>[] = [
 	},
 	{
 		key: "status",
-		header: "Status",
+		header: __ompTranslate("Status"),
 		sort: r => (r.latest?.exhausted ? 2 : (r.latest?.fraction ?? 0) >= 0.8 ? 1 : 0),
 		render: r => statusBadge(r.latest),
 	},
 	{
 		key: "peak",
-		header: "Peak in range",
+		header: __ompTranslate("Peak in range"),
 		align: "right",
 		sort: r => r.peak ?? -1,
 		render: r => <span className="num">{r.peak === null ? "–" : formatPercent(r.peak, 0)}</span>,
 	},
 	{
 		key: "samples",
-		header: "Snapshots",
+		header: __ompTranslate("Snapshots"),
 		align: "right",
 		sort: r => r.samples,
 		render: r => <span className="num muted">{formatInteger(r.samples)}</span>,
 	},
 	{
 		key: "recorded",
-		header: "Recorded",
+		header: __ompTranslate("Recorded"),
 		align: "right",
 		sort: r => r.latest?.timestamp ?? 0,
 		render: r => <span className="muted">{r.latest ? formatRelativeTime(r.latest.timestamp) : "–"}</span>,

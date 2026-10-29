@@ -73,7 +73,7 @@ function formatForLLM(response: SearchResponse, notes: readonly string[] = []): 
 	}
 
 	for (const [i, src] of response.sources.entries()) {
-		const age = formatAge(src.ageSeconds) || src.publishedDate;
+		const age = formatAge(src.ageSeconds, "en") || src.publishedDate;
 		const agePart = age ? ` (${age})` : "";
 		parts.push(`[${i + 1}] ${src.title}${agePart}\n    ${src.url}`);
 		if (src.snippet) {

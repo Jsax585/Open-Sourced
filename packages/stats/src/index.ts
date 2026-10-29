@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { t as __ompTranslate } from "@oh-my-pi/pi-utils/i18n";
 import { parseArgs } from "node:util";
 import { formatDuration, formatNumber, formatPercent, normalizePremiumRequests } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -41,7 +42,7 @@ export type {
 
 /** Format an API-equivalent estimate in dollars, or N/A for unpriced usage. */
 function formatCost(n: number, unpricedRequests = 0): string {
-	if (n === 0 && unpricedRequests > 0) return "N/A";
+	if (n === 0 && unpricedRequests > 0) return __ompTranslate("N/A");
 	if (n < 0.01) return `$${n.toFixed(4)}`;
 	if (n < 1) return `$${n.toFixed(3)}`;
 	return `$${n.toFixed(2)}`;
@@ -55,38 +56,72 @@ export async function printStatsSummary(): Promise<void> {
 	const stats = await getDashboardStats();
 	const { overall, byModel, byFolder } = stats;
 
-	console.log(chalk.bold("\n=== AI Usage Statistics ===\n"));
+	console.log(chalk.bold(__ompTranslate("\n=== AI Usage Statistics ===\n")));
 
-	console.log(chalk.bold("Overall:"));
-	console.log(`  Requests: ${formatNumber(overall.totalRequests)} (${formatNumber(overall.failedRequests)} errors)`);
-	console.log(`  Error Rate: ${formatErrorRate(overall.errorRate)}`);
-	console.log(`  Total Tokens: ${formatNumber(overall.totalInputTokens + overall.totalOutputTokens)}`);
-	console.log(`  Input Tokens: ${formatNumber(overall.totalInputTokens)}`);
-	console.log(`  Output Tokens: ${formatNumber(overall.totalOutputTokens)}`);
-	console.log(`  Cache Rate: ${formatPercent(overall.cacheRate)}`);
-	console.log(`  Cache Savings: ${formatPercent(overall.cacheSavings)}`);
-	console.log(`  API-equivalent estimate: ${formatCost(overall.totalCost, overall.unpricedRequests)}`);
-	console.log(`  Premium Requests: ${formatNumber(normalizePremiumRequests(overall.totalPremiumRequests ?? 0))}`);
-	console.log(`  Avg Duration: ${overall.avgDuration !== null ? formatDuration(overall.avgDuration) : "-"}`);
-	console.log(`  Avg TTFT: ${overall.avgTtft !== null ? formatDuration(overall.avgTtft) : "-"}`);
+	console.log(chalk.bold(__ompTranslate("Overall:")));
+	console.log(
+		__ompTranslate(
+			"  Requests: {0} ({1} errors)",
+			`${formatNumber(overall.totalRequests)}`,
+			`${formatNumber(overall.failedRequests)}`,
+		),
+	);
+	console.log(__ompTranslate("  Error Rate: {0}", `${formatErrorRate(overall.errorRate)}`));
+	console.log(
+		__ompTranslate("  Total Tokens: {0}", `${formatNumber(overall.totalInputTokens + overall.totalOutputTokens)}`),
+	);
+	console.log(__ompTranslate("  Input Tokens: {0}", `${formatNumber(overall.totalInputTokens)}`));
+	console.log(__ompTranslate("  Output Tokens: {0}", `${formatNumber(overall.totalOutputTokens)}`));
+	console.log(__ompTranslate("  Cache Rate: {0}", `${formatPercent(overall.cacheRate)}`));
+	console.log(__ompTranslate("  Cache Savings: {0}", `${formatPercent(overall.cacheSavings)}`));
+	console.log(
+		__ompTranslate("  API-equivalent estimate: {0}", `${formatCost(overall.totalCost, overall.unpricedRequests)}`),
+	);
+	console.log(
+		__ompTranslate(
+			"  Premium Requests: {0}",
+			`${formatNumber(normalizePremiumRequests(overall.totalPremiumRequests ?? 0))}`,
+		),
+	);
+	console.log(
+		__ompTranslate(
+			"  Avg Duration: {0}",
+			`${overall.avgDuration !== null ? formatDuration(overall.avgDuration) : "-"}`,
+		),
+	);
+	console.log(
+		__ompTranslate("  Avg TTFT: {0}", `${overall.avgTtft !== null ? formatDuration(overall.avgTtft) : "-"}`),
+	);
 	if (overall.avgTokensPerSecond !== null) {
-		console.log(`  Avg Tokens/s: ${overall.avgTokensPerSecond.toFixed(1)}`);
+		console.log(__ompTranslate("  Avg Tokens/s: {0}", `${overall.avgTokensPerSecond.toFixed(1)}`));
 	}
 
 	if (byModel.length > 0) {
-		console.log(chalk.bold("\nBy Model (API-equivalent estimates):"));
+		console.log(chalk.bold(__ompTranslate("\nBy Model (API-equivalent estimates):")));
 		for (const m of byModel.slice(0, 10)) {
 			console.log(
-				`  ${m.model}: ${formatNumber(m.totalRequests)} reqs, ${formatCost(m.totalCost, m.unpricedRequests)}, ${formatPercent(m.cacheRate)} cache rate, ${formatPercent(m.cacheSavings)} cache savings`,
+				__ompTranslate(
+					"  {0}: {1} reqs, {2}, {3} cache rate, {4} cache savings",
+					`${m.model}`,
+					`${formatNumber(m.totalRequests)}`,
+					`${formatCost(m.totalCost, m.unpricedRequests)}`,
+					`${formatPercent(m.cacheRate)}`,
+					`${formatPercent(m.cacheSavings)}`,
+				),
 			);
 		}
 	}
 
 	if (byFolder.length > 0) {
-		console.log(chalk.bold("\nBy Folder (API-equivalent estimates):"));
+		console.log(chalk.bold(__ompTranslate("\nBy Folder (API-equivalent estimates):")));
 		for (const f of byFolder.slice(0, 10)) {
 			console.log(
-				`  ${f.folder}: ${formatNumber(f.totalRequests)} reqs, ${formatCost(f.totalCost, f.unpricedRequests)}`,
+				__ompTranslate(
+					"  {0}: {1} reqs, {2}",
+					`${f.folder}`,
+					`${formatNumber(f.totalRequests)}`,
+					`${formatCost(f.totalCost, f.unpricedRequests)}`,
+				),
 			);
 		}
 	}
@@ -132,25 +167,11 @@ async function main(): Promise<void> {
 	const values = parseStandaloneStatsArgs(process.argv.slice(2));
 
 	if (values.help) {
-		console.log(`
-omp-stats - AI Usage Statistics Dashboard
-
-Usage:
-  omp-stats [options]
-
-Options:
-  -p, --port <port>  Port for the dashboard server (default: 3847)
-  --host <host>       Host to bind (default: 127.0.0.1)
-  -j, --json         Output stats as JSON and exit
-  -s, --sync         Sync session files and show summary
-  -h, --help         Show this help message
-
-Examples:
-  omp-stats              # Start dashboard server
-  omp-stats --json       # Print stats as JSON
-  omp-stats --host 0.0.0.0 # Explicitly expose on all IPv4 interfaces
-  omp-stats --sync       # Sync and show summary
-`);
+		console.log(
+			__ompTranslate(
+				"\nomp-stats - AI Usage Statistics Dashboard\n\nUsage:\n  omp-stats [options]\n\nOptions:\n  -p, --port <port>  Port for the dashboard server (default: 3847)\n  --host <host>       Host to bind (default: 127.0.0.1)\n  -j, --json         Output stats as JSON and exit\n  -s, --sync         Sync session files and show summary\n  -h, --help         Show this help message\n\nExamples:\n  omp-stats              # Start dashboard server\n  omp-stats --json       # Print stats as JSON\n  omp-stats --host 0.0.0.0 # Explicitly expose on all IPv4 interfaces\n  omp-stats --sync       # Sync and show summary\n",
+			),
+		);
 		return;
 	}
 
@@ -158,10 +179,12 @@ Examples:
 		if (!values.json && !values.sync) {
 			// The dashboard ingests sessions in the background and streams progress to the page.
 			const { port: actualPort } = await startServer(values.port, values.host);
-			console.log(`Dashboard available at: ${formatStatsDashboardUrl(values.host, actualPort)}`);
-			console.log("Press Ctrl+C to stop\n");
+			console.log(
+				__ompTranslate("Dashboard available at: {0}", `${formatStatsDashboardUrl(values.host, actualPort)}`),
+			);
+			console.log(__ompTranslate("Press Ctrl+C to stop\n"));
 			process.on("SIGINT", () => {
-				console.log("\nShutting down...");
+				console.log(__ompTranslate("\nShutting down..."));
 				closeDb();
 				process.exit(0);
 			});
@@ -170,7 +193,7 @@ Examples:
 
 		// One-shot reports need fully ingested, fully rolled-up data before printing.
 		const tty = process.stderr.isTTY === true;
-		process.stderr.write("Syncing session files...\n");
+		process.stderr.write(__ompTranslate("Syncing session files...\n"));
 		let lastWidth = 0;
 		let lastRender = 0;
 		const { processed, files } = await syncAllSessions({
@@ -193,7 +216,15 @@ Examples:
 		if (tty && lastWidth > 0) process.stderr.write(`\r${" ".repeat(lastWidth)}\r`);
 		await refreshRollups();
 		const total = await getTotalMessageCount();
-		process.stderr.write(`Synced ${processed} new entries from ${files} files (${total} total)\n\n`);
+		process.stderr.write(
+			((__ompTranslateValue0, __ompTranslateValue1, __ompTranslateValue2) =>
+				__ompTranslate(
+					"Synced {1} new entries from {0} files ({2} total)\n\n\u0004stats.sync.completed",
+					__ompTranslateValue1,
+					__ompTranslateValue0,
+					__ompTranslateValue2,
+				))(`${processed}`, `${files}`, `${total}`),
+		);
 
 		if (values.json) {
 			console.log(JSON.stringify(await getDashboardStats(), null, 2));
@@ -201,7 +232,7 @@ Examples:
 			await printStatsSummary();
 		}
 	} catch (error) {
-		console.error("Error:", error);
+		console.error(__ompTranslate("Error:"), error);
 		closeDb();
 		process.exit(1);
 	}
