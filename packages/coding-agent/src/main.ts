@@ -49,7 +49,6 @@ import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
-	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
 	expandRoleAlias,
 	getModelMatchPreferences,
@@ -193,6 +192,7 @@ import {
 	cfgHideThinkingBlock,
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
+	cfgPrewalkInto,
 	cfgSessionMaxCost,
 	cfgSessionWarnCost,
 	cfgSessionWorktreeScope,
@@ -1632,13 +1632,13 @@ export async function buildSessionOptions(
 			? true
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
-		const target = parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET;
+		const target = parsed.prewalkInto ?? cfgPrewalkInto.get(activeSettings);
 		let targetPatterns: string[];
 
 		if (parsed.prewalkInto === undefined) {
-			// Preserve the existing default-prewalk behavior; this PR only needs
-			// pre-override role semantics for an explicit target.
-			targetPatterns = [expandRoleAlias(DEFAULT_PREWALK_TARGET, activeSettings)];
+			// Preserve the existing default-prewalk behavior; only an explicit
+			// target needs pre-override role semantics.
+			targetPatterns = [expandRoleAlias(target, activeSettings)];
 		} else {
 			// `--model` mutates only the session default role. Resolve explicit
 			// prewalk aliases against the pre-mutation default while leaving all
