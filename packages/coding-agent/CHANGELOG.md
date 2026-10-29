@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- Fixed `workpool()` and `judgeBatch()` ignoring an `op` given to their helpers, so a spread or `op` override now takes effect ([#16446](https://github.com/can1357/oh-my-pi/issues/16446), [#16459](https://github.com/can1357/oh-my-pi/pull/16459) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
 ### Breaking Changes
 
 - Custom tool loaders now resolve the injected host SDK themselves; constructors take cwd as their first argument instead of a pi namespace.
