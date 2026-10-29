@@ -37,6 +37,7 @@ import {
 	ReadToolGroupComponent,
 	readArgsCollapseIntoGroup,
 } from "@oh-my-pi/pi-tui/chat/read-tool-group";
+import { ReplyWriteComponent, replyDisplayMessage, toolResultReplies } from "@oh-my-pi/pi-tui/chat/reply-write";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
 import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-tool-calls-placeholder";
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
@@ -55,6 +56,7 @@ import { span } from "@oh-my-pi/pi-tui/native/describe";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
+import { createToolCallBlock } from "../../modes/controllers/tool-call-block";
 import {
 	materializeImageReferenceLinks,
 	materializeImageReferenceLinksSync,
@@ -516,7 +518,7 @@ export class UiHelpers {
 		const readToolCallArgs = new Map<string, Record<string, unknown>>();
 		const readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 		// Tool calls of an error or abort turn; Cursor runs them inside the stream, so a real result may still follow.
-		const erroredTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
+		const erroredTools = new Map<string, ToolExecutionHandle>();
 		// Defer per-turn metrics until the turn's tool results have materialized.
 		// Read-only invisible turns attach the metrics to their shared compact
 		// group; every other turn keeps the standalone row below its tool blocks.
@@ -732,18 +734,15 @@ export class UiHelpers {
 								streamingStringKeys: streamingStringKeysForTool(renderToolName, rawInput),
 							})
 						: content.arguments;
-					const component = new ToolExecutionComponent(
-						renderToolName,
-						renderArgs,
-						{
-							useBuiltInRenderer: this.ctx.viewSession.hasBuiltInTool(renderToolName),
-							showImages: cfgTerminalShowImages.get(settings),
-						},
+					const component = createToolCallBlock(this.ctx, {
+						name: renderToolName,
+						args: renderArgs,
 						tool,
-						this.ctx.ui,
-						this.ctx.viewSession.sessionManager.getCwd(),
-						content.id,
-					);
+						id: content.id,
+						cwd: this.ctx.viewSession.sessionManager.getCwd(),
+					});
+					// Persisted args are final: settle a reply's text now. Cards keep their own args-complete timing.
+					if (!partialJson && component instanceof ReplyWriteComponent) component.setArgsComplete();
 					component.setExpanded(this.ctx.toolOutputExpanded);
 					this.ctx.chatContainer.addChild(component);
 
@@ -887,6 +886,9 @@ export class UiHelpers {
 							todoSnapshot = component;
 						}
 					}
+				}
+				for (const reply of toolResultReplies(message.details)) {
+					this.ctx.chatContainer.addChild(createAssistantMessageComponent(this.ctx, replyDisplayMessage(reply)));
 				}
 			} else {
 				readGroup?.seal();
@@ -1092,8 +1094,8 @@ export class UiHelpers {
 
 	/**
 	 * Make a transcript replay still in flight rebuild its components with the current extension
-	 * text renderers before it commits. Components take the renderer set when built, so a set that
-	 * changes while a replay yields would otherwise stay on the committed transcript. Returns
+	 * text renderers and link schemes before it commits. Components take both when built, so a
+	 * change while a replay yields would otherwise stay on the committed transcript. Returns
 	 * whether a replay was in flight; the caller then leaves the redraw to it.
 	 */
 	restartTranscriptReplay(): boolean {
