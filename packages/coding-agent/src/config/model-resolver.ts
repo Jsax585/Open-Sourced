@@ -1669,7 +1669,17 @@ export function resolveSessionModelSelector(
 ): { model: Model<Api>; thinkingLevel?: ConfiguredThinkingLevel } | undefined {
 	const parsed = parseSessionModelSelector(modelRegistry, selector);
 	if (!parsed) return undefined;
-	const model = modelRegistry.find(parsed.provider, parsed.id);
+	let model = modelRegistry.find(parsed.provider, parsed.id);
+	if (!model) {
+		const routing = splitUpstreamRouting(parsed.id);
+		if (routing) {
+			const base = modelRegistry.find(parsed.provider, routing.base);
+			if (base && supportsUpstreamRouting(base)) {
+				model =
+					getSingleUpstreamRoute(base) === routing.upstream ? base : applyUpstreamRouting(base, routing.upstream);
+			}
+		}
+	}
 	if (!model || !modelRegistry.hasConfiguredAuth(model)) return undefined;
 	return { model, thinkingLevel: parsed.thinkingLevel };
 }

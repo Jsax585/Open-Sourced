@@ -87,6 +87,8 @@ export class ModelControls {
 	readonly #thinkingLevelCeiling: Effort | undefined;
 	#autoThinking = false;
 	#autoResolvedLevel: Effort | undefined;
+	#selectionGeneration = 0;
+	#modelPublication = 0;
 	#serviceTierByFamily: ServiceTierByFamily;
 
 	constructor(
@@ -122,6 +124,10 @@ export class ModelControls {
 
 	get #model(): Model | undefined {
 		return this.#host.model();
+	}
+
+	invalidateAutomaticSelection(): void {
+		this.#selectionGeneration++;
 	}
 
 	/** Effective metadata-clamped thinking level applied to the agent. */
@@ -173,6 +179,7 @@ export class ModelControls {
 
 	/** Restores thinking state from a transcript without persisting a new entry. */
 	restoreThinkingLevel(level: ConfiguredThinkingLevel | undefined): void {
+		this.#selectionGeneration++;
 		this.#autoThinking = level === AUTO_THINKING;
 		this.#autoResolvedLevel = undefined;
 		this.#thinkingLevel =
@@ -191,6 +198,7 @@ export class ModelControls {
 
 	/** Restores an exact thinking snapshot after a failed session switch. */
 	restoreThinkingSnapshot(level: ThinkingLevel | undefined, auto: boolean, resolved: Effort | undefined): void {
+		this.#selectionGeneration++;
 		this.#thinkingLevel = level;
 		this.#autoThinking = auto;
 		this.#autoResolvedLevel = resolved;
@@ -248,8 +256,10 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
+		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(targetModel);
-		this.#host.sessionManager.appendModelChange(`${targetModel.provider}/${targetModel.id}`, role);
+		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(targetModel), role);
 		if (options?.persist) {
 			this.#host.settings.setModelRole(
 				role,
@@ -278,37 +288,58 @@ export class ModelControls {
 	 * refreshing OAuth or running command-backed key programs), saves to session
 	 * log but NOT to settings.
 	 * @throws Error if no API key available for the model
+	 * @returns Whether this call published its model.
 	 */
 	async setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
 		options?: { ephemeral?: boolean; prewalk?: boolean },
 		selection: "explicit" | "automatic" = "explicit",
-	): Promise<void> {
+	): Promise<boolean> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
 		if (!this.#host.modelRegistry.hasConfiguredAuth(model)) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
 
+		const generation = this.#selectionGeneration;
 		const targetModel = await this.#host.modelRegistry.refreshSelectedModelMetadata(model);
+		// An automatic switch yields to a model or effort selected while its metadata loaded.
+		if (selection === "automatic" && this.#selectionGeneration !== generation) return false;
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(targetModel));
 		this.#host.clearActiveRetryFallback();
+		const published = ++this.#selectionGeneration;
+		const publication = ++this.#modelPublication;
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
-		this.#host.sessionManager.appendModelChange(
-			`${targetModel.provider}/${targetModel.id}`,
-			options?.prewalk ? PREWALK_MODEL_CHANGE_ROLE : options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
-		);
-		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		// A newer model publication owns the journal leaf; this stale one must not become the resume target.
+		if (this.#modelPublication === publication) {
+			this.#host.sessionManager.appendModelChange(
+				formatModelStringWithRouting(targetModel),
+				options?.prewalk
+					? PREWALK_MODEL_CHANGE_ROLE
+					: options?.ephemeral
+						? EPHEMERAL_MODEL_CHANGE_ROLE
+						: "temporary",
+			);
+			this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
+		}
 
-		// Apply explicit thinking level if given; otherwise prefer the model's
-		// configured defaultLevel; otherwise re-clamp the current level (or auto).
-		if (thinkingLevel !== undefined) {
-			this.setThinkingLevel(thinkingLevel);
+		// A selection made while this one reconciled owns the effort.
+		if (this.#selectionGeneration === published) {
+			// Prefer explicit effort, then the model's default, then re-clamp the current level (or auto).
+			if (thinkingLevel !== undefined) {
+				this.setThinkingLevel(thinkingLevel);
+			} else {
+				this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+			}
 		} else {
-			this.#reapplyThinkingLevel(targetModel.thinking?.defaultLevel);
+			// Re-clamping for a stale switch must not advance the generation owned by the newer one.
+			const owner = this.#selectionGeneration;
+			this.setThinkingLevel(this.configuredThinkingLevel());
+			this.#selectionGeneration = owner;
 		}
 		await this.#host.syncAfterModelChange(previousEditMode);
+		return true;
 	}
 
 	/**
@@ -454,8 +485,10 @@ export class ModelControls {
 		// Apply model
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(next.model));
 		this.#host.clearActiveRetryFallback();
+		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(next.model);
-		this.#host.sessionManager.appendModelChange(`${next.model.provider}/${next.model.id}`);
+		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(next.model));
 		this.#host.settings.getStorage()?.recordModelUsage(`${next.model.provider}/${next.model.id}`);
 
 		// Apply the scoped model's configured thinking level, preserving auto.
@@ -485,8 +518,10 @@ export class ModelControls {
 
 		this.#host.modelRegistry.clearSuppressedSelector(formatModelStringWithRouting(nextModel));
 		this.#host.clearActiveRetryFallback();
+		this.#selectionGeneration++;
+		this.#modelPublication++;
 		await this.#host.setModelWithProviderSessionReset(nextModel);
-		this.#host.sessionManager.appendModelChange(`${nextModel.provider}/${nextModel.id}`);
+		this.#host.sessionManager.appendModelChange(formatModelStringWithRouting(nextModel));
 		this.#host.settings.getStorage()?.recordModelUsage(`${nextModel.provider}/${nextModel.id}`);
 		// Re-apply the current thinking level (or auto) for the newly selected model
 		this.#reapplyThinkingLevel();
@@ -522,6 +557,7 @@ export class ModelControls {
 	 * user turn. Later classifications persist only changed concrete resolutions.
 	 */
 	setThinkingLevel(level: ConfiguredThinkingLevel | undefined, persist: boolean = false): void {
+		this.#selectionGeneration++;
 		if (level === AUTO_THINKING) {
 			const provisional = clampThinkingLevelToCeiling(
 				this.#model,
@@ -631,6 +667,7 @@ export class ModelControls {
 	 */
 	async applyAutoThinkingLevel(promptText: string, generation: number, solutionSpace?: string): Promise<void> {
 		const model = this.#model;
+		const selectionGeneration = this.#selectionGeneration;
 		if (!model?.reasoning || model.thinking?.unverified) return;
 		// Models with reasoning but no controllable effort surface (devin-agent
 		// Cascade routes effort via sibling model ids, not a wire param) have
@@ -676,8 +713,15 @@ export class ModelControls {
 			}
 		}
 
-		// Drop the result if the turn was aborted/superseded while classifying.
-		if (this.#host.promptGeneration() !== generation || !this.#autoThinking) return;
+		// Drop judgments superseded by a turn, model, or effort selection.
+		if (
+			this.#host.promptGeneration() !== generation ||
+			!this.#autoThinking ||
+			!modelsAreEqual(this.#model, model) ||
+			this.#selectionGeneration !== selectionGeneration
+		) {
+			return;
+		}
 
 		const effort = clampThinkingLevelToCeiling(
 			model,

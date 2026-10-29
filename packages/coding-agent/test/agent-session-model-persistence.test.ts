@@ -1,10 +1,11 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, type Context, Effort, type ImageContent, type Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { formatModelStringWithRouting, parseModelPattern } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type CreateAgentSessionResult, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -34,6 +35,7 @@ describe("AgentSession model persistence", () => {
 		sharedAuthStorage = await AuthStorage.create(path.join(sharedDir.path(), "auth.db"));
 		sharedAuthStorage.keys.setRuntime("anthropic", "test-key");
 		sharedAuthStorage.keys.setRuntime("zai", "test-key");
+		sharedAuthStorage.keys.setRuntime("openrouter", "test-key");
 		sharedModelRegistry = new ModelRegistry(sharedAuthStorage, path.join(sharedDir.path(), "models.yml"));
 	});
 
@@ -102,6 +104,7 @@ describe("AgentSession model persistence", () => {
 		selectInitialModel?: (availableModels: Model<Api>[]) => Model<Api>;
 		modelRoles?: Record<string, string>;
 		persist?: boolean;
+		scopedModels?: Array<{ model: Model<Api> }>;
 	}): Promise<{ modelRegistry: ModelRegistry; settings: Settings; session: AgentSession }> {
 		const modelRegistry = sharedModelRegistry;
 		const model =
@@ -135,6 +138,7 @@ describe("AgentSession model persistence", () => {
 				: SessionManager.inMemory(),
 			settings: sessionSettings,
 			modelRegistry,
+			scopedModels: options?.scopedModels,
 		});
 
 		return { modelRegistry, settings: sessionSettings, session };
@@ -143,13 +147,14 @@ describe("AgentSession model persistence", () => {
 	async function createStartupResumeSession(
 		targetSessionFile: string,
 		settings: Settings = Settings.isolated(),
+		modelRegistry: ModelRegistry = sharedModelRegistry,
 	): Promise<CreateAgentSessionResult> {
 		const sessionManager = await SessionManager.open(targetSessionFile, path.join(tempDir.path(), "startup"));
 		const result = await createAgentSession({
 			cwd: tempDir.path(),
 			agentDir: tempDir.path(),
 			authStorage: sharedAuthStorage,
-			modelRegistry: sharedModelRegistry,
+			modelRegistry,
 			sessionManager,
 			settings,
 			disableExtensionDiscovery: true,
@@ -416,6 +421,151 @@ describe("AgentSession model persistence", () => {
 		const result = await createStartupResumeSession(targetSessionFile, settings);
 
 		expect(result.session.model?.id).toBe(temporaryModel.id);
+	});
+
+	it.each(["options.model", "deferred pattern"] as const)(
+		"startup resume preserves the initial SDK upstream selected by %s without a later model change",
+		async selection => {
+			const selector = "openrouter/anthropic/claude-sonnet-4.5@anthropic";
+			const model = parseModelPattern(selector, sharedModelRegistry.getAvailable()).model;
+			if (!model) throw new Error("Expected routed OpenRouter model");
+			const role = "subagent:initial-route";
+			const result = await createAgentSession({
+				cwd: tempDir.path(),
+				agentDir: tempDir.path(),
+				authStorage: sharedAuthStorage,
+				modelRegistry: sharedModelRegistry,
+				sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "initial-sdk")),
+				settings: Settings.isolated(),
+				...(selection === "options.model"
+					? { model }
+					: { modelPattern: selector, modelPatternFallbackRole: role, modelPatternDefaultFallbackChain: [] }),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+			});
+			session = result.session;
+			expect(formatModelStringWithRouting(session.model!)).toBe(selector);
+			const manager = session.sessionManager;
+			manager.appendMessage({ role: "user", content: "preserve the initial route", timestamp: Date.now() });
+			manager.appendMessage(createAssistantMessage("ready"));
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session");
+			await session.dispose();
+			session = undefined;
+
+			const resumed = await createStartupResumeSession(sessionFile);
+
+			expect(formatModelStringWithRouting(resumed.session.model!)).toBe(selector);
+			const models = resumed.session.sessionManager.buildSessionContext().models;
+			expect(models.default).toBe(selector);
+			if (selection === "deferred pattern") expect(models[role]).toBe(selector);
+		},
+	);
+
+	it("startup resume preserves an explicit routed switchSession selection", async () => {
+		const selector = "openrouter/anthropic/claude-sonnet-4.5";
+		const target = parseModelPattern(`${selector}@anthropic`, sharedModelRegistry.getAvailable()).model;
+		if (!target) throw new Error("Expected routed OpenRouter model");
+		const targetSessionFile = await writeRoleModelSession(`${selector}@google`, `${selector}@google`);
+		const created = await createSession({ persist: true });
+
+		await expect(created.session.switchSession(targetSessionFile, { model: target })).resolves.toBe(true);
+		expect(formatModelStringWithRouting(created.session.model!)).toBe(`${selector}@anthropic`);
+		created.session.sessionManager.appendMessage({
+			role: "user",
+			content: "preserve the explicit restore route",
+			timestamp: Date.now(),
+		});
+		created.session.sessionManager.appendMessage(createAssistantMessage("ready"));
+		await created.session.dispose();
+		session = undefined;
+
+		const resumed = await createStartupResumeSession(targetSessionFile);
+
+		expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+	});
+
+	it.each(["setModel", "setModelTemporary", "scoped cycle", "available cycle"] as const)(
+		"startup resume preserves the upstream selected by a route-only %s publication",
+		async publication => {
+			const selector = "openrouter/anthropic/claude-sonnet-4.5";
+			const available = sharedModelRegistry.getAvailable();
+			const source = parseModelPattern(`${selector}@google`, available).model;
+			const target = parseModelPattern(`${selector}@anthropic`, available).model;
+			if (!source || !target) throw new Error("Expected routed OpenRouter models");
+			const created = await createSession({
+				initialModel: source,
+				modelRoles: { default: `${selector}@google` },
+				persist: true,
+				scopedModels: publication === "scoped cycle" ? [{ model: source }, { model: target }] : undefined,
+			});
+			const manager = created.session.sessionManager;
+			manager.appendMessage({ role: "user", content: "preserve this route", timestamp: Date.now() });
+			manager.appendMessage(createAssistantMessage("ready"));
+			if (publication === "setModel") {
+				await created.session.setModel(target);
+			} else if (publication === "setModelTemporary") {
+				await created.session.setModelTemporary(target);
+			} else {
+				const availableModels =
+					publication === "available cycle"
+						? vi.spyOn(sharedModelRegistry, "getAvailable").mockReturnValue([source, target])
+						: undefined;
+				try {
+					await created.session.cycleModel();
+				} finally {
+					availableModels?.mockRestore();
+				}
+			}
+			expect(formatModelStringWithRouting(created.session.model!)).toBe(`${selector}@anthropic`);
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted session");
+			await created.session.dispose();
+			session = undefined;
+
+			const resumed = await createStartupResumeSession(sessionFile);
+
+			expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+		},
+	);
+
+	it("startup resume preserves configured routing fields for an already pinned upstream", async () => {
+		const selector = "openrouter/anthropic/claude-sonnet-4.5";
+		const modelsPath = path.join(tempDir.path(), "models.yml");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					openrouter: {
+						modelOverrides: {
+							"anthropic/claude-sonnet-4.5": {
+								compat: { openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] } },
+							},
+						},
+					},
+				},
+			}),
+		);
+		const modelRegistry = new ModelRegistry(sharedAuthStorage, modelsPath);
+		const configured = modelRegistry.find("openrouter", "anthropic/claude-sonnet-4.5");
+		if (!configured) throw new Error("Expected configured OpenRouter model");
+		expect(configured.compat).toMatchObject({
+			openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] },
+		});
+		const sessionFile = await writeRoleModelSession(`${selector}@anthropic`, `${selector}@anthropic`, "temporary");
+
+		const resumed = await createStartupResumeSession(sessionFile, Settings.isolated(), modelRegistry);
+
+		expect(formatModelStringWithRouting(resumed.session.model!)).toBe(`${selector}@anthropic`);
+		expect(resumed.session.model?.compat).toMatchObject({
+			openRouterRouting: { only: ["anthropic"], order: ["anthropic", "google"] },
+		});
 	});
 
 	it("activates auto thinking on startup resume when modelRoles.default carries an explicit :auto suffix", async () => {
