@@ -1216,6 +1216,72 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 		const live = transcript.renderViewport(WIDTH, 1000, frame);
 		expect([...retired, ...live]).toEqual([...trimBlankEdges(component.render(WIDTH))]);
 	});
+
+	it.each([
+		{ name: "without a closing fence", closer: "" },
+		{ name: "with a closing fence", closer: "```\n" },
+	])("replays finalized fence history $name without losing rows on resize", ({ closer }) => {
+		const transcript = new TranscriptContainer();
+		const component = new AssistantMessageComponent();
+		transcript.addChild(component);
+		let body = "```sql\n";
+		for (let index = 0; index < 12; index++) {
+			body += `SELECT column_${index} FROM orders_${index};\n`;
+			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: body }] }, { transient: true });
+			transcript.renderViewport(WIDTH, ROOM, frame);
+		}
+		const published = retire(transcript, WIDTH);
+		const [emitted = 0] = transcript.emittedStableRows();
+		component.updateContent({ ...finalAnswer, content: [{ type: "text", text: body + closer }] });
+		component.markTranscriptBlockFinalized();
+		expect(component.renderTranscriptStableRows(emitted, WIDTH)).toEqual(published);
+
+		// Reflow has no old row-count cache to mask an extra fabricated closer.
+		const narrow = 44;
+		transcript.beginReplay();
+		const replay = transcript.peekFinalizedBatch(narrow, 1000);
+		if (!replay) throw new Error("Expected emitted fence history to replay");
+		transcript.acknowledgeFinalizedBatch(replay.id);
+		const live = transcript.renderViewport(narrow, 1000, frame);
+		expect([...replay.rows, ...live]).toEqual([...trimBlankEdges(component.render(narrow))]);
+	});
+
+	it("keeps retiring later blocks while replaying earlier partial fence snapshots", () => {
+		const transcript = new TranscriptContainer();
+		const component = new AssistantMessageComponent();
+		transcript.addChild(component);
+		let fence = "```sql\n";
+		for (let index = 0; index < 12; index++) {
+			fence += `SELECT column_${index} FROM orders_${index};\n`;
+			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: fence }] }, { transient: true });
+			transcript.renderViewport(WIDTH, ROOM, frame);
+		}
+		const first = retire(transcript, WIDTH);
+		const [firstCount = 0] = transcript.emittedStableRows();
+		let tail = "";
+		for (let index = 0; index < 6; index++) {
+			tail += paragraph("After", index);
+			component.updateContent(
+				{
+					...finalAnswer,
+					content: [
+						{ type: "text", text: fence },
+						{ type: "text", text: `${tail}Pending` },
+					],
+				},
+				{ transient: true },
+			);
+			transcript.renderViewport(WIDTH, ROOM, frame);
+		}
+		const second = retire(transcript, WIDTH);
+		expect(Bun.stripANSI(second.join("\n"))).toContain("After 0");
+		const live = transcript.renderViewport(WIDTH, 1000, frame);
+		expect([...first, ...second, ...live]).toEqual([...trimBlankEdges(component.render(WIDTH))]);
+
+		// The first part is now complete, but its earlier snapshot remains partial.
+		component.releaseRenderCaches();
+		expect(component.renderTranscriptStableRows(firstCount, WIDTH)).toEqual(first);
+	});
 });
 
 describe("TranscriptContainer viewport click spans", () => {

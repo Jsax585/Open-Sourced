@@ -74,7 +74,8 @@ interface FastPathItem {
 }
 type DisplayThinkingContentBlock = ThinkingContentBlock & { rawThinking?: string };
 type StablePartKind = "thinking" | "text";
-type StablePart = { kind: StablePartKind; text: string } | { kind: "spacer" };
+/** `partial` distinguishes a frozen prefix from a whole, completed child block. */
+type StablePart = { kind: StablePartKind; text: string; partial: boolean } | { kind: "spacer" };
 
 /**
  * One published prefix of the block's finished content. Later snapshots extend
@@ -86,6 +87,8 @@ interface StableSnapshot {
 	// Earlier parts are immutable; only the final part needs a historical offset.
 	readonly partCount: number;
 	readonly lastTextLength: number;
+	// Preserve the boundary even after newer snapshots complete this part.
+	readonly lastPartial: boolean;
 }
 
 /**
@@ -98,7 +101,11 @@ interface StableRowLedger {
 	newest: number;
 	rows: readonly string[];
 	readonly ends: Map<number, number>;
-	/** Rendered rows of parts a snapshot has closed (full text final), by part index. */
+	/**
+	 * Rendered rows of parts a snapshot has closed (full text final), by part
+	 * index. Closed parts only: a partial prefix renders without the streaming
+	 * block's fabricated closer, so its rows never match a closed part's.
+	 */
 	readonly parts: (
 		| { readonly kind: StablePartKind; readonly text: string; readonly rows: readonly string[] }
 		| undefined
@@ -1275,6 +1282,7 @@ export class AssistantMessageComponent extends Container {
 				this.#stableParts,
 				snapshot.partCount,
 				snapshot.lastTextLength,
+				snapshot.lastPartial,
 				width,
 				"replay",
 			);
@@ -1299,14 +1307,20 @@ export class AssistantMessageComponent extends Container {
 		if (!parts) return;
 		const last = parts.at(-1);
 		if (!last || last.kind === "spacer") return;
-		const snapshot = { partCount: parts.length, lastTextLength: last.text.length };
+		const snapshot = { partCount: parts.length, lastTextLength: last.text.length, lastPartial: last.partial };
 		const previous = this.#stableSnapshots.at(-1);
 		// An unmoved boundary publishes nothing whether or not it still extends
 		// the last snapshot, so most frames skip the whole-document comparison.
-		if (previous?.partCount === snapshot.partCount && previous.lastTextLength === snapshot.lastTextLength) return;
+		if (
+			previous?.partCount === snapshot.partCount &&
+			previous.lastTextLength === snapshot.lastTextLength &&
+			previous.lastPartial === snapshot.lastPartial
+		) {
+			return;
+		}
 		if (previous && !isSnapshotExtension(this.#stableParts, parts)) return;
 		this.#syncStableRenderInputs();
-		const currentRows = this.#renderStableParts(parts, parts.length, last.text.length, width, "head");
+		const currentRows = this.#renderStableParts(parts, parts.length, last.text.length, last.partial, width, "head");
 		// The container verifies stable rows against the blank-trimmed render.
 		if (!isRowPrefix(currentRows, trimBlankEdges(rendered))) return;
 		const previousRows = previous
@@ -1341,7 +1355,7 @@ export class AssistantMessageComponent extends Container {
 				const md = item.md;
 				if (md instanceof FigureMarkdown) {
 					// Plain Markdown reproduces only the prose ahead of the first figure.
-					if (md.leadingProse) parts.push({ kind: item.blockType, text: md.leadingProse });
+					if (md.leadingProse) parts.push({ kind: item.blockType, text: md.leadingProse, partial: true });
 					break;
 				}
 				if (itemIndex === items.length - 1) {
@@ -1357,14 +1371,15 @@ export class AssistantMessageComponent extends Container {
 					let past = streamingMarkdownSource(item.lastText).slice(raw.length);
 					if (item.blockType === "thinking") past = past.replace(UNSETTLED_THINKING_TAIL, "");
 					if (frozen.length > 0 && /\S/.test(past)) {
-						parts.push({ kind: item.blockType, text: frozen });
+						parts.push({ kind: item.blockType, text: frozen, partial: true });
 					}
 					break;
 				}
 				// Closed child: only the streaming tail may mutate in place, so
 				// everything before it is final. Same form as the frozen prefix it
-				// published while streaming, so the snapshot still extends.
-				parts.push({ kind: item.blockType, text: streamingMarkdownSource(item.lastText) });
+				// published while streaming, so the snapshot still extends. It is a
+				// whole block, so it keeps the closing border an open fence gets.
+				parts.push({ kind: item.blockType, text: streamingMarkdownSource(item.lastText), partial: false });
 				itemIndex++;
 				continue;
 			}
@@ -1391,6 +1406,7 @@ export class AssistantMessageComponent extends Container {
 		parts: readonly StablePart[],
 		partCount: number,
 		lastLength: number,
+		lastPartial: boolean,
 		width: number,
 		role: "head" | "replay",
 	): readonly string[] {
@@ -1403,15 +1419,19 @@ export class AssistantMessageComponent extends Container {
 				rows.push("");
 				continue;
 			}
-			const closed = index < lastIndex;
-			const text = closed || lastLength === part.text.length ? part.text : part.text.slice(0, lastLength);
-			const cached = ledger.parts[index];
+			// `part` comes from the newest publication, where a later part may
+			// already have closed this one; the snapshot decides what this
+			// boundary was, so a prefix stays a prefix on replay.
+			const partial = index === lastIndex && lastPartial;
+			const text = index === lastIndex && lastLength < part.text.length ? part.text.slice(0, lastLength) : part.text;
+			const cached = partial ? undefined : ledger.parts[index];
 			let partRows: readonly string[];
 			if (cached?.kind === part.kind && cached.text === text) {
 				partRows = cached.rows;
 			} else {
-				partRows = this.#renderStablePart(index, part.kind, text, width, closed ? undefined : role);
-				if (closed) ledger.parts[index] = { kind: part.kind, text, rows: partRows };
+				partRows = this.#renderStablePart(index, part.kind, text, width, partial ? role : undefined);
+				if (partial) partRows = trimFabricatedCloser(partRows, text.trim());
+				else ledger.parts[index] = { kind: part.kind, text, rows: partRows };
 			}
 			for (const row of partRows) rows.push(row);
 		}
@@ -1419,9 +1439,9 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	/**
-	 * Render one part's Markdown. `role` names the instance reused for a final
-	 * part as its text grows; a closed part continues whichever instance was
-	 * already growing it, else renders once. Finalized blocks keep no instance.
+	 * Render one part's Markdown. `role` names the instance reused for a partial
+	 * final part as its text grows; a closed part continues whichever instance
+	 * was already growing it, else renders once. Finalized blocks keep no instance.
 	 */
 	#renderStablePart(
 		index: number,
@@ -1439,12 +1459,12 @@ export class AssistantMessageComponent extends Container {
 		const renderer = role === "head" ? head : role === "replay" ? replay : head?.index === index ? head : replay;
 		if (renderer?.index === index && renderer.kind === kind) {
 			renderer.md.setText(trimmed);
-			return trimFabricatedCloser(renderer.md.render(width), trimmed);
+			return renderer.md.render(width);
 		}
 		const md = this.#createMarkdown(kind, trimmed);
 		if (role === "head") this.#stableHeadRenderer = { index, kind, md };
 		else if (role === "replay") this.#stableReplayRenderer = { index, kind, md };
-		return trimFabricatedCloser(md.render(width), trimmed);
+		return md.render(width);
 	}
 
 	/** Markdown for a text or thinking block; live children and stable-row renders share it so stable rows prefix the block render. */

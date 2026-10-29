@@ -2369,6 +2369,28 @@ describe("Module-level LRU render cache", () => {
 		expect(markdown.getLastRenderStableText()).toBe("```sql\nnew\nrow\nthird\n");
 	});
 
+	it.each([
+		{ opener: "$$", gap: "\n\n", closer: "$$" },
+		{ opener: "\\[", gap: "\n", closer: "\\]" },
+	])("keeps fence rows live until a preceding $opener math block closes", ({ opener, gap, closer }) => {
+		clearRenderCache();
+		const intro = "Introduction.\n\n";
+		const source = `${intro}${opener}\nx + 1${gap}\`\`\`sql\nSELECT 1;\nSELECT 2;\nSELECT 3;\n`;
+		const markdown = new Markdown(source, 0, 0, defaultMarkdownTheme);
+		markdown.transientRenderCache = true;
+		const before = markdown.render(80);
+		// Neither a frozen opener nor one still in the lexer tail may be
+		// crossed: its later closer would reinterpret the code as mathematics.
+		expect(markdown.getLastRenderStableText()).toBe(intro);
+		const published = new Markdown(intro.trim(), 0, 0, defaultMarkdownTheme).render(80);
+		expect(before.slice(0, published.length)).toEqual([...published]);
+
+		markdown.setText(`${source}\`\`\`\n\n${closer}\n\nAfter.\n\nPending`);
+		const after = markdown.render(80);
+		expect(after.slice(0, published.length)).toEqual([...published]);
+		expect(markdown.getLastRenderStableText()).toContain("After.\n\n");
+	});
+
 	it("keeps an open fence plain when the highlight stream factory rejects the language", () => {
 		clearRenderCache();
 		const themeWithStream = {
