@@ -401,9 +401,9 @@ export class SessionTools {
 	 * rebuilds preserve it for ordinary and autonomous continuations until the
 	 * next preparation replaces it or a conversation reset clears it.
 	 */
-	#turnSystemPromptOverride: string[] | undefined;
-	/** The latest per-turn override and the base its hook was given; kept after the turn ends. */
-	#lastTurnSystemPromptOverride: { prompt: string[]; base: string[] } | undefined;
+	#preparedSystemPrompt: string[] | undefined;
+	/** The latest prepared policy and the base its hook was given; retained after clearing. */
+	#lastPreparedSystemPrompt: { prompt: string[]; base: string[] } | undefined;
 	#lastAppliedToolSignature: string | undefined;
 	/** Full enabled set, including tools demoted from the model-visible surface. */
 	#enabledToolNames = new Set<string>();
@@ -551,40 +551,40 @@ export class SessionTools {
 	}
 
 	/**
-	 * Pushes `base` to the agent as the effective system prompt, unless an active
-	 * per-turn {@link #turnSystemPromptOverride} takes precedence. Every base
-	 * rebuild applies its result through here so a mid-turn rebuild preserves the
-	 * override.
+	 * Applies `base` unless prepared {@link #preparedSystemPrompt} policy takes precedence.
+	 * Base rebuilds preserve that policy until the next preparation or conversation reset.
 	 */
 	#applyAgentSystemPrompt(base: string[]): void {
-		this.#host.agent.setSystemPrompt(this.#turnSystemPromptOverride ?? base);
+		this.#host.agent.setSystemPrompt(this.#preparedSystemPrompt ?? base);
 	}
 
-	get turnSystemPromptOverride(): string[] | undefined {
-		return this.#turnSystemPromptOverride;
+	/** Current prepared extension policy, or undefined when the base prompt applies. */
+	get preparedSystemPrompt(): string[] | undefined {
+		return this.#preparedSystemPrompt;
 	}
+
 	/**
 	 * Registers prepared `before_agent_start` policy and applies it to the agent.
 	 * Base rebuilds preserve it until the next preparation or conversation reset calls
-	 * {@link clearTurnSystemPromptOverride}.
+	 * {@link clearPreparedSystemPrompt}.
 	 */
-	setTurnSystemPromptOverride(prompt: string[], base: string[]): void {
-		this.#turnSystemPromptOverride = prompt;
-		this.#lastTurnSystemPromptOverride = { prompt, base };
+	setPreparedSystemPrompt(prompt: string[], base: string[]): void {
+		this.#preparedSystemPrompt = prompt;
+		this.#lastPreparedSystemPrompt = { prompt, base };
 		this.#host.agent.setSystemPrompt(prompt);
 	}
 
 	/**
 	 * The base prompt a system prompt the agent sent was built from: the hook's input when it is a
-	 * per-turn override, else the prompt itself, since every other prompt applied to the agent is a base.
+	 * prepared policy, else the prompt itself, since every other prompt applied to the agent is a base.
 	 */
 	baseOfSystemPrompt(prompt: string[]): string[] {
-		return prompt === this.#lastTurnSystemPromptOverride?.prompt ? this.#lastTurnSystemPromptOverride.base : prompt;
+		return prompt === this.#lastPreparedSystemPrompt?.prompt ? this.#lastPreparedSystemPrompt.base : prompt;
 	}
 
 	/** Drops prepared extension policy; later rebuilds fall back to the base prompt. */
-	clearTurnSystemPromptOverride(): void {
-		this.#turnSystemPromptOverride = undefined;
+	clearPreparedSystemPrompt(): void {
+		this.#preparedSystemPrompt = undefined;
 	}
 
 	/** Skills currently rendered into the system prompt. */

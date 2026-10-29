@@ -7645,7 +7645,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Drop mutable tool decisions and directives owned by the previous logical session. */
 	#clearSessionScopedToolState(): void {
-		this.#tools.clearTurnSystemPromptOverride();
+		this.#tools.clearPreparedSystemPrompt();
 		this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 		this.agent.clearDeferredToolDirectives();
 		this.#toolChoiceQueue.clear();
@@ -8711,9 +8711,9 @@ export class AgentSession implements SettingsScope {
 					if (!isCurrent() || !overrideIsCurrent()) return undefined;
 					if (basePreparation.commit?.() === false) return undefined;
 					if (result?.systemPrompt !== undefined) {
-						this.#tools.setTurnSystemPromptOverride(result.systemPrompt, basePreparation.systemPrompt);
+						this.#tools.setPreparedSystemPrompt(result.systemPrompt, basePreparation.systemPrompt);
 					} else {
-						this.#tools.clearTurnSystemPromptOverride();
+						this.#tools.clearPreparedSystemPrompt();
 						this.agent.setSystemPrompt(this.#tools.baseSystemPrompt);
 					}
 					return messages;
@@ -12993,8 +12993,10 @@ export class AgentSession implements SettingsScope {
 		const previousTools = [...this.agent.state.tools];
 		const previousBaseSystemPrompt = this.#tools.baseSystemPrompt;
 		const previousSystemPrompt = this.agent.state.systemPrompt;
-		const previousTurnSystemPromptOverride = this.#tools.turnSystemPromptOverride;
-		const previousTurnSystemPromptBase = this.#tools.baseOfSystemPrompt(previousTurnSystemPromptOverride ?? previousSystemPrompt);
+		const previousPreparedSystemPrompt = this.#tools.preparedSystemPrompt;
+		const previousPreparedSystemPromptBase = this.#tools.baseOfSystemPrompt(
+			previousPreparedSystemPrompt ?? previousSystemPrompt,
+		);
 		const previousBaseSystemPromptBeforeMemoryPromotion = this.#memory.promotionSnapshot;
 		const previousFreshProviderSessionId = this.#freshProviderSessionId;
 		const previousInheritedProviderPromptCacheKey = this.#inheritedProviderPromptCacheKey;
@@ -13254,10 +13256,10 @@ export class AgentSession implements SettingsScope {
 			this.agent.setTools(previousTools);
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
-			if (previousTurnSystemPromptOverride !== undefined) {
-				this.#tools.setTurnSystemPromptOverride(previousTurnSystemPromptOverride, previousTurnSystemPromptBase);
+			if (previousPreparedSystemPrompt !== undefined) {
+				this.#tools.setPreparedSystemPrompt(previousPreparedSystemPrompt, previousPreparedSystemPromptBase);
 			} else {
-				this.#tools.clearTurnSystemPromptOverride();
+				this.#tools.clearPreparedSystemPrompt();
 			}
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);

@@ -114,20 +114,29 @@ describe("AgentSession before_agent_start system prompt override", () => {
 	it("keeps prepared policy until the next preparation returns no override", async () => {
 		let enabled = true;
 		let hookCalls = 0;
-		const { session, systemPrompts } = createSession(Array.from({ length: 4 }, () => ({ content: ["Done"] })), {
-			beforeAgentStart: async () => {
-				hookCalls++;
-				return enabled ? { systemPrompt: [OVERRIDE] } : undefined;
+		const { session, systemPrompts } = createSession(
+			Array.from({ length: 4 }, () => ({ content: ["Done"] })),
+			{
+				beforeAgentStart: async () => {
+					hookCalls++;
+					return enabled ? { systemPrompt: [OVERRIDE] } : undefined;
+				},
 			},
-		});
+		);
 
 		await session.prompt("enable extension policy");
 		await session.refreshBaseSystemPrompt();
-		await session.sendCustomMessage({ customType: "peer", content: "continue", display: false }, { deliverAs: "aside" });
+		await session.sendCustomMessage(
+			{ customType: "peer", content: "continue", display: false },
+			{ deliverAs: "aside" },
+		);
 		enabled = false;
 		await session.prompt("extension mode is now off");
 		await session.refreshBaseSystemPrompt();
-		await session.sendCustomMessage({ customType: "peer", content: "continue without policy", display: false }, { deliverAs: "aside" });
+		await session.sendCustomMessage(
+			{ customType: "peer", content: "continue without policy", display: false },
+			{ deliverAs: "aside" },
+		);
 
 		expect(hookCalls).toBe(2);
 		expect(systemPrompts).toEqual([[OVERRIDE], [OVERRIDE], [REBUILT_BASE], [REBUILT_BASE]]);
@@ -139,7 +148,10 @@ describe("AgentSession before_agent_start system prompt override", () => {
 			await session.prompt("old conversation");
 			if (transition === "new") expect(await session.newSession()).toBe(true);
 			else expect(await session.resetSessionContext()).toBeDefined();
-			await session.sendCustomMessage({ customType: "peer", content: "new conversation", display: false }, { deliverAs: "aside" });
+			await session.sendCustomMessage(
+				{ customType: "peer", content: "new conversation", display: false },
+				{ deliverAs: "aside" },
+			);
 			expect(systemPrompts).toEqual([[OVERRIDE], [REBUILT_BASE]]);
 		});
 	}
@@ -155,7 +167,10 @@ describe("AgentSession before_agent_start system prompt override", () => {
 		await target.close();
 		try {
 			expect(await session.switchSession(targetFile, { keepModel: true })).toBe(true);
-			await session.sendCustomMessage({ customType: "peer", content: "target aside", display: false }, { deliverAs: "aside" });
+			await session.sendCustomMessage(
+				{ customType: "peer", content: "target aside", display: false },
+				{ deliverAs: "aside" },
+			);
 			expect(systemPrompts).toEqual([[OVERRIDE], [REBUILT_BASE]]);
 		} finally {
 			await session.dispose();
@@ -170,7 +185,10 @@ describe("AgentSession before_agent_start system prompt override", () => {
 		vi.spyOn(session.sessionManager, "setSessionFile").mockRejectedValueOnce(failure);
 		await expect(session.switchSession(tempDir.join("target.jsonl"))).rejects.toBe(failure);
 		await session.refreshBaseSystemPrompt();
-		await session.sendCustomMessage({ customType: "peer", content: "original aside", display: false }, { deliverAs: "aside" });
+		await session.sendCustomMessage(
+			{ customType: "peer", content: "original aside", display: false },
+			{ deliverAs: "aside" },
+		);
 		expect(systemPrompts).toEqual([[OVERRIDE], [OVERRIDE]]);
 	});
 });
