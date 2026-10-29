@@ -72,6 +72,7 @@
 - Fixed unavailable configured default or dictation models being silently replaced; omp now warns and identifies the fallback model.
 - Fixed LSP references for files in sibling Git worktrees by adding those checkouts to the active workspace.
 - Improved macOS computer-use behavior for applications without windows by opening the app and inspecting its returned window in one operation.
+- Fixed keys you type in another app going into a page on macOS when omp's click in a relay tab opened a new tab or popup ([#16284](https://github.com/can1357/oh-my-pi/pull/16284) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.13.3] - 2026-10-28
 
