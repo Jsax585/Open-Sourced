@@ -281,8 +281,11 @@ export interface TurnRecoveryHost {
 	setModelWithProviderSessionReset(model: Model): Promise<void>;
 	/** Edit mode resolved for the active model and settings, captured before a fallback swap. */
 	resolveActiveEditMode(): EditMode;
-	/** Rebuilds the model-dependent base system prompt when a swap changed the edit mode or model policy. */
-	syncAfterModelChange(previousEditMode: EditMode): Promise<void>;
+	/**
+	 * Rebuilds the model-dependent base system prompt after a swap. Retry fallback passes
+	 * `retryFallback`, which rebuilds only for an edit-mode change so the cached prompt survives.
+	 */
+	syncAfterModelChange(previousEditMode: EditMode, options?: { retryFallback?: boolean }): Promise<void>;
 	resetCurrentResponsesProviderSession(reason: string): void;
 	/**
 	 * Spend an eligible saved reset for the blocked provider pool.
@@ -863,18 +866,17 @@ export class TurnRecovery {
 			const primaryModel =
 				resolveModelOverride([selectedModel], this.#host.modelRegistry, this.#host.settings).model ??
 				(selector ? this.#host.modelRegistry.find(selector.provider, selector.id) : undefined);
+			const requestedThinkingSelection =
+				selectedThinkingLevel ?? (restoredFallbackThinking ? selector?.thinkingLevel : undefined);
 			const requestedThinkingLevel =
-				selectedThinkingLevel === AUTO_THINKING
+				requestedThinkingSelection === AUTO_THINKING
 					? resolveProvisionalAutoLevel(primaryModel)
-					: (concreteThinkingLevel(selectedThinkingLevel) ??
-						(restoredFallbackThinking ? selector?.thinkingLevel : undefined));
+					: concreteThinkingLevel(requestedThinkingSelection);
+			// Keep the configured selector separate from the resolved level persisted below.
+			const resolvedThinkingLevel = resolveThinkingLevelForModel(primaryModel, requestedThinkingLevel);
 			selectedConcreteThinkingLevel = primaryModel
-				? clampThinkingLevelToCeiling(
-						primaryModel,
-						resolveThinkingLevelForModel(primaryModel, requestedThinkingLevel),
-						this.#host.thinkingLevelCeiling(),
-					)
-				: requestedThinkingLevel;
+				? clampThinkingLevelToCeiling(primaryModel, resolvedThinkingLevel, this.#host.thinkingLevelCeiling())
+				: resolvedThinkingLevel;
 		}
 		// Carry only the unfinished route. Produced-work attribution belongs to
 		// the old conversation, unlike a fork which retains that conversation.
@@ -2443,7 +2445,7 @@ export class TurnRecovery {
 			this.#activeRetryFallback.lastAppliedFallbackThinkingLevel = nextThinkingLevel;
 			this.#activeRetryFallback.pinned = this.#activeRetryFallback.pinned || options?.pinFallback === true;
 		}
-		await this.#host.syncAfterModelChange(previousEditMode);
+		await this.#host.syncAfterModelChange(previousEditMode, { retryFallback: true });
 		await this.#host.emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
@@ -2465,6 +2467,8 @@ export class TurnRecovery {
 			wrapAround?: boolean;
 			/** This hop is a classifier-refusal walk, which visits each model at most once per turn. */
 			refusalWalk?: boolean;
+			/** The retry policy retries the failed model if this hop does not switch. */
+			sameModelRetryAvailable?: boolean;
 		},
 	): Promise<boolean> {
 		const fallbackGeneration = this.#retryFallbackGeneration;
@@ -2481,6 +2485,23 @@ export class TurnRecovery {
 			? this.#host.modelRegistry.find(failedMessage.provider, failedMessage.model)
 			: undefined;
 		const creditTargets = failedModel ? fallbackCreditTargets(failedModel) : [];
+		// Deferring a sibling Anthropic candidate below is only worth it while
+		// another attempt on the model that signed the replayed thinking follows:
+		// the active model is that model, and the retry policy will retry it. Any
+		// other failure — on a model that did not sign the thinking, or one the
+		// policy does not retry (a refusal, a policy denial, a non-retryable error,
+		// a wait past the delay cap, a spent budget) — has no source model to go
+		// back to, so deferring left the whole chain untried and ended the turn.
+		// Under retry.rateLimitWalksChain a rate limit on the signer counts as no
+		// attempt too: the retry re-hits the same cap, while a chain entry may sit
+		// under a different one.
+		const sourceModel = this.#host.model();
+		const signerRetryRemains =
+			options?.sameModelRetryAvailable === true &&
+			latestAssistant !== undefined &&
+			!!sourceModel &&
+			sourceModel.provider === latestAssistant.provider &&
+			sourceModel.id === latestAssistant.model;
 		for (const role of this.retryFallbackChainKeys(currentSelector)) {
 			for (const selector of this.findRetryFallbackCandidates(role, currentSelector, undefined, options)) {
 				if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
@@ -2511,16 +2532,20 @@ export class TurnRecovery {
 					creditTargets.includes(candidate.id) &&
 					Date.now() < creditHandle.expiresAt;
 				// Anthropic signatures and redacted blocks are model-bound, while the
-				// latest assistant response must remain byte-identical. On a transient
-				// failure keep retrying the source model, or consider a later
-				// cross-provider candidate whose message transform can safely demote the
-				// foreign thinking.
-				// A classifier refusal is exempt: the source model declines the same
+				// latest assistant response must remain byte-identical. While another
+				// attempt on the model that signed them is still allowed, prefer it to a
+				// same-provider model switch, which satisfies neither constraint; a later
+				// cross-provider candidate's message transform can demote the foreign
+				// thinking safely. A refusal, an account-policy denial, a non-retryable
+				// error, a wait past `retry.maxDelayMs` or a spent budget makes no such
+				// attempt, and, when `retry.rateLimitWalksChain` is on, a rate limit on
+				// the signer makes only a futile one, so the chain moves to the
+				// candidate.
+				// A classifier refusal is one of those: the source model declines the same
 				// request again, and Anthropic's documented retry for a refusal resends
 				// the history unchanged on another Claude model, which drops the thinking
 				// blocks it cannot read (preserved thinking, "Switching models
-				// mid-conversation"). Skipping same-provider candidates here ended the turn
-				// on the refusal with every Anthropic entry of the chain untried.
+				// mid-conversation").
 				// While the refusal's fallback credit can still be redeemed, only its
 				// targets pass, so an earlier non-target entry cannot forfeit the credit.
 				// An Anthropic-compatible proxy that will not verify a sibling model's
@@ -2530,10 +2555,10 @@ export class TurnRecovery {
 				// afterwards.
 				const creditLive =
 					creditHandle !== undefined && creditTargets.length > 0 && Date.now() < creditHandle.expiresAt;
-				const refusalMayReplay = options?.refusalWalk === true && !creditLive;
+				const refusalKeepsCredit = options?.refusalWalk === true && creditLive;
 				if (
+					(signerRetryRemains || refusalKeepsCredit) &&
 					!canRedeemFallbackCredit &&
-					!refusalMayReplay &&
 					candidate.api === "anthropic-messages" &&
 					latestAssistant?.api === "anthropic-messages" &&
 					latestAssistant.provider === candidate.provider &&
@@ -2702,7 +2727,7 @@ export class TurnRecovery {
 		await this.#host.setModelWithProviderSessionReset(baseModel);
 		this.#host.sessionManager.appendModelChange(baseSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
 		this.#host.settings.getStorage()?.recordModelUsage(baseSelector);
-		await this.#host.syncAfterModelChange(previousEditMode);
+		await this.#host.syncAfterModelChange(previousEditMode, { retryFallback: true });
 		await this.#host.emitSessionEvent({
 			type: "retry_fallback_applied",
 			from: currentSelector,
@@ -2819,6 +2844,8 @@ export class TurnRecovery {
 		) {
 			return false;
 		}
+		// The plain comparison: a hop kept the primary's prompt, so this is a no-op, unless a rebuild
+		// while on the fallback rendered the fallback's policy, which the primary must not keep.
 		await this.#host.syncAfterModelChange(previousEditMode);
 		return true;
 	}
@@ -2900,6 +2927,14 @@ export class TurnRecovery {
 			((classifierRefusal || AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
 				this.#unexecutedToolCallsReplaySafe(message));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
+		// A rate limit is a cap the next attempt on this model re-hits, so
+		// retry.rateLimitWalksChain lets it skip the signed-thinking deferral in
+		// #tryRetryModelFallback and walk the chain at once. A chain entry may sit
+		// under a different cap; when it shares this one, its own failure walks the
+		// chain on. Off (the default) the deferral holds for a rate limit too.
+		const sourceRateLimited =
+			retrySettings.rateLimitWalksChain &&
+			(message.errorStatus === 429 || rateLimitReason === "RATE_LIMIT_EXCEEDED");
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
 		const recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
@@ -2917,7 +2952,13 @@ export class TurnRecovery {
 			!staleOpenAIResponsesReplayError &&
 			!AIError.is(id, AIError.Flag.UsageLimit) &&
 			parsedRetryAfterMs === undefined &&
-			(rateLimitReason === "CONCURRENT_LIMIT" || rateLimitReason === "RATE_LIMIT_EXCEEDED")
+			(rateLimitReason === "CONCURRENT_LIMIT" ||
+				rateLimitReason === "RATE_LIMIT_EXCEEDED" ||
+				(rateLimitReason === "MODEL_CAPACITY_EXHAUSTED" &&
+					(AIError.isUsageLimitStatus(message.errorStatus) ||
+						/\b(?:429|MODEL_CAPACITY_EXHAUSTED|MODEL_CAPACITY_EXCEEDED|resource.?exhausted)\b/i.test(
+							errorMessage,
+						))))
 		) {
 			const reasonBackoffMs = calculateRateLimitBackoffMs(rateLimitReason);
 			if (reasonBackoffMs > delayMs) delayMs = reasonBackoffMs;
@@ -3119,6 +3160,35 @@ export class TurnRecovery {
 			!classifierRefusal &&
 			this.#activeRetryFallback?.restoreAfterSuccess === true;
 
+		// Fail-fast cap: if the provider asks us to wait longer than
+		// retry.maxDelayMs and we have no fallback credential or model to
+		// switch to, surface the error instead of sleeping. Defends against
+		// 3-hour Anthropic rate-limit windows that would otherwise leave a
+		// subagent (or interactive session) silently hung. The original
+		// assistant error message is preserved in agent state so the caller
+		// can act on it.
+		// Opt-out: retry.waitForUsageReset lets a provider-stated usage-limit
+		// reset (Flag.UsageLimit — 5h/weekly quota windows, CN 使用上限, spend
+		// caps, … on any provider) sleep past the cap. Gated on authoritative
+		// provider timing: either a parsed reset hint from the error text, or
+		// a complete usage-report window (every exhausted limit carries a
+		// future reset). Usage-limit errors with neither fall back to the
+		// 30-minute QUOTA_EXHAUSTED heuristic, and sleeping on that for a
+		// permanent error (402 balance, dead spend cap) would hold the session
+		// through repeated heuristic sleeps instead of surfacing it. Bounded
+		// by the stated wait so an unrelated large backoff cannot sneak
+		// through.
+		const maxDelayMs = retrySettings.maxDelayMs;
+		const exceedsDelayCap = (waitMs: number): boolean => {
+			const waitForUsageReset =
+				retrySettings.waitForUsageReset === true &&
+				recordedUsageLimitOutcome !== undefined &&
+				(parsedRetryAfterMs !== undefined || recordedUsageLimitOutcome.reportResetAtMs !== undefined) &&
+				effectiveUsageLimitWaitMs !== undefined &&
+				waitMs <= effectiveUsageLimitWaitMs;
+			return maxDelayMs > 0 && waitMs > maxDelayMs && !waitForUsageReset;
+		};
+
 		if (!staleOpenAIResponsesReplayError && !switchedCredential && currentSelector) {
 			// Classifier-refusal walks visit each model at most once instead
 			// of using the same-model retry budget as their bound.
@@ -3153,6 +3223,27 @@ export class TurnRecovery {
 					refusalWalk: classifierRefusal,
 					preserveFailedTurn,
 					wrapAround: longUsageLimitFallback,
+					// Deferring a chain candidate only pays when the code below makes
+					// another attempt on this model that can succeed. Each term is a
+					// branch below that, with no switch, ends the turn instead (a spent
+					// budget, a refusal or account-policy denial, a hard-error or
+					// Fast-degrade consult the classifier would not retry, a wait past
+					// the fail-fast cap), or, under `retry.rateLimitWalksChain`, a rate
+					// limit on this model, which the next attempt re-hits.
+					sameModelRetryAvailable:
+						!retryBudgetExhausted &&
+						!sourceRateLimited &&
+						!classifierRefusal &&
+						!accountPolicyDenial &&
+						!(
+							(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+							!this.isRetryableError(message)
+						) &&
+						!exceedsDelayCap(
+							usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs
+								? parsedRetryAfterMs
+								: delayMs,
+						),
 				});
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent
@@ -3224,32 +3315,8 @@ export class TurnRecovery {
 			return false;
 		}
 
-		// Fail-fast cap: if the provider asks us to wait longer than
-		// retry.maxDelayMs and we have no fallback credential or model to
-		// switch to, surface the error instead of sleeping. Defends against
-		// 3-hour Anthropic rate-limit windows that would otherwise leave a
-		// subagent (or interactive session) silently hung. The original
-		// assistant error message is preserved in agent state so the caller
-		// can act on it.
-		// Opt-out: retry.waitForUsageReset lets a provider-stated usage-limit
-		// reset (Flag.UsageLimit — 5h/weekly quota windows, CN 使用上限, spend
-		// caps, … on any provider) sleep past the cap. Gated on authoritative
-		// provider timing: either a parsed reset hint from the error text, or
-		// a complete usage-report window (every exhausted limit carries a
-		// future reset). Usage-limit errors with neither fall back to the
-		// 30-minute QUOTA_EXHAUSTED heuristic, and sleeping on that for a
-		// permanent error (402 balance, dead spend cap) would hold the session
-		// through repeated heuristic sleeps instead of surfacing it. Bounded
-		// by the stated wait so an unrelated large backoff cannot sneak
-		// through.
-		const maxDelayMs = retrySettings.maxDelayMs;
-		const waitForUsageReset =
-			retrySettings.waitForUsageReset === true &&
-			recordedUsageLimitOutcome !== undefined &&
-			(parsedRetryAfterMs !== undefined || recordedUsageLimitOutcome.reportResetAtMs !== undefined) &&
-			effectiveUsageLimitWaitMs !== undefined &&
-			delayMs <= effectiveUsageLimitWaitMs;
-		if (maxDelayMs > 0 && delayMs > maxDelayMs && !switchedCredential && !switchedModel && !waitForUsageReset) {
+		// The fail-fast cap (`exceedsDelayCap`, defined above the chain consult).
+		if (exceedsDelayCap(delayMs) && !switchedCredential && !switchedModel) {
 			const attempt = this.#retryAttempt;
 			this.#retryAttempt = 0;
 			await this.#closeRetrySaga(

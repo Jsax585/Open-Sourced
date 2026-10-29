@@ -195,6 +195,7 @@ Defined in `packages/coding-agent/src/session/settings.ts`:
 - `retry.waitForUsageReset` (default `false`)
 - `retry.modelFallback` (default `true`; gates configured retry model-fallback switching)
 - `retry.fallbackOn` (default `"any"`; `"usage-limit"` or `"except-usage-limit"` restrict which errors walk the chains)
+- `retry.rateLimitWalksChain` (default `false`; `true` walks the chain as soon as a rate limit fails the turn, including after signed thinking, instead of keeping the failing model for its whole retry budget)
 - `retry.fallbackChains`
 - `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 - `retry.refusalFallbackRevertPolicy` (`"default"` preserves existing error-specific behavior; `"after-success"` restores after a successful refusal/content-block fallback response)
@@ -268,6 +269,9 @@ An abort or session transition during fallback application rolls back an
 uncommitted candidate. Once primary restoration installs its model, its transcript
 and thinking selection commit before asynchronous model-dependent reconciliation.
 An ordinary abort finishes that restoration; an explicit model selection still wins.
+
+For `/new`, configured `auto` remains separate from resolved thinking state.
+Neither `auto` nor `inherit` is serialized as the primary's resolved level.
 
 Whole-session forks preserve the running conversation. Rolling back an unfinished
 refusal swap keeps an outer availability fallback routed to the fork. A primary
@@ -383,5 +387,5 @@ A new retry chain can still start later on a future retryable error after counte
 - Retry strips the failing assistant error from **runtime context** before re-continue, but session history still keeps that error entry. When the retry chain eventually succeeds, each persisted error entry from the chain is marked with a `retryRecovery` marker (`status: "recovered"`, plus kind/attempt/note and the superseding message; entries whose error was rendered moot carry `status: "superseded"` instead). Marked entries render as a dim, non-error one-line note instead of a red failure (live UI included, via the success event's `retryErrors`), and they are excluded when the LLM context is rebuilt — the display transcript still keeps them visible.
 - `RpcSessionState` currently exposes `autoCompactionEnabled` but not an `autoRetryEnabled` field; RPC callers must track their own toggle state or query settings through other APIs.
 - Model fallback changes append temporary `model_change` entries. Availability fallbacks may restore the primary after its cooldown expires according to `retry.fallbackRevertPolicy`; request-scoped refusal fallbacks restore according to `retry.refusalFallbackRevertPolicy`.
-- A same-provider Anthropic fallback candidate is skipped while the latest assistant turn carries signed or redacted thinking from a different model, except after a classifier refusal, which may move to that candidate; Anthropic drops the earlier thinking blocks the new model cannot read. While that refusal's fallback credit can still be redeemed, only the credit's target models are exempt.
+- A same-provider Anthropic fallback candidate is skipped while the latest assistant turn carries signed or redacted thinking from a different model and another attempt on the signing model follows; a classifier refusal, account-policy denial, non-retryable error, wait past `retry.maxDelayMs`, spent retry budget, or (only when `retry.rateLimitWalksChain` is `true`) a rate limit on the signing model moves to that candidate, and Anthropic drops the earlier thinking blocks the new model cannot read. The exception is a usage-limit wait past `retry.maxDelayMs` that the authoritative usage-reset opt-in (`retry.waitForUsageReset`) waits out: the signing model is retried after the reset, so the candidate stays skipped. While a classifier refusal's fallback credit can still be redeemed, only the credit's target models pass.
 - Usage-aware preflight runs before a provider request when `retry.usageAwareFallback` is enabled. It prefers healthy same-provider coding-plan accounts before configured model fallback; ordinary configured API keys are excluded. Unknown/unmapped usage fails open. `retry.modelFallback` gates model switching, not the preflight's account selection or `"fail-closed"` policy. At the reserve threshold, `"confirm"` asks interactive sessions and keeps the current model when declined; sessions without a confirmation UI automatically apply an eligible fallback. `"auto"` applies an eligible fallback without asking. `"fail-closed"` rejects reserve or depleted usage instead of spending it or selecting a fallback. Depleted usage under the other policies applies an eligible fallback without a reserve confirmation.
