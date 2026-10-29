@@ -6328,12 +6328,15 @@ describe("openai-codex streaming", () => {
 		});
 
 		let constructorCount = 0;
+		const created = Promise.withResolvers<void>();
+		const joined = Promise.withResolvers<void>();
 		const sockets: DeferredOpenWebSocket[] = [];
 		class DeferredOpenWebSocket extends MockWebSocket {
 			constructor(url: string, options?: { headers?: WsHeaders }) {
 				super(url, options);
 				constructorCount += 1;
 				sockets.push(this);
+				created.resolve();
 			}
 
 			open(): void {
@@ -6363,6 +6366,14 @@ describe("openai-codex streaming", () => {
 			sessionId: "ws-join-session",
 			providerSessionState,
 		});
+		await created.promise;
+		const originalTime = piUtils.logger.time.bind(piUtils.logger);
+		const interceptTime = ((...args: Parameters<typeof originalTime>) => {
+			const result = originalTime(...args);
+			if (args[0] === "codexWs:awaitSharedHandshake") joined.resolve();
+			return result;
+		}) as typeof piUtils.logger.time;
+		const timeSpy = vi.spyOn(piUtils.logger, "time").mockImplementation(interceptTime);
 		const streamResult = streamOpenAICodexResponses(model, createCodexTestContext(), {
 			fetch: fetchMock as FetchImpl,
 			apiKey: token,
@@ -6370,8 +6381,9 @@ describe("openai-codex streaming", () => {
 			providerSessionState,
 		}).result();
 
-		// Let both callers reach the handshake before the socket opens.
-		await Bun.sleep(5);
+		// Open only after the second caller has entered the shared handshake wait.
+		await joined.promise;
+		timeSpy.mockRestore();
 		for (const socket of sockets) socket.open();
 
 		await prewarmPromise;

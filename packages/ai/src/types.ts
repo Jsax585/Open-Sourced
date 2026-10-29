@@ -723,6 +723,8 @@ export interface StreamOptions {
 	 * implementation when set. Defaults to `globalThis.fetch`. Providers that
 	 * do not use `fetch` (Bedrock's AWS SDK transport, Cursor's HTTP/2
 	 * channel) silently ignore the override.
+	 * Standard Responses defaults to HTTP/SSE when set unless a request or model
+	 * explicitly selects WebSockets. WebSocket connections do not use this hook.
 	 */
 	fetch?: FetchImpl;
 	/** Current session working directory for providers that need workspace-scoped discovery. */
@@ -836,7 +838,7 @@ export interface SimpleStreamOptions extends Omit<StreamOptions, "apiKey"> {
 	kimiApiFormat?: "openai" | "anthropic";
 	/** API format for Synthetic provider: "openai" or "anthropic" (default: "openai") */
 	syntheticApiFormat?: "openai" | "anthropic";
-	/** Hint that websocket transport should be preferred when supported by the provider implementation. */
+	/** Override WebSocket preference within catalog eligibility; explicit false disables WS. Codex keeps its independent policy. */
 	preferWebsockets?: boolean;
 	/**
 	 * OpenRouter routing-variant suffix automatically appended to model IDs when

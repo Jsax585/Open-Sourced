@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added standard Responses WebSockets with connection-local incremental turns, official OpenAI defaults, and session-scoped fallback through the existing HTTP/SSE transport ([#17354](https://github.com/can1357/oh-my-pi/pull/17354) by [@TatsukiMeng](https://github.com/TatsukiMeng))
+
 ### Fixed
 
+- Fixed standard Responses ignoring SDK `fetch` overrides when no WebSocket preference was set ([#17354](https://github.com/can1357/oh-my-pi/pull/17354) by [@TatsukiMeng](https://github.com/TatsukiMeng))
 - Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 - Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
 - Fixed Cursor models losing omp's system prompt (context files, skills, rules) from the second turn on, or whenever earlier messages precede the active one ([#17059](https://github.com/can1357/oh-my-pi/issues/17059), [#17325](https://github.com/can1357/oh-my-pi/pull/17325) by [@robfeldmann](https://github.com/robfeldmann))

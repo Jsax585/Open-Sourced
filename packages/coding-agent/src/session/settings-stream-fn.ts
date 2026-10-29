@@ -37,8 +37,9 @@ import {
 	validateProviderMaxInFlightRequests,
 } from "./settings";
 
-/** Map `providers.openaiWebsockets` to the provider `preferWebsockets` hint (`auto` → model default). */
-export function resolveOpenAIWebsocketPreference(settings: Settings): boolean | undefined {
+/** Resolve the Codex-only setting without predicting standard Responses transport. */
+export function resolveCodexWebsocketPreference(settings: Settings, model: Model | undefined): boolean | undefined {
+	if (model?.api !== "openai-codex-responses") return undefined;
 	const setting = cfgProvidersOpenaiWebsockets.get(settings);
 	return setting === "on" ? true : setting === "off" ? false : undefined;
 }
