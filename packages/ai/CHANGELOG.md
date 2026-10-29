@@ -17,6 +17,7 @@
 - Account policy `priority` now takes precedence when usage information is temporarily unavailable, keeping new sessions on the preferred account.
 
 ### Fixed
+- Fixed provider in-flight lock cleanup failures being swallowed silently; they are now logged instead of ignored ([#16131](https://github.com/can1357/oh-my-pi/pull/16131) by [@yuzu-octopus](https://github.com/yuzu-octopus))
 
 - Fixed Mistral thinking-message replay requests that could be rejected by LiteLLM with a `422 extra_forbidden` error.
 - Added the `omp/<version>` User-Agent to native Judge API requests so omp usage is correctly identified in upstream statistics.
