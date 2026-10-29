@@ -341,7 +341,7 @@ describe("model-facing seance model approval", () => {
 		},
 	);
 
-	it("refuses saved and explicit Factory models with server-side fallback even when its targets are granted", async () => {
+	it("approves saved and explicit Factory models with server-side fallback now that the per-call request omits the chain", async () => {
 		using tempDir = TempDir.createSync("@omp-seance-factory-fallback-");
 		const fixture = await modelGateFixture(tempDir.path(), {
 			modelRoles: { review: "factory-droid/claude-fable-5", smol: "factory-droid/claude-opus-5" },
@@ -390,8 +390,11 @@ describe("model-facing seance model approval", () => {
 				model,
 			});
 		try {
-			await expect(policy()).rejects.toThrow(/No approved saved model/);
-			await expect(policy("factory-droid/claude-fable-5")).rejects.toThrow(/server-side/);
+			const savedPolicy = await policy();
+			expect(savedPolicy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);
+			const explicitPolicy = await policy("factory-droid/claude-fable-5");
+			expect(explicitPolicy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);
+			expect(explicitPolicy.perCallModelGrants).toBeDefined();
 			const hostPolicy = await policy(undefined, []);
 			expect(hostPolicy.perCallModelGrants).toBeUndefined();
 			expect(hostPolicy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);

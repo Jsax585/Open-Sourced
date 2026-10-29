@@ -1692,7 +1692,7 @@ describe("per-call model preflight", () => {
 		expect(usageOrder).toEqual(["mock/worker-b", "mock/worker-a"]);
 	});
 
-	it("refuses a role candidate with Factory server-side fallbacks even when its target is granted", async () => {
+	it("expands a role candidate with Factory server-side fallbacks now that the per-call request omits the chain", async () => {
 		mockDiscovery();
 		const fable = buildModel(
 			buildFactoryDroidModel(
@@ -1711,9 +1711,8 @@ describe("per-call model preflight", () => {
 				awaitBackgroundRefresh: async () => {},
 			},
 		});
-		await expect(resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }))).rejects.toThrow(
-			/No available approved model matches/,
-		);
+		const policy = await resolveEffectiveSubagentPolicy(request({ session: base, perCallModel: "@review" }));
+		expect(policy.modelOverride).toEqual(["factory-droid/claude-fable-5"]);
 	});
 
 	it("skips unavailable candidates in caller order and drops the role identity of a list", async () => {
@@ -1837,6 +1836,66 @@ describe("per-call model preflight", () => {
 			);
 			expect(policy.modelOverride).toEqual(["mock/target"]);
 			expect(policy.perCallModelGrants?.agentName).toBe("seance");
+		});
+
+		it("dispatches a model-facing seance with the per-call grants the Factory switch rides on", async () => {
+			const seanceAgent = getBundledAgent("seance");
+			if (!seanceAgent) throw new Error("Expected the bundled seance agent");
+			mockDiscovery(seanceAgent);
+			const dispatched: executorModule.ExecutorOptions[] = [];
+			vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				dispatched.push(options);
+				return result();
+			});
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-seance-dispatch-grants-"));
+			const authStorage = await AuthStorage.create(":memory:");
+			authStorage.keys.setRuntime("anthropic", "test-key");
+			const modelRegistry = new ModelRegistry(authStorage);
+			const cwd = path.join(tempDir, "project");
+			const sourceFile = path.join(tempDir, "sessions", "source.jsonl");
+			await fs.mkdir(path.dirname(sourceFile), { recursive: true });
+			await Bun.write(
+				sourceFile,
+				`${[
+					{ type: "session", version: 3, id: "grant-source", timestamp: "2026-10-01T00:00:00.000Z", cwd },
+					{
+						type: "model_change",
+						id: "default-model",
+						parentId: null,
+						timestamp: "2026-10-01T00:00:01.000Z",
+						model: "anthropic/claude-sonnet-4-5",
+						role: "default",
+					},
+				]
+					.map(entry => JSON.stringify(entry))
+					.join("\n")}\n`,
+			);
+			const caller = Object.assign(
+				session({
+					cwd,
+					settings: Settings.isolated({
+						"task.perCallModel": "on",
+						modelRoles: { review: "anthropic/claude-sonnet-4-5" },
+					}),
+				}),
+				{ modelRegistry },
+			);
+			try {
+				const settled = await runStructuredSubagent(
+					request({
+						session: caller,
+						agent: "seance",
+						sourceSession: sourceFile,
+						seanceModel: "anthropic/claude-sonnet-4-5",
+						retainArtifacts: true,
+					}),
+				);
+				expect(dispatched[0]?.perCallModelGrants?.agentName).toBe("seance");
+				await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+			} finally {
+				authStorage.close();
+				await fs.rm(tempDir, { recursive: true, force: true });
+			}
 		});
 	});
 });
