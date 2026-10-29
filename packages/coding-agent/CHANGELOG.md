@@ -2,9 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- Fixed a resumed session rebuilding its memory block from disk, so a `learn` call or a consolidation in another session no longer makes the next turn rewrite the whole prompt cache ([#15704](https://github.com/can1357/oh-my-pi/issues/15704), [#16465](https://github.com/can1357/oh-my-pi/pull/16465) by [@yuzu-octopus](https://github.com/yuzu-octopus))
-
 ### Breaking Changes
 
 - Custom tool loaders now resolve the injected host SDK themselves; constructors take cwd as their first argument instead of a pi namespace.
