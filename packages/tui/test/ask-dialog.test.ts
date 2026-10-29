@@ -1549,6 +1549,41 @@ describe("AskDialogComponent", () => {
 		expect(render(component)).toBe(before);
 	});
 
+	it("opens with long title and option descriptions expanded when seeded, and collapses on Ctrl+O", () => {
+		const component = new AskDialogComponent(
+			[
+				{
+					id: "q1",
+					question: "This is a very long question ".repeat(30),
+					options: [
+						{ label: "Option A", description: "This is a very long description ".repeat(30) },
+						{ label: "Option B" },
+					],
+				},
+			],
+			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn(), expanded: true },
+		);
+
+		const expanded = render(component);
+		expect(expanded.match(/This is a very long question/g)?.length ?? 0).toBeGreaterThanOrEqual(15);
+		expect(expanded.match(/This is a very long description/g)?.length ?? 0).toBeGreaterThanOrEqual(10);
+
+		component.handleInput("\x0f");
+		const collapsed = render(component);
+		expect(collapsed.match(/This is a very long question/g)?.length ?? 0).toBeLessThan(10);
+		expect(collapsed.match(/This is a very long description/g)?.length ?? 0).toBeLessThan(10);
+	});
+
+	it("does not consume expansion for a short question opened expanded", () => {
+		const component = new AskDialogComponent(
+			[{ id: "q1", question: "Choose one?", options: [{ label: "Option A", description: "Short description." }] }],
+			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn(), expanded: true },
+		);
+		const before = render(component);
+		expect(component.toggleQuestionExpansion()).toBe(false);
+		expect(render(component)).toBe(before);
+	});
+
 	it("wraps long option labels onto indented continuation lines instead of truncating", () => {
 		const onSubmit = vi.fn();
 		const tail = "UNIQUE_TAIL_MARKER_8654";
