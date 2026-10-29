@@ -25,7 +25,7 @@
 
 ### Fixed
 
-- Fixed resolving a merge conflict with `write conflict://<N>` or `conflict://*` removing the UTF-8 byte-order mark (BOM) from the start of the file ([#16558](https://github.com/can1357/oh-my-pi/pull/16558) by [@mottopanikeiku](https://github.com/mottopanikeiku))
+- Fixed `write conflict://<N>` and `conflict://*` dropping UTF-8 byte-order marks (BOMs) or skipping conflicts that start on the BOM-prefixed first line ([#16558](https://github.com/can1357/oh-my-pi/pull/16558) by [@mottopanikeiku](https://github.com/mottopanikeiku))
 - Fixed Bash services failing to start with `ready.port must be an integer from 1 to 65535` when the model sent `port: 0` beside a `log` condition; a zero port now counts as unset
 - Fixed omp's title staying on the terminal tab after exit in terminals without a title stack; Windows consoles get their original title back ([#17321](https://github.com/can1357/oh-my-pi/pull/17321) by [@asuffield](https://github.com/asuffield))
 - Fixed cached approvals offering a directory grant that would not cover every target in the call ([#17309](https://github.com/can1357/oh-my-pi/pull/17309) by [@iliaal](https://github.com/iliaal)).
