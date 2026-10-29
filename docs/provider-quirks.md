@@ -621,7 +621,8 @@ AIML API is an AI model aggregator platform providing access to diverse multi-ve
 
 ### Special casings
 - **Non-chat model filtering**: Dynamic model listings are filtered via `isLikelyAimlApiChatModelId` (`packages/catalog/src/provider-models/openai-compat.ts`), excluding audio, embedding, image, video, and TTS models matched by regex `/(?:^|[/:._-])(?:audio|embed|embedding|embeddings|i2i|i2v|image|speech|t2i|t2v|tts|video)(?:$|[/:._-])/i` or substrings (`dall-e`, `dalle`, `flux`, `imagen`, `sora`, `veo`, `whisper`).
-- **Standard transport pipeline**: Uses un-customized `openai-completions` transport with no custom request transformers or error handlers (`packages/catalog/src/provider-models/openai-compat.ts`).
+- **Standard transport pipeline**: Uses the `openai-completions` transport with no custom request transformers or error handlers (`packages/catalog/src/provider-models/openai-compat.ts`); the only provider-specific request setup is the header overlay below.
+- **Client-identity headers**: `aimlapiClientHeaders` in `packages/catalog/src/wire/aimlapi.ts` adds `HTTP-Referer: https://github.com/can1357/oh-my-pi`, `X-Title: oh-my-pi`, `X-AIMLAPI-Source: agent/oh-my-pi`, and `X-AIMLAPI-Partner-ID` to chat-completion requests through the `prependHeaders` overlay in `packages/ai/src/providers/openai-completions.ts`. They are sent only when the model base URL origin is exactly `https://api.aimlapi.com`; a repointed, look-alike, or plaintext base URL gets none of them. Model discovery requests are unchanged.
 
 ### Auth & usage
 - **Environment authentication**: Configured to discover credentials via the `AIMLAPI_API_KEY` environment variable (`packages/catalog/src/provider-models/descriptors.ts`, `packages/catalog/src/compat/rules/auth/aimlapi.kdl`).
