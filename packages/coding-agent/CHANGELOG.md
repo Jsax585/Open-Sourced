@@ -23,6 +23,7 @@
 - Adjusted view placement to align with column‑capped output, fixing view offsets after line truncation
 - In Tern, warnings, errors, the update notice, `@file` reads and finished background jobs, tangents and supervised processes read like the rest of the chat: an icon and the message instead of a raw terminal line
 
+- Added OMP Jev Gate to the standalone extension list, with direct GitHub installation and graphical configuration ([#12585](https://github.com/can1357/oh-my-pi/pull/12585) by [@cyriusweng](https://github.com/cyriusweng)).
 ### Fixed
 
 - Fixed Bash services failing to start with `ready.port must be an integer from 1 to 65535` when the model sent `port: 0` beside a `log` condition; a zero port now counts as unset
