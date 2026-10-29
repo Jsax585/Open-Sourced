@@ -35,6 +35,10 @@
 - Fixed the LSP diagnostics view showing "No issues" for files whose language server had not reported yet; they now show as unverified ([#17293](https://github.com/can1357/oh-my-pi/pull/17293) by [@JustasMasiulis](https://github.com/JustasMasiulis))
 - Fixed Esc-Esc rewind in Tern opening on, and stepping onto, a turn that shows nothing (one interrupted before any output) instead of the last turn shown
 
+### Fixed
+
+- Fixed the thinking block's streaming-speed badge: the accent-color ceiling no longer clamps the number it prints — 200 tok/s was a hard cap no faster stream could exceed — and the rate is now the window's streamed tokens over their decode time instead of the mean of per-sample ratios, so bursty usage reporting no longer skews it low ([#17306](https://github.com/can1357/oh-my-pi/pull/17306) by [@iacore](https://github.com/iacore))
+
 ## [18.13.3] - 2026-10-28
 
 ### Added
